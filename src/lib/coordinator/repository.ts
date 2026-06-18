@@ -1,0 +1,361 @@
+import { serviceClient } from "@/lib/supabase/server";
+import type {
+  CoordinatorTouch,
+  DraftedBy,
+  OpportunityStatus,
+  OutboxItem,
+  TouchChannel,
+  TouchStatus,
+  TreatmentOpportunity,
+} from "./types";
+
+// ---------------------------------------------------------------------------
+// DB row shapes (snake_case, as stored in Postgres / returned by supabase-js).
+// ---------------------------------------------------------------------------
+
+interface OpportunityRow {
+  id: string;
+  site_id: string;
+  dentally_patient_id: string;
+  dentally_plan_id: string;
+  patient_name: string;
+  treatment: string;
+  planned_value: number | string;
+  amount_outstanding: number | string;
+  accepted_at: string | null;
+  status: string;
+  finance_presented: boolean;
+  last_touch_at: string | null;
+  priority_score: number | string;
+  consent: { sms?: boolean; email?: boolean; marketing?: boolean } | null;
+  updated_from_dentally_at: string;
+}
+
+interface TouchRow {
+  id: string;
+  opportunity_id: string;
+  site_id: string;
+  channel: string;
+  direction: string;
+  body: string;
+  drafted_by: string;
+  status: string;
+  approved_by: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+interface OutboxRow {
+  id: string;
+  touch_id: string;
+  site_id: string;
+  channel: string;
+  to_ref: string;
+  body: string;
+  status: string;
+  provider: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+interface SyncStateRow {
+  site_id: string;
+  resource: string;
+  high_water_mark: string | null;
+  last_run_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Mappers (row <-> domain).
+// ---------------------------------------------------------------------------
+
+function toNumber(value: number | string | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  return typeof value === "number" ? value : Number(value);
+}
+
+function rowToOpportunity(row: OpportunityRow): TreatmentOpportunity {
+  return {
+    id: row.id,
+    siteId: row.site_id,
+    dentallyPatientId: row.dentally_patient_id,
+    dentallyPlanId: row.dentally_plan_id,
+    patientName: row.patient_name,
+    treatment: row.treatment,
+    plannedValue: toNumber(row.planned_value),
+    amountOutstanding: toNumber(row.amount_outstanding),
+    acceptedAt: row.accepted_at ?? "",
+    status: row.status as OpportunityStatus,
+    financePresented: row.finance_presented,
+    lastTouchAt: row.last_touch_at,
+    priorityScore: toNumber(row.priority_score),
+    consent: {
+      sms: row.consent?.sms ?? false,
+      email: row.consent?.email ?? false,
+      marketing: row.consent?.marketing ?? false,
+    },
+    updatedFromDentallyAt: row.updated_from_dentally_at,
+  };
+}
+
+function opportunityToRow(opp: TreatmentOpportunity): OpportunityRow {
+  return {
+    id: opp.id,
+    site_id: opp.siteId,
+    dentally_patient_id: opp.dentallyPatientId,
+    dentally_plan_id: opp.dentallyPlanId,
+    patient_name: opp.patientName,
+    treatment: opp.treatment,
+    planned_value: opp.plannedValue,
+    amount_outstanding: opp.amountOutstanding,
+    accepted_at: opp.acceptedAt || null,
+    status: opp.status,
+    finance_presented: opp.financePresented,
+    last_touch_at: opp.lastTouchAt,
+    priority_score: opp.priorityScore,
+    consent: opp.consent,
+    updated_from_dentally_at: opp.updatedFromDentallyAt,
+  };
+}
+
+function rowToTouch(row: TouchRow): CoordinatorTouch {
+  return {
+    id: row.id,
+    opportunityId: row.opportunity_id,
+    siteId: row.site_id,
+    channel: row.channel as TouchChannel,
+    direction: row.direction as CoordinatorTouch["direction"],
+    body: row.body,
+    draftedBy: row.drafted_by as DraftedBy,
+    status: row.status as TouchStatus,
+    approvedBy: row.approved_by,
+    createdAt: row.created_at,
+    sentAt: row.sent_at,
+  };
+}
+
+function rowToOutbox(row: OutboxRow): OutboxItem {
+  return {
+    id: row.id,
+    touchId: row.touch_id,
+    siteId: row.site_id,
+    channel: row.channel as TouchChannel,
+    toRef: row.to_ref,
+    body: row.body,
+    status: row.status as OutboxItem["status"],
+    provider: row.provider,
+    createdAt: row.created_at,
+    sentAt: row.sent_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Opportunities.
+// ---------------------------------------------------------------------------
+
+export async function upsertOpportunities(
+  opps: TreatmentOpportunity[],
+): Promise<void> {
+  if (opps.length === 0) return;
+  const db = serviceClient();
+  const rows = opps.map(opportunityToRow);
+  const { error } = await db
+    .from("treatment_opportunity")
+    .upsert(rows, { onConflict: "id" });
+  if (error) throw error;
+}
+
+export async function listOpportunities(args: {
+  siteIds: string[];
+  statuses?: OpportunityStatus[];
+}): Promise<TreatmentOpportunity[]> {
+  const db = serviceClient();
+  let query = db
+    .from("treatment_opportunity")
+    .select("*")
+    .in("site_id", args.siteIds);
+  if (args.statuses && args.statuses.length > 0) {
+    query = query.in("status", args.statuses);
+  }
+  const { data, error } = await query.order("priority_score", {
+    ascending: false,
+  });
+  if (error) throw error;
+  return (data as OpportunityRow[]).map(rowToOpportunity);
+}
+
+export async function getOpportunity(
+  id: string,
+): Promise<TreatmentOpportunity | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("treatment_opportunity")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return rowToOpportunity(data as OpportunityRow);
+}
+
+export async function setFinancePresented(
+  opportunityId: string,
+  value: boolean,
+): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("treatment_opportunity")
+    .update({ finance_presented: value })
+    .eq("id", opportunityId);
+  if (error) throw error;
+}
+
+export async function setLastTouchAt(
+  opportunityId: string,
+  iso: string,
+): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("treatment_opportunity")
+    .update({ last_touch_at: iso })
+    .eq("id", opportunityId);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Touches.
+// ---------------------------------------------------------------------------
+
+export async function insertTouch(input: {
+  opportunityId: string;
+  siteId: string;
+  channel: TouchChannel;
+  body: string;
+  draftedBy: DraftedBy;
+  status?: TouchStatus;
+}): Promise<CoordinatorTouch> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("coordinator_touch")
+    .insert({
+      opportunity_id: input.opportunityId,
+      site_id: input.siteId,
+      channel: input.channel,
+      body: input.body,
+      drafted_by: input.draftedBy,
+      ...(input.status ? { status: input.status } : {}),
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToTouch(data as TouchRow);
+}
+
+export async function listTouches(
+  opportunityId: string,
+): Promise<CoordinatorTouch[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("coordinator_touch")
+    .select("*")
+    .eq("opportunity_id", opportunityId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data as TouchRow[]).map(rowToTouch);
+}
+
+export async function approveTouch(
+  touchId: string,
+  approvedBy: string,
+): Promise<CoordinatorTouch> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("coordinator_touch")
+    .update({ status: "approved", approved_by: approvedBy })
+    .eq("id", touchId)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToTouch(data as TouchRow);
+}
+
+export async function markTouchSent(touchId: string): Promise<void> {
+  const db = serviceClient();
+  const nowIso = new Date().toISOString();
+  const { error: touchError } = await db
+    .from("coordinator_touch")
+    .update({ status: "sent", sent_at: nowIso })
+    .eq("id", touchId);
+  if (touchError) throw touchError;
+  const { error: outboxError } = await db
+    .from("outbox")
+    .update({ status: "sent", provider: "stub", sent_at: nowIso })
+    .eq("touch_id", touchId);
+  if (outboxError) throw outboxError;
+}
+
+// ---------------------------------------------------------------------------
+// Outbox.
+// ---------------------------------------------------------------------------
+
+export async function enqueueOutbox(input: {
+  touchId: string;
+  siteId: string;
+  channel: TouchChannel;
+  toRef: string;
+  body: string;
+}): Promise<OutboxItem> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("outbox")
+    .insert({
+      touch_id: input.touchId,
+      site_id: input.siteId,
+      channel: input.channel,
+      to_ref: input.toRef,
+      body: input.body,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToOutbox(data as OutboxRow);
+}
+
+// ---------------------------------------------------------------------------
+// Sync state.
+// ---------------------------------------------------------------------------
+
+export async function getSyncState(
+  siteId: string,
+  resource: string,
+): Promise<{ highWaterMark: string | null } | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("sync_state")
+    .select("*")
+    .eq("site_id", siteId)
+    .eq("resource", resource)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as SyncStateRow;
+  return { highWaterMark: row.high_water_mark };
+}
+
+export async function setSyncState(
+  siteId: string,
+  resource: string,
+  highWaterMark: string,
+): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("sync_state").upsert(
+    {
+      site_id: siteId,
+      resource,
+      high_water_mark: highWaterMark,
+      last_run_at: new Date().toISOString(),
+    },
+    { onConflict: "site_id,resource" },
+  );
+  if (error) throw error;
+}
