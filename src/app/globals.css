@@ -1,26 +1,94 @@
 @import "tailwindcss";
 
+/*
+  Azen x Vitality brand tokens.
+  Light, premium look: cream app background, navy chrome, white cards, blue accents.
+  No OS dark-mode flipping. Everything here is the single source of truth for colour.
+*/
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Brand (from spec) */
+  --navy: #0a0e1a;
+  --cream: #eeeae4;
+  --card: #ffffff;
+  --card-muted: #f6f3ee;
+  --blue-light: #5bc4f7;
+  --blue-dark: #2b8ac0;
+  --ink: #333b4d;
+  --whatsapp: #25d366;
+
+  /* Derived neutrals */
+  --line: #e4ded6; /* hairline borders on cream */
+  --line-strong: #d6cfc4;
+  --muted: #6b7280; /* secondary text */
+  --navy-soft: #161c2d; /* raised surface on navy chrome */
+  --navy-line: #232a3d; /* borders inside navy chrome */
+  --on-navy: #e9ecf3; /* primary text on navy */
+  --on-navy-muted: #9aa3b8; /* secondary text on navy */
+
+  /* Semantic status */
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: var(--blue-dark);
+
+  /* App surfaces */
+  --background: var(--cream);
+  --foreground: var(--navy);
+
+  --radius: 0.75rem;
 }
 
+/* Map tokens to Tailwind utilities (bg-navy, text-ink, border-line, etc.) */
 @theme inline {
+  --color-navy: var(--navy);
+  --color-navy-soft: var(--navy-soft);
+  --color-navy-line: var(--navy-line);
+  --color-cream: var(--cream);
+  --color-card: var(--card);
+  --color-card-muted: var(--card-muted);
+  --color-blue-light: var(--blue-light);
+  --color-blue-dark: var(--blue-dark);
+  --color-ink: var(--ink);
+  --color-whatsapp: var(--whatsapp);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-muted: var(--muted);
+  --color-on-navy: var(--on-navy);
+  --color-on-navy-muted: var(--on-navy-muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  --font-sans: var(--font-jakarta);
+
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 0.25rem);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--line);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+/* Headings use the ExtraBold weight per brand guidance */
+h1, h2, h3, h4 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* Thin, unobtrusive scrollbars inside dark chrome */
+.scroll-navy::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-navy::-webkit-scrollbar-thumb { background: var(--navy-line); border-radius: 8px; }
+.scroll-navy::-webkit-scrollbar-track { background: transparent; }
