@@ -1,7 +1,108 @@
-"use client";
+import { HeartPulse, PoundSterling, ListChecks, CheckCircle2, Clock } from "lucide-react";
+import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
+import { Worklist } from "@/components/client/coordinator/worklist";
+import { getClient, getSites, NOW } from "@/lib/mock/clients";
+import { listOpportunities } from "@/lib/coordinator/repository";
+import type { TreatmentOpportunity } from "@/lib/coordinator/types";
+import { gbp } from "@/lib/utils";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="treatment-coordinator" />;
+const DAY = 86_400_000;
+
+/** Plain, serializable shape passed across the server/client boundary. */
+export type OpportunityDTO = TreatmentOpportunity;
+
+function daysStalled(acceptedAt: string, now: Date): number {
+  if (!acceptedAt) return 0;
+  return Math.max(0, Math.floor((now.getTime() - new Date(acceptedAt).getTime()) / DAY));
+}
+
+async function loadOpportunities(siteIds: string[]): Promise<TreatmentOpportunity[]> {
+  try {
+    return await listOpportunities({ siteIds });
+  } catch {
+    // DB may be empty or unreachable in this environment. Treat as no data.
+    return [];
+  }
+}
+
+export default async function TreatmentCoordinatorPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  const client = getClient(clientSlug);
+
+  if (!client) {
+    return (
+      <PageHeader
+        title="Treatment Coordinator"
+        description="This client could not be found."
+      />
+    );
+  }
+
+  const siteIds = getSites(client.id).map((s) => s.id);
+  const opportunities = await loadOpportunities(siteIds);
+
+  const open = opportunities.filter((o) => o.status !== "completed");
+  const completed = opportunities.filter((o) => o.status === "completed");
+  const stalled = opportunities.filter((o) => o.status === "stalled");
+
+  const totalRecoverable = open.reduce((sum, o) => sum + o.amountOutstanding, 0);
+  const recoveredToDate = completed.reduce((sum, o) => sum + o.amountOutstanding, 0);
+  const avgDaysStalled =
+    stalled.length > 0
+      ? Math.round(
+          stalled.reduce((sum, o) => sum + daysStalled(o.acceptedAt, NOW), 0) / stalled.length,
+        )
+      : 0;
+
+  return (
+    <>
+      <PageHeader
+        title="Treatment Coordinator"
+        description="Recover accepted but incomplete treatment. Every plan is ranked by recoverable value, so the highest impact patient is always at the top of the list."
+      />
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard
+          label="Recoverable value"
+          value={gbp(totalRecoverable)}
+          icon={PoundSterling}
+          hint="Outstanding across open plans"
+        />
+        <StatCard
+          label="Open opportunities"
+          value={String(open.length)}
+          icon={ListChecks}
+          hint="Plans not yet completed"
+        />
+        <StatCard
+          label="Recovered to date"
+          value={gbp(recoveredToDate)}
+          icon={CheckCircle2}
+          hint="Completed plan value"
+        />
+        <StatCard
+          label="Average days stalled"
+          value={String(avgDaysStalled)}
+          icon={Clock}
+          hint="Across stalled plans"
+        />
+      </div>
+
+      {opportunities.length === 0 ? (
+        <EmptyState
+          icon={HeartPulse}
+          title="No opportunities synced yet"
+          description="Run the Dentally sync to pull accepted but incomplete treatment plans into this worklist. This view is mock safe, so it stays empty until real data lands."
+        />
+      ) : (
+        <Worklist opportunities={opportunities} nowIso={NOW.toISOString()} />
+      )}
+    </>
+  );
 }
