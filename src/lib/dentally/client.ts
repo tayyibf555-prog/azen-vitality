@@ -9,6 +9,7 @@ export class DentallyError extends Error {
 interface Opts { apiKey: string; baseUrl: string; fetchImpl?: FetchImpl; userAgent?: string; }
 
 export interface ListPlansArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
+export interface ListPatientsArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
 
 export class DentallyClient {
   private fetchImpl: FetchImpl;
@@ -46,6 +47,18 @@ export class DentallyClient {
   getPatient(id: string) { return this.get<{ patient: unknown }>(`/v1/patients/${id}`); }
   getAccountOutstanding(patientId: string) {
     return this.get<{ payment_plans: unknown[] }>("/v1/payment_plans", { patient_id: patientId });
+  }
+
+  listPatients(a: ListPatientsArgs) {
+    return this.get<{ patients: unknown[] }>("/v1/patients", {
+      site_id: a.siteId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+  getPatientAppointments(patientId: string) {
+    return this.get<{ appointments: unknown[] }>("/v1/appointments", { patient_id: patientId });
+  }
+  getPatientInvoices(patientId: string) {
+    return this.get<{ invoices: unknown[] }>("/v1/invoices", { patient_id: patientId });
   }
 
   async createAppointment(payload: Record<string, unknown>) {
