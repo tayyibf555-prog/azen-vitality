@@ -20,8 +20,15 @@ export function NeedsReview({ onResolved }: { onResolved: () => void }) {
   }
 
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void (async () => {
+      const res = await fetch("/api/practice-brain/needs-review", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }).then((r) => r.json());
+      if (res.success) setItems(res.data.nodes);
+      else setError(res.error);
+    })();
   }, []);
 
   async function resolve(id: string, branch: string, tier: Tier) {
