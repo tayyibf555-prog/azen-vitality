@@ -1,0 +1,400 @@
+import { serviceClient } from "@/lib/supabase/server";
+import type {
+  CadenceStatus,
+  DraftedBy,
+  ReactivationCadence,
+  ReactivationOutboxItem,
+  ReactivationReason,
+  ReactivationStatus,
+  ReactivationTarget,
+  ReactivationTouch,
+  TouchChannel,
+  TouchStatus,
+} from "./types";
+
+// Re-export shared sync_state helpers (DRY: identical, resource-generic).
+export { getSyncState, setSyncState } from "@/lib/coordinator/repository";
+
+// ---------------------------------------------------------------------------
+// Row shapes.
+// ---------------------------------------------------------------------------
+
+interface TargetRow {
+  id: string;
+  site_id: string;
+  dentally_patient_id: string;
+  patient_name: string;
+  reason: string;
+  dentally_plan_id: string | null;
+  treatment: string | null;
+  recoverable_value: number | string;
+  last_visit_at: string | null;
+  recall_due_at: string | null;
+  prior_attempts: number | string;
+  status: string;
+  reactivation_score: number | string;
+  consent: { sms?: boolean; email?: boolean; marketing?: boolean } | null;
+  updated_from_dentally_at: string;
+}
+
+interface CadenceRow {
+  id: string;
+  target_id: string;
+  site_id: string;
+  current_step: number | string;
+  status: string;
+  next_due_at: string | null;
+  started_at: string;
+  ended_at: string | null;
+  updated_at: string;
+}
+
+interface TouchRow {
+  id: string;
+  target_id: string;
+  cadence_id: string | null;
+  site_id: string;
+  step: number | string;
+  channel: string;
+  direction: string;
+  body: string;
+  drafted_by: string;
+  status: string;
+  approved_by: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+interface OutboxRow {
+  id: string;
+  touch_id: string;
+  site_id: string;
+  channel: string;
+  to_ref: string;
+  body: string;
+  status: string;
+  provider: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+function num(v: number | string | null | undefined): number {
+  if (v === null || v === undefined) return 0;
+  return typeof v === "number" ? v : Number(v);
+}
+
+// ---------------------------------------------------------------------------
+// Mappers.
+// ---------------------------------------------------------------------------
+
+function rowToTarget(r: TargetRow): ReactivationTarget {
+  return {
+    id: r.id,
+    siteId: r.site_id,
+    dentallyPatientId: r.dentally_patient_id,
+    patientName: r.patient_name,
+    reason: r.reason as ReactivationReason,
+    dentallyPlanId: r.dentally_plan_id,
+    treatment: r.treatment,
+    recoverableValue: num(r.recoverable_value),
+    lastVisitAt: r.last_visit_at,
+    recallDueAt: r.recall_due_at,
+    priorAttempts: num(r.prior_attempts),
+    status: r.status as ReactivationStatus,
+    reactivationScore: num(r.reactivation_score),
+    consent: {
+      sms: r.consent?.sms ?? false,
+      email: r.consent?.email ?? false,
+      marketing: r.consent?.marketing ?? false,
+    },
+    updatedFromDentallyAt: r.updated_from_dentally_at,
+  };
+}
+
+function targetToRow(t: ReactivationTarget): TargetRow {
+  return {
+    id: t.id,
+    site_id: t.siteId,
+    dentally_patient_id: t.dentallyPatientId,
+    patient_name: t.patientName,
+    reason: t.reason,
+    dentally_plan_id: t.dentallyPlanId,
+    treatment: t.treatment,
+    recoverable_value: t.recoverableValue,
+    last_visit_at: t.lastVisitAt,
+    recall_due_at: t.recallDueAt,
+    prior_attempts: t.priorAttempts,
+    status: t.status,
+    reactivation_score: t.reactivationScore,
+    consent: t.consent,
+    updated_from_dentally_at: t.updatedFromDentallyAt,
+  };
+}
+
+function rowToCadence(r: CadenceRow): ReactivationCadence {
+  return {
+    id: r.id,
+    targetId: r.target_id,
+    siteId: r.site_id,
+    currentStep: num(r.current_step),
+    status: r.status as CadenceStatus,
+    nextDueAt: r.next_due_at,
+    startedAt: r.started_at,
+    endedAt: r.ended_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function rowToTouch(r: TouchRow): ReactivationTouch {
+  return {
+    id: r.id,
+    targetId: r.target_id,
+    cadenceId: r.cadence_id ?? "",
+    siteId: r.site_id,
+    step: num(r.step),
+    channel: r.channel as TouchChannel,
+    direction: r.direction as ReactivationTouch["direction"],
+    body: r.body,
+    draftedBy: r.drafted_by as DraftedBy,
+    status: r.status as TouchStatus,
+    approvedBy: r.approved_by,
+    createdAt: r.created_at,
+    sentAt: r.sent_at,
+  };
+}
+
+function rowToOutbox(r: OutboxRow): ReactivationOutboxItem {
+  return {
+    id: r.id,
+    touchId: r.touch_id,
+    siteId: r.site_id,
+    channel: r.channel as TouchChannel,
+    toRef: r.to_ref,
+    body: r.body,
+    status: r.status as ReactivationOutboxItem["status"],
+    provider: r.provider,
+    createdAt: r.created_at,
+    sentAt: r.sent_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Targets.
+// ---------------------------------------------------------------------------
+
+export async function upsertTargets(targets: ReactivationTarget[]): Promise<void> {
+  if (targets.length === 0) return;
+  const db = serviceClient();
+  const { error } = await db
+    .from("reactivation_target")
+    .upsert(targets.map(targetToRow), { onConflict: "id" });
+  if (error) throw error;
+}
+
+export async function listTargets(args: {
+  siteIds: string[];
+  reasons?: ReactivationReason[];
+  statuses?: ReactivationStatus[];
+}): Promise<ReactivationTarget[]> {
+  const db = serviceClient();
+  let q = db.from("reactivation_target").select("*").in("site_id", args.siteIds);
+  if (args.reasons && args.reasons.length > 0) q = q.in("reason", args.reasons);
+  if (args.statuses && args.statuses.length > 0) q = q.in("status", args.statuses);
+  const { data, error } = await q.order("reactivation_score", { ascending: false });
+  if (error) throw error;
+  return (data as TargetRow[]).map(rowToTarget);
+}
+
+export async function getTarget(id: string): Promise<ReactivationTarget | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_target")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToTarget(data as TargetRow) : null;
+}
+
+export async function setTargetStatus(id: string, status: ReactivationStatus): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("reactivation_target").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function incrementPriorAttempts(id: string): Promise<void> {
+  const db = serviceClient();
+  const current = await getTarget(id);
+  if (!current) return;
+  const { error } = await db
+    .from("reactivation_target")
+    .update({ prior_attempts: current.priorAttempts + 1 })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Cadences.
+// ---------------------------------------------------------------------------
+
+export async function createCadence(input: {
+  targetId: string;
+  siteId: string;
+  nextDueAt: string;
+}): Promise<ReactivationCadence> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_cadence")
+    .insert({ target_id: input.targetId, site_id: input.siteId, next_due_at: input.nextDueAt })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToCadence(data as CadenceRow);
+}
+
+export async function getCadenceByTarget(targetId: string): Promise<ReactivationCadence | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_cadence")
+    .select("*")
+    .eq("target_id", targetId)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToCadence(data as CadenceRow) : null;
+}
+
+export async function listCadences(siteIds: string[]): Promise<ReactivationCadence[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_cadence")
+    .select("*")
+    .in("site_id", siteIds);
+  if (error) throw error;
+  return (data as CadenceRow[]).map(rowToCadence);
+}
+
+export async function listDueCadences(nowIso: string): Promise<ReactivationCadence[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_cadence")
+    .select("*")
+    .eq("status", "active")
+    .lte("next_due_at", nowIso);
+  if (error) throw error;
+  return (data as CadenceRow[]).map(rowToCadence);
+}
+
+export async function updateCadence(
+  id: string,
+  fields: Partial<{
+    currentStep: number;
+    status: CadenceStatus;
+    nextDueAt: string | null;
+    endedAt: string | null;
+  }>,
+): Promise<void> {
+  const db = serviceClient();
+  const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (fields.currentStep !== undefined) row.current_step = fields.currentStep;
+  if (fields.status !== undefined) row.status = fields.status;
+  if (fields.nextDueAt !== undefined) row.next_due_at = fields.nextDueAt;
+  if (fields.endedAt !== undefined) row.ended_at = fields.endedAt;
+  const { error } = await db.from("reactivation_cadence").update(row).eq("id", id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Touches + outbox.
+// ---------------------------------------------------------------------------
+
+export async function insertTouch(input: {
+  targetId: string;
+  cadenceId?: string | null;   // null when drafted before enrolment
+  siteId: string;
+  step: number;
+  channel: TouchChannel;
+  body: string;
+  draftedBy: DraftedBy;
+  status?: TouchStatus;
+}): Promise<ReactivationTouch> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_touch")
+    .insert({
+      target_id: input.targetId,
+      cadence_id: input.cadenceId || null, // empty/missing -> SQL NULL (column is a nullable uuid)
+      site_id: input.siteId,
+      step: input.step,
+      channel: input.channel,
+      body: input.body,
+      drafted_by: input.draftedBy,
+      ...(input.status ? { status: input.status } : {}),
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToTouch(data as TouchRow);
+}
+
+export async function listTouches(targetId: string): Promise<ReactivationTouch[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_touch")
+    .select("*")
+    .eq("target_id", targetId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data as TouchRow[]).map(rowToTouch);
+}
+
+export async function approveTouch(touchId: string, approvedBy: string): Promise<ReactivationTouch> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_touch")
+    .update({ status: "approved", approved_by: approvedBy })
+    .eq("id", touchId)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToTouch(data as TouchRow);
+}
+
+export async function enqueueOutbox(input: {
+  touchId: string;
+  siteId: string;
+  channel: TouchChannel;
+  toRef: string;
+  body: string;
+}): Promise<ReactivationOutboxItem> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_outbox")
+    .insert({
+      touch_id: input.touchId,
+      site_id: input.siteId,
+      channel: input.channel,
+      to_ref: input.toRef,
+      body: input.body,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToOutbox(data as OutboxRow);
+}
+
+export async function markTouchSent(touchId: string): Promise<void> {
+  const db = serviceClient();
+  const nowIso = new Date().toISOString();
+  const { error: tErr } = await db
+    .from("reactivation_touch")
+    .update({ status: "sent", sent_at: nowIso })
+    .eq("id", touchId);
+  if (tErr) throw tErr;
+  const { error: oErr } = await db
+    .from("reactivation_outbox")
+    .update({ status: "sent", provider: "stub", sent_at: nowIso })
+    .eq("touch_id", touchId);
+  if (oErr) throw oErr;
+}
