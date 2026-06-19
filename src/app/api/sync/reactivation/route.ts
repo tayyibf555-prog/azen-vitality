@@ -89,7 +89,7 @@ function summariseAppointments(payload: { appointments: unknown[] }, now: Date):
     const t = new Date(startIso).getTime();
     if (t > now.getTime()) {
       futureBookingExists = true;
-    } else if (!lastVisitAt || startIso > lastVisitAt) {
+    } else if (!lastVisitAt || new Date(startIso).getTime() > new Date(lastVisitAt).getTime()) {
       lastVisitAt = startIso;
     }
   }
