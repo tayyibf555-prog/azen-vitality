@@ -1,3 +1,5 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { SONNET } from "@/lib/ai/models";
 import type { ClassificationResult, Tier } from "./types";
 
 const CONFIDENCE_THRESHOLD = 0.6;
@@ -58,6 +60,34 @@ export function failClosed(rawInput: string): ClassificationResult {
     reasoning: "Automatic fallback: classification could not be completed.",
     needsReview: true,
   };
+}
+
+function extractText(msg: Anthropic.Message): string {
+  return msg.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+}
+
+export async function classifyKnowledge(
+  rawInput: string,
+  branches: string[],
+  client: Anthropic = new Anthropic(),
+): Promise<ClassificationResult> {
+  if (!rawInput.trim()) throw new Error("empty input");
+  const { system, user } = buildClassifyPrompt(rawInput, branches);
+  try {
+    const msg = await client.messages.create({
+      model: SONNET,
+      max_tokens: 700,
+      system,
+      messages: [{ role: "user", content: user }],
+    });
+    return parseClassification(extractText(msg));
+  } catch {
+    return failClosed(rawInput);
+  }
 }
 
 export function parseClassification(text: string): ClassificationResult {

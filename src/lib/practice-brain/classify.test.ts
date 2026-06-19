@@ -1,5 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { buildClassifyPrompt, stripEmDash, parseClassification, failClosed } from "./classify";
+import { classifyKnowledge } from "./classify";
+
+function fakeClient(jsonText: string) {
+  return {
+    messages: {
+      create: async () => ({ content: [{ type: "text", text: jsonText }] }),
+    },
+  } as unknown as import("@anthropic-ai/sdk").default;
+}
+
+function throwingClient() {
+  return {
+    messages: { create: async () => { throw new Error("api down"); } },
+  } as unknown as import("@anthropic-ai/sdk").default;
+}
 
 describe("stripEmDash", () => {
   it("replaces em and en dashes with commas", () => {
@@ -74,5 +89,28 @@ describe("failClosed", () => {
     expect(r.needsReview).toBe(true);
     expect(r.body).toContain("kettle");
     expect(r.title.length).toBeGreaterThan(0);
+  });
+});
+
+describe("classifyKnowledge", () => {
+  it("returns a parsed result from the model output", async () => {
+    const json = JSON.stringify({
+      branch: "Reception", branchIsNew: false, title: "Greeting script",
+      body: "Greet every caller by name.", tier: 1, tags: ["calls", "script"],
+      confidence: 0.92, reasoning: "Front desk script.",
+    });
+    const r = await classifyKnowledge("Greet every caller by name", ["Reception"], fakeClient(json));
+    expect(r.branch).toBe("Reception");
+    expect(r.needsReview).toBe(false);
+  });
+
+  it("fails closed when the API throws", async () => {
+    const r = await classifyKnowledge("anything", ["Reception"], throwingClient());
+    expect(r.needsReview).toBe(true);
+    expect(r.tier).toBe(4);
+  });
+
+  it("rejects empty input", async () => {
+    await expect(classifyKnowledge("   ", ["Reception"], fakeClient("{}"))).rejects.toThrow();
   });
 });
