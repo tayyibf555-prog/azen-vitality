@@ -40,6 +40,11 @@ export interface MockPatient {
   use_email: boolean;
   marketing: number; // 0 | 1 (integer, mirrors Dentally)
   active: boolean;
+  site_id: string;
+  archived?: boolean;
+  archived_reason?: string | null;
+  dentist_recall_date?: string | null;
+  hygienist_recall_date?: string | null;
 }
 
 export interface MockTreatmentPlan {
@@ -72,6 +77,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: true,
     marketing: 1,
     active: true,
+    site_id: "site-cc",
   },
   {
     id: "pat-002",
@@ -83,6 +89,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: false,
     marketing: 1,
     active: true,
+    site_id: "site-rv",
   },
   {
     id: "pat-003",
@@ -94,6 +101,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: true,
     marketing: 1,
     active: true,
+    site_id: "site-ng",
   },
   {
     id: "pat-004",
@@ -105,6 +113,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: true,
     marketing: 0,
     active: true,
+    site_id: "site-cc",
   },
   {
     id: "pat-005",
@@ -116,6 +125,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: false,
     marketing: 1,
     active: true,
+    site_id: "site-rv",
   },
   {
     id: "pat-006",
@@ -127,6 +137,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: true,
     marketing: 1,
     active: true,
+    site_id: "site-ng",
   },
   {
     id: "pat-007",
@@ -138,6 +149,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: true,
     marketing: 1,
     active: true,
+    site_id: "site-cc",
   },
   {
     // NO CONSENT on any channel — demonstrates the consent gate.
@@ -150,6 +162,7 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: false,
     marketing: 0,
     active: true,
+    site_id: "site-rv",
   },
   {
     id: "pat-009",
@@ -161,6 +174,31 @@ export const MOCK_PATIENTS: MockPatient[] = [
     use_email: true,
     marketing: 1,
     active: true,
+    site_id: "site-ng",
+  },
+  {
+    // LAPSED: archived as lapsed, no visit in ~2 years, has historic spend.
+    id: "pat-010", first_name: "Harold", last_name: "Pemberton",
+    email_address: "harold.pemberton@example.co.uk", mobile_phone: "+447700900010",
+    use_sms: true, use_email: true, marketing: 1, active: false,
+    site_id: "site-cc", archived: true, archived_reason: "lapsed",
+    dentist_recall_date: null, hygienist_recall_date: null,
+  },
+  {
+    // OVERDUE RECALL: recall date 5+ months past, no future booking.
+    id: "pat-011", first_name: "Priya", last_name: "Sharma",
+    email_address: "priya.sharma@example.co.uk", mobile_phone: "+447700900011",
+    use_sms: true, use_email: true, marketing: 1, active: true,
+    site_id: "site-rv", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-01-05T00:00:00Z", hygienist_recall_date: null,
+  },
+  {
+    // STALLED PLAN: open high-value plan accepted ~200 days ago (see plan-010).
+    id: "pat-012", first_name: "Marcus", last_name: "Bennett",
+    email_address: "marcus.bennett@example.co.uk", mobile_phone: "+447700900012",
+    use_sms: true, use_email: false, marketing: 1, active: true,
+    site_id: "site-ng", archived: false, archived_reason: null,
+    dentist_recall_date: null, hygienist_recall_date: null,
   },
 ];
 
@@ -264,6 +302,12 @@ export const MOCK_TREATMENT_PLANS: MockTreatmentPlan[] = [
     accepted_at: "2026-03-18T08:50:00Z",
     updated_at: "2026-06-13T13:40:00Z",
   },
+  // --- DORMANT STALLED PLAN: high-value, accepted ~200 days before 2026-06-18 ---
+  {
+    id: "plan-010", patient_id: "pat-012", site_id: "site-ng",
+    name: "Full mouth rehabilitation", planned_private_treatment_value: 7800,
+    amount_outstanding: 7800, accepted_at: "2025-12-01T10:00:00Z", updated_at: "2026-06-10T09:00:00Z",
+  },
 ];
 
 // --- Payment plans --------------------------------------------------------
@@ -278,6 +322,37 @@ export const MOCK_PAYMENT_PLANS: MockPaymentPlan[] = MOCK_TREATMENT_PLANS.filter
   outstanding: p.amount_outstanding,
 }));
 
+export interface MockAppointment {
+  id: string;
+  patient_id: string;
+  site_id: string;
+  start_time: string; // ISO
+  state: string;
+}
+
+export interface MockInvoice {
+  id: string;
+  patient_id: string;
+  paid: number;
+}
+
+// Appointment history. Past visits set "last visit"; a future one marks an
+// existing booking (which disqualifies a patient from the dormant book).
+export const MOCK_APPOINTMENTS: MockAppointment[] = [
+  { id: "appt-010a", patient_id: "pat-010", site_id: "site-cc", start_time: "2024-05-10T09:00:00Z", state: "completed" },
+  { id: "appt-011a", patient_id: "pat-011", site_id: "site-rv", start_time: "2025-07-02T11:30:00Z", state: "completed" },
+  { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "completed" },
+  // An active patient WITH a future booking (must NOT appear in the dormant book).
+  { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked" },
+];
+
+// Paid invoices = lifetime spend proxy.
+export const MOCK_INVOICES: MockInvoice[] = [
+  { id: "inv-010a", patient_id: "pat-010", paid: 1200 },
+  { id: "inv-010b", patient_id: "pat-010", paid: 480 },
+  { id: "inv-011a", patient_id: "pat-011", paid: 950 },
+];
+
 // --- Lookups --------------------------------------------------------------
 export function findPatient(id: string): MockPatient | undefined {
   return MOCK_PATIENTS.find((p) => p.id === id);
@@ -289,4 +364,14 @@ export function paymentPlansForPatient(patientId: string): MockPaymentPlan[] {
 
 export function treatmentPlansForSite(siteId: string): MockTreatmentPlan[] {
   return MOCK_TREATMENT_PLANS.filter((p) => p.site_id === siteId);
+}
+
+export function patientsForSite(siteId: string): MockPatient[] {
+  return MOCK_PATIENTS.filter((p) => p.site_id === siteId);
+}
+export function appointmentsForPatient(patientId: string): MockAppointment[] {
+  return MOCK_APPOINTMENTS.filter((a) => a.patient_id === patientId);
+}
+export function invoicesForPatient(patientId: string): MockInvoice[] {
+  return MOCK_INVOICES.filter((i) => i.patient_id === patientId);
 }

@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { appointmentsForPatient } from "@/app/api/mock-dentally/_fixtures";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,15 @@ function asRecord(value: unknown): Record<string, unknown> {
 function randomId(): string {
   // appt-<random-ish> — good enough for a mock.
   return `appt-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// GET /api/mock-dentally/v1/appointments?patient_id=
+export async function GET(request: Request): Promise<Response> {
+  const unauthorized = unauthorizedIfMissingBearer(request);
+  if (unauthorized) return unauthorized;
+  const url = new URL(request.url);
+  const patientId = url.searchParams.get("patient_id") ?? "";
+  return Response.json({ appointments: appointmentsForPatient(patientId) });
 }
 
 // POST /api/mock-dentally/v1/appointments
