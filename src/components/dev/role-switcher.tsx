@@ -7,17 +7,20 @@ import type { Role } from "@/lib/types";
 import { MOCK_USERS, useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
 
-const ORDER: Role[] = ["agency_admin", "client_owner", "client_coordinator"];
+const ORDER: Role[] = ["agency_admin", "client_owner", "client_manager", "client_general"];
 const LABEL: Record<Role, string> = {
   agency_admin: "Agency admin",
   client_owner: "Practice owner",
-  client_coordinator: "Coordinator",
+  client_manager: "Manager",
+  client_general: "General",
 };
 
 function destinationFor(role: Role): string {
   if (role === "agency_admin") return "/agency";
   const clientId = MOCK_USERS[role].clientId ?? "vitality";
   if (role === "client_owner") return `/owner/${clientId}`;
+  if (role === "client_manager") return `/owner/${clientId}/analytics`;
+  if (role === "client_general") return `/owner/${clientId}/daily-brief`;
   return `/c/${clientId}`;
 }
 

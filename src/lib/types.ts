@@ -15,7 +15,7 @@
  * Tenancy: Agency -> Client -> Site
  * -------------------------------------------------------------------------- */
 
-export type Role = "agency_admin" | "client_owner" | "client_coordinator";
+export type Role = "agency_admin" | "client_owner" | "client_manager" | "client_general";
 
 export interface Client {
   id: string;

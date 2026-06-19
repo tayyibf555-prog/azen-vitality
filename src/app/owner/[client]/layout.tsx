@@ -3,10 +3,12 @@
 import { OwnerSidebar } from "@/components/owner/owner-sidebar";
 import { OwnerTopbar } from "@/components/owner/owner-topbar";
 import { OwnerModeProvider } from "@/components/owner/owner-mode";
+import { RoleGuard } from "@/components/owner/role-guard";
 
 export default function OwnerLayout({ children }: { children: React.ReactNode }) {
   return (
     <OwnerModeProvider>
+      <RoleGuard />
       <div className="flex min-h-screen bg-cream">
         <OwnerSidebar />
         <div className="flex min-h-screen flex-1 flex-col">

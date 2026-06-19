@@ -37,9 +37,9 @@ export const TREATMENT_PLANS: TreatmentPlan[] = [
 ];
 
 export const BRIEF_ITEMS: BriefItem[] = [
-  { id: "b-1", siteId: "site-cc", role: "client_coordinator", priority: "high", title: "Re-present finance to Sarah Lindqvist", detail: "Accepted £3,400 Invisalign, stalled 9 days, no finance presented yet.", metric: "revenue" },
-  { id: "b-2", siteId: "site-cc", role: "client_coordinator", priority: "high", title: "Confirm George Mills (arrived)", detail: "High-value implant review in surgery shortly. Make sure notes are ready.", metric: "bookings" },
+  { id: "b-1", siteId: "site-cc", role: "client_general", priority: "high", title: "Re-present finance to Sarah Lindqvist", detail: "Accepted £3,400 Invisalign, stalled 9 days, no finance presented yet.", metric: "revenue" },
+  { id: "b-2", siteId: "site-cc", role: "client_general", priority: "high", title: "Confirm George Mills (arrived)", detail: "High-value implant review in surgery shortly. Make sure notes are ready.", metric: "bookings" },
   { id: "b-3", siteId: "site-ng", role: "client_owner", priority: "medium", title: "Northgate no-show rate at 14%", detail: "Above the 10% threshold this week. Reminder cadence may need tightening.", metric: "risk" },
   { id: "b-4", siteId: "site-cc", role: "all", priority: "medium", title: "3 hygienist recalls due tomorrow", detail: "All consented for SMS. Recall concierge will handle unless paused.", metric: "bookings" },
-  { id: "b-5", siteId: "site-rv", role: "client_coordinator", priority: "low", title: "Tom Fletcher waiting 41s for first contact", detail: "Just outside the 30s target. Worth a quick callback.", metric: "time" },
+  { id: "b-5", siteId: "site-rv", role: "client_general", priority: "low", title: "Tom Fletcher waiting 41s for first contact", detail: "Just outside the 30s target. Worth a quick callback.", metric: "time" },
 ];

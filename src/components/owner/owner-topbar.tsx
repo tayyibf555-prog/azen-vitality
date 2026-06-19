@@ -28,23 +28,25 @@ export function OwnerTopbar() {
 
   return (
     <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-line bg-card px-8">
-      {/* Left: site switcher + mode segmented control */}
+      {/* Left: site switcher + (owner-only) mode segmented control */}
       <div className="flex items-center gap-3">
         <SiteSwitcher />
-        <div className="flex items-center gap-0.5 rounded-lg border border-line-strong bg-card-muted p-0.5">
-          <ModeButton
-            label="Operations"
-            icon={ListChecks}
-            active={mode === "operations"}
-            onClick={() => select("operations")}
-          />
-          <ModeButton
-            label="Management"
-            icon={Gauge}
-            active={mode === "management"}
-            onClick={() => select("management")}
-          />
-        </div>
+        {user?.role === "client_owner" ? (
+          <div className="flex items-center gap-0.5 rounded-lg border border-line-strong bg-card-muted p-0.5">
+            <ModeButton
+              label="Operations"
+              icon={ListChecks}
+              active={mode === "operations"}
+              onClick={() => select("operations")}
+            />
+            <ModeButton
+              label="Management"
+              icon={Gauge}
+              active={mode === "management"}
+              onClick={() => select("management")}
+            />
+          </div>
+        ) : null}
       </div>
 
       {/* Right side */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Building2, Stethoscope, Headset, ArrowRight } from "lucide-react";
+import { Building2, Stethoscope, LineChart, Headset, ArrowRight } from "lucide-react";
 import type { Role } from "@/lib/types";
 import { MOCK_USERS, useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,8 @@ function destinationFor(role: Role): string {
   if (role === "agency_admin") return "/agency";
   const clientId = MOCK_USERS[role].clientId ?? "vitality";
   if (role === "client_owner") return `/owner/${clientId}`;
+  if (role === "client_manager") return `/owner/${clientId}/analytics`;
+  if (role === "client_general") return `/owner/${clientId}/daily-brief`;
   return `/c/${clientId}`;
 }
 
@@ -30,16 +32,22 @@ const ROLE_CARDS: {
     blurb: "The practice owner view. Full funnel across all sites, every module, real-time performance.",
   },
   {
-    role: "client_coordinator",
+    role: "client_manager",
+    icon: LineChart,
+    blurb: "The practice manager view. Analytics, the team's tasks, running systems and the AI co-pilot.",
+  },
+  {
+    role: "client_general",
     icon: Headset,
-    blurb: "The front-desk view. The day's prioritised tasks, recalls, follow-ups and bookings.",
+    blurb: "The front-desk view. The day's prioritised tasks, recalls, treatment follow-ups and reactivation.",
   },
 ];
 
 const ROLE_LABEL: Record<Role, string> = {
   agency_admin: "Agency admin",
   client_owner: "Practice owner",
-  client_coordinator: "Coordinator",
+  client_manager: "Manager",
+  client_general: "General",
 };
 
 export default function LoginPage() {

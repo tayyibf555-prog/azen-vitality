@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
 const ROLE_LABELS: Record<string, string> = {
   agency_admin: "Agency admin",
   client_owner: "Owner",
-  client_coordinator: "Coordinator",
+  client_manager: "Manager",
+  client_general: "General",
 };
 
 function initialsOf(name: string) {

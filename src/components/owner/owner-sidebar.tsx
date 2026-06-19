@@ -7,12 +7,21 @@ import { CLIENT_NAV, type NavGroup } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { useOwnerMode } from "@/components/owner/owner-mode";
+import { PORTAL_ACCESS, isClientRole } from "@/lib/portal-access";
 import { cn } from "@/lib/utils";
+
+/** Slugs that have a placeholder (not yet built) CLIENT_NAV entry. */
+const PLACEHOLDER_SLUGS = new Set(
+  CLIENT_NAV.flatMap((g) => g.items)
+    .filter((i) => i.status === "placeholder")
+    .map((i) => i.slug),
+);
 
 const ROLE_LABELS: Record<string, string> = {
   agency_admin: "Agency admin",
   client_owner: "Owner",
-  client_coordinator: "Coordinator",
+  client_manager: "Manager",
+  client_general: "General",
 };
 
 function initialsOf(name: string) {
@@ -46,6 +55,11 @@ export function OwnerSidebar() {
     (group) => !group.items.some((item) => item.slug === ""),
   );
 
+  // Owner (and agency_admin previewing) keep the mode-based nav; the two employee
+  // roles render their fixed PORTAL_ACCESS nav as a single group instead.
+  const role = user?.role;
+  const isEmployeePortal = role === "client_manager" || role === "client_general";
+
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-navy-line bg-navy">
       {/* Client context */}
@@ -63,7 +77,26 @@ export function OwnerSidebar() {
 
       {/* Nav groups */}
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {mode === "management" ? (
+        {isEmployeePortal && isClientRole(role) ? (
+          <div className="mb-4">
+            <ul className="space-y-0.5">
+              {PORTAL_ACCESS[role].nav.map((item) => {
+                const href = item.slug === "" ? base : `${base}/${item.slug}`;
+                const active = item.slug === "" ? isBaseActive : isHrefActive(href);
+                return (
+                  <SidebarLink
+                    key={item.slug || "base"}
+                    href={href}
+                    label={item.label}
+                    icon={item.icon}
+                    active={active}
+                    soon={PLACEHOLDER_SLUGS.has(item.slug)}
+                  />
+                );
+              })}
+            </ul>
+          </div>
+        ) : mode === "management" ? (
           <div className="mb-4">
             <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
               Management

@@ -27,11 +27,18 @@ export const MOCK_USERS: Record<Role, SessionUser> = {
     role: "client_owner",
     clientId: "vitality",
   },
-  client_coordinator: {
-    id: "u-vitality-coord",
+  client_manager: {
+    id: "u-vitality-manager",
+    name: "Priya Shah",
+    email: "priya@vitalitydental.co.uk",
+    role: "client_manager",
+    clientId: "vitality",
+  },
+  client_general: {
+    id: "u-vitality-general",
     name: "Aisha Rahman",
     email: "aisha@vitalitydental.co.uk",
-    role: "client_coordinator",
+    role: "client_general",
     clientId: "vitality",
   },
 };
