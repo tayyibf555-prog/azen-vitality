@@ -110,7 +110,8 @@ Tags: **[PILOT]** ships in the first London build (target 2 weeks, 3 max if the 
 - **Accounts:** `planned_private_treatment_value` and `planned_nhs_treatment_value` (treatment-coordinator targeting).
 - **Invoices:** `amount_outstanding`/`paid`, `treatment_plan_id` (revenue tracking).
 - `site_id` is on everything — this is what makes the cross-site dashboard possible.
-- **Constraints:** appointments queries limited to <=3 months per request; paginate (<=100/page); **no webhooks**, so poll with `updated_after`; a `User-Agent` header is required.
+- **Constraints:** appointments queries limited to <=3 months per request; paginate (<=100/page); a `User-Agent` header is required.
+- **Webhooks:** Dentally **does support webhooks** (patient.* and appointment.* events; appointment payloads carry the state timestamps incl. `did_not_attend_at` / `completed_at`). Use webhooks for real-time tracking, and keep polling with `updated_after` as a reconciliation backstop.
 - **The API sends no SMS/WhatsApp and holds no clinical data.** Use Twilio / WhatsApp Business API for messaging. The absence of clinical data fits our boundary; do not work around it.
 
 ## 9. Conventions
