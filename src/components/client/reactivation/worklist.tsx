@@ -104,7 +104,7 @@ export function Worklist({
       header: "Next due",
       cell: (t) => {
         const c = cadenceByTarget.get(t.id);
-        return <span className="text-muted">{c?.nextDueAt ? relativeTime(c.nextDueAt, now) : "—"}</span>;
+        return <span className="text-muted">{c?.nextDueAt ? relativeTime(c.nextDueAt, now) : "Not scheduled"}</span>;
       },
       align: "right",
     },
