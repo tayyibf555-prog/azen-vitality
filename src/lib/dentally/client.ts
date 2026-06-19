@@ -18,8 +18,18 @@ export class DentallyClient {
     this.userAgent = opts.userAgent ?? "Azen-Vitality/0.1 (+https://azen.ai)";
   }
 
+  /**
+   * Join base + path by string concatenation (not `new URL(path, base)`), so a
+   * base URL that carries its own path prefix is preserved. This lets us point
+   * at a local mock server (e.g. http://localhost:3000/api/mock-dentally) as
+   * well as the real https://api.sandbox.dentally.co.
+   */
+  private buildUrl(path: string): URL {
+    return new URL(this.opts.baseUrl.replace(/\/+$/, "") + path);
+  }
+
   private async get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
-    const url = new URL(path, this.opts.baseUrl);
+    const url = this.buildUrl(path);
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
     const res = await this.fetchImpl(url, {
       headers: { Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent, Accept: "application/json" },
@@ -39,7 +49,7 @@ export class DentallyClient {
   }
 
   async createAppointment(payload: Record<string, unknown>) {
-    const url = new URL("/v1/appointments", this.opts.baseUrl);
+    const url = this.buildUrl("/v1/appointments");
     const res = await this.fetchImpl(url, {
       method: "POST",
       headers: {

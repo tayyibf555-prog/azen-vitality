@@ -6,7 +6,7 @@ const NOW = new Date("2026-06-18T09:00:00Z");
 const input: DentallyPlanInput = {
   siteId: "site-cc",
   patient: { id: "123", first_name: "Sarah", last_name: "Lindqvist",
-    contact_details: { sms_marketing: true, email_marketing: false }, marketing: true },
+    use_sms: true, use_email: false, marketing: 1 },
   plan: { id: "pl-9", name: "Invisalign full arch", planned_private_treatment_value: 3400,
     accepted_at: "2026-04-01T00:00:00Z" },
   amountOutstanding: 3400,
