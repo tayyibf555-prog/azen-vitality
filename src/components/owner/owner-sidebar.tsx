@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Gauge, LogOut } from "lucide-react";
-import { CLIENT_NAV } from "@/lib/nav";
+import { Gauge, LayoutDashboard, LogOut, type LucideIcon } from "lucide-react";
+import { CLIENT_NAV, type NavGroup } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
+import { useOwnerMode } from "@/components/owner/owner-mode";
 import { cn } from "@/lib/utils";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -29,21 +30,21 @@ export function OwnerSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { mode } = useOwnerMode();
 
   const clientSlug = params.client;
   const client = getClient(clientSlug);
   const base = `/owner/${clientSlug}`;
 
-  // The owner Overview lives at /owner/[client]/overview, so the base path is
-  // reserved for the Management view rather than the funnel Overview.
-  const hrefFor = (slug: string) => (slug === "" ? `${base}/overview` : `${base}/${slug}`);
+  const isBaseActive = pathname === base || pathname === `${base}/`;
 
-  const isManagementActive = pathname === base || pathname === `${base}/`;
+  const isHrefActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
-  const isActive = (slug: string) => {
-    const href = hrefFor(slug);
-    return pathname === href || pathname.startsWith(`${href}/`);
-  };
+  // Operations mode renders the CLIENT_NAV groups, skipping the first Overview
+  // group (its only item has slug ""), each item linking under /owner/[client].
+  const operationsGroups: NavGroup[] = CLIENT_NAV.filter(
+    (group) => !group.items.some((item) => item.slug === ""),
+  );
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-navy-line bg-navy">
@@ -62,70 +63,50 @@ export function OwnerSidebar() {
 
       {/* Nav groups */}
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {/* Management: the owner's command view, peer of (but above) the funnel. */}
-        <div className="mb-4">
-          <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
-            Practice
-          </p>
-          <ul className="space-y-0.5">
-            <li>
-              <Link
-                href={base}
-                className={cn(
-                  "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
-                  isManagementActive
-                    ? "bg-navy-soft text-on-navy"
-                    : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
-                )}
-              >
-                {isManagementActive ? (
-                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
-                ) : null}
-                <Gauge size={16} className="shrink-0" />
-                <span className="truncate">Management</span>
-              </Link>
-            </li>
-          </ul>
-        </div>
-
-        {CLIENT_NAV.map((group) => (
-          <div key={group.label} className="mb-4">
+        {mode === "management" ? (
+          <div className="mb-4">
             <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
-              {group.label}
+              Management
             </p>
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const href = hrefFor(item.slug);
-                const active = isActive(item.slug);
-                return (
-                  <li key={item.slug || "overview"}>
-                    <Link
-                      href={href}
-                      className={cn(
-                        "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
-                        active
-                          ? "bg-navy-soft text-on-navy"
-                          : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
-                      )}
-                    >
-                      {active ? (
-                        <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
-                      ) : null}
-                      <Icon size={16} className="shrink-0" />
-                      <span className="truncate">{item.label}</span>
-                      {item.status === "placeholder" ? (
-                        <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
-                          soon
-                        </span>
-                      ) : null}
-                    </Link>
-                  </li>
-                );
-              })}
+              <SidebarLink
+                href={base}
+                label="Management"
+                icon={Gauge}
+                active={isBaseActive}
+              />
+              <SidebarLink
+                href={`${base}/overview`}
+                label="Overview"
+                icon={LayoutDashboard}
+                active={isHrefActive(`${base}/overview`)}
+              />
             </ul>
           </div>
-        ))}
+        ) : (
+          operationsGroups.map((group) => (
+            <div key={group.label} className="mb-4">
+              <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
+                {group.label}
+              </p>
+              <ul className="space-y-0.5">
+                {group.items.map((item) => {
+                  const href = `${base}/${item.slug}`;
+                  return (
+                    <SidebarLink
+                      key={item.slug}
+                      href={href}
+                      label={item.label}
+                      icon={item.icon}
+                      active={isHrefActive(href)}
+                      soon={item.status === "placeholder"}
+                    />
+                  );
+                })}
+              </ul>
+            </div>
+          ))
+        )}
       </nav>
 
       {/* User chip + logout */}
@@ -163,5 +144,44 @@ export function OwnerSidebar() {
         )}
       </div>
     </aside>
+  );
+}
+
+function SidebarLink({
+  href,
+  label,
+  icon: Icon,
+  active,
+  soon,
+}: {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  active: boolean;
+  soon?: boolean;
+}) {
+  return (
+    <li>
+      <Link
+        href={href}
+        className={cn(
+          "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+          active
+            ? "bg-navy-soft text-on-navy"
+            : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+        )}
+      >
+        {active ? (
+          <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+        ) : null}
+        <Icon size={16} className="shrink-0" />
+        <span className="truncate">{label}</span>
+        {soon ? (
+          <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
+            soon
+          </span>
+        ) : null}
+      </Link>
+    </li>
   );
 }

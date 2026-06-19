@@ -14,6 +14,7 @@ import {
   MessageCircle,
   Sunrise,
   BrainCircuit,
+  CalendarRange,
   Settings,
 } from "lucide-react";
 
@@ -159,6 +160,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: BrainCircuit,
         status: "placeholder",
         note: "Basic internal knowledge base for the pilot: protocols, scripts, pricing and Dentally workflows. One standard answer across every site.",
+      },
+      {
+        slug: "staff-rota",
+        label: "Staff rota",
+        icon: CalendarRange,
+        status: "placeholder",
+        note: "Staff scheduling and rota across all sites, replacing the per-head third-party app (around 40 staff). Phase 2. Build out later.",
       },
     ],
   },
