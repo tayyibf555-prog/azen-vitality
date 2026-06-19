@@ -1,0 +1,239 @@
+import { DentallyClient } from "@/lib/dentally/client";
+import {
+  toReactivationTarget,
+  DEFAULT_CONFIG,
+  type ReactivationConfig,
+  type ReactivationInput,
+} from "@/lib/reactivation/normalise";
+import { rankTargets } from "@/lib/reactivation/scoring";
+import { upsertTargets, getSyncState, setSyncState } from "@/lib/reactivation/repository";
+import { SITES } from "@/lib/mock/clients";
+
+export const dynamic = "force-dynamic";
+
+const RESOURCE = "reactivation";
+const PER_PAGE = 100;
+
+// ===========================================================================
+// CALIBRATION: confirm these field paths against the live Dentally sandbox.
+// Everything about the raw Dentally JSON shape lives in THIS block.
+// Known unknowns to verify on calibration:
+//   - patients[]      -> id, names, consent (use_sms/use_email/marketing),
+//                        archived/archived_reason, dentist/hygienist recall dates
+//   - appointments[]  -> start/date field; how past vs future is represented
+//   - invoices[]      -> paid amount field (for historic spend)
+//   - treatment_plans -> open plan id/name/value/accepted_at + outstanding
+// ===========================================================================
+
+type Raw = Record<string, unknown>;
+
+function asRecord(v: unknown): Raw {
+  return v && typeof v === "object" ? (v as Raw) : {};
+}
+function pickString(o: Raw, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string") return v;
+    if (typeof v === "number") return String(v);
+  }
+  return undefined;
+}
+function pickNumber(o: Raw, ...keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  }
+  return undefined;
+}
+function pickBoolean(o: Raw, ...keys: string[]): boolean | undefined {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "boolean") return v;
+    if (typeof v === "number") return v === 1;
+  }
+  return undefined;
+}
+
+function patientUpdatedAt(p: Raw): string | undefined {
+  return pickString(p, "updated_at", "updatedAt");
+}
+
+function mapPatient(p: Raw, fallbackId: string): ReactivationInput["patient"] {
+  return {
+    id: pickString(p, "id") ?? fallbackId,
+    first_name: pickString(p, "first_name", "firstName") ?? "",
+    last_name: pickString(p, "last_name", "lastName") ?? "",
+    use_sms: pickBoolean(p, "use_sms", "sms"),
+    use_email: pickBoolean(p, "use_email", "email"),
+    marketing: pickBoolean(p, "marketing"),
+    archived: pickBoolean(p, "archived"),
+    archived_reason: pickString(p, "archived_reason", "archivedReason") ?? null,
+    dentist_recall_date: pickString(p, "dentist_recall_date", "dentistRecallDate") ?? null,
+    hygienist_recall_date: pickString(p, "hygienist_recall_date", "hygienistRecallDate") ?? null,
+  };
+}
+
+/** Most recent past appointment date, and whether any future appointment exists. */
+function summariseAppointments(payload: { appointments: unknown[] }, now: Date): {
+  lastVisitAt: string | null;
+  futureBookingExists: boolean;
+} {
+  const appts = Array.isArray(payload.appointments) ? payload.appointments : [];
+  let lastVisitAt: string | null = null;
+  let futureBookingExists = false;
+  for (const raw of appts) {
+    const a = asRecord(raw);
+    const startIso = pickString(a, "start_time", "start", "date", "appointment_date");
+    if (!startIso) continue;
+    const t = new Date(startIso).getTime();
+    if (t > now.getTime()) {
+      futureBookingExists = true;
+    } else if (!lastVisitAt || startIso > lastVisitAt) {
+      lastVisitAt = startIso;
+    }
+  }
+  return { lastVisitAt, futureBookingExists };
+}
+
+/** Sum of paid invoice amounts = lifetime spend proxy. */
+function deriveHistoricSpend(payload: { invoices: unknown[] }): number {
+  const invoices = Array.isArray(payload.invoices) ? payload.invoices : [];
+  let total = 0;
+  for (const raw of invoices) {
+    const inv = asRecord(raw);
+    total += pickNumber(inv, "paid", "amount_paid", "total_paid") ?? 0;
+  }
+  return total;
+}
+
+interface OpenPlan {
+  plan: ReactivationInput["plan"];
+  amountOutstanding: number;
+}
+
+/**
+ * Index a site's treatment plans by patient id, keeping the open one
+ * (outstanding > 0). The treatment plan carries accepted_at + outstanding,
+ * which is what stalled-plan detection needs.
+ */
+function indexOpenPlansByPatient(rawPlans: unknown[]): Map<string, OpenPlan> {
+  const byPatient = new Map<string, OpenPlan>();
+  for (const raw of rawPlans) {
+    const tp = asRecord(raw);
+    const patientId = pickString(tp, "patient_id", "patientId");
+    const outstanding = pickNumber(tp, "amount_outstanding", "outstanding", "balance") ?? 0;
+    if (!patientId || outstanding <= 0) continue;
+    byPatient.set(patientId, {
+      plan: {
+        id: pickString(tp, "id") ?? "",
+        name: pickString(tp, "name", "title", "description") ?? "Treatment plan",
+        planned_private_treatment_value:
+          pickNumber(tp, "planned_private_treatment_value", "total", "value") ?? 0,
+        accepted_at: pickString(tp, "accepted_at", "acceptedAt", "created_at") ?? new Date().toISOString(),
+      },
+      amountOutstanding: outstanding,
+    });
+  }
+  return byPatient;
+}
+
+// ===========================================================================
+// END CALIBRATION block.
+// ===========================================================================
+
+function config(): ReactivationConfig {
+  return {
+    lapseMonths: Number(process.env.REACTIVATION_LAPSE_MONTHS ?? DEFAULT_CONFIG.lapseMonths),
+    recallGraceDays: Number(process.env.REACTIVATION_RECALL_GRACE_DAYS ?? DEFAULT_CONFIG.recallGraceDays),
+    staleDays: Number(process.env.REACTIVATION_STALE_DAYS ?? DEFAULT_CONFIG.staleDays),
+    baselineValue: Number(process.env.REACTIVATION_BASELINE_VALUE ?? DEFAULT_CONFIG.baselineValue),
+  };
+}
+
+function vitalitySiteIds(): string[] {
+  return SITES.filter((s) => s.clientId === "vitality").map((s) => s.id);
+}
+
+async function syncSite(
+  client: DentallyClient,
+  siteId: string,
+  cfg: ReactivationConfig,
+): Promise<{ siteId: string; pulled: number; upserted: number }> {
+  const state = await getSyncState(siteId, RESOURCE);
+  const updatedAfter = state?.highWaterMark ?? undefined;
+  const now = new Date();
+
+  // 1. Index the site's open treatment plans by patient (carries outstanding + accepted_at).
+  const openByPatient = new Map<string, OpenPlan>();
+  for (let pp = 1; ; pp++) {
+    const res = await client.listTreatmentPlans({ siteId, page: pp, perPage: PER_PAGE });
+    const rawPlans = Array.isArray(res.treatment_plans) ? res.treatment_plans : [];
+    for (const [k, v] of indexOpenPlansByPatient(rawPlans)) openByPatient.set(k, v);
+    if (rawPlans.length < PER_PAGE) break;
+  }
+
+  // 2. Page patients and classify each into a cohort.
+  const targets = [];
+  let highWaterMark = updatedAfter ?? null;
+  let pulled = 0;
+  let page = 1;
+
+  for (;;) {
+    const res = await client.listPatients({ siteId, updatedAfter, page, perPage: PER_PAGE });
+    const rawPatients = Array.isArray(res.patients) ? res.patients : [];
+    pulled += rawPatients.length;
+
+    for (const rawPatient of rawPatients) {
+      const p = asRecord(rawPatient);
+      const patient = mapPatient(p, "");
+      if (!patient.id) continue;
+
+      const appts = summariseAppointments(await client.getPatientAppointments(patient.id), now);
+      const historicSpend = deriveHistoricSpend(await client.getPatientInvoices(patient.id));
+      const open = openByPatient.get(patient.id) ?? { plan: null, amountOutstanding: 0 };
+
+      const input: ReactivationInput = {
+        siteId,
+        patient,
+        lastVisitAt: appts.lastVisitAt,
+        futureBookingExists: appts.futureBookingExists,
+        plan: open.plan,
+        amountOutstanding: open.amountOutstanding,
+        historicSpend,
+        lastTouchAt: null,
+      };
+
+      const target = toReactivationTarget(input, now, cfg);
+      if (target) targets.push(target);
+
+      const updated = patientUpdatedAt(p);
+      if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
+    }
+
+    if (rawPatients.length < PER_PAGE) break;
+    page += 1;
+  }
+
+  const ranked = rankTargets(targets, now);
+  await upsertTargets(ranked);
+  await setSyncState(siteId, RESOURCE, highWaterMark ?? now.toISOString());
+  return { siteId, pulled, upserted: ranked.length };
+}
+
+export async function POST() {
+  const apiKey = process.env.DENTALLY_API_KEY;
+  if (!apiKey) {
+    return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
+  }
+  const client = new DentallyClient({
+    apiKey,
+    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+  });
+  const cfg = config();
+  const perSite = [];
+  for (const siteId of vitalitySiteIds()) {
+    perSite.push(await syncSite(client, siteId, cfg));
+  }
+  return Response.json({ ok: true, perSite });
+}

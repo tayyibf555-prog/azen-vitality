@@ -339,6 +339,16 @@ export interface MockInvoice {
 // Appointment history. Past visits set "last visit"; a future one marks an
 // existing booking (which disqualifies a patient from the dormant book).
 export const MOCK_APPOINTMENTS: MockAppointment[] = [
+  // Active patients — recent past visit, no future booking → not dormant.
+  { id: "appt-002a", patient_id: "pat-002", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-003a", patient_id: "pat-003", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-004a", patient_id: "pat-004", site_id: "site-cc",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-005a", patient_id: "pat-005", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-006a", patient_id: "pat-006", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-007a", patient_id: "pat-007", site_id: "site-cc",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-008a", patient_id: "pat-008", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-009a", patient_id: "pat-009", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  // Dormant patients.
   { id: "appt-010a", patient_id: "pat-010", site_id: "site-cc", start_time: "2024-05-10T09:00:00Z", state: "completed" },
   { id: "appt-011a", patient_id: "pat-011", site_id: "site-rv", start_time: "2025-07-02T11:30:00Z", state: "completed" },
   { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "completed" },
