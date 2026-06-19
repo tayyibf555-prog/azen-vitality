@@ -23,10 +23,23 @@ const PER_PAGE = 100;
 // Raw shapes are typed loosely (Record<string, unknown>) and narrowed with the
 // small `pick*` helpers so we never reach for `any`.
 //
-// Known unknowns to verify on calibration:
-//   - treatment_plans[]   -> plan id, name, value, accepted_at, patient_id
-//   - patients/:id        -> first_name, last_name, contact_details, marketing
-//   - payment_plans[]     -> how "amount outstanding" is represented/summed
+// Calibrated against the local mock at src/app/api/mock-dentally (which mirrors
+// the real Dentally response shapes). Field paths confirmed:
+//   - treatment_plans[] -> id, name, patient_id, planned_private_treatment_value,
+//       amount_outstanding (MOCK source for outstanding — see note below),
+//       accepted_at, updated_at (high-water mark).
+//   - patients/:id      -> id, first_name, last_name, and the consent fields
+//       use_sms / use_email (boolean) + marketing (integer 0/1). These mirror
+//       the real Dentally patient object exactly.
+//   - payment_plans[]   -> NOT used for the amount. We prefer the plan's
+//       amount_outstanding directly (see MOCK SIMPLIFICATION below). The call
+//       is dropped to avoid an extra round-trip per patient.
+//
+// MOCK SIMPLIFICATION: real Dentally does not expose a clean treatment-plans-
+// with-outstanding list — outstanding really lives on invoices/accounts. The
+// mock carries amount_outstanding directly on the plan so the pipeline runs.
+// When wiring the real sandbox, replace `planAmountOutstanding` with the proper
+// invoice/account lookup; the rest of the mapping should be unaffected.
 // ===========================================================================
 
 type Raw = Record<string, unknown>;
@@ -92,47 +105,30 @@ function mapPlan(plan: Raw): DentallyPlanInput["plan"] {
   };
 }
 
+/**
+ * Amount outstanding sourced directly from the treatment plan.
+ *
+ * MOCK SIMPLIFICATION: the mock carries `amount_outstanding` on the plan. For
+ * the real sandbox, outstanding lives on invoices/accounts — replace this with
+ * the proper lookup (the rest of the mapping is independent of it).
+ */
+function planAmountOutstanding(plan: Raw): number {
+  return pickNumber(plan, "amount_outstanding", "amountOutstanding") ?? 0;
+}
+
 /** Map a raw patient record into the normaliser's `patient` sub-shape. */
 function mapPatient(patient: Raw, fallbackId: string): DentallyPlanInput["patient"] {
-  const contact = asRecord(patient["contact_details"] ?? patient["contactDetails"]);
   return {
     id: pickString(patient, "id") ?? fallbackId,
     first_name: pickString(patient, "first_name", "firstName") ?? "",
     last_name: pickString(patient, "last_name", "lastName") ?? "",
-    contact_details: {
-      sms_marketing: pickBoolean(contact, "sms_marketing", "smsMarketing"),
-      email_marketing: pickBoolean(contact, "email_marketing", "emailMarketing"),
-    },
-    marketing: pickBoolean(patient, "marketing"),
+    // Consent: flat top-level fields, mirroring the real Dentally patient.
+    use_sms: pickBoolean(patient, "use_sms", "useSms"),
+    use_email: pickBoolean(patient, "use_email", "useEmail"),
+    // `marketing` is an integer (0/1) in Dentally; the normaliser accepts
+    // number|boolean and coerces with Boolean(), so 0 -> false, 1 -> true.
+    marketing: pickNumber(patient, "marketing"),
   };
-}
-
-/**
- * Derive the amount outstanding from the account/payment-plans payload.
- * Sums any per-plan outstanding balances; falls back to a single top-level
- * field if that is how the sandbox returns it.
- */
-function deriveOutstanding(payload: { payment_plans: unknown[] }): number {
-  const plans = Array.isArray(payload.payment_plans) ? payload.payment_plans : [];
-  let total = 0;
-  let sawAny = false;
-  for (const raw of plans) {
-    const pp = asRecord(raw);
-    const amount = pickNumber(
-      pp,
-      "outstanding",
-      "amount_outstanding",
-      "balance",
-      "outstanding_balance",
-    );
-    if (amount !== undefined) {
-      total += amount;
-      sawAny = true;
-    }
-  }
-  if (sawAny) return total;
-  // Fallback: a single top-level outstanding figure on the payload itself.
-  return pickNumber(asRecord(payload), "outstanding", "amount_outstanding") ?? 0;
 }
 
 // ===========================================================================
@@ -171,13 +167,14 @@ async function syncSite(
       const plan = asRecord(rawPlan);
       const patientId = planPatientId(plan);
 
+      // Outstanding comes from the plan itself (see CALIBRATION block); we no
+      // longer call the payment_plans endpoint for the amount.
+      const amountOutstanding = planAmountOutstanding(plan);
+
       let patient: DentallyPlanInput["patient"];
-      let amountOutstanding = 0;
       if (patientId) {
         const patientRes = await client.getPatient(patientId);
         patient = mapPatient(asRecord(patientRes.patient), patientId);
-        const outstandingRes = await client.getAccountOutstanding(patientId);
-        amountOutstanding = deriveOutstanding(outstandingRes);
       } else {
         patient = mapPatient({}, "");
       }
