@@ -45,6 +45,24 @@ describe("reactivationScore", () => {
     );
     expect(plan).toBeGreaterThan(checkup);
   });
+
+  it("uses recallDueAt as the anchor when set, ignoring an older lastVisitAt", () => {
+    const fromRecall = reactivationScore(
+      target({ recallDueAt: "2026-05-01T00:00:00Z", lastVisitAt: "2024-01-01T00:00:00Z" }),
+      NOW,
+    );
+    const fromLastVisit = reactivationScore(
+      target({ recallDueAt: null, lastVisitAt: "2024-01-01T00:00:00Z" }),
+      NOW,
+    );
+    expect(fromRecall).toBeGreaterThan(fromLastVisit);
+  });
+
+  it("handles both anchor dates null without producing NaN", () => {
+    const s = reactivationScore(target({ recallDueAt: null, lastVisitAt: null }), NOW);
+    expect(Number.isFinite(s)).toBe(true);
+    expect(s).toBeGreaterThan(0);
+  });
 });
 
 describe("rankTargets", () => {
