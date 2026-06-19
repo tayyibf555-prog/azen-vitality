@@ -49,6 +49,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     }
 
     // Every other action requires a valid unlock cookie. maxTier comes from it, not the client.
+    if (!secret) return fail("Server missing PRACTICE_BRAIN_SESSION_SECRET.", 500);
     const session = verifySession(req.cookies.get(COOKIE)?.value, secret);
     if (!session) return fail("Locked. Unlock Practice Brain first.", 401);
     const maxTier = session.maxTier as Tier;
@@ -103,8 +104,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       if (maxTier < 3) return fail("Not authorised.", 403);
       const id = String(body.id ?? "");
       const branch = String(body.branch ?? "");
-      const tier = Number(body.tier) as Tier;
+      const tierNum = Math.round(Number(body.tier));
       if (!id || !branch) return fail("Missing id or branch.");
+      if (![1, 2, 3, 4].includes(tierNum)) return fail("Tier must be 1 to 4.");
+      const tier = tierNum as Tier;
       const parentId = await ensureBranch(CLIENT_ID, branch, tier);
       await resolveReview(id, { tier, parentId });
       return ok({ id });
