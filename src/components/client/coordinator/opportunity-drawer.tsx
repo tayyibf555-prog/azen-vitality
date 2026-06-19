@@ -173,8 +173,8 @@ export function OpportunityDrawer({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <StatusPill tone={STATUS_TONE[opportunity.status]}>
-              {STATUS_LABEL[opportunity.status]}
+            <StatusPill tone={STATUS_TONE[opportunity.status] ?? "neutral"}>
+              {STATUS_LABEL[opportunity.status] ?? opportunity.status}
             </StatusPill>
             <StatusPill tone="neutral">
               {daysStalled(opportunity.acceptedAt, now)} days stalled

@@ -4,6 +4,7 @@ import {
   approveTouch,
   enqueueOutbox,
   getOpportunity,
+  getTouch,
   insertTouch,
   markTouchSent,
   setLastTouchAt,
@@ -36,12 +37,15 @@ function autoSendThreshold(): number {
 
 /**
  * Whether the chosen channel is consented for this opportunity.
- * WhatsApp uses SMS consent as a proxy for now.
+ *
+ * A channel is consented only if BOTH the per-channel flag (sms/email; whatsapp
+ * uses sms as a proxy) AND the marketing consent flag are true.
  */
 function isChannelConsented(
   opportunity: TreatmentOpportunity,
   channel: TouchChannel,
 ): boolean {
+  if (!opportunity.consent.marketing) return false;
   switch (channel) {
     case "email":
       return opportunity.consent.email;
@@ -72,6 +76,10 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
   }
   if (!isChannel(channel)) {
     return badRequest("channel must be one of sms, email, whatsapp");
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return Response.json({ error: "ANTHROPIC_API_KEY not set" }, { status: 503 });
   }
 
   const opportunity = await getOpportunity(opportunityId);
@@ -139,6 +147,13 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
     return Response.json({ error: "Opportunity not found" }, { status: 404 });
   }
 
+  if (!isChannelConsented(opportunity, channel)) {
+    return Response.json(
+      { error: "Channel not consented", consentBlocked: true },
+      { status: 403 },
+    );
+  }
+
   const touch = await approveTouch(touchId, "coordinator");
   await enqueueOutbox({
     touchId: touch.id,
@@ -160,6 +175,28 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
   }
   if (typeof opportunityId !== "string" || opportunityId === "") {
     return badRequest("opportunityId is required");
+  }
+
+  const touch = await getTouch(touchId);
+  if (!touch || touch.opportunityId !== opportunityId) {
+    return Response.json({ error: "Touch not found" }, { status: 404 });
+  }
+  if (touch.status !== "approved" && touch.status !== "queued") {
+    return Response.json(
+      { error: `Touch is not ready to send (status: ${touch.status})` },
+      { status: 409 },
+    );
+  }
+
+  const opportunity = await getOpportunity(opportunityId);
+  if (!opportunity) {
+    return Response.json({ error: "Opportunity not found" }, { status: 404 });
+  }
+  if (!isChannelConsented(opportunity, touch.channel)) {
+    return Response.json(
+      { error: "Channel not consented", consentBlocked: true },
+      { status: 403 },
+    );
   }
 
   // STUB adapter: mark the touch (and its outbox row) sent, provider 'stub'.
@@ -192,14 +229,30 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
 
   const client = new DentallyClient({
     apiKey,
-    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.sandbox.dentally.co",
   });
 
-  // Forward every caller-supplied field except our routing key, then stamp
-  // booked_via_api so Dentally records the booking source.
-  const { opportunityId: _omit, ...rest } = body;
-  void _omit;
-  const payload: Record<string, unknown> = { ...rest, booked_via_api: true };
+  // Build an explicit, allow-listed payload. The patient is bound from the
+  // loaded opportunity (never the request body) so a caller cannot book against
+  // an arbitrary patient. Any other body fields are ignored.
+  const finish =
+    typeof body.finish === "string" && body.finish !== ""
+      ? body.finish
+      : new Date(new Date(start).getTime() + 30 * 60_000).toISOString();
+
+  const payload: Record<string, unknown> = {
+    patient_id: opportunity.dentallyPatientId,
+    start_time: start,
+    finish_time: finish,
+    reason: typeof body.reason === "string" && body.reason !== "" ? body.reason : "Continuing Treatment",
+    booked_via_api: true,
+  };
+  if (typeof body.practitionerId === "string" && body.practitionerId !== "") {
+    payload.practitioner_id = body.practitionerId;
+  }
+  if (typeof body.notes === "string" && body.notes !== "") {
+    payload.notes = body.notes;
+  }
 
   try {
     const { appointment } = await client.createAppointment(payload);
@@ -241,16 +294,24 @@ export async function POST(
     return badRequest("Request body must be valid JSON");
   }
 
-  switch (action) {
-    case "draft":
-      return handleDraft(body);
-    case "approve":
-      return handleApprove(body);
-    case "send":
-      return handleSend(body);
-    case "book":
-      return handleBook(body);
-    default:
-      return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
+  try {
+    switch (action) {
+      case "draft":
+        return await handleDraft(body);
+      case "approve":
+        return await handleApprove(body);
+      case "send":
+        return await handleSend(body);
+      case "book":
+        return await handleBook(body);
+      default:
+        return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
+    }
+  } catch (err) {
+    if (err instanceof DentallyError) {
+      return Response.json({ error: err.message }, { status: 502 });
+    }
+    const message = err instanceof Error ? err.message : "Unexpected error";
+    return Response.json({ error: message }, { status: 500 });
   }
 }

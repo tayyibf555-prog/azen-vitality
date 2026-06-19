@@ -180,7 +180,7 @@ export function DraftEditor({
           ) : null}
 
           {consentBlocked ? (
-            <StatusPill tone="warning">No marketing consent for this channel</StatusPill>
+            <StatusPill tone="warning">Patient has not consented to this channel</StatusPill>
           ) : null}
           {autoQueued ? (
             <StatusPill tone="info">Auto queued, low value plan</StatusPill>

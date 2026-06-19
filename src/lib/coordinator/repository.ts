@@ -98,7 +98,15 @@ function rowToOpportunity(row: OpportunityRow): TreatmentOpportunity {
   };
 }
 
-function opportunityToRow(opp: TreatmentOpportunity): OpportunityRow {
+/**
+ * Row mapper for the sync upsert. Deliberately OMITS the coordinator-owned
+ * columns `finance_presented` and `last_touch_at` so a re-sync never resets
+ * values set by the coordinator. On UPDATE, supabase leaves omitted columns
+ * unchanged (preserved); on INSERT they take DB defaults (false / null).
+ */
+function opportunityToSyncRow(
+  opp: TreatmentOpportunity,
+): Omit<OpportunityRow, "finance_presented" | "last_touch_at"> {
   return {
     id: opp.id,
     site_id: opp.siteId,
@@ -110,8 +118,6 @@ function opportunityToRow(opp: TreatmentOpportunity): OpportunityRow {
     amount_outstanding: opp.amountOutstanding,
     accepted_at: opp.acceptedAt || null,
     status: opp.status,
-    finance_presented: opp.financePresented,
-    last_touch_at: opp.lastTouchAt,
     priority_score: opp.priorityScore,
     consent: opp.consent,
     updated_from_dentally_at: opp.updatedFromDentallyAt,
@@ -158,7 +164,7 @@ export async function upsertOpportunities(
 ): Promise<void> {
   if (opps.length === 0) return;
   const db = serviceClient();
-  const rows = opps.map(opportunityToRow);
+  const rows = opps.map(opportunityToSyncRow);
   const { error } = await db
     .from("treatment_opportunity")
     .upsert(rows, { onConflict: "id" });
@@ -248,6 +254,20 @@ export async function insertTouch(input: {
     .select("*")
     .single();
   if (error) throw error;
+  return rowToTouch(data as TouchRow);
+}
+
+export async function getTouch(
+  touchId: string,
+): Promise<CoordinatorTouch | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("coordinator_touch")
+    .select("*")
+    .eq("id", touchId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
   return rowToTouch(data as TouchRow);
 }
 

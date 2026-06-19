@@ -3,7 +3,12 @@ import type { TreatmentOpportunity } from "./types";
 const DAY = 86_400_000;
 
 export function priorityScore(o: TreatmentOpportunity, now: Date): number {
-  const ageDays = Math.max(0, (now.getTime() - new Date(o.acceptedAt).getTime()) / DAY);
+  const acceptedMs = new Date(o.acceptedAt).getTime();
+  // An empty/invalid acceptedAt would yield NaN; treat age as 0 so the score
+  // stays finite (and the opportunity ranks as freshly accepted).
+  const ageDays = Number.isNaN(acceptedMs)
+    ? 0
+    : Math.max(0, (now.getTime() - acceptedMs) / DAY);
   const recencyWeight = Math.max(0.5, 1 - ageDays / 180);
   const sinceTouchDays = o.lastTouchAt
     ? Math.max(0, (now.getTime() - new Date(o.lastTouchAt).getTime()) / DAY)

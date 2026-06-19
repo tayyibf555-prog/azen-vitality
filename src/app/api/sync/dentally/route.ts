@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 
 const RESOURCE = "treatment_plans";
 const PER_PAGE = 100;
+const MAX_PAGES = 50;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -152,8 +153,15 @@ async function syncSite(
   let pulled = 0;
   let page = 1;
 
-  // Page until a page returns fewer than PER_PAGE items.
+  // Page until a page returns fewer than PER_PAGE items, with an upper bound to
+  // guard against an unbounded loop if the API never short-pages.
   for (;;) {
+    if (page > MAX_PAGES) {
+      console.warn(
+        `[sync] pagination cap (${MAX_PAGES} pages) hit for site ${siteId}; stopping early`,
+      );
+      break;
+    }
     const res = await client.listTreatmentPlans({
       siteId,
       updatedAfter,
@@ -187,7 +195,7 @@ async function syncSite(
         lastTouchAt: null,
       };
 
-      opportunities.push(toOpportunity(input, new Date()));
+      opportunities.push(toOpportunity(input, now));
 
       const planUpdated = planUpdatedAt(plan);
       if (planUpdated && (!highWaterMark || planUpdated > highWaterMark)) {
@@ -214,12 +222,28 @@ export async function POST() {
 
   const client = new DentallyClient({
     apiKey,
-    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.sandbox.dentally.co",
   });
 
-  const perSite = [];
+  // Sync each site independently. A failing site is recorded in the summary but
+  // never aborts the rest; we always return 200 with the per-site outcome.
+  const perSite: Array<{
+    siteId: string;
+    ok: boolean;
+    pulled?: number;
+    upserted?: number;
+    error?: string;
+  }> = [];
+
   for (const siteId of vitalitySiteIds()) {
-    perSite.push(await syncSite(client, siteId));
+    try {
+      const result = await syncSite(client, siteId);
+      perSite.push({ siteId, ok: true, pulled: result.pulled, upserted: result.upserted });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Sync failed";
+      console.error(`[sync] site ${siteId} failed: ${message}`);
+      perSite.push({ siteId, ok: false, error: message });
+    }
   }
 
   return Response.json({ ok: true, perSite });

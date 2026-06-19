@@ -33,6 +33,13 @@ describe("priorityScore", () => {
     const tiny = priorityScore(opp({ amountOutstanding: 200, acceptedAt: "2026-06-17T00:00:00Z" }), NOW);
     expect(large).toBeGreaterThan(tiny);
   });
+
+  it("stays finite when acceptedAt is empty or invalid", () => {
+    const empty = priorityScore(opp({ acceptedAt: "" }), NOW);
+    const invalid = priorityScore(opp({ acceptedAt: "not-a-date" }), NOW);
+    expect(Number.isFinite(empty)).toBe(true);
+    expect(Number.isFinite(invalid)).toBe(true);
+  });
 });
 
 describe("rankOpportunities", () => {

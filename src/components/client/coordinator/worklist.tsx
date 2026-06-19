@@ -128,7 +128,11 @@ export function Worklist({
     {
       key: "status",
       header: "Status",
-      cell: (o) => <StatusPill tone={STATUS_TONE[o.status]}>{STATUS_LABEL[o.status]}</StatusPill>,
+      cell: (o) => (
+        <StatusPill tone={STATUS_TONE[o.status] ?? "neutral"}>
+          {STATUS_LABEL[o.status] ?? o.status}
+        </StatusPill>
+      ),
     },
   ];
 
