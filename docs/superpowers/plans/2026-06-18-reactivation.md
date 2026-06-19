@@ -29,6 +29,7 @@ Spec: `docs/superpowers/specs/2026-06-18-reactivation-design.md`
 - Create `src/lib/reactivation/draft.ts` — cohort-aware Claude prompt assembly + `draftReactivation()` caller.
 - Create `src/lib/reactivation/repository.ts` — typed Supabase reads/writes for the reactivation tables.
 - Modify `src/lib/dentally/client.ts` — add `listPatients`, `getPatientAppointments`, `getPatientInvoices`.
+- Modify `src/app/api/mock-dentally/_fixtures.ts` + add `v1/patients` (list), `v1/appointments` (GET), `v1/invoices` mock routes — dormant-book fixtures and list endpoints (the calibration target; no live sandbox key yet).
 - Create `supabase/migrations/0003_reactivation.sql` — schema + enable RLS.
 - Create `supabase/migrations/0004_reactivation_pilot_rls.sql` — permissive pilot policies + grants.
 - Create `src/app/api/sync/reactivation/route.ts` — sync endpoint.
@@ -659,7 +660,7 @@ git commit -m "feat: reactivation cohort normaliser (ops fields only)"
 - Modify: `src/lib/dentally/client.ts`
 - Test: `src/lib/dentally/client-reactivation.test.ts`
 
-Add three read methods for the dormant book, reusing the existing private `get<T>` (auth, User-Agent, base URL, error guard). Exact paths/params are confirmed against the sandbox in Task 9; the call sites do not change after that.
+Add three read methods for the dormant book, reusing the existing private `get<T>` (auth, User-Agent, base URL, error guard). Exact paths/params are confirmed against the mock in Task 11; the call sites do not change after that.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1451,12 +1452,194 @@ git commit -m "feat: reactivation supabase repository"
 
 ---
 
-## Task 10: Sync route + live sandbox calibration
+## Task 10: Extend the mock Dentally for the dormant book
+
+**Files:**
+- Modify: `src/app/api/mock-dentally/_fixtures.ts`
+- Create: `src/app/api/mock-dentally/v1/patients/route.ts`
+- Modify: `src/app/api/mock-dentally/v1/appointments/route.ts` (add a GET handler)
+- Create: `src/app/api/mock-dentally/v1/invoices/route.ts`
+
+Context: there is no live Dentally sandbox key yet, so the existing local mock (`/api/mock-dentally`) is the calibration target. It currently serves only the Treatment Coordinator's needs (treatment plans by site, a single patient, payment plans, appointment create). Reactivation must enumerate the dormant book, so the mock needs a patients list, an appointments history (GET), and invoices, with fixtures that exercise all three cohorts. Reference "now" is 2026-06-18 (`src/lib/mock/clients.ts` NOW). Note the mock carries `accepted_at` and `amount_outstanding` directly on the treatment plan (see `_fixtures.ts` header), so stalled-plan detection reads from treatment plans, not payment plans.
+
+- [ ] **Step 1: Extend `_fixtures.ts`.** Add `site_id` (and optional dormant fields) to `MockPatient`, give the existing nine patients a `site_id`, append three dormant patients, one stalled open plan, and appointment + invoice fixtures with lookups.
+
+Add to the `MockPatient` interface:
+
+```ts
+  site_id: string;
+  archived?: boolean;
+  archived_reason?: string | null;
+  dentist_recall_date?: string | null;
+  hygienist_recall_date?: string | null;
+```
+
+Give the existing nine patients a `site_id` matching their treatment plan's site: pat-001 `site-cc`, pat-002 `site-rv`, pat-003 `site-ng`, pat-004 `site-cc`, pat-005 `site-rv`, pat-006 `site-ng`, pat-007 `site-cc`, pat-008 `site-rv`, pat-009 `site-ng`.
+
+Append three dormant patients to `MOCK_PATIENTS`:
+
+```ts
+  {
+    // LAPSED: archived as lapsed, no visit in ~2 years, has historic spend.
+    id: "pat-010", first_name: "Harold", last_name: "Pemberton",
+    email_address: "harold.pemberton@example.co.uk", mobile_phone: "+447700900010",
+    use_sms: true, use_email: true, marketing: 1, active: false,
+    site_id: "site-cc", archived: true, archived_reason: "lapsed",
+    dentist_recall_date: null, hygienist_recall_date: null,
+  },
+  {
+    // OVERDUE RECALL: recall date 5+ months past, no future booking.
+    id: "pat-011", first_name: "Priya", last_name: "Sharma",
+    email_address: "priya.sharma@example.co.uk", mobile_phone: "+447700900011",
+    use_sms: true, use_email: true, marketing: 1, active: true,
+    site_id: "site-rv", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-01-05T00:00:00Z", hygienist_recall_date: null,
+  },
+  {
+    // STALLED PLAN: open high-value plan accepted ~200 days ago (see plan-010).
+    id: "pat-012", first_name: "Marcus", last_name: "Bennett",
+    email_address: "marcus.bennett@example.co.uk", mobile_phone: "+447700900012",
+    use_sms: true, use_email: false, marketing: 1, active: true,
+    site_id: "site-ng", archived: false, archived_reason: null,
+    dentist_recall_date: null, hygienist_recall_date: null,
+  },
+```
+
+Append a stalled open plan to `MOCK_TREATMENT_PLANS`:
+
+```ts
+  {
+    id: "plan-010", patient_id: "pat-012", site_id: "site-ng",
+    name: "Full mouth rehabilitation", planned_private_treatment_value: 7800,
+    amount_outstanding: 7800, accepted_at: "2025-12-01T10:00:00Z", updated_at: "2026-06-10T09:00:00Z",
+  },
+```
+
+Add appointment + invoice types, fixtures, and lookups:
+
+```ts
+export interface MockAppointment {
+  id: string;
+  patient_id: string;
+  site_id: string;
+  start_time: string; // ISO
+  state: string;
+}
+
+export interface MockInvoice {
+  id: string;
+  patient_id: string;
+  paid: number;
+}
+
+// Appointment history. Past visits set "last visit"; a future one marks an
+// existing booking (which disqualifies a patient from the dormant book).
+export const MOCK_APPOINTMENTS: MockAppointment[] = [
+  { id: "appt-010a", patient_id: "pat-010", site_id: "site-cc", start_time: "2024-05-10T09:00:00Z", state: "completed" },
+  { id: "appt-011a", patient_id: "pat-011", site_id: "site-rv", start_time: "2025-07-02T11:30:00Z", state: "completed" },
+  { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "completed" },
+  // An active patient WITH a future booking (must NOT appear in the dormant book).
+  { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked" },
+];
+
+// Paid invoices = lifetime spend proxy.
+export const MOCK_INVOICES: MockInvoice[] = [
+  { id: "inv-010a", patient_id: "pat-010", paid: 1200 },
+  { id: "inv-010b", patient_id: "pat-010", paid: 480 },
+  { id: "inv-011a", patient_id: "pat-011", paid: 950 },
+];
+
+export function patientsForSite(siteId: string): MockPatient[] {
+  return MOCK_PATIENTS.filter((p) => p.site_id === siteId);
+}
+export function appointmentsForPatient(patientId: string): MockAppointment[] {
+  return MOCK_APPOINTMENTS.filter((a) => a.patient_id === patientId);
+}
+export function invoicesForPatient(patientId: string): MockInvoice[] {
+  return MOCK_INVOICES.filter((i) => i.patient_id === patientId);
+}
+```
+
+- [ ] **Step 2: Create `src/app/api/mock-dentally/v1/patients/route.ts`**
+
+```ts
+import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { patientsForSite, MOCK_PATIENTS, type MockPatient } from "@/app/api/mock-dentally/_fixtures";
+
+export const dynamic = "force-dynamic";
+
+function serialise(p: MockPatient) {
+  return {
+    id: p.id, first_name: p.first_name, last_name: p.last_name,
+    email_address: p.email_address, mobile_phone: p.mobile_phone,
+    use_sms: p.use_sms, use_email: p.use_email, marketing: p.marketing, active: p.active,
+    archived: p.archived ?? false, archived_reason: p.archived_reason ?? null,
+    dentist_recall_date: p.dentist_recall_date ?? null,
+    hygienist_recall_date: p.hygienist_recall_date ?? null,
+    updated_at: "2026-06-17T00:00:00Z",
+  };
+}
+
+// GET /api/mock-dentally/v1/patients?site_id=&page=&per_page=
+export async function GET(request: Request): Promise<Response> {
+  const unauthorized = unauthorizedIfMissingBearer(request);
+  if (unauthorized) return unauthorized;
+  const url = new URL(request.url);
+  const siteId = url.searchParams.get("site_id");
+  const all = siteId ? patientsForSite(siteId) : MOCK_PATIENTS;
+  return Response.json({ patients: all.map(serialise) });
+}
+```
+
+- [ ] **Step 3: Add a GET handler to `src/app/api/mock-dentally/v1/appointments/route.ts`** (keep the existing POST). Add the import and handler:
+
+```ts
+import { appointmentsForPatient } from "@/app/api/mock-dentally/_fixtures";
+
+// GET /api/mock-dentally/v1/appointments?patient_id=
+export async function GET(request: Request): Promise<Response> {
+  const unauthorized = unauthorizedIfMissingBearer(request);
+  if (unauthorized) return unauthorized;
+  const url = new URL(request.url);
+  const patientId = url.searchParams.get("patient_id") ?? "";
+  return Response.json({ appointments: appointmentsForPatient(patientId) });
+}
+```
+
+- [ ] **Step 4: Create `src/app/api/mock-dentally/v1/invoices/route.ts`**
+
+```ts
+import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { invoicesForPatient } from "@/app/api/mock-dentally/_fixtures";
+
+export const dynamic = "force-dynamic";
+
+// GET /api/mock-dentally/v1/invoices?patient_id=
+export async function GET(request: Request): Promise<Response> {
+  const unauthorized = unauthorizedIfMissingBearer(request);
+  if (unauthorized) return unauthorized;
+  const url = new URL(request.url);
+  const patientId = url.searchParams.get("patient_id") ?? "";
+  return Response.json({ invoices: invoicesForPatient(patientId) });
+}
+```
+
+- [ ] **Step 5: Typecheck, build, commit**
+
+```bash
+npx tsc --noEmit && npm run build
+git add src/app/api/mock-dentally/
+git commit -m "feat: mock dentally dormant-book fixtures + list endpoints"
+```
+
+---
+
+## Task 11: Sync route + mock calibration
 
 **Files:**
 - Create: `src/app/api/sync/reactivation/route.ts`
 
-Mirrors the TC sync route. All assumptions about raw Dentally JSON live in a single CALIBRATION block, narrowed with small `pick*` helpers (no `any`).
+Mirrors the TC sync route. All assumptions about raw Dentally JSON live in a single CALIBRATION block, narrowed with small `pick*` helpers (no `any`). Open plans (with `accepted_at` + outstanding) are read from the site's treatment plans and indexed by patient.
 
 - [ ] **Step 1: Implement the sync route**
 
@@ -1570,27 +1753,35 @@ function deriveHistoricSpend(payload: { invoices: unknown[] }): number {
   return total;
 }
 
-/** Open plan + outstanding for a patient, if any (first open plan wins). */
-function findOpenPlan(payload: { payment_plans: unknown[] }): {
+interface OpenPlan {
   plan: ReactivationInput["plan"];
   amountOutstanding: number;
-} {
-  const plans = Array.isArray(payload.payment_plans) ? payload.payment_plans : [];
-  for (const raw of plans) {
-    const pp = asRecord(raw);
-    const outstanding = pickNumber(pp, "outstanding", "amount_outstanding", "balance") ?? 0;
-    if (outstanding <= 0) continue;
-    return {
+}
+
+/**
+ * Index a site's treatment plans by patient id, keeping the open one
+ * (outstanding > 0). The treatment plan carries accepted_at + outstanding,
+ * which is what stalled-plan detection needs.
+ */
+function indexOpenPlansByPatient(rawPlans: unknown[]): Map<string, OpenPlan> {
+  const byPatient = new Map<string, OpenPlan>();
+  for (const raw of rawPlans) {
+    const tp = asRecord(raw);
+    const patientId = pickString(tp, "patient_id", "patientId");
+    const outstanding = pickNumber(tp, "amount_outstanding", "outstanding", "balance") ?? 0;
+    if (!patientId || outstanding <= 0) continue;
+    byPatient.set(patientId, {
       plan: {
-        id: pickString(pp, "id", "treatment_plan_id") ?? "",
-        name: pickString(pp, "name", "title", "description") ?? "Treatment plan",
-        planned_private_treatment_value: pickNumber(pp, "total", "value", "planned_private_treatment_value") ?? 0,
-        accepted_at: pickString(pp, "accepted_at", "created_at") ?? new Date().toISOString(),
+        id: pickString(tp, "id") ?? "",
+        name: pickString(tp, "name", "title", "description") ?? "Treatment plan",
+        planned_private_treatment_value:
+          pickNumber(tp, "planned_private_treatment_value", "total", "value") ?? 0,
+        accepted_at: pickString(tp, "accepted_at", "acceptedAt", "created_at") ?? new Date().toISOString(),
       },
       amountOutstanding: outstanding,
-    };
+    });
   }
-  return { plan: null, amountOutstanding: 0 };
+  return byPatient;
 }
 
 // ===========================================================================
@@ -1618,6 +1809,17 @@ async function syncSite(
   const state = await getSyncState(siteId, RESOURCE);
   const updatedAfter = state?.highWaterMark ?? undefined;
   const now = new Date();
+
+  // 1. Index the site's open treatment plans by patient (carries outstanding + accepted_at).
+  const openByPatient = new Map<string, OpenPlan>();
+  for (let pp = 1; ; pp++) {
+    const res = await client.listTreatmentPlans({ siteId, page: pp, perPage: PER_PAGE });
+    const rawPlans = Array.isArray(res.treatment_plans) ? res.treatment_plans : [];
+    for (const [k, v] of indexOpenPlansByPatient(rawPlans)) openByPatient.set(k, v);
+    if (rawPlans.length < PER_PAGE) break;
+  }
+
+  // 2. Page patients and classify each into a cohort.
   const targets = [];
   let highWaterMark = updatedAfter ?? null;
   let pulled = 0;
@@ -1635,7 +1837,7 @@ async function syncSite(
 
       const appts = summariseAppointments(await client.getPatientAppointments(patient.id), now);
       const historicSpend = deriveHistoricSpend(await client.getPatientInvoices(patient.id));
-      const open = findOpenPlan(await client.getAccountOutstanding(patient.id));
+      const open = openByPatient.get(patient.id) ?? { plan: null, amountOutstanding: 0 };
 
       const input: ReactivationInput = {
         siteId,
@@ -1683,10 +1885,10 @@ export async function POST() {
 }
 ```
 
-- [ ] **Step 2: Calibrate against the live sandbox.** With `.env.local` set, run the dev server and `curl -X POST http://localhost:3000/api/sync/reactivation`. Inspect the real Dentally JSON; fix the field names/paths in the CALIBRATION block (patients, appointments, invoices, payment plans) to match actual sandbox responses. Re-run until `reactivation_target` is populated with sensible cohorts.
+- [ ] **Step 2: Calibrate against the mock** (extended in Task 10). Set `DENTALLY_BASE_URL=http://localhost:3000/api/mock-dentally` and `DENTALLY_API_KEY` in `.env.local` (the same values the TC sync uses). Run the dev server and `curl -X POST http://localhost:3000/api/sync/reactivation`. The three dormant fixtures should classify as one cohort each: pat-010 lapsed, pat-011 overdue_recall, pat-012 stalled_plan; pat-001 (future booking) must NOT appear. Adjust the CALIBRATION block field names if needed. When a real sandbox key arrives later, only the CALIBRATION strings change.
 
 Run: `curl -X POST http://localhost:3000/api/sync/reactivation`
-Expected: `{ "ok": true, "perSite": [{ "upserted": <n>, ... }] }` and rows in Supabase.
+Expected: `{ "ok": true, "perSite": [{ "upserted": <n>, ... }] }` with at least the three dormant targets, and rows in Supabase.
 
 - [ ] **Step 3: Verify idempotency** — run twice; row count stable, no duplicates, high-water mark advanced.
 
@@ -1694,12 +1896,12 @@ Expected: `{ "ok": true, "perSite": [{ "upserted": <n>, ... }] }` and rows in Su
 
 ```bash
 git add src/lib/dentally/client.ts src/lib/reactivation/normalise.ts src/app/api/sync/reactivation/route.ts
-git commit -m "feat: reactivation sync route (calibrated against sandbox)"
+git commit -m "feat: reactivation sync route (calibrated against mock)"
 ```
 
 ---
 
-## Task 11: Cadence sweep route
+## Task 12: Cadence sweep route
 
 **Files:**
 - Create: `src/app/api/reactivation/sweep/route.ts`
@@ -1821,7 +2023,7 @@ export async function POST() {
 }
 ```
 
-- [ ] **Step 2: Smoke test.** Seed one low-value and one high-value target each with an `active` cadence whose `next_due_at` is in the past (insert via Supabase SQL editor or by enrolling through Task 12). `curl -X POST http://localhost:3000/api/reactivation/sweep`. Confirm the low-value one auto-queues and advances, the high-value one becomes `awaiting_approval`.
+- [ ] **Step 2: Smoke test.** Seed one low-value and one high-value target each with an `active` cadence whose `next_due_at` is in the past (insert via Supabase SQL editor or by enrolling through Task 13). `curl -X POST http://localhost:3000/api/reactivation/sweep`. Confirm the low-value one auto-queues and advances, the high-value one becomes `awaiting_approval`.
 
 Run: `curl -X POST http://localhost:3000/api/reactivation/sweep`
 Expected: `{ "ok": true, "swept": <n>, "queued": <n>, "awaitingApproval": <n>, ... }`.
@@ -1835,7 +2037,7 @@ git commit -m "feat: reactivation cadence sweep (advance due steps)"
 
 ---
 
-## Task 12: Action route (enrol / draft / approve / send / pause / resume / book)
+## Task 13: Action route (enrol / draft / approve / send / pause / resume / book)
 
 **Files:**
 - Create: `src/app/api/reactivation/[action]/route.ts`
@@ -2110,7 +2312,7 @@ git commit -m "feat: reactivation actions (enrol, draft, approve, send, pause, r
 
 ---
 
-## Task 13: UI — worklist + target detail + cadence timeline
+## Task 14: UI — worklist + target detail + cadence timeline
 
 **Files:**
 - Modify: `src/app/c/[client]/reactivation/page.tsx` (replace placeholder)
@@ -2908,7 +3110,7 @@ git commit -m "feat: reactivation UI (worklist + cadence + draft-and-approve)"
 
 ---
 
-## Task 14: Full test + verification pass
+## Task 15: Full test + verification pass
 
 - [ ] **Step 1: Run all unit tests**
 
@@ -2933,7 +3135,7 @@ git commit -m "test: reactivation verification pass"
 
 ## Notes for the implementer
 
-- Dentally exact endpoint paths and field names are the main unknown; Task 10 Step 2 is where they get pinned against the live sandbox. Everything upstream is structured so only the CALIBRATION block strings change.
+- Dentally exact endpoint paths and field names are the main unknown; Task 11 Step 2 is where they get pinned against the mock (and later a live sandbox). Everything upstream is structured so only the CALIBRATION block strings change.
 - Never commit `.env.local`. Secrets stay local.
 - `site_id` on every row and query. Multi-site by default.
 - Respect `consent` before any (stub) send; the sweep pauses a cadence whose due step has no consented channel.
