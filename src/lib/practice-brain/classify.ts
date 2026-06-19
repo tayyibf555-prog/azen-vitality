@@ -31,6 +31,7 @@ export function buildClassifyPrompt(rawInput: string, branches: string[]) {
     "- Assign a sensitivity tier: 1 General (all staff: scripts, public SOPs, pricing), 2 Operational (coordinators and up: internal workflows, follow-up cadences), 3 Management (managers and owner: performance, financials, HR-adjacent), 4 Confidential (owner only: commercials, contracts, strategy).",
     "- If you are unsure of the branch or tier, pick the higher (more restrictive) tier and lower your confidence.",
     "- Write a concise title (max 8 words) and a cleaned body that tidies the note while keeping every fact.",
+    "- Use sentence case for the title (capitalise the first word only, plus proper nouns). Do not use Title Case.",
     "- Extract 3 to 8 lowercase tags.",
     "- confidence is your certainty about branch and tier, from 0 to 1.",
     "- Never invent clinical content: no diagnosis, imaging, charting, or treatment decisions. Operations only.",
