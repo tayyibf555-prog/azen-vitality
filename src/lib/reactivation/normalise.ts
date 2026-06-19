@@ -41,7 +41,10 @@ export interface ReactivationInput {
 const DAY = 86_400_000;
 
 function daysBetween(fromIso: string, now: Date): number {
-  return (now.getTime() - new Date(fromIso).getTime()) / DAY;
+  const t = new Date(fromIso).getTime();
+  // An unparseable date must never count as overdue or stale; fail safe.
+  if (Number.isNaN(t)) return Number.NEGATIVE_INFINITY;
+  return (now.getTime() - t) / DAY;
 }
 
 /** The recall date that is most overdue (earliest past date among the two set). */
@@ -50,7 +53,8 @@ function overdueRecallDate(i: ReactivationInput, now: Date, graceDays: number): 
     .filter((d): d is string => typeof d === "string" && d !== "")
     .filter((d) => daysBetween(d, now) > graceDays);
   if (candidates.length === 0) return null;
-  return candidates.sort()[0]; // earliest = most overdue
+  // earliest (most overdue) first; numeric sort is robust to ISO format differences.
+  return candidates.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
 }
 
 function deriveReason(i: ReactivationInput, now: Date, cfg: ReactivationConfig): ReactivationReason | null {

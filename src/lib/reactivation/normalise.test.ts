@@ -82,4 +82,50 @@ describe("toReactivationTarget", () => {
     const t = toReactivationTarget(dirty, NOW)!;
     expect(JSON.stringify(t)).not.toContain("SECRET");
   });
+
+  it("prefers stalled_plan over overdue_recall when both apply", () => {
+    const t = toReactivationTarget(
+      base({
+        plan: { id: "pl-1", name: "Crown", planned_private_treatment_value: 900, accepted_at: "2026-01-01T00:00:00Z" },
+        amountOutstanding: 900,
+        patient: { ...base().patient, dentist_recall_date: "2026-01-01T00:00:00Z" },
+      }),
+      NOW,
+    )!;
+    expect(t.reason).toBe("stalled_plan");
+  });
+
+  it("treats archived_reason 'lapsed' as lapsed even with a recent visit", () => {
+    const t = toReactivationTarget(
+      base({
+        lastVisitAt: "2026-06-01T00:00:00Z",
+        patient: { ...base().patient, archived_reason: "lapsed" },
+      }),
+      NOW,
+    )!;
+    expect(t.reason).toBe("lapsed");
+  });
+
+  it("does not classify an overdue recall when a future booking exists", () => {
+    const t = toReactivationTarget(
+      base({
+        lastVisitAt: "2026-05-01T00:00:00Z",
+        futureBookingExists: true,
+        patient: { ...base().patient, dentist_recall_date: "2026-01-01T00:00:00Z" },
+      }),
+      NOW,
+    );
+    expect(t).toBeNull();
+  });
+
+  it("ignores a malformed recall date instead of misclassifying", () => {
+    const t = toReactivationTarget(
+      base({
+        lastVisitAt: "2026-06-01T00:00:00Z",
+        patient: { ...base().patient, dentist_recall_date: "not-a-date" },
+      }),
+      NOW,
+    );
+    expect(t).toBeNull();
+  });
 });
