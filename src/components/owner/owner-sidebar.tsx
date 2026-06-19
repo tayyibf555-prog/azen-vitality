@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Gauge, LogOut } from "lucide-react";
+import { Gauge, LogOut, BrainCircuit } from "lucide-react";
 import { CLIENT_NAV } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
@@ -83,6 +83,23 @@ export function OwnerSidebar() {
                 ) : null}
                 <Gauge size={16} className="shrink-0" />
                 <span className="truncate">Management</span>
+              </Link>
+            </li>
+            <li>
+              <Link
+                href={`${base}/practice-brain`}
+                className={cn(
+                  "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                  isActive("practice-brain")
+                    ? "bg-navy-soft text-on-navy"
+                    : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                )}
+              >
+                {isActive("practice-brain") ? (
+                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+                ) : null}
+                <BrainCircuit size={16} className="shrink-0" />
+                <span className="truncate">Practice brain</span>
               </Link>
             </li>
           </ul>

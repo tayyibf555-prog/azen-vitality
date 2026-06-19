@@ -13,7 +13,6 @@ import {
   ShieldCheck,
   MessageCircle,
   Sunrise,
-  BrainCircuit,
   Settings,
 } from "lucide-react";
 
@@ -152,13 +151,6 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: Sunrise,
         status: "placeholder",
         note: "Every morning, reads the diary and hands each role a prioritised action list: who to chase, gaps to fill, no-show risks, high-value treatment arriving today.",
-      },
-      {
-        slug: "practice-brain",
-        label: "Practice brain",
-        icon: BrainCircuit,
-        status: "placeholder",
-        note: "Basic internal knowledge base for the pilot: protocols, scripts, pricing and Dentally workflows. One standard answer across every site.",
       },
     ],
   },
