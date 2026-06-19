@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 function destinationFor(role: Role): string {
   if (role === "agency_admin") return "/agency";
   const clientId = MOCK_USERS[role].clientId ?? "vitality";
+  if (role === "client_owner") return `/owner/${clientId}`;
   return `/c/${clientId}`;
 }
 

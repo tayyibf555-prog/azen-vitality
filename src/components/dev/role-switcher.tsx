@@ -16,7 +16,9 @@ const LABEL: Record<Role, string> = {
 
 function destinationFor(role: Role): string {
   if (role === "agency_admin") return "/agency";
-  return `/c/${MOCK_USERS[role].clientId ?? "vitality"}`;
+  const clientId = MOCK_USERS[role].clientId ?? "vitality";
+  if (role === "client_owner") return `/owner/${clientId}`;
+  return `/c/${clientId}`;
 }
 
 /**
