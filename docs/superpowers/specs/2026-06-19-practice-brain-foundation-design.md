@@ -21,14 +21,25 @@ That full vision is several subsystems. This spec is the **foundation slice only
 enforcement, and a browse UI, shaped so the co-pilot, file ingest, cross-module feeds, and
 the self-learning loop drop in cleanly later.
 
-## The product metaphor: a central hub with branches
+## The product metaphor: a glowing constellation
 
-Practice Brain is presented as a **central `Practice brain` hub with branches radiating off
-it** (Marketing, Patients, Treatments, Pricing, Compliance, Reception, Protocols, HR & team,
-and so on), not a flat list or a single "brain" view. Knowledge lives in a hierarchy:
-hub → branch → sub-branch → item. The classifier decides which branch a new piece of
-knowledge grows on, and proposes a new branch when nothing fits. This is the visual and
-mental model the owner chose during brainstorming.
+Practice Brain is presented as a **constellation / neural map**: a dense luminous core in the
+centre, with organic dendritic branches radiating out to iconified category hubs (Back office,
+Sales, Reception, Marketing, Operations, Intelligence, and so on), elegant letter-spaced
+labels around the edge, and a deep navy canvas with an ambient starfield. The active hub is
+lit (gold) while the rest sit calmer. This is the look the owner chose during brainstorming
+(reference: a constellation "second brain" dashboard), rendered in the platform's brand navy.
+
+It is NOT a flat list or a single static "brain" blob. Knowledge lives in a hierarchy:
+core → hub (top-level branch) → sub-branch → item. Hubs are top-level branches; the dots
+radiating off each hub are its sub-branches and items. The classifier decides which branch a
+new piece of knowledge grows on, and proposes a new branch when nothing fits. Clearance is
+expressed visually: nodes above the viewer's tier are simply absent, so a receptionist's map
+has fewer stars than the owner's.
+
+The constellation is a front-end over the ordinary tree data model below; it adds rendering
+and interaction, not new domain logic. The visual itself is phased (see UI): a real
+data-driven static-layout constellation now, motion/physics polish later.
 
 ## Scope
 
@@ -172,10 +183,19 @@ stops passing `maxTier` explicitly.
 
 Route: `src/app/c/[client]/practice-brain/page.tsx` (replaces the placeholder).
 
-- **Hub view:** a data-driven SVG/CSS radial. Centre node = current branch (or `Practice
-  brain` at the root). Children radiate out as branch/item nodes with counts. Positions
-  computed from child count (evenly spaced); no heavy graph library. Clicking a branch
-  re-centres on it (drill-in); a breadcrumb returns toward the hub.
+- **Constellation view (primary):** a data-driven SVG on a navy canvas. Centre = the dense
+  core; top-level branches render as iconified hubs around it; each hub's sub-branches and
+  items radiate outward as a dendritic tree of nodes and edges. Letter-spaced labels sit near
+  each hub. Layout is deterministic (positions derived from the tree: hubs spaced by angle,
+  child nodes fanned outward) — no heavy graph/physics library this slice. Interactions:
+  click a hub to focus/drill (it lights gold and re-centres), breadcrumb to step back, hover a
+  node for its label, keyword search lights up matching nodes. Built so a later slice can swap
+  the static layout for force-directed motion without touching the data layer.
+  - Visual phasing — **Build 1 (this slice):** real data-driven static-layout constellation,
+    clearance-filtered, click-to-focus, hover labels, the navy/glow aesthetic.
+    **Later:** force-directed animation, drifting motion, zoom transitions, starfield twinkle.
+  - The aesthetic is a deliberate dark scene (brand navy), the one place the UI departs from
+    the app's lighter surfaces; brand tokens from `CLAUDE.md` (navy, light/dark blue, cream).
 - **Item view:** title, body, branch path, tier badge, tags, source, last updated.
 - **Capture:** an "Add knowledge" panel — paste/type + optional site scope → runs
   `classify()` → shows assigned branch / tier / tags for confirm or override → saves.
@@ -222,6 +242,8 @@ call mocked):
 4. Self-learning loop (confirmed co-pilot answers saved back as knowledge).
 5. Real Supabase auth + RLS; staff-role/HR clearance grants.
 6. Re-classification + branch-reshaping background jobs.
+7. Constellation motion polish: force-directed/animated layout, drifting motion, zoom
+   transitions, ambient starfield twinkle (Build 1 ships a static deterministic layout).
 
 ## Open assumptions
 
