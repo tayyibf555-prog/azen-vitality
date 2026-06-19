@@ -105,7 +105,7 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "reactivation",
         label: "Reactivation",
         icon: RotateCcw,
-        status: "placeholder",
+        status: "live",
         note: "Revives lapsed/dormant patients (Dentally archived_reason = lapsed) and unfinished treatment plans from the existing database.",
       },
       {
