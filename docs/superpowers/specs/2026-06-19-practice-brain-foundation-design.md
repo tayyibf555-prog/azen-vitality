@@ -53,6 +53,8 @@ data-driven static-layout constellation now, motion/physics polish later.
 - Browse UI: the central-hub branches canvas (clearance-filtered), drill-in to sub-branches
   and items, an item detail view, and keyword search.
 - A needs-review queue for owner/manager.
+- Owner-dashboard-only placement plus a per-user password gate (credential → tier), seeded
+  credentials, unlock flow, and a signed session cookie.
 
 ### Out of scope (deferred to later slices)
 
@@ -80,9 +82,19 @@ data-driven static-layout constellation now, motion/physics polish later.
 - **Fail closed on uncertainty.** If the classifier's confidence is low, the item is stored
   at the most restrictive tier (T4) and flagged `needs_review`. Nothing leaks while a
   manager/owner confirms. Human-in-the-loop per `CLAUDE.md` principle 5.
-- **Auth stays mock.** The existing `useAuth` session maps role → max tier
-  (`client_coordinator → T2`, `client_owner → T4`, `agency_admin → all`). The same filter
-  becomes an RLS policy when real Supabase auth lands.
+- **Placement: owner dashboard only.** Practice Brain is a view inside the practice owner
+  dashboard (`/owner/[client]/practice-brain`), not the staff (`/c/[client]`) surface. It is
+  removed from `CLIENT_NAV` and added to the owner sidebar's "Practice" group. Staff get
+  knowledge later through the co-pilot, not this management view.
+- **Access: per-user password gate (this is the clearance mechanism).** Reaching the view
+  still requires being logged into the owner dashboard, but opening Practice Brain then
+  requires a *personal* password. Each authorised person has their own password mapped to a
+  `viewer.maxTier`. The password both authenticates the person and sets what they see, so the
+  per-user password gate *is* the tier clearance for this round (it replaces the role→tier
+  mock bridge for this view). Passwords are bcrypt-hashed (pgcrypto) in a credentials table;
+  verification runs in Postgres; a successful unlock issues a signed, httpOnly session cookie
+  carrying `{credentialId, maxTier}`. The data API derives `maxTier` from that cookie, never
+  from the client. Pilot-grade (cookie session, single client), hardened later with real auth.
 - **No clinical data.** The "Clinical-adjacent / Protocols" branch holds operations around
   care only (sterilisation SOPs, consent scripts, recall workflows), never diagnosis,
   imaging, charting, or treatment-decision logic. Enforced in the classifier prompt and
@@ -95,15 +107,36 @@ data-driven static-layout constellation now, motion/physics polish later.
 
 ## The 4-tier sensitivity ladder
 
-| Tier | Name | Who (max tier) | Example knowledge |
-|------|------|----------------|-------------------|
-| T1 | General | all staff | scripts, public SOPs, published pricing |
-| T2 | Operational | coordinators+ | internal workflows, follow-up cadences, conversion tactics |
-| T3 | Management | managers / owner | performance context, financials, HR-adjacent ops |
-| T4 | Confidential | owner + agency | commercials, contracts, strategy |
+| Tier | Name | Granted to (example) | Example knowledge |
+|------|------|----------------------|-------------------|
+| T1 | General | front desk credential | scripts, public SOPs, published pricing |
+| T2 | Operational | coordinator credential | internal workflows, follow-up cadences, conversion tactics |
+| T3 | Management | practice manager credential | performance context, financials, HR-adjacent ops |
+| T4 | Confidential | owner credential | commercials, contracts, strategy |
 
-Role → max tier (mock auth bridge): `client_coordinator → T2`, `client_owner → T4`,
-`agency_admin → T4 (all)`.
+`maxTier` comes from the **unlocked per-user credential** (see "Access: per-user password
+gate"), not from the mock `useAuth` role. The owner's credential is T4 (sees everything).
+
+## Access: per-user password gate
+
+Each authorised person has a row in `practice_brain_credential` (`label`, bcrypt
+`password_hash`, `tier`). Flow:
+
+1. The logged-in owner opens `/owner/[client]/practice-brain`. If there is no valid unlock
+   cookie, a password screen is shown (no knowledge is fetched yet).
+2. They enter their personal password. `POST /api/practice-brain/unlock` calls a Postgres
+   function `verify_practice_brain_password(client_id, password)` that returns the matching
+   credential (`crypt(input, password_hash) = password_hash`) or nothing.
+3. On a match, the route sets a signed, httpOnly session cookie `pb_session`
+   (HMAC of `{credentialId, maxTier, exp}` using `PRACTICE_BRAIN_SESSION_SECRET`). On no
+   match, a 401 and the screen shows "incorrect password".
+4. Every data action (`tree`, `classify`, `create`, `needs-review`, `resolve-review`) reads
+   and verifies `pb_session`, derives `maxTier`, and applies the deterministic clearance
+   filter. Without a valid cookie the data actions return 401.
+
+Credentials are seeded with bcrypt hashes of documented pilot passwords (owner T4, manager
+T3, coordinator T2); an in-app credential manager is a later slice. The owner rotates the
+seeded passwords after handover.
 
 ## Branch taxonomy (seed)
 
@@ -155,6 +188,21 @@ Indexes: `(client_id, parent_id)`, `(client_id, tier)`, `(client_id, status)`, a
 `tags`, and a trigram or `to_tsvector` index on `title`/`body` for keyword search. No
 embeddings column this slice (added with the co-pilot).
 
+## Data model — `practice_brain_credential` (Supabase / Postgres)
+
+Per-user passwords for the gate (see "Access: per-user password gate").
+
+- `id` uuid pk
+- `client_id` text
+- `label` text (who: "Owner", "Practice manager", "Coordinator")
+- `password_hash` text (bcrypt via pgcrypto `crypt()`/`gen_salt('bf')`)
+- `tier` smallint 1–4 (the `maxTier` this person is granted)
+- `created_at` timestamptz
+
+Plus a Postgres function `verify_practice_brain_password(p_client_id text, p_password text)`
+returning the matching `(id, label, tier)` row (or none), so the plaintext password is
+compared in the database, never in app memory longer than the request.
+
 ## Classification pipeline (server)
 
 `classifyKnowledge(rawInput, { branches, siteId })` calls Claude (Sonnet) with a system
@@ -172,16 +220,23 @@ Result handling:
 
 ## Access enforcement
 
-A single data-access layer (`listVisibleNodes`, `getNode`, `getBranchTree`) takes the current
-session's `maxTier` (derived from role) and applies `tier <= maxTier AND status = 'active'`
-(needs-review items are visible only to owner/manager in the review queue). Branch item counts
-shown on the hub are computed post-filter, so each role sees only what it is cleared for. When
-real auth lands, this exact predicate becomes a Supabase RLS policy and the data-access layer
-stops passing `maxTier` explicitly.
+The data-access layer applies `tier <= maxTier AND status = 'active'` (needs-review items are
+visible only at tier ≥ 3, in the review queue). `maxTier` is derived server-side from the
+verified `pb_session` cookie, never from the client. Branch item counts shown on the hub are
+computed post-filter, so each credential sees only what it is cleared for. When real auth
+lands, this predicate becomes a Supabase RLS policy.
 
 ## UI
 
-Route: `src/app/c/[client]/practice-brain/page.tsx` (replaces the placeholder).
+Route: rendered in the owner dashboard via `src/app/owner/[client]/[module]/page.tsx` for
+`module === "practice-brain"` (a `PracticeBrainView` component), mirroring how
+`treatment-coordinator` is wired there. The staff route
+`src/app/c/[client]/practice-brain/page.tsx` stays a placeholder; the module is removed from
+`CLIENT_NAV` and added to the owner sidebar's "Practice" group.
+
+- **Password screen (gate):** shown first if there is no valid `pb_session` cookie. A single
+  password field → `POST /api/practice-brain/unlock`. On success the constellation loads; on
+  failure it shows "incorrect password". No knowledge is fetched until unlocked.
 
 - **Constellation view (primary):** a data-driven SVG on a navy canvas. Centre = the dense
   core; top-level branches render as iconified hubs around it; each hub's sub-branches and
@@ -212,7 +267,11 @@ Route: `src/app/c/[client]/practice-brain/page.tsx` (replaces the placeholder).
   `SUPABASE_SERVICE_ROLE_KEY` (already in `.env.example`).
 - Anthropic: existing `@anthropic-ai/sdk`, `ANTHROPIC_API_KEY`. Sonnet model id from a shared
   constant.
-- A SQL migration creates `knowledge_node`, enums, indexes, and seeds the starter branches.
+- A SQL migration creates `knowledge_node` and `practice_brain_credential`, enums, indexes,
+  the `pgcrypto` extension, the `verify_practice_brain_password` function, and seeds the
+  starter branches and pilot credentials.
+- New env: `PRACTICE_BRAIN_SESSION_SECRET` (HMAC secret for the `pb_session` cookie). Added to
+  `.env.example`; set in `.env.local`.
 - If env is missing: a `not configured` banner + a small in-memory seed tree so the UI is
   demonstrable without credentials.
 
@@ -244,6 +303,8 @@ call mocked):
 6. Re-classification + branch-reshaping background jobs.
 7. Constellation motion polish: force-directed/animated layout, drifting motion, zoom
    transitions, ambient starfield twinkle (Build 1 ships a static deterministic layout).
+8. In-app credential manager (add/rotate/remove per-user passwords and tiers); Build 1 seeds
+   credentials in the migration and the owner rotates them after handover.
 
 ## Open assumptions
 

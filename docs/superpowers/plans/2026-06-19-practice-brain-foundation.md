@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the foundation of the Practice Brain knowledge hub: a Supabase-backed self-referential knowledge tree, a Claude (Sonnet) classifier that assigns branch + sensitivity tier + tags on capture, a deterministic clearance guard, and a glowing constellation browse UI with capture and a needs-review queue.
+**Goal:** Build the foundation of the Practice Brain knowledge hub as a password-gated view inside the practice owner dashboard: a Supabase-backed self-referential knowledge tree, a Claude (Sonnet) classifier that assigns branch + sensitivity tier + tags on capture, a deterministic clearance guard, and a glowing constellation browse UI with capture and a needs-review queue.
 
-**Architecture:** One self-referential Postgres table (`knowledge_node`) holds both branches and items. On capture, a server action sends the raw note to Claude and gets back structured JSON (branch, title, cleaned body, tier 1-4, tags, confidence); low-confidence results fail closed to tier 4 + `needs_review`. Reads pass through a pure clearance filter (`tier <= viewer.maxTier`). The browse UI is a deterministic data-driven SVG constellation (navy canvas, luminous core, dendritic branches to iconified hubs). Auth stays mock this round; the clearance filter becomes an RLS policy later.
+**Architecture:** One self-referential Postgres table (`knowledge_node`) holds both branches and items. On capture, a server action sends the raw note to Claude and gets back structured JSON (branch, title, cleaned body, tier 1-4, tags, confidence); low-confidence results fail closed to tier 4 + `needs_review`. The view lives at `/owner/[client]/practice-brain` and is gated by a per-user password: each person has a bcrypt credential mapped to a tier; unlocking issues a signed httpOnly cookie, and every data action derives `viewer.maxTier` from that cookie and applies a pure clearance filter (`tier <= maxTier`). The per-user password is the clearance mechanism for this round. The browse UI is a deterministic data-driven SVG constellation (navy canvas, luminous core, dendritic branches to iconified hubs). Mock `useAuth` still gates reaching the owner dashboard; the clearance filter becomes an RLS policy when real auth lands.
 
 **Tech Stack:** Next.js 16 (App Router) + React 19, TypeScript (strict), Tailwind v4, `@supabase/supabase-js`, `@anthropic-ai/sdk` (model `claude-sonnet-4-6`), Vitest. Reuses `src/lib/supabase/server.ts` (`serviceClient`) and the `src/lib/coordinator/*` + `supabase/migrations/*` patterns.
 
@@ -22,18 +22,25 @@ Created in this plan:
 - `src/lib/practice-brain/clearance.ts` (+ `.test.ts`) — role→tier, visibility filter, branch counts. Pure.
 - `src/lib/practice-brain/classify.ts` (+ `.test.ts`) — classifier prompt, JSON parser/normaliser (fail-closed), Claude call. Claude client dependency-injected for tests.
 - `src/lib/practice-brain/layout.ts` (+ `.test.ts`) — deterministic constellation layout math. Pure.
-- `src/lib/practice-brain/repository.ts` — Supabase data access (reuses `serviceClient`).
-- `src/app/api/practice-brain/[action]/route.ts` — `tree` | `classify` | `create` | `needs-review` | `resolve-review`.
+- `src/lib/practice-brain/session.ts` (+ `.test.ts`) — sign/verify the `pb_session` HMAC cookie. Pure.
+- `src/lib/practice-brain/repository.ts` — Supabase data access (reuses `serviceClient`), incl. `verifyCredential`.
+- `src/app/api/practice-brain/[action]/route.ts` — `unlock` | `tree` | `classify` | `create` | `needs-review` | `resolve-review`.
+- `src/components/client/practice-brain/practice-brain-view.tsx` — top-level view: password gate → constellation page (used by the owner route).
+- `src/components/client/practice-brain/password-gate.tsx` — the unlock screen.
 - `src/components/client/practice-brain/constellation.tsx` — the SVG constellation view.
 - `src/components/client/practice-brain/capture-panel.tsx` — capture + classify preview + confirm.
 - `src/components/client/practice-brain/item-detail.tsx` — single item view.
-- `src/components/client/practice-brain/needs-review.tsx` — review queue (owner/manager).
+- `src/components/client/practice-brain/needs-review.tsx` — review queue (tier ≥ 3).
 - `src/components/client/practice-brain/index.ts` — barrel.
 
 Modified:
 
-- `src/app/c/[client]/practice-brain/page.tsx` — replace placeholder with the real page.
-- `src/lib/nav.ts` — set `practice-brain` status `"placeholder"` → `"live"`.
+- `src/app/owner/[client]/[module]/page.tsx` — render `PracticeBrainView` for `module === "practice-brain"`.
+- `src/components/owner/owner-sidebar.tsx` — add a "Practice brain" link to the "Practice" group.
+- `src/lib/nav.ts` — remove `practice-brain` from `CLIENT_NAV` (owner-only now; the staff route stays a placeholder).
+- `.env.example` — add `PRACTICE_BRAIN_SESSION_SECRET`.
+
+**Placement & access:** Practice Brain is an owner-dashboard view at `/owner/[client]/practice-brain`, gated by a per-user password. `maxTier` is derived from the unlocked credential's signed cookie, not from the mock role.
 
 ---
 
@@ -105,6 +112,51 @@ insert into knowledge_node (client_id, parent_id, kind, title, tier, source, cre
   ('vitality', null, 'branch', 'Marketing',    1, 'manual_note', 'seed'),
   ('vitality', null, 'branch', 'Operations',   2, 'manual_note', 'seed'),
   ('vitality', null, 'branch', 'Intelligence', 3, 'manual_note', 'seed');
+
+-- Per-user password gate for the owner-dashboard view.
+create table practice_brain_credential (
+  id uuid primary key default gen_random_uuid(),
+  client_id text not null,
+  label text not null,
+  password_hash text not null,
+  tier smallint not null check (tier between 1 and 4),
+  created_at timestamptz not null default now()
+);
+
+alter table practice_brain_credential enable row level security;
+-- No permissive policy: this table is only ever read via the SECURITY DEFINER function
+-- below (service role bypasses RLS for seeding). The anon key can never read hashes.
+
+-- Verifies a plaintext password against the stored bcrypt hash, in the database.
+create or replace function verify_practice_brain_password(p_client_id text, p_password text)
+returns table (id uuid, label text, tier smallint)
+language sql security definer
+as $$
+  select c.id, c.label, c.tier
+  from practice_brain_credential c
+  where c.client_id = p_client_id
+    and c.password_hash = crypt(p_password, c.password_hash)
+  limit 1;
+$$;
+
+-- Seed pilot credentials. Documented pilot passwords (rotate after handover):
+--   Owner            -> vitality-owner-2026   (tier 4)
+--   Practice manager -> vitality-manager-2026 (tier 3)
+--   Coordinator      -> vitality-coord-2026   (tier 2)
+insert into practice_brain_credential (client_id, label, password_hash, tier) values
+  ('vitality', 'Owner',            crypt('vitality-owner-2026',   gen_salt('bf')), 4),
+  ('vitality', 'Practice manager', crypt('vitality-manager-2026', gen_salt('bf')), 3),
+  ('vitality', 'Coordinator',      crypt('vitality-coord-2026',   gen_salt('bf')), 2);
+```
+
+After applying, add the cookie-signing secret to the environment. Append to `.env.example`:
+```env
+# Practice Brain: HMAC secret for the per-user unlock session cookie
+PRACTICE_BRAIN_SESSION_SECRET=
+```
+And set a real value in `.env.local` (any long random string), e.g.:
+```env
+PRACTICE_BRAIN_SESSION_SECRET=<paste a long random string>
 ```
 
 - [ ] **Step 2: Apply the migration**
@@ -116,14 +168,17 @@ Use the Supabase MCP tool `mcp__plugin_supabase_supabase__apply_migration` with 
 Use `mcp__plugin_supabase_supabase__execute_sql` with:
 ```sql
 select kind, title, tier from knowledge_node where client_id = 'vitality' order by title;
+select label, tier from practice_brain_credential where client_id = 'vitality' order by tier desc;
+select label, tier from verify_practice_brain_password('vitality', 'vitality-owner-2026');
 ```
-Expected: 6 rows, all `kind = branch`, the six hub titles above.
+Expected: 6 branch rows; 3 credential rows (Owner/4, Practice manager/3, Coordinator/2); the
+third query returns exactly one row `Owner | 4` (proves bcrypt verification works).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add supabase/migrations/0003_practice_brain.sql
-git commit -m "feat: practice brain knowledge_node schema + seed hubs"
+git add supabase/migrations/0003_practice_brain.sql .env.example
+git commit -m "feat: practice brain schema, seed hubs + per-user credentials"
 ```
 
 ---
@@ -830,6 +885,118 @@ git commit -m "feat: practice brain constellation layout math"
 
 ---
 
+## Task 6b: Session cookie helper (TDD)
+
+**Files:**
+- Create: `src/lib/practice-brain/session.ts`
+- Test: `src/lib/practice-brain/session.test.ts`
+
+Pure HMAC sign/verify for the `pb_session` cookie. Uses Node `crypto` (available in route handlers and vitest).
+
+- [ ] **Step 1: Write the failing test**
+
+`src/lib/practice-brain/session.test.ts`:
+```ts
+import { describe, it, expect } from "vitest";
+import { signSession, verifySession, type PbSession } from "./session";
+
+const SECRET = "test-secret-please-rotate";
+const future = 10_000_000_000_000;
+
+describe("session cookie", () => {
+  const payload: PbSession = { credentialId: "cred-1", maxTier: 4, exp: future };
+
+  it("round-trips a valid token", () => {
+    const token = signSession(payload, SECRET);
+    expect(verifySession(token, SECRET)).toEqual(payload);
+  });
+
+  it("rejects a tampered token", () => {
+    const token = signSession(payload, SECRET);
+    const tampered = token.slice(0, -2) + (token.endsWith("a") ? "bb" : "aa");
+    expect(verifySession(tampered, SECRET)).toBeNull();
+  });
+
+  it("rejects a token signed with another secret", () => {
+    const token = signSession(payload, "other-secret");
+    expect(verifySession(token, SECRET)).toBeNull();
+  });
+
+  it("rejects an expired token", () => {
+    const token = signSession({ ...payload, exp: 1 }, SECRET);
+    expect(verifySession(token, SECRET)).toBeNull();
+  });
+
+  it("rejects missing/garbage input", () => {
+    expect(verifySession(undefined, SECRET)).toBeNull();
+    expect(verifySession("nope", SECRET)).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/lib/practice-brain/session.test.ts`
+Expected: FAIL ("Failed to resolve import ./session").
+
+- [ ] **Step 3: Write minimal implementation**
+
+`src/lib/practice-brain/session.ts`:
+```ts
+import { createHmac, timingSafeEqual } from "crypto";
+
+export interface PbSession {
+  credentialId: string;
+  maxTier: number;
+  exp: number;
+}
+
+function sign(body: string, secret: string): string {
+  return createHmac("sha256", secret).update(body).digest("base64url");
+}
+
+export function signSession(payload: PbSession, secret: string): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${body}.${sign(body, secret)}`;
+}
+
+export function verifySession(
+  token: string | undefined | null,
+  secret: string,
+  now: number = Date.now(),
+): PbSession | null {
+  if (!token) return null;
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return null;
+  const expected = sign(body, secret);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString()) as PbSession;
+    if (typeof payload.exp !== "number" || payload.exp < now) return null;
+    if (typeof payload.credentialId !== "string" || typeof payload.maxTier !== "number") return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run src/lib/practice-brain/session.test.ts`
+Expected: PASS (5 passing).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/practice-brain/session.ts src/lib/practice-brain/session.test.ts
+git commit -m "feat: practice brain signed session cookie helper"
+```
+
+---
+
 ## Task 7: Supabase repository
 
 **Files:**
@@ -992,6 +1159,24 @@ export async function resolveReview(id: string, patch: { tier: Tier; parentId: s
     .eq("id", id);
   if (error) throw new Error(error.message);
 }
+
+export interface VerifiedCredential {
+  id: string;
+  label: string;
+  tier: Tier;
+}
+
+/** Verifies a plaintext password in Postgres (bcrypt). Returns the credential or null. */
+export async function verifyCredential(clientId: string, password: string): Promise<VerifiedCredential | null> {
+  const { data, error } = await serviceClient().rpc("verify_practice_brain_password", {
+    p_client_id: clientId,
+    p_password: password,
+  });
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as { id: string; label: string; tier: number }[];
+  if (rows.length === 0) return null;
+  return { id: rows[0].id, label: rows[0].label, tier: rows[0].tier as Tier };
+}
 ```
 
 - [ ] **Step 2: Verify it compiles**
@@ -1013,22 +1198,24 @@ git commit -m "feat: practice brain supabase repository"
 **Files:**
 - Create: `src/app/api/practice-brain/[action]/route.ts`
 
-Follows the `src/app/api/coordinator/[action]/route.ts` dispatch pattern. Clearance is applied server-side using the role the client sends (mock auth this round).
+Follows the `src/app/api/coordinator/[action]/route.ts` dispatch pattern. `unlock` verifies a per-user password and sets the signed `pb_session` cookie; every other action derives `maxTier` from that cookie (server-side) and applies the deterministic clearance filter, returning 401 when locked.
 
 - [ ] **Step 1: Write the route**
 
 `src/app/api/practice-brain/[action]/route.ts`:
 ```ts
-import { NextResponse } from "next/server";
-import type { Role } from "@/lib/types";
+import { NextResponse, type NextRequest } from "next/server";
 import { classifyKnowledge } from "@/lib/practice-brain/classify";
-import { maxTierForRole, visibleNodes } from "@/lib/practice-brain/clearance";
+import { visibleNodes } from "@/lib/practice-brain/clearance";
+import { signSession, verifySession } from "@/lib/practice-brain/session";
 import type { ClassificationResult, Tier } from "@/lib/practice-brain/types";
 import {
-  createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, resolveReview,
+  createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, resolveReview, verifyCredential,
 } from "@/lib/practice-brain/repository";
 
 const CLIENT_ID = "vitality";
+const COOKIE = "pb_session";
+const SESSION_MS = 1000 * 60 * 60 * 8;
 
 function ok<T>(data: T) {
   return NextResponse.json({ success: true, data });
@@ -1037,19 +1224,41 @@ function fail(error: string, status = 400) {
   return NextResponse.json({ success: false, error }, { status });
 }
 
-export async function POST(req: Request, ctx: { params: Promise<{ action: string }> }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
   const { action } = await ctx.params;
+  const secret = process.env.PRACTICE_BRAIN_SESSION_SECRET ?? "";
   let body: Record<string, unknown> = {};
   try {
     body = await req.json();
   } catch {
     body = {};
   }
-  const role = (body.role as Role) ?? "client_coordinator";
-  const userId = (body.userId as string) ?? "unknown";
-  const maxTier = maxTierForRole(role);
 
   try {
+    // Unlock: verify a per-user password and issue the signed session cookie.
+    if (action === "unlock") {
+      const password = String(body.password ?? "");
+      if (!password) return fail("Password required.");
+      if (!secret) return fail("Server missing PRACTICE_BRAIN_SESSION_SECRET.", 500);
+      const cred = await verifyCredential(CLIENT_ID, password);
+      if (!cred) return fail("Incorrect password.", 401);
+      const token = signSession({ credentialId: cred.id, maxTier: cred.tier, exp: Date.now() + SESSION_MS }, secret);
+      const res = ok({ label: cred.label, maxTier: cred.tier });
+      res.cookies.set(COOKIE, token, {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: SESSION_MS / 1000,
+      });
+      return res;
+    }
+
+    // Every other action requires a valid unlock cookie. maxTier comes from it, not the client.
+    const session = verifySession(req.cookies.get(COOKIE)?.value, secret);
+    if (!session) return fail("Locked. Unlock Practice Brain first.", 401);
+    const maxTier = session.maxTier as Tier;
+
     if (action === "tree") {
       const all = await listActiveNodes(CLIENT_ID);
       return ok({ nodes: visibleNodes(all, maxTier), maxTier });
@@ -1086,7 +1295,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
         tags: result.tags,
         status: result.needsReview ? "needs_review" : "active",
         classification,
-        createdBy: userId,
+        createdBy: session.credentialId,
       });
       return ok(node);
     }
@@ -1117,25 +1326,46 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
 
 - [ ] **Step 2: Smoke test the route**
 
-Start the dev server with the `preview_start` tool. Then verify with `preview_eval`:
+Start the dev server with the `preview_start` tool. Then verify with `preview_eval`.
+
+First confirm the gate blocks unauthenticated reads:
 ```js
 await fetch("/api/practice-brain/tree", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ role: "client_owner", userId: "u-vitality-owner" }),
+  method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+}).then((r) => r.status);
+```
+Expected: `401` (locked).
+
+Now unlock (the browser stores the `pb_session` cookie automatically), then read the tree:
+```js
+await fetch("/api/practice-brain/unlock", {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ password: "vitality-owner-2026" }),
+}).then((r) => r.json());
+// then:
+await fetch("/api/practice-brain/tree", {
+  method: "POST", headers: { "content-type": "application/json" }, body: "{}",
 }).then((r) => r.json());
 ```
-Expected: `{ success: true, data: { nodes: [6 seed branches...], maxTier: 4 } }`.
+Expected: unlock returns `{ success: true, data: { label: "Owner", maxTier: 4 } }`; tree returns `{ success: true, data: { nodes: [6 seed branches...], maxTier: 4 } }`.
 
-Then test classification (uses the real Anthropic key):
+Then test classification (uses the real Anthropic key, requires the cookie from unlock):
 ```js
 await fetch("/api/practice-brain/classify", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
+  method: "POST", headers: { "content-type": "application/json" },
   body: JSON.stringify({ rawInput: "Always confirm implant consults by phone the day before." }),
 }).then((r) => r.json());
 ```
 Expected: `{ success: true, data: { branch: <one of the hubs>, tier: <1-4>, title, body, tags, confidence, needsReview } }`.
+
+Also confirm a wrong password is rejected:
+```js
+await fetch("/api/practice-brain/unlock", {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ password: "wrong" }),
+}).then((r) => r.status);
+```
+Expected: `401`.
 
 - [ ] **Step 3: Commit**
 
@@ -1272,7 +1502,6 @@ Paste a note → classify (preview the branch/tier/tags) → confirm or edit tie
 "use client";
 
 import { useState } from "react";
-import { useAuth } from "@/lib/auth/mock-auth";
 import { TIER_LABELS, type ClassificationResult, type Tier } from "@/lib/practice-brain/types";
 
 interface Props {
@@ -1280,7 +1509,6 @@ interface Props {
 }
 
 export function CapturePanel({ onSaved }: Props) {
-  const { user } = useAuth();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ClassificationResult | null>(null);
@@ -1312,7 +1540,7 @@ export function CapturePanel({ onSaved }: Props) {
       const res = await fetch("/api/practice-brain/create", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ result, rawInput: text, role: user?.role, userId: user?.id }),
+        body: JSON.stringify({ result, rawInput: text }),
       }).then((r) => r.json());
       if (!res.success) throw new Error(res.error);
       setText("");
@@ -1397,6 +1625,106 @@ git commit -m "feat: practice brain capture panel with classify preview"
 
 ---
 
+## Task 10b: Password gate component
+
+**Files:**
+- Create: `src/components/client/practice-brain/password-gate.tsx`
+
+The unlock screen, styled on the navy constellation canvas. On success it hands the caller the label + maxTier.
+
+- [ ] **Step 1: Write the component**
+
+`src/components/client/practice-brain/password-gate.tsx`:
+```tsx
+"use client";
+
+import { useState, type FormEvent } from "react";
+
+interface Props {
+  onUnlocked: (label: string, maxTier: number) => void;
+}
+
+export function PasswordGate({ onUnlocked }: Props) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/practice-brain/unlock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
+      }).then((r) => r.json());
+      if (!res.success) throw new Error(res.error);
+      onUnlocked(res.data.label as string, res.data.maxTier as number);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unlock failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        minHeight: 420, background: "#0A0E1A", borderRadius: 12,
+        border: "0.5px solid rgba(150,170,210,0.18)",
+      }}
+    >
+      <form onSubmit={submit} style={{ width: 300, textAlign: "center" }}>
+        <div style={{ color: "#5BC4F7", fontSize: 13, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>
+          Practice brain
+        </div>
+        <p style={{ color: "#C8D4F0", fontSize: 14, margin: "0 0 16px" }}>Enter your password to unlock.</p>
+        <input
+          type="password"
+          autoFocus
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          style={{
+            width: "100%", padding: "10px 12px", borderRadius: 8,
+            border: "0.5px solid rgba(150,170,210,0.35)", background: "#12224A",
+            color: "#FFFFFF", fontSize: 14,
+          }}
+        />
+        {error && <p style={{ color: "#F09595", fontSize: 12, margin: "8px 0 0" }}>{error}</p>}
+        <button
+          type="submit"
+          disabled={busy || password.length === 0}
+          style={{
+            marginTop: 12, width: "100%", padding: "10px 12px", borderRadius: 8,
+            border: "none", background: "#2B8AC0", color: "#FFFFFF", fontSize: 14,
+            fontWeight: 500, cursor: "pointer", opacity: busy || !password ? 0.5 : 1,
+          }}
+        >
+          {busy ? "Unlocking..." : "Unlock"}
+        </button>
+      </form>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 2: Verify it compiles**
+
+Run: `npx tsc --noEmit`
+Expected: no errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/components/client/practice-brain/password-gate.tsx
+git commit -m "feat: practice brain password gate screen"
+```
+
+---
+
 ## Task 11: Item detail + needs-review + barrel
 
 **Files:**
@@ -1439,13 +1767,11 @@ export function ItemDetail({ node, onClose }: { node: KnowledgeNode; onClose: ()
 "use client";
 
 import { useEffect, useState } from "react";
-import { useAuth } from "@/lib/auth/mock-auth";
 import { TIER_LABELS, type KnowledgeNode, type Tier } from "@/lib/practice-brain/types";
 
 const HUBS = ["Back office", "Sales", "Reception", "Marketing", "Operations", "Intelligence"];
 
 export function NeedsReview({ onResolved }: { onResolved: () => void }) {
-  const { user } = useAuth();
   const [items, setItems] = useState<KnowledgeNode[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -1453,7 +1779,7 @@ export function NeedsReview({ onResolved }: { onResolved: () => void }) {
     const res = await fetch("/api/practice-brain/needs-review", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ role: user?.role, userId: user?.id }),
+      body: "{}",
     }).then((r) => r.json());
     if (res.success) setItems(res.data.nodes);
     else setError(res.error);
@@ -1468,7 +1794,7 @@ export function NeedsReview({ onResolved }: { onResolved: () => void }) {
     const res = await fetch("/api/practice-brain/resolve-review", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, branch, tier, role: user?.role, userId: user?.id }),
+      body: JSON.stringify({ id, branch, tier }),
     }).then((r) => r.json());
     if (res.success) {
       await load();
@@ -1518,6 +1844,8 @@ function ReviewRow({ node, onResolve }: { node: KnowledgeNode; onResolve: (id: s
 
 `src/components/client/practice-brain/index.ts`:
 ```ts
+export { PracticeBrainView } from "./practice-brain-view";
+export { PasswordGate } from "./password-gate";
 export { Constellation } from "./constellation";
 export { CapturePanel } from "./capture-panel";
 export { ItemDetail } from "./item-detail";
@@ -1538,61 +1866,85 @@ git commit -m "feat: practice brain item detail + needs-review queue"
 
 ---
 
-## Task 12: Page wiring + nav status
+## Task 12: View component + owner wiring
 
 **Files:**
-- Modify: `src/app/c/[client]/practice-brain/page.tsx`
+- Create: `src/components/client/practice-brain/practice-brain-view.tsx`
+- Modify: `src/app/owner/[client]/[module]/page.tsx`
+- Modify: `src/components/owner/owner-sidebar.tsx`
 - Modify: `src/lib/nav.ts`
+- Delete: `src/app/c/[client]/practice-brain/page.tsx`
 
-- [ ] **Step 1: Replace the placeholder page**
+- [ ] **Step 1: Write the view component (gate + constellation orchestration)**
 
-`src/app/c/[client]/practice-brain/page.tsx`:
+`src/components/client/practice-brain/practice-brain-view.tsx`:
 ```tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAuth } from "@/lib/auth/mock-auth";
-import { maxTierForRole } from "@/lib/practice-brain/clearance";
 import type { KnowledgeNode } from "@/lib/practice-brain/types";
 import { PageHeader } from "@/components/primitives";
-import { Constellation, CapturePanel, ItemDetail, NeedsReview } from "@/components/client/practice-brain";
+import { Constellation } from "./constellation";
+import { CapturePanel } from "./capture-panel";
+import { ItemDetail } from "./item-detail";
+import { NeedsReview } from "./needs-review";
+import { PasswordGate } from "./password-gate";
 
-export default function Page() {
-  const { user } = useAuth();
+export function PracticeBrainView() {
+  const [unlocked, setUnlocked] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [maxTier, setMaxTier] = useState(0);
   const [nodes, setNodes] = useState<KnowledgeNode[]>([]);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [activeHubId, setActiveHubId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  const canReview = user ? maxTierForRole(user.role) >= 3 : false;
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
-    if (!user) return;
     setLoading(true);
     const res = await fetch("/api/practice-brain/tree", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ role: user.role, userId: user.id }),
+      body: "{}",
     }).then((r) => r.json());
-    if (res.success) setNodes(res.data.nodes);
+    if (res.success) {
+      setNodes(res.data.nodes);
+      setMaxTier(res.data.maxTier);
+      setUnlocked(true);
+    }
     setLoading(false);
-  }, [user]);
+  }, []);
 
+  // Detect an existing unlock cookie on mount (returning within the session).
   useEffect(() => {
-    void load();
-  }, [load]);
+    (async () => {
+      const r = await fetch("/api/practice-brain/tree", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.success) {
+          setNodes(j.data.nodes);
+          setMaxTier(j.data.maxTier);
+          setUnlocked(true);
+        }
+      }
+      setChecking(false);
+    })();
+  }, []);
 
   const selectedItem = useMemo(
     () => nodes.find((n) => n.id === selectedItemId) ?? null,
     [nodes, selectedItemId],
   );
+  const canReview = maxTier >= 3;
 
   function selectHub(id: string) {
     const node = nodes.find((n) => n.id === id);
-    if (!node) return;
-    if (node.kind === "branch") {
+    if (node && node.kind === "branch") {
       setActiveHubId(id);
       setFocusId(id);
     }
@@ -1617,76 +1969,146 @@ export default function Page() {
         description="The practice knowledge hub. Branches grow as you add knowledge; the co-pilot will draw from it."
       />
 
-      <div className="mb-3 flex items-center gap-2">
-        <button onClick={() => { setFocusId(null); setActiveHubId(null); }} className="text-xs text-muted hover:text-ink">
-          Practice brain
-        </button>
-        {breadcrumb.map((b) => (
-          <span key={b.id} className="text-xs text-muted">/ {b.title}</span>
-        ))}
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search the brain..."
-          className="ml-auto w-48 rounded-lg border border-line bg-card-muted px-2 py-1 text-sm"
-        />
-      </div>
-
-      {loading ? (
-        <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Loading the constellation...</div>
+      {checking ? (
+        <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Checking access...</div>
+      ) : !unlocked ? (
+        <PasswordGate onUnlocked={() => { void load(); }} />
       ) : (
-        <Constellation
-          nodes={nodes}
-          focusId={focusId}
-          activeHubId={activeHubId}
-          query={query}
-          onSelectHub={selectHub}
-          onSelectItem={setSelectedItemId}
-        />
-      )}
-
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <CapturePanel onSaved={load} />
-        {selectedItem ? (
-          <ItemDetail node={selectedItem} onClose={() => setSelectedItemId(null)} />
-        ) : canReview ? (
-          <div className="rounded-xl border border-line-strong bg-card p-4">
-            <h3 className="mb-2 text-sm font-semibold text-ink">Needs review</h3>
-            <NeedsReview onResolved={load} />
+        <>
+          <div className="mb-3 flex items-center gap-2">
+            <button onClick={() => { setFocusId(null); setActiveHubId(null); }} className="text-xs text-muted hover:text-ink">
+              Practice brain
+            </button>
+            {breadcrumb.map((b) => (
+              <span key={b.id} className="text-xs text-muted">/ {b.title}</span>
+            ))}
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search the brain..."
+              className="ml-auto w-48 rounded-lg border border-line bg-card-muted px-2 py-1 text-sm"
+            />
           </div>
-        ) : null}
-      </div>
+
+          {loading ? (
+            <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Loading the constellation...</div>
+          ) : (
+            <Constellation
+              nodes={nodes}
+              focusId={focusId}
+              activeHubId={activeHubId}
+              query={query}
+              onSelectHub={selectHub}
+              onSelectItem={setSelectedItemId}
+            />
+          )}
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <CapturePanel onSaved={load} />
+            {selectedItem ? (
+              <ItemDetail node={selectedItem} onClose={() => setSelectedItemId(null)} />
+            ) : canReview ? (
+              <div className="rounded-xl border border-line-strong bg-card p-4">
+                <h3 className="mb-2 text-sm font-semibold text-ink">Needs review</h3>
+                <NeedsReview onResolved={load} />
+              </div>
+            ) : null}
+          </div>
+        </>
+      )}
     </>
   );
 }
 ```
 
-- [ ] **Step 2: Set the nav status to live**
+- [ ] **Step 2: Render the view in the owner module route**
 
-In `src/lib/nav.ts`, find the `practice-brain` item and change `status: "placeholder"` to `status: "live"`.
+Replace `src/app/owner/[client]/[module]/page.tsx` with:
+```tsx
+import { notFound } from "next/navigation";
+import { OverviewDashboard } from "@/components/client/overview-dashboard";
+import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
+import { PracticeBrainView } from "@/components/client/practice-brain";
+import { ModulePlaceholder } from "@/components/client/module-placeholder";
+import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 
-```ts
-      {
-        slug: "practice-brain",
-        label: "Practice brain",
-        icon: BrainCircuit,
-        status: "live",
-        note: "Basic internal knowledge base for the pilot: protocols, scripts, pricing and Dentally workflows. One standard answer across every site.",
-      },
+export const dynamic = "force-dynamic";
+
+export default async function OwnerModulePage({
+  params,
+}: {
+  params: Promise<{ client: string; module: string }>;
+}) {
+  const { client, module } = await params;
+
+  if (module === "overview") {
+    return <OverviewDashboard />;
+  }
+
+  if (module === "treatment-coordinator") {
+    return <TreatmentCoordinatorView clientSlug={client} />;
+  }
+
+  if (module === "practice-brain") {
+    return <PracticeBrainView />;
+  }
+
+  if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {
+    return <ModulePlaceholder slug={module} />;
+  }
+
+  notFound();
+}
 ```
 
-- [ ] **Step 3: Verify it compiles and renders**
+- [ ] **Step 3: Add the Practice brain link to the owner sidebar**
 
-Run: `npx tsc --noEmit`
-Expected: no errors.
+In `src/components/owner/owner-sidebar.tsx`, add `BrainCircuit` to the lucide import:
+```ts
+import { Gauge, LogOut, BrainCircuit } from "lucide-react";
+```
+Then add a second `<li>` inside the "Practice" group's `<ul>`, right after the Management `<li>`:
+```tsx
+            <li>
+              <Link
+                href={`${base}/practice-brain`}
+                className={cn(
+                  "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                  isActive("practice-brain")
+                    ? "bg-navy-soft text-on-navy"
+                    : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                )}
+              >
+                {isActive("practice-brain") ? (
+                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+                ) : null}
+                <BrainCircuit size={16} className="shrink-0" />
+                <span className="truncate">Practice brain</span>
+              </Link>
+            </li>
+```
 
-Then with the dev server running (`preview_start`), navigate to `/c/vitality/practice-brain` (use `preview_eval` with `window.location.href = "/c/vitality/practice-brain"` after logging in as owner via the role switcher, or set the mock role in localStorage: `localStorage.setItem("azen.mockauth.role","client_owner")` then reload). Use `preview_console_logs` to confirm no errors, then `preview_screenshot` to confirm the constellation renders with six hubs on the navy canvas.
+- [ ] **Step 4: Remove Practice brain from the staff nav and delete the staff route**
 
-- [ ] **Step 4: Commit**
+In `src/lib/nav.ts`: delete the entire `practice-brain` item object from the "Staff & Ops" group (leaving `daily-brief`), and remove `BrainCircuit` from the lucide import at the top of the file (it is no longer used there). This removes it from the staff (`/c/[client]`) sidebar automatically; the owner sidebar adds it back explicitly (Step 3).
+
+Then delete the now-dead staff route:
+```bash
+git rm src/app/c/[client]/practice-brain/page.tsx
+```
+
+- [ ] **Step 5: Verify it compiles and renders**
+
+Run: `npx tsc --noEmit && npm run lint`
+Expected: no errors (in particular, no "unused BrainCircuit" in `nav.ts`).
+
+Then with the dev server running (`preview_start`): log in as owner (`localStorage.setItem("azen.mockauth.role","client_owner")`), navigate via `preview_eval` to `window.location.href = "/owner/vitality/practice-brain"`. Confirm the password screen shows. Use `preview_fill` to enter `vitality-owner-2026` and submit, then `preview_screenshot` to confirm the constellation renders with six hubs on the navy canvas. Use `preview_console_logs` to confirm no errors.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/app/c/[client]/practice-brain/page.tsx src/lib/nav.ts
-git commit -m "feat: practice brain page + mark module live"
+git add src/app/owner/[client]/[module]/page.tsx src/components/owner/owner-sidebar.tsx src/lib/nav.ts src/components/client/practice-brain/practice-brain-view.tsx
+git commit -m "feat: practice brain owner-dashboard view behind password gate"
 ```
 
 ---
@@ -1710,11 +2132,12 @@ Expected: build succeeds.
 
 - [ ] **Step 4: End-to-end manual check via preview**
 
-With the dev server running and logged in as `client_owner`:
-1. Add a note in the capture panel (e.g. "Send the Invisalign price list to enquiries within the hour"). Confirm it classifies, shows a branch + tier + tags, and saves.
-2. Reload; confirm the relevant hub's item count increased and the new item appears as a leaf when you drill into that hub.
-3. Switch role to `client_coordinator` (role switcher) and confirm tier 3/4 items are absent and the needs-review panel is hidden.
-4. `preview_screenshot` the final state for the user.
+With the dev server running, logged in as `client_owner`, at `/owner/vitality/practice-brain`:
+1. Unlock with the owner password `vitality-owner-2026`. Confirm the constellation loads.
+2. Add a note in the capture panel (e.g. "Send the Invisalign price list to enquiries within the hour"). Confirm it classifies, shows a branch + tier + tags, and saves.
+3. Reload; confirm the relevant hub's item count increased and the new item appears as a leaf when you drill into that hub.
+4. Clear the cookie (`document.cookie = "pb_session=; Max-Age=0; path=/"` via `preview_eval`) and reload; confirm the password screen returns. Unlock with the coordinator password `vitality-coord-2026` and confirm tier 3/4 items are absent and the needs-review panel is hidden (maxTier 2).
+5. `preview_screenshot` the final state for the user.
 
 - [ ] **Step 5: Final commit (if any cleanup)**
 
@@ -1727,7 +2150,8 @@ git commit -m "chore: practice brain foundation verification fixes"
 
 ## Self-review notes (author)
 
-- **Spec coverage:** store + hierarchy (Task 1, 7), classifier branch/tier/tags + propose-new-branch (Task 4, 5, 8), deterministic clearance + fail-closed (Task 3, 4), constellation UI + drill-in + search (Task 6, 9, 12), capture confirm/override (Task 10), needs-review queue (Task 11), graceful behaviour and no-clinical/no-em-dash rules (Task 4 prompt + parser). All in scope; co-pilot, embeddings, file ingest, cross-module feeds, self-learning loop, real auth/RLS, and motion polish remain explicitly deferred (not in any task).
-- **Degraded mode:** the spec mentions a demo fallback when env is absent. Since `.env.local` has all keys set, this plan builds the live path. If keys are later removed, `serviceClient()`/`new Anthropic()` will throw and the API returns a 500 surfaced in the UI error states; a dedicated seeded demo mode is a small follow-up, not built here.
-- **Type consistency:** `ClassificationResult`, `KnowledgeNode`, `Tier`, `maxTierForRole`, `visibleNodes`, `childrenOf`, `layoutConstellation`/`HubInput` names are used identically across tasks.
-- **Tailwind tokens:** capture/detail/review components assume the app's existing token names (`bg-card`, `border-line`, `text-ink`, `text-muted`, `blue-dark`, `blue-light`). Verify against `src/app/globals.css` / existing coordinator components during Task 10 and adjust if a name differs.
+- **Spec coverage:** store + hierarchy (Task 1, 7), classifier branch/tier/tags + propose-new-branch (Task 4, 5, 8), deterministic clearance + fail-closed (Task 3, 4), per-user password gate + credentials + session cookie (Task 1, 6b, 7, 8, 10b), owner-only placement (Task 12), constellation UI + drill-in + search (Task 6, 9, 12), capture confirm/override (Task 10), needs-review queue (Task 11), graceful behaviour and no-clinical/no-em-dash rules (Task 4 prompt + parser). All in scope; co-pilot, embeddings, file ingest, cross-module feeds, self-learning loop, real auth/RLS, in-app credential manager, and motion polish remain explicitly deferred (not in any task).
+- **Access model:** `maxTier` is derived only from the verified `pb_session` cookie set by `unlock`; the data actions return 401 without it and never trust a client-sent role. `maxTierForRole` (Task 3) remains for future co-pilot/staff use but is not on the request path for this owner view.
+- **Degraded mode:** the spec mentions a demo fallback when env is absent. Since `.env.local` has all keys set (plus the new `PRACTICE_BRAIN_SESSION_SECRET`), this plan builds the live path. If keys are later removed, the API returns a 500/`Server missing PRACTICE_BRAIN_SESSION_SECRET` surfaced in the UI error states; a dedicated seeded demo mode is a small follow-up, not built here.
+- **Type consistency:** `ClassificationResult`, `KnowledgeNode`, `Tier`, `visibleNodes`, `childrenOf`, `layoutConstellation`/`HubInput`, `PbSession`, `signSession`/`verifySession`, `verifyCredential` names are used identically across tasks.
+- **Tailwind tokens:** capture/detail/review components assume the app's existing token names (`bg-card`, `border-line`, `text-ink`, `text-muted`, `blue-dark`, `blue-light`). Verify against `src/app/globals.css` / existing coordinator components during Task 10 and adjust if a name differs. The password gate and constellation use inline hex (intentional dark scene), so they are token-independent.
