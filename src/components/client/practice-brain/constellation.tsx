@@ -48,9 +48,10 @@ function seeded(seed: number) {
   let s = seed;
   return () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
 }
+const STAR_SPAN = 900; // stars extend well beyond the viewBox so the full-width panel never shows empty sides
 const STARS = (() => {
   const rnd = seeded(9);
-  return Array.from({ length: 130 }, () => ({ x: rnd() * W, y: rnd() * H, r: rnd() * 1.1 + 0.3, o: rnd() * 0.45 + 0.12 }));
+  return Array.from({ length: 360 }, () => ({ x: -STAR_SPAN + rnd() * (W + 2 * STAR_SPAN), y: rnd() * H, r: rnd() * 1.1 + 0.3, o: rnd() * 0.45 + 0.12 }));
 })();
 const FILAMENTS = (() => {
   const rnd = seeded(7);
@@ -211,7 +212,7 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
   const focusedHub = focusIndex !== null ? hubs[focusIndex] : null;
 
   return (
-    <div style={{ position: "relative", width: "100%", maxWidth: `min(100%, calc(58vh * ${W} / ${H}))`, aspectRatio: `${W} / ${H}`, margin: "0 auto", background: "radial-gradient(120% 90% at 50% 46%, #0E1530 0%, #090D1A 62%, #070A14 100%)", borderRadius: 16, overflow: "hidden", border: "0.5px solid rgba(150,170,210,0.18)", boxShadow: "inset 0 1px 0 rgba(170,200,255,0.06)" }}>
+    <div style={{ position: "relative", width: "100%", height: "clamp(380px, 52vh, 540px)", background: "radial-gradient(70% 110% at 50% 44%, #14204A 0%, #0C1226 42%, #080C18 72%, #060911 100%)", borderRadius: 16, overflow: "hidden", border: "0.5px solid rgba(150,170,210,0.18)", boxShadow: "inset 0 1px 0 rgba(170,200,255,0.06), inset 0 0 140px 36px rgba(4,6,13,0.55)" }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }} role="img" aria-label="Practice brain constellation">
         <defs>
           <radialGradient id="pbCoreGlow" cx="50%" cy="50%" r="50%">
@@ -228,10 +229,6 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
             <stop offset="0%" stopColor="#21386B" />
             <stop offset="100%" stopColor="#0E1B3C" />
           </linearGradient>
-          <radialGradient id="pbVignette" cx="50%" cy="48%" r="62%">
-            <stop offset="62%" stopColor="#000000" stopOpacity="0" />
-            <stop offset="100%" stopColor="#04060D" stopOpacity="0.55" />
-          </radialGradient>
           <filter id="pbSoft" x="-120%" y="-120%" width="340%" height="340%">
             <feGaussianBlur stdDeviation="6" />
           </filter>
@@ -357,7 +354,6 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
           );
         })}
 
-        <rect x={0} y={0} width={W} height={H} fill="url(#pbVignette)" pointerEvents="none" />
       </svg>
 
       {/* overlay chrome */}
