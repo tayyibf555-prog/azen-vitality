@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ThumbsUp, ThumbsDown } from "lucide-react";
 
 interface Cite {
   id: string;
@@ -13,6 +14,8 @@ interface Turn {
   citations: Cite[];
   groundedIn: number;
   saveStatus?: string;
+  qaId?: string;
+  feedback?: number;
 }
 
 interface Props {
@@ -39,9 +42,9 @@ export function CopilotPanel({ onCite }: Props) {
       }).then((r) => r.json());
 
       if (res.success) {
-        const { answer, citations, groundedIn } = res.data;
+        const { answer, citations, groundedIn, qaId } = res.data;
         setMessages((prev) => [
-          { question, answer, citations: citations ?? [], groundedIn: groundedIn ?? 0 },
+          { question, answer, citations: citations ?? [], groundedIn: groundedIn ?? 0, qaId },
           ...prev,
         ]);
         setInput("");
@@ -58,6 +61,23 @@ export function CopilotPanel({ onCite }: Props) {
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
       void ask();
+    }
+  }
+
+  async function sendFeedback(idx: number, qaId: string, value: number) {
+    try {
+      const res = await fetch("/api/practice-brain/qa-feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: qaId, value }),
+      }).then((r) => r.json());
+      if (res.success) {
+        setMessages((prev) =>
+          prev.map((turn, i) => (i === idx ? { ...turn, feedback: value } : turn)),
+        );
+      }
+    } catch {
+      // Best-effort — silently swallow network errors on feedback
     }
   }
 
@@ -155,6 +175,33 @@ export function CopilotPanel({ onCite }: Props) {
                       {c.title}
                     </button>
                   ))}
+                </div>
+              )}
+
+              {turn.qaId && (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={() => void sendFeedback(i, turn.qaId!, 1)}
+                    disabled={turn.feedback === 1}
+                    aria-label="Helpful"
+                    className="disabled:cursor-default"
+                  >
+                    <ThumbsUp
+                      size={14}
+                      className={turn.feedback === 1 ? "text-blue-dark" : "text-muted hover:text-blue-dark transition-colors"}
+                    />
+                  </button>
+                  <button
+                    onClick={() => void sendFeedback(i, turn.qaId!, -1)}
+                    disabled={turn.feedback === -1}
+                    aria-label="Not helpful"
+                    className="disabled:cursor-default"
+                  >
+                    <ThumbsDown
+                      size={14}
+                      className={turn.feedback === -1 ? "text-blue-dark" : "text-muted hover:text-blue-dark transition-colors"}
+                    />
+                  </button>
                 </div>
               )}
             </div>

@@ -221,6 +221,46 @@ export async function resolveGap(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Q&A conversation log
+// ---------------------------------------------------------------------------
+
+const QA_TABLE = "practice_brain_qa";
+
+export interface QaLogInput {
+  clientId: string;
+  question: string;
+  answer: string;
+  groundedIn: number;
+  askerTier: number;
+  citedIds: string[];
+}
+
+export async function logQa(input: QaLogInput): Promise<string> {
+  const { data, error } = await serviceClient()
+    .from(QA_TABLE)
+    .insert({
+      client_id: input.clientId,
+      question: input.question,
+      answer: input.answer,
+      grounded_in: input.groundedIn,
+      asker_tier: input.askerTier,
+      cited_ids: input.citedIds,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(error.message);
+  return (data as { id: string }).id;
+}
+
+export async function setQaFeedback(id: string, value: number): Promise<void> {
+  const { error } = await serviceClient()
+    .from(QA_TABLE)
+    .update({ feedback: value })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
 
 /** Verifies a plaintext password in Postgres (bcrypt). Returns the credential or null. */
 export async function verifyCredential(clientId: string, password: string): Promise<VerifiedCredential | null> {

@@ -6,7 +6,7 @@ import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { signSession, verifySession } from "@/lib/practice-brain/session";
 import type { ClassificationResult, Tier } from "@/lib/practice-brain/types";
 import {
-  createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, listOpenGaps, logKnowledgeGap, resolveGap, resolveReview, verifyCredential,
+  createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, listOpenGaps, logKnowledgeGap, logQa, resolveGap, resolveReview, setQaFeedback, verifyCredential,
 } from "@/lib/practice-brain/repository";
 
 const CLIENT_ID = "vitality";
@@ -108,7 +108,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const ranked = await searchKnowledge(CLIENT_ID, question, maxTier, 6);
       const result = await askCopilot(question, ranked);
       if (ranked.length === 0) await logKnowledgeGap(CLIENT_ID, question, maxTier);
-      return ok({ ...result, usedNodeIds: ranked.map((r) => r.node.id) });
+      const qaId = await logQa({
+        clientId: CLIENT_ID, question, answer: result.answer, groundedIn: result.groundedIn,
+        askerTier: maxTier, citedIds: result.citations.map((c) => c.id),
+      });
+      return ok({ ...result, usedNodeIds: ranked.map((r) => r.node.id), qaId });
+    }
+
+    if (action === "qa-feedback") {
+      const id = String(body.id ?? "");
+      const value = Number(body.value);
+      if (!id || (value !== 1 && value !== -1)) return fail("Invalid feedback.");
+      await setQaFeedback(id, value);
+      return ok({ id, value });
     }
 
     if (action === "learn") {
