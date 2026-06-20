@@ -53,4 +53,28 @@ describe("sendViaTwilio", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(r.provider).toBe("dry-run");
   });
+
+  it("uses API Key auth (SK:secret) when configured, with the account SID in the URL", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true, status: 201, json: async () => ({ sid: "SMkey", status: "queued" }), text: async () => "",
+    });
+    await sendViaTwilio(
+      { channel: "sms", to: "+447700900010", body: "Hi" },
+      { accountSid: "ACtest", apiKeySid: "SKabc", apiKeySecret: "sekret", smsFrom: "+441234567890", fetchImpl },
+    );
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain("/Accounts/ACtest/Messages.json");
+    const expected = `Basic ${Buffer.from("SKabc:sekret").toString("base64")}`;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe(expected);
+  });
+
+  it("dry-runs when no auth credentials are present", async () => {
+    const fetchImpl = vi.fn();
+    const r = await sendViaTwilio(
+      { channel: "sms", to: "+1", body: "x" },
+      { accountSid: "ACtest", smsFrom: "+441234567890", fetchImpl },
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.provider).toBe("dry-run");
+  });
 });
