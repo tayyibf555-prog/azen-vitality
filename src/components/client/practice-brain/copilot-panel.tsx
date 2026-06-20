@@ -12,6 +12,7 @@ interface Turn {
   answer: string;
   citations: Cite[];
   groundedIn: number;
+  saveStatus?: string;
 }
 
 interface Props {
@@ -23,6 +24,7 @@ export function CopilotPanel({ onCite }: Props) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savingIdx, setSavingIdx] = useState<number | null>(null);
 
   async function ask() {
     if (!input.trim() || busy) return;
@@ -56,6 +58,27 @@ export function CopilotPanel({ onCite }: Props) {
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
       void ask();
+    }
+  }
+
+  async function saveToBrain(idx: number, text: string) {
+    setSavingIdx(idx);
+    try {
+      const res = await fetch("/api/practice-brain/learn", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+      }).then((r) => r.json());
+
+      if (res.success) {
+        const { branch, needsReview } = res.data;
+        const status = needsReview ? "Sent to review" : `Saved to ${branch || "the brain"}`;
+        setMessages((prev) =>
+          prev.map((turn, i) => (i === idx ? { ...turn, saveStatus: status } : turn)),
+        );
+      }
+    } finally {
+      setSavingIdx(null);
     }
   }
 
@@ -101,10 +124,24 @@ export function CopilotPanel({ onCite }: Props) {
               </p>
               <p className="mt-1.5 text-sm text-ink">{turn.answer}</p>
 
-              {turn.groundedIn === 0 && (
+              {turn.groundedIn === 0 ? (
                 <p className="mt-1.5 text-xs text-muted italic">
-                  No matching knowledge found in the brain for this query.
+                  This was not in the brain, so it went to the gap queue for an owner to fill.
                 </p>
+              ) : (
+                <div className="mt-1.5 flex items-center gap-2">
+                  {!turn.saveStatus ? (
+                    <button
+                      onClick={() => void saveToBrain(i, turn.answer)}
+                      disabled={savingIdx === i}
+                      className="text-xs text-blue-dark disabled:opacity-50"
+                    >
+                      {savingIdx === i ? "Saving..." : "Save to brain"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-muted">{turn.saveStatus}</span>
+                  )}
+                </div>
               )}
 
               {turn.citations.length > 0 && (

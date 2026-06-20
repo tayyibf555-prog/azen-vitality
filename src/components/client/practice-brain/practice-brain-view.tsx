@@ -8,6 +8,7 @@ import { CapturePanel } from "./capture-panel";
 import { CopilotPanel } from "./copilot-panel";
 import { ItemDetail } from "./item-detail";
 import { NeedsReview } from "./needs-review";
+import { GapsQueue } from "./gaps-queue";
 import { PasswordGate } from "./password-gate";
 
 export function PracticeBrainView() {
@@ -132,10 +133,16 @@ export function PracticeBrainView() {
             {selectedItem ? (
               <ItemDetail node={selectedItem} onClose={() => setSelectedItemId(null)} />
             ) : canReview ? (
-              <div className="rounded-xl border border-line-strong bg-card p-4">
-                <h3 className="mb-2 text-sm font-semibold text-ink">Needs review</h3>
-                <NeedsReview onResolved={load} />
-              </div>
+              <>
+                <div className="rounded-xl border border-line-strong bg-card p-4">
+                  <h3 className="mb-2 text-sm font-semibold text-ink">Needs review</h3>
+                  <NeedsReview onResolved={load} />
+                </div>
+                <div className="rounded-xl border border-line-strong bg-card p-4 mt-4">
+                  <h3 className="mb-2 text-sm font-semibold text-ink">Co-pilot gaps</h3>
+                  <GapsQueue />
+                </div>
+              </>
             ) : null}
           </div>
         </>
