@@ -87,3 +87,120 @@ export async function stampInbound(id: string): Promise<void> {
     .eq("id", id);
   if (error) throw error;
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard: settings, analytics, conversation list.
+// ---------------------------------------------------------------------------
+
+/** Whether the agent is enabled for a site (defaults to true when unset). */
+export async function isAgentEnabled(siteId: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("agent_settings")
+    .select("enabled")
+    .eq("site_id", siteId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return true;
+  return (data as { enabled: boolean }).enabled;
+}
+
+/** Per-site enabled map for the given sites (default true when no row). */
+export async function getAgentSettings(siteIds: string[]): Promise<Record<string, boolean>> {
+  const db = serviceClient();
+  const { data, error } = await db.from("agent_settings").select("site_id, enabled").in("site_id", siteIds);
+  if (error) throw error;
+  const map: Record<string, boolean> = {};
+  for (const id of siteIds) map[id] = true;
+  for (const r of (data as { site_id: string; enabled: boolean }[]) ?? []) map[r.site_id] = r.enabled;
+  return map;
+}
+
+export async function setAgentEnabled(siteId: string, enabled: boolean): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("agent_settings")
+    .upsert({ site_id: siteId, enabled, updated_at: new Date().toISOString() }, { onConflict: "site_id" });
+  if (error) throw error;
+}
+
+export interface AgentAnalytics {
+  total: number;
+  active: number;
+  booked: number;
+  needsHuman: number;
+}
+
+export async function getAgentAnalytics(siteIds: string[]): Promise<AgentAnalytics> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("agent_conversation")
+    .select("status")
+    .in("site_id", siteIds);
+  if (error) throw error;
+  const rows = (data as { status: string }[]) ?? [];
+  return {
+    total: rows.length,
+    active: rows.filter((r) => r.status === "active").length,
+    booked: rows.filter((r) => r.status === "booked").length,
+    needsHuman: rows.filter((r) => r.status === "needs_human").length,
+  };
+}
+
+export interface DashboardConversation {
+  id: string;
+  patientName: string;
+  treatment: string | null;
+  channel: string;
+  status: ConversationStatus;
+  lastMessage: string;
+  lastMessageRole: MessageRole;
+  messageCount: number;
+  updatedAt: string;
+}
+
+/** Conversations for the dashboard, newest first, each with its latest message + count. */
+export async function listDashboardConversations(siteIds: string[], limit = 50): Promise<DashboardConversation[]> {
+  const db = serviceClient();
+  const { data: convs, error } = await db
+    .from("agent_conversation")
+    .select("*")
+    .in("site_id", siteIds)
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const conversations = (convs as ConvRow[]) ?? [];
+  if (conversations.length === 0) return [];
+
+  const ids = conversations.map((c) => c.id);
+  const { data: msgs, error: mErr } = await db
+    .from("agent_message")
+    .select("conversation_id, role, body, created_at")
+    .in("conversation_id", ids)
+    .order("created_at", { ascending: true });
+  if (mErr) throw mErr;
+  const messages = (msgs as { conversation_id: string; role: string; body: string; created_at: string }[]) ?? [];
+
+  const byConv = new Map<string, { last: { role: string; body: string }; count: number }>();
+  for (const m of messages) {
+    const cur = byConv.get(m.conversation_id) ?? { last: { role: m.role, body: m.body }, count: 0 };
+    cur.last = { role: m.role, body: m.body };
+    cur.count += 1;
+    byConv.set(m.conversation_id, cur);
+  }
+
+  return conversations.map((c) => {
+    const agg = byConv.get(c.id);
+    return {
+      id: c.id,
+      patientName: c.patient_name,
+      treatment: c.treatment,
+      channel: c.channel,
+      status: c.status as ConversationStatus,
+      lastMessage: agg?.last.body ?? "",
+      lastMessageRole: (agg?.last.role as MessageRole) ?? "patient",
+      messageCount: agg?.count ?? 0,
+      updatedAt: c.updated_at,
+    };
+  });
+}

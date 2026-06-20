@@ -20,6 +20,7 @@ import {
   appendMessage,
   setConversationStatus,
   stampInbound,
+  isAgentEnabled,
 } from "@/lib/agent/repository";
 import type { AgentContext } from "@/lib/agent/types";
 
@@ -87,6 +88,12 @@ export async function POST(request: Request): Promise<Response> {
     });
     await appendMessage({ conversationId: conversation.id, role: "patient", body });
     await stampInbound(conversation.id);
+
+    if (!(await isAgentEnabled(match.siteId))) {
+      // Agent paused for this site from the dashboard: route to a human, no auto-reply.
+      await setConversationStatus(conversation.id, "needs_human");
+      return twiml();
+    }
 
     if (conversation.status === "needs_human") {
       return twiml(); // already handed over; log only
