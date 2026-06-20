@@ -5,6 +5,7 @@ import type { KnowledgeNode } from "@/lib/practice-brain/types";
 import { PageHeader } from "@/components/primitives";
 import { Constellation } from "./constellation";
 import { CapturePanel } from "./capture-panel";
+import { CopilotPanel } from "./copilot-panel";
 import { ItemDetail } from "./item-detail";
 import { NeedsReview } from "./needs-review";
 import { PasswordGate } from "./password-gate";
@@ -121,6 +122,10 @@ export function PracticeBrainView() {
               onSelectItem={setSelectedItemId}
             />
           )}
+
+          <div className="mt-4">
+            <CopilotPanel onCite={(id) => setSelectedItemId(id)} />
+          </div>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <CapturePanel onSaved={load} />
