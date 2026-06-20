@@ -398,3 +398,124 @@ export async function markTouchSent(touchId: string): Promise<void> {
     .eq("touch_id", touchId);
   if (oErr) throw oErr;
 }
+
+// ---------------------------------------------------------------------------
+// Outbox drain + inbound correlation (messaging layer).
+// ---------------------------------------------------------------------------
+
+export interface QueuedOutbox {
+  id: string;
+  touchId: string;
+  siteId: string;
+  channel: TouchChannel;
+  toRef: string;
+  body: string;
+}
+
+export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_outbox")
+    .select("id, touch_id, site_id, channel, to_ref, body")
+    .in("site_id", siteIds)
+    .eq("status", "queued")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data as Array<{
+    id: string; touch_id: string; site_id: string; channel: string; to_ref: string; body: string;
+  }>).map((r) => ({
+    id: r.id, touchId: r.touch_id, siteId: r.site_id, channel: r.channel as TouchChannel, toRef: r.to_ref, body: r.body,
+  }));
+}
+
+export async function recordOutboxSent(
+  outboxId: string,
+  touchId: string,
+  fields: { provider: string; providerMessageId: string; toAddress: string },
+): Promise<void> {
+  const db = serviceClient();
+  const nowIso = new Date().toISOString();
+  const { error: oErr } = await db
+    .from("reactivation_outbox")
+    .update({
+      status: "sent",
+      provider: fields.provider,
+      provider_message_id: fields.providerMessageId,
+      to_address: fields.toAddress,
+      sent_at: nowIso,
+    })
+    .eq("id", outboxId);
+  if (oErr) throw oErr;
+  const { error: tErr } = await db
+    .from("reactivation_touch")
+    .update({ status: "sent", sent_at: nowIso })
+    .eq("id", touchId);
+  if (tErr) throw tErr;
+}
+
+export async function markOutboxFailed(outboxId: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("reactivation_outbox").update({ status: "failed" }).eq("id", outboxId);
+  if (error) throw error;
+}
+
+export async function markOutboxBlocked(outboxId: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("reactivation_outbox").update({ status: "failed", provider: "suppressed" }).eq("id", outboxId);
+  if (error) throw error;
+}
+
+export async function updateOutboxStatusByMessageId(providerMessageId: string, status: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("reactivation_outbox")
+    .update({ status })
+    .eq("provider_message_id", providerMessageId);
+  if (error) throw error;
+}
+
+/** Find the most recent outbound row sent to an address, with its target (via the touch). */
+export async function findTargetByAddress(
+  toAddress: string,
+): Promise<{ targetId: string; siteId: string } | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_outbox")
+    .select("touch_id, site_id")
+    .eq("to_address", toAddress)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as { touch_id: string; site_id: string };
+  const { data: touch, error: tErr } = await db
+    .from("reactivation_touch")
+    .select("target_id")
+    .eq("id", row.touch_id)
+    .maybeSingle();
+  if (tErr) throw tErr;
+  if (!touch) return null;
+  return { targetId: (touch as { target_id: string }).target_id, siteId: row.site_id };
+}
+
+export async function insertInboundTouch(input: {
+  targetId: string;
+  cadenceId: string | null;
+  siteId: string;
+  channel: TouchChannel;
+  body: string;
+}): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("reactivation_touch").insert({
+    target_id: input.targetId,
+    cadence_id: input.cadenceId,
+    site_id: input.siteId,
+    channel: input.channel,
+    direction: "inbound",
+    body: input.body,
+    drafted_by: "human",
+    status: "sent",
+  });
+  if (error) throw error;
+}
