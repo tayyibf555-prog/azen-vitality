@@ -31,8 +31,12 @@ export async function POST(request: Request): Promise<Response> {
   if (!apiKey) return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
   const client = new DentallyClient({ apiKey, baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co" });
 
-  const base = process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
-  const statusCallbackUrl = `${base}/api/webhooks/twilio/status`;
+  // Twilio rejects a StatusCallback that is not publicly reachable, so only
+  // attach it when PUBLIC_BASE_URL is a real https endpoint (deployed app or tunnel).
+  const base = process.env.PUBLIC_BASE_URL ?? "";
+  const statusCallbackUrl = base.startsWith("https://")
+    ? `${base}/api/webhooks/twilio/status`
+    : undefined;
 
   const rows = await listQueuedOutbox(vitalitySiteIds());
   let sent = 0, failed = 0, blocked = 0;
