@@ -87,3 +87,11 @@ checked or the user intervenes.
 ## Out of scope (still)
 
 Real Supabase auth/RLS; voice; co-pilot sources beyond the brain; cross-site federation.
+
+## Update 2026-06-20: conversation capture + feedback (completes 4c)
+
+Every co-pilot Q&A is now logged to `practice_brain_qa` (question, answer, grounded_in,
+asker_tier, cited_ids, feedback, created_at) — the "conversation capture" the goal called for.
+Each answer has thumbs up/down (`qa-feedback` action) stored on its row for later tuning.
+This closes the deferred Phase 4(c). The ONLY remaining goal item is activating semantic
+retrieval (Phase 5), which is built and dormant pending a `VOYAGE_API_KEY`.
