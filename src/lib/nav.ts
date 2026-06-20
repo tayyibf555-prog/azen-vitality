@@ -14,6 +14,7 @@ import {
   MessageCircle,
   Sunrise,
   Settings,
+  Bot,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -151,6 +152,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: Sunrise,
         status: "placeholder",
         note: "Every morning, reads the diary and hands each role a prioritised action list: who to chase, gaps to fill, no-show risks, high-value treatment arriving today.",
+      },
+      {
+        slug: "co-pilot",
+        label: "Ask the brain",
+        icon: Bot,
+        status: "live",
+        note: "Practice co-pilot. Ask the knowledge base anything; answers are grounded in stored knowledge and filtered to your access level.",
       },
     ],
   },
