@@ -45,12 +45,12 @@ if low-confidence, lands in needs-review) — learning never bypasses the cleara
   over title/body/tags + tag-overlap boost), and `searchKnowledge(query, maxTier)` in the
   repository (Postgres `websearch_to_tsquery` over the existing `to_tsvector` index, plus tag
   match), clearance-filtered, returns top-K with a snippet. Unit-test the pure ranker.
-- [ ] **Phase 2 — Co-pilot Q&A endpoint.** `POST /api/practice-brain/ask` (cookie-gated,
+- [x] **Phase 2 — Co-pilot Q&A endpoint.** `POST /api/practice-brain/ask` (cookie-gated,
   `maxTier` from the cookie): retrieve top-K, build a grounded system prompt, call Sonnet to
   answer strictly from the retrieved knowledge with citations (node id + title), refuse to
   invent, no em-dashes, no clinical content. Returns `{ answer, citations[], usedNodeIds[] }`.
   Unit-test the prompt builder + the answer/citation parser with a fake client.
-- [ ] **Phase 3 — Co-pilot UI.** A chat panel in the Practice Brain view: ask box, answer with
+- [x] **Phase 3 — Co-pilot UI.** A chat panel in the Practice Brain view: ask box, answer with
   inline citations that focus the cited hub/item in the constellation, loading + empty states.
   Available to whoever is unlocked; their tier governs what comes back.
 - [ ] **Phase 4 — Self-learning loop.** (a) "Save to brain" / "correct this" on an answer →
