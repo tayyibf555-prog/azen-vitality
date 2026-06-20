@@ -44,6 +44,44 @@ const FILAMENTS = (() => {
   });
 })();
 
+// A tapered, gently curved branch (filled): wide where it leaves the core, narrowing to the hub.
+function branchPath(cx: number, cy: number, hx: number, hy: number): string {
+  const dx = hx - cx, dy = hy - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len; // perpendicular unit
+  const hw = 2.1; // half width at the base; the far end comes to a point at the hub
+  const bow = len * 0.1; // gentle organic curve
+  const mx = cx + dx * 0.5 + nx * bow;
+  const my = cy + dy * 0.5 + ny * bow;
+  return (
+    `M${(cx + nx * hw).toFixed(1)},${(cy + ny * hw).toFixed(1)} ` +
+    `Q${(mx + nx * hw * 0.45).toFixed(1)},${(my + ny * hw * 0.45).toFixed(1)} ${hx.toFixed(1)},${hy.toFixed(1)} ` +
+    `Q${(mx - nx * hw * 0.45).toFixed(1)},${(my - ny * hw * 0.45).toFixed(1)} ${(cx - nx * hw).toFixed(1)},${(cy - ny * hw).toFixed(1)} Z`
+  );
+}
+
+// A few small twigs sprouting outward from a hub, for the dendritic / tree look.
+const TWIGS: [number, number][] = [[-27, 0.78], [-10, 1], [9, 1], [26, 0.8]];
+function twigPath(cx: number, cy: number, hx: number, hy: number, scale: number): string {
+  const dx = hx - cx, dy = hy - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const sx = hx + ux * 15 * scale, sy = hy + uy * 15 * scale; // start at the hub's outer edge
+  const base = Math.atan2(uy, ux);
+  const L = 22 * scale;
+  let d = "";
+  for (const [off, lf] of TWIGS) {
+    const a = base + off * RAD;
+    const tl = L * lf;
+    const ex = sx + Math.cos(a) * tl, ey = sy + Math.sin(a) * tl;
+    const bend = tl * 0.16 * (off < 0 ? -1 : 1);
+    const cxx = sx + Math.cos(a) * tl * 0.5 - Math.sin(a) * bend;
+    const cyy = sy + Math.sin(a) * tl * 0.5 + Math.cos(a) * bend;
+    d += `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cxx.toFixed(1)},${cyy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)} `;
+  }
+  return d;
+}
+
 interface Props {
   nodes: KnowledgeNode[];
   focusId: string | null;
@@ -74,7 +112,8 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
   const stepRef = useRef(step);
   const coreRef = useRef<SVGGElement | null>(null);
   const hubRefs = useRef<(SVGGElement | null)[]>([]);
-  const lineRefs = useRef<(SVGLineElement | null)[]>([]);
+  const branchRefs = useRef<(SVGPathElement | null)[]>([]);
+  const twigRefs = useRef<(SVGPathElement | null)[]>([]);
 
   // Reset focus when the underlying hub set changes (render-time, the React-blessed way).
   const resetKey = `${focusId}:${hubs.length}`;
@@ -124,12 +163,12 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
         const hx = px(CX + RING * Math.cos(a));
         const hy = py(CY + RING * Math.sin(a));
         g.setAttribute("transform", `translate(${hx.toFixed(2)},${hy.toFixed(2)}) scale(${scale.toFixed(3)})`);
-        const line = lineRefs.current[i];
-        if (line) {
-          line.setAttribute("x1", coreX.toFixed(2));
-          line.setAttribute("y1", coreY.toFixed(2));
-          line.setAttribute("x2", hx.toFixed(2));
-          line.setAttribute("y2", hy.toFixed(2));
+        const branch = branchRefs.current[i];
+        if (branch) branch.setAttribute("d", branchPath(coreX, coreY, hx, hy));
+        const twig = twigRefs.current[i];
+        if (twig) {
+          twig.setAttribute("d", twigPath(coreX, coreY, hx, hy, scale));
+          twig.setAttribute("opacity", (1 - z * 0.85).toFixed(2));
         }
       });
       id = requestAnimationFrame(frame);
@@ -194,16 +233,27 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
           />
         </g>
 
-        {/* connectors (positioned each frame) */}
-        {hubs.map((h, i) => (
-          <line
-            key={`l${h.id}`}
-            ref={(el) => { lineRefs.current[i] = el; }}
-            stroke={i === focusIndex ? "rgba(244,196,81,0.45)" : "rgba(124,166,226,0.2)"}
-            strokeWidth={i === focusIndex ? 1.1 : 0.7}
-            className="pb-hub-ring"
-          />
-        ))}
+        {/* branches: tapered curved core->hub limb + outward twigs (path d set each frame) */}
+        {hubs.map((h, i) => {
+          const active = i === focusIndex;
+          return (
+            <g key={`b${h.id}`} className="pb-hub-ring" style={{ opacity: focusIndex !== null && !active ? 0.22 : 1 }}>
+              <path
+                ref={(el) => { branchRefs.current[i] = el; }}
+                fill={active ? "rgba(244,196,81,0.16)" : "rgba(110,150,210,0.12)"}
+                className="pb-hub-ring"
+              />
+              <path
+                ref={(el) => { twigRefs.current[i] = el; }}
+                fill="none"
+                stroke={active ? "rgba(244,196,81,0.4)" : "rgba(124,166,226,0.3)"}
+                strokeWidth={0.7}
+                strokeLinecap="round"
+                className="pb-hub-ring"
+              />
+            </g>
+          );
+        })}
 
         {/* hubs (positioned each frame; never rotated, so labels stay upright) */}
         {hubs.map((h, i) => {
@@ -237,7 +287,7 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
                   const ihit = matches(it.title);
                   return (
                     <g key={it.id} onClick={(e) => { e.stopPropagation(); onSelectItem(it.id); }} style={{ cursor: "pointer" }}>
-                      <line x1={0} y1={6} x2={ix.toFixed(1)} y2={iy.toFixed(1)} stroke="rgba(124,166,226,0.25)" strokeWidth={0.5} />
+                      <path d={`M0,7 Q${(ix * 0.5 - iy * 0.12).toFixed(1)},${(iy * 0.5 + 7).toFixed(1)} ${ix.toFixed(1)},${iy.toFixed(1)}`} fill="none" stroke="rgba(124,166,226,0.3)" strokeWidth={0.6} strokeLinecap="round" />
                       <circle cx={ix.toFixed(1)} cy={iy.toFixed(1)} r={ihit ? 4 : 3} fill={ihit ? "#FFFFFF" : "#79ADE8"} />
                       <text x={ix.toFixed(1)} y={(iy + (iy > 0 ? 12 : -8)).toFixed(1)} textAnchor="middle" fontSize={8} fill="#9FB2D8">{it.title.length > 22 ? it.title.slice(0, 21) + "…" : it.title}</text>
                     </g>
