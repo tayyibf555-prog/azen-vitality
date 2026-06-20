@@ -15,6 +15,12 @@ import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types"
 
 export const dynamic = "force-dynamic";
 
+function authorized(request: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true;
+  return request.headers.get("authorization") === `Bearer ${secret}`;
+}
+
 function autoSendThreshold(): number {
   return Number(process.env.REACTIVATION_AUTO_SEND_THRESHOLD ?? 250);
 }
@@ -28,7 +34,8 @@ function patientToRef(t: ReactivationTarget): string {
   return `patient:${t.dentallyPatientId}`;
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
