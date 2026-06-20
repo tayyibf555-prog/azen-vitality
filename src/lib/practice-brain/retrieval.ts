@@ -12,6 +12,14 @@
 import type { KnowledgeNode, Tier } from "./types";
 import { visibleNodes } from "./clearance";
 import { listActiveNodes } from "./repository";
+import {
+  isSemanticEnabled,
+  embed,
+  cosineSim,
+  blendRankings,
+  snippetFor as snippetForImpl,
+} from "./embeddings";
+import type { SemanticScore } from "./embeddings";
 
 export interface RankedNode {
   node: KnowledgeNode;
@@ -28,22 +36,12 @@ function tokenize(s: string): string[] {
   return (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((t) => t.length > 1 && !STOP.has(t));
 }
 
-/** A short body excerpt centred on the first query term, for showing alongside an answer. */
+/**
+ * A short body excerpt centred on the first query term, for showing alongside an answer.
+ * Re-exported from embeddings.ts (canonical location) to avoid a circular import.
+ */
 export function snippetFor(node: KnowledgeNode, queryTokens: string[], len = 180): string {
-  const body = node.body ?? "";
-  if (!body) return node.title;
-  const lower = body.toLowerCase();
-  let idx = -1;
-  for (const t of queryTokens) {
-    const i = lower.indexOf(t);
-    if (i !== -1 && (idx === -1 || i < idx)) idx = i;
-  }
-  if (idx === -1) {
-    return body.slice(0, len).trim() + (body.length > len ? "..." : "");
-  }
-  const start = Math.max(0, idx - 40);
-  const end = Math.min(body.length, start + len);
-  return (start > 0 ? "..." : "") + body.slice(start, end).trim() + (end < body.length ? "..." : "");
+  return snippetForImpl(node, queryTokens, len);
 }
 
 /** Pure keyword ranker. Items only (branches are structure, not answerable knowledge). */
@@ -62,14 +60,19 @@ export function rankNodes(query: string, nodes: KnowledgeNode[], limit = 6): Ran
         if (tags.includes(t)) score += 3;
         score += Math.min(body.split(t).length - 1, 3);
       }
-      return { node: n, score, snippet: snippetFor(n, q) };
+      return { node: n, score, snippet: snippetForImpl(n, q) };
     })
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score || a.node.title.localeCompare(b.node.title))
     .slice(0, limit);
 }
 
-/** Clearance-filtered retrieval: load active nodes, drop above-tier, rank, return top-K. */
+/** Clearance-filtered retrieval: load active nodes, drop above-tier, rank, return top-K.
+ *
+ * Keyword path (default — no VOYAGE_API_KEY): byte-for-byte identical to Phase 1–4.
+ * Semantic path (VOYAGE_API_KEY present): blends keyword + cosine similarity rankings.
+ * If embedding the query fails for any reason, falls back transparently to keyword-only.
+ */
 export async function searchKnowledge(
   clientId: string,
   query: string,
@@ -77,5 +80,28 @@ export async function searchKnowledge(
   limit = 6,
 ): Promise<RankedNode[]> {
   const all = await listActiveNodes(clientId);
-  return rankNodes(query, visibleNodes(all, maxTier), limit);
+  const visible = visibleNodes(all, maxTier);
+
+  // Keyword-only path: no VOYAGE_API_KEY — unchanged from pre-Phase 5.
+  if (!isSemanticEnabled()) {
+    return rankNodes(query, visible, limit);
+  }
+
+  // Semantic path: embed the query and blend with keyword rankings.
+  const qvec = await embed(query);
+  if (!qvec) {
+    // Embedding failed (network error, bad response, etc.) — graceful keyword fallback.
+    return rankNodes(query, visible, limit);
+  }
+
+  // Compute cosine similarity for every item node that has a stored embedding vector.
+  const semanticScores: SemanticScore[] = visible
+    .filter((n) => n.kind === "item" && Array.isArray(n.embedding) && (n.embedding as number[]).length > 0)
+    .map((n) => ({
+      id: n.id,
+      score: cosineSim(qvec, n.embedding as number[]),
+    }));
+
+  // Blend: keyword ranked with 2× limit headroom so blend has enough candidates.
+  return blendRankings(rankNodes(query, visible, limit * 2), semanticScores, visible, limit);
 }

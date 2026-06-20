@@ -2,6 +2,7 @@ import { serviceClient } from "@/lib/supabase/server";
 import type {
   ClassificationMeta, KnowledgeNode, KnowledgeSource, KnowledgeStatus, Tier,
 } from "./types";
+import { isSemanticEnabled, embed } from "./embeddings";
 
 const TABLE = "knowledge_node";
 
@@ -23,6 +24,7 @@ interface Row {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  embedding: number[] | null;
 }
 
 function toNode(r: Row): KnowledgeNode {
@@ -44,6 +46,7 @@ function toNode(r: Row): KnowledgeNode {
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    embedding: r.embedding ?? null,
   };
 }
 
@@ -129,7 +132,23 @@ export async function createItem(input: CreateItemInput): Promise<KnowledgeNode>
     .select("*")
     .single();
   if (error) throw new Error(error.message);
-  return toNode(data as Row);
+  const node = toNode(data as Row);
+
+  // Best-effort: embed the new item when semantic retrieval is enabled.
+  // A failure here never blocks the create — keyword retrieval is always the fallback.
+  if (isSemanticEnabled()) {
+    try {
+      const vec = await embed(input.body);
+      if (vec) {
+        await serviceClient().from(TABLE).update({ embedding: vec }).eq("id", node.id);
+        node.embedding = vec;
+      }
+    } catch {
+      // Swallow — semantic is optional.
+    }
+  }
+
+  return node;
 }
 
 export async function listNeedsReview(clientId: string): Promise<KnowledgeNode[]> {

@@ -38,6 +38,8 @@ export interface KnowledgeNode {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Optional embedding vector. Present only when semantic retrieval is enabled and the node has been embedded. */
+  embedding?: number[] | null;
 }
 
 /** Stored on the node (jsonb) for audit and the review queue. */
