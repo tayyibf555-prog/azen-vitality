@@ -4,6 +4,7 @@ import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatm
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { SystemsView } from "@/components/client/systems-view";
 import { CopilotView } from "@/components/client/copilot-view";
+import { PatientsView } from "@/components/client/patients-view";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,10 @@ export default async function OwnerModulePage({
 
   if (module === "co-pilot") {
     return <CopilotView />;
+  }
+
+  if (module === "patients") {
+    return <PatientsView />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {

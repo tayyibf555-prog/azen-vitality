@@ -52,6 +52,7 @@ const OWNER_NAV: PortalNavItem[] = CLIENT_NAV.flatMap((group) =>
 const MANAGER_NAV: PortalNavItem[] = [
   { slug: "daily-brief", label: "Daily brief", icon: navIcon("daily-brief") },
   { slug: "task-queue", label: "Tasks", icon: navIcon("task-queue") },
+  { slug: "patients", label: "Patients", icon: navIcon("patients") },
   { slug: SYSTEMS_SLUG, label: "Systems", icon: Activity },
   { slug: COPILOT_SLUG, label: "Co-pilot", icon: Bot },
   { slug: ANALYTICS_SLUG, label: "Analytics", icon: navIcon("") },
@@ -60,6 +61,7 @@ const MANAGER_NAV: PortalNavItem[] = [
 const GENERAL_NAV: PortalNavItem[] = [
   { slug: "daily-brief", label: "Daily brief", icon: navIcon("daily-brief") },
   { slug: "task-queue", label: "Tasks", icon: navIcon("task-queue") },
+  { slug: "patients", label: "Patients", icon: navIcon("patients") },
   { slug: "recall", label: "Recall concierge", icon: navIcon("recall") },
   { slug: "treatment-coordinator", label: "Treatment Coordinator", icon: navIcon("treatment-coordinator") },
   { slug: "reactivation", label: "Reactivation", icon: navIcon("reactivation") },

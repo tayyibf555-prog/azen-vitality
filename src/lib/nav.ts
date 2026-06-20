@@ -16,6 +16,7 @@ import {
   BrainCircuit,
   CalendarRange,
   Settings,
+  Users,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -167,6 +168,18 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: CalendarRange,
         status: "placeholder",
         note: "Staff scheduling and rota across all sites, replacing the per-head third-party app (around 40 staff). Phase 2. Build out later.",
+      },
+    ],
+  },
+  {
+    label: "Patients",
+    items: [
+      {
+        slug: "patients",
+        label: "Patients",
+        icon: Users,
+        status: "live",
+        note: "Patient database of mock test records, used to exercise the no-show and abandoned-inquiry outreach systems safely.",
       },
     ],
   },
