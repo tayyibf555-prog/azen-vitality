@@ -519,3 +519,19 @@ export async function insertInboundTouch(input: {
   });
   if (error) throw error;
 }
+
+export async function getTargetContext(
+  targetId: string,
+): Promise<{ patientName: string; treatment: string | null; fundingType: "nhs" | "private" | null } | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_target")
+    .select("patient_name, treatment, reason")
+    .eq("id", targetId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as { patient_name: string; treatment: string | null; reason: string };
+  // Funding type is not modelled on the target yet; default null (Phase 2 wires NHS/private).
+  return { patientName: row.patient_name, treatment: row.treatment, fundingType: null };
+}
