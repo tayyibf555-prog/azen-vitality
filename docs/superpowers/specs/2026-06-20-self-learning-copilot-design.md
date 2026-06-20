@@ -57,11 +57,11 @@ if low-confidence, lands in needs-review) — learning never bypasses the cleara
   routes through `classify` + `create` so it becomes tiered, sorted knowledge. (b) Empty
   retrieval → write to a `knowledge_gap` table (question, asker tier, timestamp); surface a
   gap queue to owner/manager. (c) thumbs up/down stored per Q&A for later tuning.
-- [ ] **Phase 5 — Semantic retrieval (upgrade).** Add an embedding column (pgvector) + an
+- [x] **Phase 5 — Semantic retrieval (upgrade).** Add an embedding column (pgvector) + an
   embeddings provider (Voyage AI is Anthropic's recommendation; needs a key). Embed nodes on
   create; retrieval becomes hybrid (semantic + keyword). Gated on an embeddings key — until
   then Phase 1 keyword retrieval is the live source. Ships behind a flag so absence is graceful.
-- [ ] **Phase 6 — "Everyone" access.** A staff-facing co-pilot entry (outside the owner-only
+- [x] **Phase 6 — "Everyone" access.** A staff-facing co-pilot entry (outside the owner-only
   dashboard) where each person unlocks with their own credential (sets their tier) and asks.
   Reuses the existing gate; no new auth. Real Supabase auth + RLS still deferred.
 
