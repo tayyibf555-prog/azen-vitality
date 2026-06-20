@@ -211,8 +211,8 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
   const focusedHub = focusIndex !== null ? hubs[focusIndex] : null;
 
   return (
-    <div style={{ position: "relative", width: "100%", background: "radial-gradient(120% 90% at 50% 46%, #0E1530 0%, #090D1A 62%, #070A14 100%)", borderRadius: 16, overflow: "hidden", border: "0.5px solid rgba(150,170,210,0.18)", boxShadow: "inset 0 1px 0 rgba(170,200,255,0.06)" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }} role="img" aria-label="Practice brain constellation">
+    <div style={{ position: "relative", width: "100%", maxWidth: `min(100%, calc(58vh * ${W} / ${H}))`, aspectRatio: `${W} / ${H}`, margin: "0 auto", background: "radial-gradient(120% 90% at 50% 46%, #0E1530 0%, #090D1A 62%, #070A14 100%)", borderRadius: 16, overflow: "hidden", border: "0.5px solid rgba(150,170,210,0.18)", boxShadow: "inset 0 1px 0 rgba(170,200,255,0.06)" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }} role="img" aria-label="Practice brain constellation">
         <defs>
           <radialGradient id="pbCoreGlow" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#2A3E72" stopOpacity="0.62" />
