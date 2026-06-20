@@ -7,7 +7,6 @@ import {
   type Column,
 } from "@/components/primitives";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
-import { AgentSection } from "@/components/client/agent/agent-section";
 import { getClient, getSites, getSite } from "@/lib/mock";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
@@ -142,8 +141,6 @@ export default async function OwnerManagementPage({
           </div>
         )}
       </SectionCard>
-
-      <AgentSection siteIds={siteIds} />
 
       <OverviewDashboard />
     </>
