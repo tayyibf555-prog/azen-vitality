@@ -41,7 +41,7 @@ if low-confidence, lands in needs-review) — learning never bypasses the cleara
 
 ## Phases (each phase = one /loop iteration: TDD where pure, committed, verified)
 
-- [ ] **Phase 1 — Retrieval core.** `rankNodes(query, nodes)` pure ranking (full-text score
+- [x] **Phase 1 — Retrieval core.** `rankNodes(query, nodes)` pure ranking (full-text score
   over title/body/tags + tag-overlap boost), and `searchKnowledge(query, maxTier)` in the
   repository (Postgres `websearch_to_tsquery` over the existing `to_tsvector` index, plus tag
   match), clearance-filtered, returns top-K with a snippet. Unit-test the pure ranker.
