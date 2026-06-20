@@ -53,7 +53,7 @@ if low-confidence, lands in needs-review) — learning never bypasses the cleara
 - [x] **Phase 3 — Co-pilot UI.** A chat panel in the Practice Brain view: ask box, answer with
   inline citations that focus the cited hub/item in the constellation, loading + empty states.
   Available to whoever is unlocked; their tier governs what comes back.
-- [ ] **Phase 4 — Self-learning loop.** (a) "Save to brain" / "correct this" on an answer →
+- [x] **Phase 4 — Self-learning loop.** (a) "Save to brain" / "correct this" on an answer →
   routes through `classify` + `create` so it becomes tiered, sorted knowledge. (b) Empty
   retrieval → write to a `knowledge_gap` table (question, asker tier, timestamp); surface a
   gap queue to owner/manager. (c) thumbs up/down stored per Q&A for later tuning.
