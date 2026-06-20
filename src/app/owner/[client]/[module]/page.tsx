@@ -2,7 +2,9 @@ import { notFound } from "next/navigation";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
+import { AgentSection } from "@/components/client/agent/agent-section";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
+import { getClient, getSites } from "@/lib/mock";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +16,14 @@ export default async function OwnerModulePage({
   const { client, module } = await params;
 
   if (module === "overview") {
-    return <OverviewDashboard />;
+    const c = getClient(client);
+    const siteIds = c ? getSites(c.id).map((s) => s.id) : [];
+    return (
+      <>
+        <AgentSection siteIds={siteIds} />
+        <OverviewDashboard />
+      </>
+    );
   }
 
   if (module === "treatment-coordinator") {
