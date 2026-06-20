@@ -6,7 +6,7 @@ import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { signSession, verifySession } from "@/lib/practice-brain/session";
 import type { ClassificationResult, Tier } from "@/lib/practice-brain/types";
 import {
-  createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, resolveReview, verifyCredential,
+  createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, listOpenGaps, logKnowledgeGap, resolveGap, resolveReview, verifyCredential,
 } from "@/lib/practice-brain/repository";
 
 const CLIENT_ID = "vitality";
@@ -107,7 +107,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       if (!question) return fail("Question is empty.");
       const ranked = await searchKnowledge(CLIENT_ID, question, maxTier, 6);
       const result = await askCopilot(question, ranked);
+      if (ranked.length === 0) await logKnowledgeGap(CLIENT_ID, question, maxTier);
       return ok({ ...result, usedNodeIds: ranked.map((r) => r.node.id) });
+    }
+
+    if (action === "learn") {
+      const text = String(body.text ?? "").trim();
+      if (!text) return fail("Nothing to save.");
+      const branches = await listBranchNames(CLIENT_ID);
+      const result = await classifyKnowledge(text, branches);
+      const classification = { reasoning: result.reasoning, confidence: result.confidence, branchIsNew: result.branchIsNew };
+      const parentId = result.needsReview || !result.branch ? null : await ensureBranch(CLIENT_ID, result.branch, result.tier);
+      const node = await createItem({
+        clientId: CLIENT_ID, parentId, title: result.title, body: result.body, rawInput: text,
+        tier: result.tier, tags: result.tags, status: result.needsReview ? "needs_review" : "active",
+        classification, createdBy: session.credentialId, source: "copilot_capture",
+      });
+      return ok({ node, needsReview: result.needsReview, tier: result.tier, branch: result.branch });
+    }
+
+    if (action === "gaps") {
+      if (maxTier < 3) return fail("Not authorised.", 403);
+      return ok({ gaps: await listOpenGaps(CLIENT_ID) });
+    }
+
+    if (action === "resolve-gap") {
+      if (maxTier < 3) return fail("Not authorised.", 403);
+      const id = String(body.id ?? "");
+      if (!id) return fail("Missing id.");
+      await resolveGap(id);
+      return ok({ id });
     }
 
     if (action === "resolve-review") {

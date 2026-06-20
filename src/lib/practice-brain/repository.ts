@@ -1,6 +1,6 @@
 import { serviceClient } from "@/lib/supabase/server";
 import type {
-  ClassificationMeta, KnowledgeNode, KnowledgeStatus, Tier,
+  ClassificationMeta, KnowledgeNode, KnowledgeSource, KnowledgeStatus, Tier,
 } from "./types";
 
 const TABLE = "knowledge_node";
@@ -105,6 +105,7 @@ export interface CreateItemInput {
   classification: ClassificationMeta;
   createdBy: string;
   siteId?: string | null;
+  source?: KnowledgeSource;
 }
 
 export async function createItem(input: CreateItemInput): Promise<KnowledgeNode> {
@@ -120,7 +121,7 @@ export async function createItem(input: CreateItemInput): Promise<KnowledgeNode>
       raw_input: input.rawInput,
       tier: input.tier,
       tags: input.tags,
-      source: "manual_note",
+      source: input.source ?? "manual_note",
       status: input.status,
       classification: input.classification,
       created_by: input.createdBy,
@@ -155,6 +156,52 @@ export interface VerifiedCredential {
   label: string;
   tier: Tier;
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge gap log
+// ---------------------------------------------------------------------------
+
+const GAP_TABLE = "practice_brain_gap";
+
+export interface KnowledgeGap {
+  id: string;
+  question: string;
+  askerTier: number;
+  createdAt: string;
+}
+
+export async function logKnowledgeGap(clientId: string, question: string, askerTier: number): Promise<void> {
+  const { error } = await serviceClient()
+    .from(GAP_TABLE)
+    .insert({ client_id: clientId, question, asker_tier: askerTier });
+  if (error) throw new Error(error.message);
+}
+
+export async function listOpenGaps(clientId: string): Promise<KnowledgeGap[]> {
+  const { data, error } = await serviceClient()
+    .from(GAP_TABLE)
+    .select("id, question, asker_tier, created_at")
+    .eq("client_id", clientId)
+    .eq("status", "open")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data as { id: string; question: string; asker_tier: number; created_at: string }[]).map((r) => ({
+    id: r.id,
+    question: r.question,
+    askerTier: r.asker_tier,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function resolveGap(id: string): Promise<void> {
+  const { error } = await serviceClient()
+    .from(GAP_TABLE)
+    .update({ status: "resolved" })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
 
 /** Verifies a plaintext password in Postgres (bcrypt). Returns the credential or null. */
 export async function verifyCredential(clientId: string, password: string): Promise<VerifiedCredential | null> {
