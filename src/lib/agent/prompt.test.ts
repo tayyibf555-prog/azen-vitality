@@ -15,4 +15,17 @@ describe("buildSystemPrompt", () => {
     expect(s).not.toContain("—");
     expect(s).toContain("£");
   });
+
+  it("locks scope on-topic and lists the human-escalation triggers", () => {
+    const s = buildSystemPrompt(ctx).toLowerCase();
+    // Stay on topic / no random messaging
+    expect(s).toContain("stay on topic");
+    expect(s).toContain("steer back");
+    expect(s).toContain("never start a new topic");
+    // Explicit escalation triggers
+    expect(s).toContain("escalate_to_human");
+    expect(s).toContain("complaint");
+    expect(s).toContain("emergency");
+    expect(s).toContain("speak to a person");
+  });
 });
