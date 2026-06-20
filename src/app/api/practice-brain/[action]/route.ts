@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { classifyKnowledge } from "@/lib/practice-brain/classify";
 import { visibleNodes } from "@/lib/practice-brain/clearance";
+import { askCopilot } from "@/lib/practice-brain/copilot";
+import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { signSession, verifySession } from "@/lib/practice-brain/session";
 import type { ClassificationResult, Tier } from "@/lib/practice-brain/types";
 import {
@@ -98,6 +100,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     if (action === "needs-review") {
       if (maxTier < 3) return fail("Not authorised.", 403);
       return ok({ nodes: await listNeedsReview(CLIENT_ID) });
+    }
+
+    if (action === "ask") {
+      const question = String(body.question ?? "").trim();
+      if (!question) return fail("Question is empty.");
+      const ranked = await searchKnowledge(CLIENT_ID, question, maxTier, 6);
+      const result = await askCopilot(question, ranked);
+      return ok({ ...result, usedNodeIds: ranked.map((r) => r.node.id) });
     }
 
     if (action === "resolve-review") {
