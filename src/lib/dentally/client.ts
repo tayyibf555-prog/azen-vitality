@@ -10,6 +10,7 @@ interface Opts { apiKey: string; baseUrl: string; fetchImpl?: FetchImpl; userAge
 
 export interface ListPlansArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface ListPatientsArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
+export interface AvailabilityArgs { siteId: string; fromDate?: string; toDate?: string; duration?: number; }
 
 export class DentallyClient {
   private fetchImpl: FetchImpl;
@@ -59,6 +60,12 @@ export class DentallyClient {
   }
   getPatientInvoices(patientId: string) {
     return this.get<{ invoices: unknown[] }>("/v1/invoices", { patient_id: patientId });
+  }
+
+  getAvailability(a: AvailabilityArgs) {
+    return this.get<{ availability: unknown[] }>("/v1/appointments/availability", {
+      site_id: a.siteId, start_date: a.fromDate, finish_date: a.toDate, duration: a.duration,
+    });
   }
 
   async createAppointment(payload: Record<string, unknown>) {
