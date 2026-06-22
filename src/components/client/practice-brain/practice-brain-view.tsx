@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Sparkles, FolderTree } from "lucide-react";
 import type { KnowledgeNode } from "@/lib/practice-brain/types";
 import { PageHeader } from "@/components/primitives";
 import { Constellation } from "./constellation";
+import { FileTree } from "./file-view";
 import { CapturePanel } from "./capture-panel";
 import { CopilotPanel } from "./copilot-panel";
 import { ItemDetail } from "./item-detail";
@@ -21,6 +23,7 @@ export function PracticeBrainView() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<"brain" | "files">("brain");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,30 +99,60 @@ export function PracticeBrainView() {
         <PasswordGate onUnlocked={() => { void load(); }} />
       ) : (
         <>
-          <div className="mb-3 flex items-center gap-2">
-            <button onClick={() => { setFocusId(null); setActiveHubId(null); }} className="text-xs text-muted hover:text-ink">
-              Practice brain
-            </button>
-            {breadcrumb.map((b) => (
-              <span key={b.id} className="text-xs text-muted">/ {b.title}</span>
-            ))}
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <div className="inline-flex rounded-xl border border-line bg-card p-0.5">
+              {([["brain", "Brain", Sparkles], ["files", "Files", FolderTree]] as const).map(([key, label, Icon]) => {
+                const active = view === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setView(key)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${active ? "bg-navy text-on-navy" : "text-muted hover:text-ink"}`}
+                  >
+                    <Icon size={14} className="shrink-0" />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {view === "brain" ? (
+              <div className="flex items-center gap-2">
+                <button onClick={() => { setFocusId(null); setActiveHubId(null); }} className="text-xs text-muted hover:text-ink">
+                  Practice brain
+                </button>
+                {breadcrumb.map((b) => (
+                  <span key={b.id} className="text-xs text-muted">/ {b.title}</span>
+                ))}
+              </div>
+            ) : null}
+
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search the brain..."
+              placeholder={view === "brain" ? "Search the brain..." : "Search files..."}
               className="ml-auto w-48 rounded-lg border border-line bg-card-muted px-2 py-1 text-sm"
             />
           </div>
 
           {loading ? (
-            <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Loading the constellation...</div>
-          ) : (
+            <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Loading...</div>
+          ) : view === "brain" ? (
             <Constellation
               nodes={nodes}
               focusId={focusId}
               activeHubId={activeHubId}
               query={query}
               onSelectHub={selectHub}
+              onSelectItem={setSelectedItemId}
+            />
+          ) : (
+            <FileTree
+              nodes={nodes}
+              query={query}
+              selectedItemId={selectedItemId}
               onSelectItem={setSelectedItemId}
             />
           )}
