@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   MessageCircle,
   Bot,
+  Wand2,
   Sunrise,
   BrainCircuit,
   Settings,
@@ -191,6 +192,13 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Staff & Ops",
     items: [
+      {
+        slug: "co-pilot",
+        label: "Co-pilot",
+        icon: Wand2,
+        status: "live",
+        note: "AI assistant with full read access to the practice database: patients (records, notes, history), the diary, outstanding balances, reactivation and booking-agent activity. Full access for the owner; employee and manager access will be scoped later.",
+      },
       {
         slug: "daily-brief",
         label: "Daily brief",

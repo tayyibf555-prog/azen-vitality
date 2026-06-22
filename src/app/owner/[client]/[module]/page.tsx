@@ -3,6 +3,7 @@ import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
 import { AgentView } from "@/components/client/agent/agent-view";
+import { CopilotView } from "@/components/client/copilot/copilot-view";
 import { PatientsView } from "@/components/client/patients/patients-view";
 import { CalendarView } from "@/components/client/calendar/calendar-view";
 import { TodayView } from "@/components/client/today/today-view";
@@ -33,6 +34,10 @@ export default async function OwnerModulePage({
 
   if (module === "booking-agent") {
     return <AgentView clientSlug={client} />;
+  }
+
+  if (module === "co-pilot") {
+    return <CopilotView clientSlug={client} />;
   }
 
   if (module === "patients") {

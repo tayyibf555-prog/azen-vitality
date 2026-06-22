@@ -50,7 +50,7 @@ export function PlatformShortcuts() {
         clientSlug={clientSlug}
         onOpenCopilot={() => setCopilot(true)}
       />
-      <CopilotChat open={copilot} onClose={() => setCopilot(false)} />
+      <CopilotChat open={copilot} onClose={() => setCopilot(false)} clientSlug={clientSlug} />
     </>
   );
 }
