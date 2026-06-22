@@ -2,6 +2,7 @@
 
 import { OwnerSidebar } from "@/components/owner/owner-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
+import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
 
 export default function OwnerLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -13,6 +14,7 @@ export default function OwnerLayout({ children }: { children: React.ReactNode })
           <div className="mx-auto max-w-[1400px] space-y-6 px-8 py-7">{children}</div>
         </main>
       </div>
+      <PlatformShortcuts />
     </div>
   );
 }

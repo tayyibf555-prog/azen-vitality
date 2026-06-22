@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, gbp, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
@@ -37,8 +38,15 @@ function recallTone(recallIso: string | null, nowIso: string): Tone {
 
 export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[]; nowIso: string }) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
+  const searchParams = useSearchParams();
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Open a patient directly when arriving via the command palette (?patient=id).
+  useEffect(() => {
+    const pid = searchParams.get("patient");
+    if (pid && patients.some((p) => p.id === pid)) setSelectedId(pid);
+  }, [searchParams, patients]);
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
