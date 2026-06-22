@@ -12,6 +12,7 @@ import {
   PhoneMissed,
   ShieldCheck,
   MessageCircle,
+  Bot,
   Sunrise,
   BrainCircuit,
   Settings,
@@ -134,6 +135,13 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Conversational",
     items: [
+      {
+        slug: "booking-agent",
+        label: "Booking agent",
+        icon: Bot,
+        status: "live",
+        note: "Two-way SMS booking agent. Identifies any inbound number against the patient record, answers replies and enquiries, books appointments, and escalates clinical questions, complaints and anything it is unsure about to a human.",
+      },
       {
         slug: "whatsapp",
         label: "WhatsApp agent",

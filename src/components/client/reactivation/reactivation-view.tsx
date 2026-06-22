@@ -1,7 +1,6 @@
 import { RotateCcw, PoundSterling, Users, CheckCircle2, Send } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/reactivation/worklist";
-import { AgentSection } from "@/components/client/agent/agent-section";
 import { getClient, getSites, NOW } from "@/lib/mock/clients";
 import { listTargets, listCadences } from "@/lib/reactivation/repository";
 import type { ReactivationCadence, ReactivationTarget } from "@/lib/reactivation/types";
@@ -41,7 +40,7 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Reactivation"
-        description="Win back dormant patients. Lapsed visitors, overdue recalls and stalled treatment plans are ranked by recoverable value and worked through a multi step cadence. When a patient replies, the AI booking agent below takes over and books them in."
+        description="Win back dormant patients. Lapsed visitors, overdue recalls and stalled treatment plans are ranked by recoverable value and worked through a multi step cadence. When a patient replies, the AI Booking Agent picks it up and books them in."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -60,8 +59,6 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
       ) : (
         <Worklist targets={targets} cadences={cadences} nowIso={NOW.toISOString()} />
       )}
-
-      <AgentSection siteIds={siteIds} />
     </>
   );
 }

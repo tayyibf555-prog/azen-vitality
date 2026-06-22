@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
+import { AgentView } from "@/components/client/agent/agent-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 
@@ -24,6 +25,10 @@ export default async function OwnerModulePage({
 
   if (module === "reactivation") {
     return <ReactivationView clientSlug={client} />;
+  }
+
+  if (module === "booking-agent") {
+    return <AgentView clientSlug={client} />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {

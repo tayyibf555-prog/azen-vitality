@@ -1,4 +1,4 @@
-import { SectionCard, StatCard } from "@/components/primitives";
+import { PageHeader, StatCard } from "@/components/primitives";
 import { Bot, MessagesSquare, CalendarCheck, UserCog } from "lucide-react";
 import {
   getAgentAnalytics,
@@ -7,7 +7,7 @@ import {
   type AgentAnalytics,
   type DashboardConversation,
 } from "@/lib/agent/repository";
-import { NOW } from "@/lib/mock/clients";
+import { getClient, getSites, NOW } from "@/lib/mock/clients";
 import { AgentControls } from "./agent-controls";
 
 async function load(siteIds: string[]): Promise<{
@@ -31,14 +31,23 @@ async function load(siteIds: string[]): Promise<{
   }
 }
 
-export async function AgentSection({ siteIds }: { siteIds: string[] }) {
+export async function AgentView({ clientSlug }: { clientSlug: string }) {
+  const client = getClient(clientSlug);
+
+  if (!client) {
+    return <PageHeader title="Booking agent" description="This client could not be found." />;
+  }
+
+  const siteIds = getSites(client.id).map((s) => s.id);
   const { analytics, conversations, allEnabled } = await load(siteIds);
 
   return (
-    <SectionCard
-      title="AI Booking Agent"
-      description="Answers patient replies, books them in, and hands tricky cases to your team. Live across every site."
-    >
+    <>
+      <PageHeader
+        title="AI Booking Agent"
+        description="A two way SMS agent that recognises any patient by their number, answers their replies and enquiries, books them in, and hands clinical questions, complaints and anything it is unsure about to your team. Live across every site."
+      />
+
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Status"
@@ -56,14 +65,12 @@ export async function AgentSection({ siteIds }: { siteIds: string[] }) {
         />
       </div>
 
-      <div className="mt-5">
-        <AgentControls
-          siteIds={siteIds}
-          initialEnabled={allEnabled}
-          conversations={conversations}
-          nowIso={NOW.toISOString()}
-        />
-      </div>
-    </SectionCard>
+      <AgentControls
+        siteIds={siteIds}
+        initialEnabled={allEnabled}
+        conversations={conversations}
+        nowIso={NOW.toISOString()}
+      />
+    </>
   );
 }
