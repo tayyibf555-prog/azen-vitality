@@ -62,12 +62,14 @@ export function CopilotConversation({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 space-y-3 overflow-y-auto px-1 py-1">
         {messages.length === 0 ? (
-          <div className="space-y-3 py-2">
-            <p className="text-sm text-muted">
-              I can see the whole practice. Ask me about a patient, today's diary, outstanding balances, or how things
-              are going.
+          <div className="flex min-h-full flex-col items-center justify-center px-2 py-6 text-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/copilot-logo.png" alt="Vitality Dental" className="h-20 w-20 object-contain" />
+            <h2 className="mt-4 text-lg font-extrabold text-navy">How can I help?</h2>
+            <p className="mt-1 max-w-sm text-sm text-muted">
+              I can see the whole practice. Ask about a patient, today&apos;s diary, outstanding balances, or how things are going.
             </p>
-            <div className="grid gap-1.5 sm:grid-cols-2">
+            <div className="mt-5 grid w-full max-w-md gap-1.5 sm:grid-cols-2">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
