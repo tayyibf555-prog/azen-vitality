@@ -28,4 +28,32 @@ describe("buildSystemPrompt", () => {
     expect(s).toContain("emergency");
     expect(s).toContain("speak to a person");
   });
+
+  it("personalises a known patient with last visit and recall when present", () => {
+    const s = buildSystemPrompt({
+      ...ctx,
+      isKnownPatient: true,
+      lastVisitAt: "2024-05-10T09:00:00Z",
+      recallDueAt: "2026-01-05T00:00:00Z",
+    });
+    expect(s).toContain("matches a patient on our records");
+    expect(s).toContain("10 May 2024"); // last visit, UK formatted, no em-dash
+    expect(s).toContain("5 January 2026"); // recall due
+    expect(s).not.toContain("—");
+  });
+
+  it("treats an unrecognised number as a brand new enquiry and does not claim to know them", () => {
+    const s = buildSystemPrompt({
+      patientId: "lead:+447403097379",
+      siteId: "site-cc",
+      patientName: "there",
+      treatment: null,
+      fundingType: null,
+      isKnownPatient: false,
+    });
+    expect(s).toContain("does NOT match anyone on our records");
+    expect(s.toLowerCase()).toContain("brand new enquiry");
+    expect(s.toLowerCase()).toContain("escalate_to_human");
+    expect(s).not.toContain("—");
+  });
 });

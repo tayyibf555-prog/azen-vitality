@@ -31,6 +31,28 @@ export interface AgentContext {
   patientName: string;
   treatment: string | null;
   fundingType: "nhs" | "private" | null;
+  /** Last completed visit / checkup, if known. */
+  lastVisitAt?: string | null;
+  /** When their recall is (or was) due, if known. */
+  recallDueAt?: string | null;
+  /**
+   * Whether we matched this number to a patient on record. When false the
+   * agent treats it as a brand new enquiry and does not claim to know them.
+   */
+  isKnownPatient?: boolean;
+}
+
+/** A patient resolved from an inbound phone number. */
+export interface PhoneIdentity {
+  patientId: string;
+  siteId: string;
+  patientName: string;
+  treatment: string | null;
+  fundingType: "nhs" | "private" | null;
+  lastVisitAt: string | null;
+  recallDueAt: string | null;
+  /** Where the match came from, for logging / trust. */
+  source: "directory" | "reactivation" | "dentally";
 }
 
 export interface AgentTurnResult {

@@ -46,6 +46,15 @@ export class DentallyClient {
     });
   }
   getPatient(id: string) { return this.get<{ patient: unknown }>(`/v1/patients/${id}`); }
+
+  /**
+   * Find patients by mobile phone number. Used to recognise an inbound SMS from
+   * any number, not just reactivation targets. The exact filter param is to be
+   * calibrated against the live sandbox; the local mock accepts `mobile_phone`.
+   */
+  findPatientsByPhone(phone: string) {
+    return this.get<{ patients: unknown[] }>("/v1/patients", { mobile_phone: phone });
+  }
   getAccountOutstanding(patientId: string) {
     return this.get<{ payment_plans: unknown[] }>("/v1/payment_plans", { patient_id: patientId });
   }

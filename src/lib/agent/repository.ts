@@ -1,5 +1,5 @@
 import { serviceClient } from "@/lib/supabase/server";
-import type { AgentConversation, AgentMessageRow, ConversationStatus, MessageRole } from "./types";
+import type { AgentConversation, AgentMessageRow, ConversationStatus, MessageRole, PhoneIdentity } from "./types";
 
 interface ConvRow {
   id: string; site_id: string; dentally_patient_id: string; patient_name: string; channel: string;
@@ -50,6 +50,59 @@ export async function findOrCreateConversation(input: {
     .single();
   if (error) throw error;
   return toConv(data as ConvRow);
+}
+
+// ---------------------------------------------------------------------------
+// Phone -> patient identity directory (recognise any inbound number).
+// ---------------------------------------------------------------------------
+
+interface IdentityRow {
+  phone: string; site_id: string; dentally_patient_id: string; patient_name: string;
+  treatment: string | null; funding_type: string | null;
+  last_visit_at: string | null; recall_due_at: string | null;
+}
+
+/** Look up a cached identity for an inbound phone number. */
+export async function lookupPhoneIdentity(phone: string): Promise<PhoneIdentity | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("agent_phone_identity")
+    .select("*")
+    .eq("phone", phone)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const r = data as IdentityRow;
+  return {
+    patientId: r.dentally_patient_id,
+    siteId: r.site_id,
+    patientName: r.patient_name,
+    treatment: r.treatment,
+    fundingType: (r.funding_type as "nhs" | "private" | null) ?? null,
+    lastVisitAt: r.last_visit_at,
+    recallDueAt: r.recall_due_at,
+    source: "directory",
+  };
+}
+
+/** Cache a resolved identity against a phone number for fast future routing. */
+export async function upsertPhoneIdentity(phone: string, identity: PhoneIdentity): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("agent_phone_identity").upsert(
+    {
+      phone,
+      site_id: identity.siteId,
+      dentally_patient_id: identity.patientId,
+      patient_name: identity.patientName,
+      treatment: identity.treatment,
+      funding_type: identity.fundingType,
+      last_visit_at: identity.lastVisitAt,
+      recall_due_at: identity.recallDueAt,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "phone" },
+  );
+  if (error) throw error;
 }
 
 export async function listMessages(conversationId: string): Promise<AgentMessageRow[]> {
