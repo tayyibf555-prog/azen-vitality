@@ -17,7 +17,7 @@ export const CLIENTS: Client[] = [
   {
     id: "vitality",
     slug: "vitality",
-    name: "Vitality Dental Network",
+    name: "Vitality Dental",
     status: "live",
     dentally: { connected: true, lastSyncedAt: "2026-06-18T08:52:00Z" },
     siteIds: ["site-cc", "site-rv", "site-ng"],

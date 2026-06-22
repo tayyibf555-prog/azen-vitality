@@ -9,13 +9,6 @@ interface Msg {
   content: string;
 }
 
-const SUGGESTIONS = [
-  "How are we doing today?",
-  "Tell me everything about Rajesh Patel",
-  "Who is in the diary today?",
-  "How much is outstanding across the practice?",
-];
-
 export function CopilotConversation({
   clientSlug,
   autoFocus = true,
@@ -69,18 +62,6 @@ export function CopilotConversation({
             <p className="mt-1 max-w-sm text-sm text-muted">
               I can see the whole practice. Ask about a patient, today&apos;s diary, outstanding balances, or how things are going.
             </p>
-            <div className="mt-5 grid w-full max-w-md gap-1.5 sm:grid-cols-2">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => send(s)}
-                  className="rounded-lg border border-line bg-card-muted/50 px-3 py-2 text-left text-sm text-ink hover:bg-card-muted"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
           </div>
         ) : (
           messages.map((m, i) => (
