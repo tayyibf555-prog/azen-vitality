@@ -123,6 +123,15 @@ export async function appendMessage(input: {
   if (error) throw error;
 }
 
+export async function setConversationName(id: string, patientName: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("agent_conversation")
+    .update({ patient_name: patientName, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+
 export async function setConversationStatus(id: string, status: ConversationStatus): Promise<void> {
   const db = serviceClient();
   const { error } = await db

@@ -20,6 +20,7 @@ import {
   listMessages,
   appendMessage,
   setConversationStatus,
+  setConversationName,
   stampInbound,
   isAgentEnabled,
 } from "@/lib/agent/repository";
@@ -133,6 +134,12 @@ export async function POST(request: Request): Promise<Response> {
   await appendMessage({ conversationId: conversation.id, role: "patient", body });
   await stampInbound(conversation.id);
 
+  // Keep a reused conversation's name in step with the current directory, so a
+  // renamed contact is reflected straight away rather than staying stale.
+  if (identity && conversation.patientName !== identity.patientName) {
+    await setConversationName(conversation.id, identity.patientName);
+  }
+
   if (!(await isAgentEnabled(siteId))) {
     // Agent paused for this site from the dashboard: route to a human, no reply.
     await setConversationStatus(conversation.id, "needs_human");
@@ -145,7 +152,7 @@ export async function POST(request: Request): Promise<Response> {
   const context: AgentContext = {
     patientId,
     siteId,
-    patientName: knownPatient ? conversation.patientName : "there",
+    patientName: identity ? identity.patientName : "there",
     treatment: conversation.treatment,
     fundingType: conversation.fundingType,
     lastVisitAt: identity?.lastVisitAt ?? null,
