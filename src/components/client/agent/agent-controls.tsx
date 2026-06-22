@@ -6,6 +6,7 @@ import { cn, relativeTime } from "@/lib/utils";
 import { Loader2, MessageSquare } from "lucide-react";
 import type { ConversationStatus } from "@/lib/agent/types";
 import type { DashboardConversation } from "@/lib/agent/repository";
+import { ConversationDrawer } from "./conversation-drawer";
 
 const STATUS_TONE: Record<ConversationStatus, Tone> = {
   active: "info",
@@ -35,6 +36,8 @@ export function AgentControls({
   const [enabled, setEnabled] = useState(initialEnabled);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = conversations.find((c) => c.id === selectedId) ?? null;
 
   async function toggle() {
     const next = !enabled;
@@ -147,9 +150,19 @@ export function AgentControls({
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-line">
-          <DataTable columns={columns} rows={conversations} getRowKey={(c) => c.id} className="px-2 py-1" />
+          <DataTable
+            columns={columns}
+            rows={conversations}
+            getRowKey={(c) => c.id}
+            onRowClick={(c) => setSelectedId(c.id)}
+            className="px-2 py-1"
+          />
         </div>
       )}
+
+      {selected ? (
+        <ConversationDrawer conversation={selected} nowIso={nowIso} onClose={() => setSelectedId(null)} />
+      ) : null}
     </div>
   );
 }
