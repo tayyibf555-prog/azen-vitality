@@ -204,7 +204,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button type="button" aria-label="Close panel" onClick={onClose} className="absolute inset-0 bg-navy/40 backdrop-blur-[1px]" />
-      <div className="relative z-10 flex max-h-[85vh] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-2xl">
+      <div className="relative z-10 flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-2xl">
         <header className="flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
             <h2 className="truncate text-lg font-extrabold text-navy">{patient.name}</h2>
@@ -223,111 +223,121 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
           </button>
         </header>
 
-        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
-          <div className="grid grid-cols-2 gap-2">
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat icon={Clock} label="Last seen" value={lastSeen ? relativeTime(lastSeen, now) : "No record"} />
             <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
             <Stat icon={Activity} label="Visits" value={String(completed.length)} />
             <Stat icon={PoundSterling} label="Lifetime spend" value={gbp(lifetimeSpend)} />
           </div>
 
-          <div className="space-y-4">
-            <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
-            <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
-            <Field
-              icon={Cake}
-              label="Date of birth"
-              value={patient.dateOfBirth ? `${fmtDob(patient.dateOfBirth)}${age != null ? ` · ${age} yrs` : ""}` : "Not on file"}
-            />
-            <Field icon={CalendarClock} label="Recall due" value={patient.recallDueAt ? relativeTime(patient.recallDueAt, now) : "Not set"} />
-            <Field
-              icon={MessageSquare}
-              label="Consent"
-              value={[patient.smsConsent ? "SMS" : null, patient.emailConsent ? "Email" : null].filter(Boolean).join(", ") || "No marketing consent"}
-            />
-          </div>
-
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted">
+            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
               <Loader2 size={15} className="animate-spin" /> Loading record…
             </div>
           ) : (
-            <>
-              <section className="space-y-3">
-                <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                  <StickyNote size={15} className="text-blue-dark" /> Notes
-                </h3>
-                {notes.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
-                    No notes on record.
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {notes.map((n) => (
-                      <li key={n.id} className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5">
-                        <p className="text-sm text-ink">{n.body}</p>
-                        <p className="mt-1 text-[11px] text-muted">
-                          {n.author}
-                          {n.createdAt ? ` · ${relativeTime(n.createdAt, now)}` : ""}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-              <section className="space-y-3">
-                <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                  <ReceiptText size={15} className="text-blue-dark" /> Treatment plans
-                </h3>
-                {plans.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
-                    No treatment plans on record.
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {plans.map((p, i) => (
-                      <li key={`${p.name}-${i}`} className="rounded-lg border border-line bg-card px-3 py-2.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="min-w-0 truncate text-sm font-semibold text-navy">{p.name}</p>
-                          <StatusPill tone={p.outstanding > 0 ? "warning" : "success"}>
-                            {p.outstanding > 0 ? `${gbp(p.outstanding)} due` : "Paid"}
-                          </StatusPill>
-                        </div>
-                        <p className="mt-0.5 text-xs text-muted">Plan value {gbp(p.planned)}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+            <div className="mt-5 grid gap-x-6 gap-y-5 md:grid-cols-2">
+              {/* Left column: details + treatment plans */}
+              <div className="space-y-5">
+                <section className="space-y-3">
+                  <h3 className="text-sm font-extrabold text-navy">Details</h3>
+                  <div className="space-y-3.5">
+                    <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
+                    <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
+                    <Field
+                      icon={Cake}
+                      label="Date of birth"
+                      value={patient.dateOfBirth ? `${fmtDob(patient.dateOfBirth)}${age != null ? ` · ${age} yrs` : ""}` : "Not on file"}
+                    />
+                    <Field icon={CalendarClock} label="Recall due" value={patient.recallDueAt ? relativeTime(patient.recallDueAt, now) : "Not set"} />
+                    <Field
+                      icon={MessageSquare}
+                      label="Consent"
+                      value={[patient.smsConsent ? "SMS" : null, patient.emailConsent ? "Email" : null].filter(Boolean).join(", ") || "No marketing consent"}
+                    />
+                  </div>
+                </section>
 
-              <section className="space-y-3">
-                <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                  <History size={15} className="text-blue-dark" /> Appointment history
-                </h3>
-                {appointments.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
-                    No appointments on record.
-                  </p>
-                ) : (
-                  <ol className="space-y-2">
-                    {appointments.map((a) => (
-                      <li key={a.id} className="flex items-center gap-3 rounded-lg border border-line bg-card px-3 py-2.5">
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-navy">{a.reason ?? "Appointment"}</p>
-                          <p className="text-xs text-muted">
-                            {hhmmDate(a.start)}
-                            {a.practitioner ? ` · ${a.practitioner}` : ""}
+                <section className="space-y-3">
+                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                    <ReceiptText size={15} className="text-blue-dark" /> Treatment plans
+                  </h3>
+                  {plans.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
+                      No treatment plans on record.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {plans.map((p, i) => (
+                        <li key={`${p.name}-${i}`} className="rounded-lg border border-line bg-card px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="min-w-0 truncate text-sm font-semibold text-navy">{p.name}</p>
+                            <StatusPill tone={p.outstanding > 0 ? "warning" : "success"}>
+                              {p.outstanding > 0 ? `${gbp(p.outstanding)} due` : "Paid"}
+                            </StatusPill>
+                          </div>
+                          <p className="mt-0.5 text-xs text-muted">Plan value {gbp(p.planned)}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </div>
+
+              {/* Right column: notes + appointment history */}
+              <div className="space-y-5">
+                <section className="space-y-3">
+                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                    <StickyNote size={15} className="text-blue-dark" /> Notes
+                  </h3>
+                  {notes.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
+                      No notes on record.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {notes.map((n) => (
+                        <li key={n.id} className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5">
+                          <p className="text-sm text-ink">{n.body}</p>
+                          <p className="mt-1 text-[11px] text-muted">
+                            {n.author}
+                            {n.createdAt ? ` · ${relativeTime(n.createdAt, now)}` : ""}
                           </p>
-                        </div>
-                        <StatusPill tone={APPT_STATE_TONE[a.state] ?? "neutral"}>
-                          {APPT_STATE_LABEL[a.state] ?? a.state}
-                        </StatusPill>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </section>
-            </>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="space-y-3">
+                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                    <History size={15} className="text-blue-dark" /> Appointment history
+                  </h3>
+                  {appointments.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
+                      No appointments on record.
+                    </p>
+                  ) : (
+                    <ol className="space-y-2">
+                      {appointments.map((a) => (
+                        <li key={a.id} className="flex items-center gap-3 rounded-lg border border-line bg-card px-3 py-2.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-navy">{a.reason ?? "Appointment"}</p>
+                            <p className="text-xs text-muted">
+                              {hhmmDate(a.start)}
+                              {a.practitioner ? ` · ${a.practitioner}` : ""}
+                            </p>
+                          </div>
+                          <StatusPill tone={APPT_STATE_TONE[a.state] ?? "neutral"}>
+                            {APPT_STATE_LABEL[a.state] ?? a.state}
+                          </StatusPill>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </section>
+              </div>
+            </div>
           )}
         </div>
       </div>
