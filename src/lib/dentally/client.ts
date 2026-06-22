@@ -75,6 +75,9 @@ export class DentallyClient {
   getPatientInvoices(patientId: string) {
     return this.get<{ invoices: unknown[] }>("/v1/invoices", { patient_id: patientId });
   }
+  getPatientNotes(patientId: string) {
+    return this.get<{ patient_notes: unknown[] }>("/v1/patient_notes", { patient_id: patientId });
+  }
 
   getAvailability(a: AvailabilityArgs) {
     return this.get<{ availability: unknown[] }>("/v1/appointments/availability", {

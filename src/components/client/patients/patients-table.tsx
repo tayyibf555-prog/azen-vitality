@@ -4,8 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, gbp, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
-import { Search, X, Phone, Mail, MessageSquare, CalendarClock, Clock, Loader2, History, ReceiptText } from "lucide-react";
-import type { PatientRecord, AppointmentRecord, PlanRecord } from "@/lib/dentally/read";
+import {
+  Search, X, Phone, Mail, MessageSquare, CalendarClock, Clock, Loader2, History, ReceiptText,
+  StickyNote, CalendarPlus, Activity, PoundSterling, Cake,
+} from "lucide-react";
+import type { PatientRecord, AppointmentRecord, PlanRecord, NoteRecord } from "@/lib/dentally/read";
 
 const APPT_STATE_TONE: Record<string, Tone> = {
   booked: "info",
@@ -120,6 +123,17 @@ export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[];
   );
 }
 
+function Stat({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+        <Icon size={12} className="text-blue-dark" /> {label}
+      </p>
+      <p className="mt-0.5 text-sm font-bold text-navy">{value}</p>
+    </div>
+  );
+}
+
 function Field({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
   return (
     <div className="flex items-start gap-3">
@@ -137,11 +151,25 @@ function Field({ icon: Icon, label, value }: { icon: typeof Phone; label: string
 function hhmmDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
+function fmtDob(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+function ageFrom(dob: string | null, now: Date): number | null {
+  if (!dob) return null;
+  const b = new Date(dob);
+  if (Number.isNaN(b.getTime())) return null;
+  let age = now.getUTCFullYear() - b.getUTCFullYear();
+  const m = now.getUTCMonth() - b.getUTCMonth();
+  if (m < 0 || (m === 0 && now.getUTCDate() < b.getUTCDate())) age -= 1;
+  return age;
+}
 
 function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now: Date; onClose: () => void }) {
   const s = statusOf(patient);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [plans, setPlans] = useState<PlanRecord[]>([]);
+  const [notes, setNotes] = useState<NoteRecord[]>([]);
+  const [lifetimeSpend, setLifetimeSpend] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -151,10 +179,12 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
       cache: "no-store",
     })
       .then((r) => r.json())
-      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[] }) => {
+      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[]; notes?: NoteRecord[]; lifetimeSpend?: number }) => {
         if (!alive) return;
         setAppointments(d.appointments ?? []);
         setPlans(d.plans ?? []);
+        setNotes(d.notes ?? []);
+        setLifetimeSpend(d.lifetimeSpend ?? 0);
       })
       .catch(() => {})
       .finally(() => alive && setLoading(false));
@@ -162,6 +192,14 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
       alive = false;
     };
   }, [patient.id, patient.siteId]);
+
+  const nowIso = now.toISOString();
+  const completed = appointments.filter((a) => a.state === "completed");
+  const lastSeen = completed[0]?.start ?? patient.lastVisitAt; // appointments are newest first
+  const nextAppt = [...appointments]
+    .reverse()
+    .find((a) => a.start > nowIso && (a.state === "booked" || a.state === "pending"));
+  const age = ageFrom(patient.dateOfBirth, now);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -186,10 +224,21 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
         </header>
 
         <div className="flex-1 space-y-6 px-6 py-5">
+          <div className="grid grid-cols-2 gap-2">
+            <Stat icon={Clock} label="Last seen" value={lastSeen ? relativeTime(lastSeen, now) : "No record"} />
+            <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
+            <Stat icon={Activity} label="Visits" value={String(completed.length)} />
+            <Stat icon={PoundSterling} label="Lifetime spend" value={gbp(lifetimeSpend)} />
+          </div>
+
           <div className="space-y-4">
             <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
             <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
-            <Field icon={Clock} label="Last visit" value={patient.lastVisitAt ? relativeTime(patient.lastVisitAt, now) : "No record"} />
+            <Field
+              icon={Cake}
+              label="Date of birth"
+              value={patient.dateOfBirth ? `${fmtDob(patient.dateOfBirth)}${age != null ? ` · ${age} yrs` : ""}` : "Not on file"}
+            />
             <Field icon={CalendarClock} label="Recall due" value={patient.recallDueAt ? relativeTime(patient.recallDueAt, now) : "Not set"} />
             <Field
               icon={MessageSquare}
@@ -204,6 +253,28 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
             </div>
           ) : (
             <>
+              <section className="space-y-3">
+                <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                  <StickyNote size={15} className="text-blue-dark" /> Notes
+                </h3>
+                {notes.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
+                    No notes on record.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {notes.map((n) => (
+                      <li key={n.id} className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5">
+                        <p className="text-sm text-ink">{n.body}</p>
+                        <p className="mt-1 text-[11px] text-muted">
+                          {n.author}
+                          {n.createdAt ? ` · ${relativeTime(n.createdAt, now)}` : ""}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
               <section className="space-y-3">
                 <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
                   <ReceiptText size={15} className="text-blue-dark" /> Treatment plans

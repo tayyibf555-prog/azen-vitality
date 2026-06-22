@@ -22,6 +22,7 @@ export interface PatientRecord {
   archivedReason: string | null;
   recallDueAt: string | null;
   lastVisitAt: string | null;
+  dateOfBirth: string | null;
   smsConsent: boolean;
   emailConsent: boolean;
 }
@@ -72,6 +73,7 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
     archivedReason: str(r.archived_reason),
     recallDueAt: str(r.dentist_recall_date) ?? str(r.hygienist_recall_date),
     lastVisitAt: str(r.last_visit_at),
+    dateOfBirth: str(r.date_of_birth),
     smsConsent: bool(r.use_sms),
     emailConsent: bool(r.use_email),
   };
@@ -132,12 +134,21 @@ export interface PlanRecord {
   acceptedAt: string | null;
 }
 
+export interface NoteRecord {
+  id: string;
+  body: string;
+  author: string;
+  createdAt: string;
+}
+
 export interface PatientDetail {
   appointments: AppointmentRecord[];
   plans: PlanRecord[];
+  notes: NoteRecord[];
+  lifetimeSpend: number;
 }
 
-/** Full record for one patient: appointment history (newest first) + treatment plans. */
+/** Full record for one patient: appointment history, treatment plans, notes, lifetime spend. */
 export async function getPatientDetail(patientId: string, siteId: string): Promise<PatientDetail> {
   const client = dentallyFromEnv();
 
@@ -161,9 +172,31 @@ export async function getPatientDetail(patientId: string, siteId: string): Promi
     )
     .catch(() => [] as PlanRecord[]);
 
-  const [appointments, plans] = await Promise.all([apptsP, plansP]);
+  const notesP = client
+    .getPatientNotes(patientId)
+    .then((res) =>
+      (res.patient_notes ?? []).map((n) => {
+        const r = n as Record<string, unknown>;
+        return {
+          id: String(r.id ?? ""),
+          body: str(r.body) ?? "",
+          author: str(r.author) ?? "Team",
+          createdAt: str(r.created_at) ?? "",
+        };
+      }),
+    )
+    .catch(() => [] as NoteRecord[]);
+
+  const spendP = client
+    .getPatientInvoices(patientId)
+    .then((res) =>
+      (res.invoices ?? []).reduce<number>((sum, inv) => sum + num((inv as Record<string, unknown>).paid), 0),
+    )
+    .catch(() => 0);
+
+  const [appointments, plans, notes, lifetimeSpend] = await Promise.all([apptsP, plansP, notesP, spendP]);
   appointments.sort((a, b) => (a.start < b.start ? 1 : -1)); // newest first
-  return { appointments, plans };
+  return { appointments, plans, notes, lifetimeSpend };
 }
 
 /** Treatment plans with money still outstanding, across the given sites, with patient names. */

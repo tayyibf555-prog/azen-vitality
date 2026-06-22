@@ -386,10 +386,48 @@ export const MOCK_APPOINTMENTS: MockAppointment[] = [
 
 // Paid invoices = lifetime spend proxy.
 export const MOCK_INVOICES: MockInvoice[] = [
+  { id: "inv-001a", patient_id: "pat-001", paid: 1340 },
+  { id: "inv-002a", patient_id: "pat-002", paid: 1850 },
+  { id: "inv-002b", patient_id: "pat-002", paid: 640 },
+  { id: "inv-003a", patient_id: "pat-003", paid: 980 },
+  { id: "inv-004a", patient_id: "pat-004", paid: 1200 },
+  { id: "inv-005a", patient_id: "pat-005", paid: 700 },
+  { id: "inv-006a", patient_id: "pat-006", paid: 450 },
+  { id: "inv-007a", patient_id: "pat-007", paid: 280 },
+  { id: "inv-008a", patient_id: "pat-008", paid: 320 },
+  { id: "inv-009a", patient_id: "pat-009", paid: 2100 },
   { id: "inv-010a", patient_id: "pat-010", paid: 1200 },
   { id: "inv-010b", patient_id: "pat-010", paid: 480 },
   { id: "inv-011a", patient_id: "pat-011", paid: 950 },
 ];
+
+// --- Patient notes (clinical + admin) -------------------------------------
+// Mirrors a Dentally patient-notes list. Newest first when read.
+export interface MockPatientNote {
+  id: string;
+  patient_id: string;
+  body: string;
+  author: string;
+  created_at: string; // ISO
+}
+
+export const MOCK_PATIENT_NOTES: MockPatientNote[] = [
+  { id: "note-002b", patient_id: "pat-002", body: "Implant UR6 fitted, healing well. Review in two weeks.", author: "Dr Priya Adeyemi", created_at: "2026-06-17T14:45:00Z" },
+  { id: "note-002a", patient_id: "pat-002", body: "Nervous patient, prefers morning appointments. Discussed sedation options.", author: "Dr Priya Adeyemi", created_at: "2026-05-20T10:10:00Z" },
+  { id: "note-001a", patient_id: "pat-001", body: "Keen to start Invisalign. Finance options sent, awaiting decision.", author: "Sarah Okoro", created_at: "2026-06-10T09:00:00Z" },
+  { id: "note-011a", patient_id: "pat-011", body: "Allergic to penicillin. Flag before any prescribing.", author: "Dr James Shah", created_at: "2025-07-02T11:40:00Z" },
+  { id: "note-010a", patient_id: "pat-010", body: "Moved away in 2024, may have a new local dentist. Worth a courtesy call before chasing.", author: "Reception", created_at: "2026-05-02T11:00:00Z" },
+  { id: "note-012a", patient_id: "pat-012", body: "Full mouth rehab accepted but on hold pending finance. Follow up.", author: "Sarah Okoro", created_at: "2026-01-05T10:00:00Z" },
+  { id: "note-005a", patient_id: "pat-005", body: "RCT on LL6 complete, crown to follow. Sensitive to cold.", author: "Dr Priya Adeyemi", created_at: "2026-06-08T15:30:00Z" },
+];
+
+// Date of birth, so the record can show age.
+export const PATIENT_DOB: Record<string, string> = {
+  "pat-001": "1958-03-12", "pat-002": "1979-11-02", "pat-003": "1992-08-19",
+  "pat-004": "1990-06-21", "pat-005": "1986-01-30", "pat-006": "1971-09-05",
+  "pat-007": "1995-12-11", "pat-008": "1983-04-27", "pat-009": "1989-02-14",
+  "pat-010": "1949-07-08", "pat-011": "1985-07-15", "pat-012": "1968-10-22",
+};
 
 // --- Lookups --------------------------------------------------------------
 export function findPatient(id: string): MockPatient | undefined {
@@ -415,4 +453,12 @@ export function appointmentsForSite(siteId: string): MockAppointment[] {
 }
 export function invoicesForPatient(patientId: string): MockInvoice[] {
   return MOCK_INVOICES.filter((i) => i.patient_id === patientId);
+}
+export function notesForPatient(patientId: string): MockPatientNote[] {
+  return MOCK_PATIENT_NOTES.filter((n) => n.patient_id === patientId).sort((a, b) =>
+    a.created_at < b.created_at ? 1 : -1,
+  );
+}
+export function dobForPatient(patientId: string): string | null {
+  return PATIENT_DOB[patientId] ?? null;
 }
