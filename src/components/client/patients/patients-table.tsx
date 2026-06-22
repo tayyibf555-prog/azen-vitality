@@ -1,11 +1,26 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
-import { cn, relativeTime } from "@/lib/utils";
+import { cn, gbp, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
-import { Search, X, Phone, Mail, MessageSquare, CalendarClock, Clock } from "lucide-react";
-import type { PatientRecord } from "@/lib/dentally/read";
+import { Search, X, Phone, Mail, MessageSquare, CalendarClock, Clock, Loader2, History, ReceiptText } from "lucide-react";
+import type { PatientRecord, AppointmentRecord, PlanRecord } from "@/lib/dentally/read";
+
+const APPT_STATE_TONE: Record<string, Tone> = {
+  booked: "info",
+  completed: "success",
+  did_not_attend: "danger",
+  cancelled: "neutral",
+  pending: "info",
+};
+const APPT_STATE_LABEL: Record<string, string> = {
+  booked: "Booked",
+  completed: "Completed",
+  did_not_attend: "No-show",
+  cancelled: "Cancelled",
+  pending: "Pending",
+};
 
 function statusOf(p: PatientRecord): { tone: Tone; label: string } {
   if (!p.active) return { tone: "neutral", label: p.archivedReason === "lapsed" ? "Lapsed" : "Inactive" };
@@ -119,12 +134,39 @@ function Field({ icon: Icon, label, value }: { icon: typeof Phone; label: string
   );
 }
 
+function hhmmDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
 function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now: Date; onClose: () => void }) {
   const s = statusOf(patient);
+  const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+  const [plans, setPlans] = useState<PlanRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetch(`/api/dentally/patients/${encodeURIComponent(patient.id)}?siteId=${encodeURIComponent(patient.siteId)}`, {
+      cache: "no-store",
+    })
+      .then((r) => r.json())
+      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[] }) => {
+        if (!alive) return;
+        setAppointments(d.appointments ?? []);
+        setPlans(d.plans ?? []);
+      })
+      .catch(() => {})
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [patient.id, patient.siteId]);
+
   return (
     <div className="fixed inset-0 z-50">
       <button type="button" aria-label="Close panel" onClick={onClose} className="absolute inset-0 bg-navy/40 backdrop-blur-[1px]" />
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[440px] flex-col overflow-y-auto border-l border-line bg-card shadow-2xl">
+      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[460px] flex-col overflow-y-auto border-l border-line bg-card shadow-2xl">
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
             <h2 className="truncate text-lg font-extrabold text-navy">{patient.name}</h2>
@@ -137,34 +179,85 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-card-muted hover:text-navy",
-            )}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-card-muted hover:text-navy"
           >
             <X size={18} />
           </button>
         </header>
 
-        <div className="flex-1 space-y-5 px-6 py-5">
-          <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
-          <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
-          <Field
-            icon={Clock}
-            label="Last visit"
-            value={patient.lastVisitAt ? relativeTime(patient.lastVisitAt, now) : "No record"}
-          />
-          <Field
-            icon={CalendarClock}
-            label="Recall due"
-            value={patient.recallDueAt ? relativeTime(patient.recallDueAt, now) : "Not set"}
-          />
-          <Field
-            icon={MessageSquare}
-            label="Consent"
-            value={[patient.smsConsent ? "SMS" : null, patient.emailConsent ? "Email" : null]
-              .filter(Boolean)
-              .join(", ") || "No marketing consent"}
-          />
+        <div className="flex-1 space-y-6 px-6 py-5">
+          <div className="space-y-4">
+            <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
+            <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
+            <Field icon={Clock} label="Last visit" value={patient.lastVisitAt ? relativeTime(patient.lastVisitAt, now) : "No record"} />
+            <Field icon={CalendarClock} label="Recall due" value={patient.recallDueAt ? relativeTime(patient.recallDueAt, now) : "Not set"} />
+            <Field
+              icon={MessageSquare}
+              label="Consent"
+              value={[patient.smsConsent ? "SMS" : null, patient.emailConsent ? "Email" : null].filter(Boolean).join(", ") || "No marketing consent"}
+            />
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted">
+              <Loader2 size={15} className="animate-spin" /> Loading record…
+            </div>
+          ) : (
+            <>
+              <section className="space-y-3">
+                <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                  <ReceiptText size={15} className="text-blue-dark" /> Treatment plans
+                </h3>
+                {plans.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
+                    No treatment plans on record.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {plans.map((p, i) => (
+                      <li key={`${p.name}-${i}`} className="rounded-lg border border-line bg-card px-3 py-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="min-w-0 truncate text-sm font-semibold text-navy">{p.name}</p>
+                          <StatusPill tone={p.outstanding > 0 ? "warning" : "success"}>
+                            {p.outstanding > 0 ? `${gbp(p.outstanding)} due` : "Paid"}
+                          </StatusPill>
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted">Plan value {gbp(p.planned)}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                  <History size={15} className="text-blue-dark" /> Appointment history
+                </h3>
+                {appointments.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
+                    No appointments on record.
+                  </p>
+                ) : (
+                  <ol className="space-y-2">
+                    {appointments.map((a) => (
+                      <li key={a.id} className="flex items-center gap-3 rounded-lg border border-line bg-card px-3 py-2.5">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-navy">{a.reason ?? "Appointment"}</p>
+                          <p className="text-xs text-muted">
+                            {hhmmDate(a.start)}
+                            {a.practitioner ? ` · ${a.practitioner}` : ""}
+                          </p>
+                        </div>
+                        <StatusPill tone={APPT_STATE_TONE[a.state] ?? "neutral"}>
+                          {APPT_STATE_LABEL[a.state] ?? a.state}
+                        </StatusPill>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            </>
+          )}
         </div>
       </aside>
     </div>

@@ -92,6 +92,21 @@ export async function listPatients(siteIds: string[]): Promise<PatientRecord[]> 
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function toAppointment(r: Record<string, unknown>, fallbackSiteId: string): AppointmentRecord {
+  return {
+    id: String(r.id ?? ""),
+    patientId: String(r.patient_id ?? ""),
+    patientName: str(r.patient_name) ?? "Patient",
+    siteId: str(r.site_id) ?? fallbackSiteId,
+    start: str(r.start_time) ?? "",
+    finish: str(r.finish_time),
+    durationMin: num(r.duration) || 30,
+    state: str(r.state) ?? "booked",
+    reason: str(r.reason),
+    practitioner: str(r.practitioner),
+  };
+}
+
 /** Appointments across the given sites, optionally within an inclusive date range. */
 export async function listAppointments(
   siteIds: string[],
@@ -102,26 +117,53 @@ export async function listAppointments(
   for (const siteId of siteIds) {
     try {
       const res = await client.listAppointments({ siteId, fromDate: range?.from, toDate: range?.to });
-      for (const a of res.appointments ?? []) {
-        const r = a as Record<string, unknown>;
-        out.push({
-          id: String(r.id ?? ""),
-          patientId: String(r.patient_id ?? ""),
-          patientName: str(r.patient_name) ?? "Patient",
-          siteId: str(r.site_id) ?? siteId,
-          start: str(r.start_time) ?? "",
-          finish: str(r.finish_time),
-          durationMin: num(r.duration) || 30,
-          state: str(r.state) ?? "booked",
-          reason: str(r.reason),
-          practitioner: str(r.practitioner),
-        });
-      }
+      for (const a of res.appointments ?? []) out.push(toAppointment(a as Record<string, unknown>, siteId));
     } catch {
       // skip
     }
   }
   return out.sort((a, b) => (a.start < b.start ? -1 : 1));
+}
+
+export interface PlanRecord {
+  name: string;
+  planned: number;
+  outstanding: number;
+  acceptedAt: string | null;
+}
+
+export interface PatientDetail {
+  appointments: AppointmentRecord[];
+  plans: PlanRecord[];
+}
+
+/** Full record for one patient: appointment history (newest first) + treatment plans. */
+export async function getPatientDetail(patientId: string, siteId: string): Promise<PatientDetail> {
+  const client = dentallyFromEnv();
+
+  const apptsP = client
+    .getPatientAppointments(patientId)
+    .then((res) => (res.appointments ?? []).map((a) => toAppointment(a as Record<string, unknown>, siteId)))
+    .catch(() => [] as AppointmentRecord[]);
+
+  const plansP = client
+    .listTreatmentPlans({ siteId })
+    .then((res) =>
+      (res.treatment_plans ?? [])
+        .map((pl) => pl as Record<string, unknown>)
+        .filter((r) => String(r.patient_id ?? "") === patientId)
+        .map<PlanRecord>((r) => ({
+          name: str(r.name) ?? "Treatment plan",
+          planned: num(r.planned_private_treatment_value),
+          outstanding: num(r.amount_outstanding),
+          acceptedAt: str(r.accepted_at),
+        })),
+    )
+    .catch(() => [] as PlanRecord[]);
+
+  const [appointments, plans] = await Promise.all([apptsP, plansP]);
+  appointments.sort((a, b) => (a.start < b.start ? 1 : -1)); // newest first
+  return { appointments, plans };
 }
 
 /** Treatment plans with money still outstanding, across the given sites, with patient names. */
