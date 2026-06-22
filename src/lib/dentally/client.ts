@@ -67,6 +67,11 @@ export class DentallyClient {
   getPatientAppointments(patientId: string) {
     return this.get<{ appointments: unknown[] }>("/v1/appointments", { patient_id: patientId });
   }
+  listAppointments(a: { siteId: string; fromDate?: string; toDate?: string }) {
+    return this.get<{ appointments: unknown[] }>("/v1/appointments", {
+      site_id: a.siteId, start_date: a.fromDate, finish_date: a.toDate,
+    });
+  }
   getPatientInvoices(patientId: string) {
     return this.get<{ invoices: unknown[] }>("/v1/invoices", { patient_id: patientId });
   }

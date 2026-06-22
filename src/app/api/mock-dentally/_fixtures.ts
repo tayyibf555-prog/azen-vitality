@@ -328,6 +328,11 @@ export interface MockAppointment {
   site_id: string;
   start_time: string; // ISO
   state: string;
+  // Diary fields (optional; older fixtures that only drive last-visit omit them).
+  patient_name?: string;
+  reason?: string;
+  practitioner?: string;
+  duration?: number; // minutes
 }
 
 export interface MockInvoice {
@@ -354,6 +359,29 @@ export const MOCK_APPOINTMENTS: MockAppointment[] = [
   { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "completed" },
   // An active patient WITH a future booking (must NOT appear in the dormant book).
   { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked" },
+
+  // --- Diary fixtures (relative to NOW = 2026-06-18, a Thursday) -----------
+  // A populated week so the Calendar and Today views are meaningful. These
+  // carry the optional diary fields. Walk-in / new patients use synthetic ids.
+  // Today (Thu 2026-06-18)
+  { id: "appt-d01", patient_id: "pat-004", patient_name: "Callum Fraser",    site_id: "site-cc", start_time: "2026-06-18T08:00:00Z", duration: 30, state: "completed",     reason: "Checkup",          practitioner: "Dr James Shah" },
+  { id: "appt-d02", patient_id: "pat-007", patient_name: "Megan Lloyd",      site_id: "site-cc", start_time: "2026-06-18T09:30:00Z", duration: 60, state: "booked",        reason: "Implant consult",  practitioner: "Dr James Shah" },
+  { id: "appt-d03", patient_id: "new-101", patient_name: "Daniel Okonkwo",   site_id: "site-cc", start_time: "2026-06-18T13:00:00Z", duration: 30, state: "booked",        reason: "New patient exam", practitioner: "Dr James Shah" },
+  { id: "appt-d04", patient_id: "pat-001", patient_name: "Eleanor Whitfield",site_id: "site-cc", start_time: "2026-06-18T15:00:00Z", duration: 30, state: "booked",        reason: "Invisalign review",practitioner: "Dr Priya Adeyemi" },
+  { id: "appt-d05", patient_id: "pat-002", patient_name: "Rajesh Patel",     site_id: "site-rv", start_time: "2026-06-18T08:30:00Z", duration: 30, state: "completed",     reason: "Hygiene",          practitioner: "Sarah Okoro (Hygienist)" },
+  { id: "appt-d06", patient_id: "pat-005", patient_name: "Aisha Begum",      site_id: "site-rv", start_time: "2026-06-18T10:00:00Z", duration: 60, state: "booked",        reason: "Root canal review",practitioner: "Dr Priya Adeyemi" },
+  { id: "appt-d07", patient_id: "pat-008", patient_name: "Bartosz Kowalski", site_id: "site-rv", start_time: "2026-06-18T12:00:00Z", duration: 30, state: "did_not_attend",reason: "Filling",         practitioner: "Dr James Shah" },
+  { id: "appt-d08", patient_id: "new-102", patient_name: "Grace Bello",      site_id: "site-rv", start_time: "2026-06-18T14:00:00Z", duration: 15, state: "booked",        reason: "Emergency",        practitioner: "Dr Priya Adeyemi" },
+  { id: "appt-d09", patient_id: "pat-003", patient_name: "Sophie Armstrong", site_id: "site-ng", start_time: "2026-06-18T09:00:00Z", duration: 60, state: "booked",        reason: "Veneers review",   practitioner: "Dr Priya Adeyemi" },
+  { id: "appt-d10", patient_id: "pat-009", patient_name: "Grace Okafor",     site_id: "site-ng", start_time: "2026-06-18T11:00:00Z", duration: 30, state: "booked",        reason: "Checkup",          practitioner: "Dr James Shah" },
+  { id: "appt-d11", patient_id: "pat-006", patient_name: "Thomas Hargreaves",site_id: "site-ng", start_time: "2026-06-18T15:30:00Z", duration: 30, state: "booked",        reason: "Whitening",        practitioner: "Sarah Okoro (Hygienist)" },
+  // Earlier this week (completed)
+  { id: "appt-d12", patient_id: "pat-004", patient_name: "Callum Fraser",    site_id: "site-cc", start_time: "2026-06-16T10:00:00Z", duration: 30, state: "completed",     reason: "Filling",          practitioner: "Dr James Shah" },
+  { id: "appt-d13", patient_id: "pat-002", patient_name: "Rajesh Patel",     site_id: "site-rv", start_time: "2026-06-17T14:00:00Z", duration: 60, state: "completed",     reason: "Implant fit",      practitioner: "Dr Priya Adeyemi" },
+  // Coming up (Fri 2026-06-19 and next week)
+  { id: "appt-d14", patient_id: "pat-007", patient_name: "Megan Lloyd",      site_id: "site-cc", start_time: "2026-06-19T09:00:00Z", duration: 30, state: "booked",        reason: "Implant fit",      practitioner: "Dr James Shah" },
+  { id: "appt-d15", patient_id: "new-103", patient_name: "Olivia Hughes",    site_id: "site-ng", start_time: "2026-06-19T11:30:00Z", duration: 30, state: "booked",        reason: "New patient exam", practitioner: "Dr Priya Adeyemi" },
+  { id: "appt-d16", patient_id: "pat-005", patient_name: "Aisha Begum",      site_id: "site-rv", start_time: "2026-06-22T11:00:00Z", duration: 30, state: "booked",        reason: "Hygiene",          practitioner: "Sarah Okoro (Hygienist)" },
 ];
 
 // Paid invoices = lifetime spend proxy.
@@ -381,6 +409,9 @@ export function patientsForSite(siteId: string): MockPatient[] {
 }
 export function appointmentsForPatient(patientId: string): MockAppointment[] {
   return MOCK_APPOINTMENTS.filter((a) => a.patient_id === patientId);
+}
+export function appointmentsForSite(siteId: string): MockAppointment[] {
+  return MOCK_APPOINTMENTS.filter((a) => a.site_id === siteId);
 }
 export function invoicesForPatient(patientId: string): MockInvoice[] {
   return MOCK_INVOICES.filter((i) => i.patient_id === patientId);

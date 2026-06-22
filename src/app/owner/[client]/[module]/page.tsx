@@ -3,6 +3,10 @@ import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
 import { AgentView } from "@/components/client/agent/agent-view";
+import { PatientsView } from "@/components/client/patients/patients-view";
+import { CalendarView } from "@/components/client/calendar/calendar-view";
+import { TodayView } from "@/components/client/today/today-view";
+import { PaymentsView } from "@/components/client/payments/payments-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 
@@ -29,6 +33,22 @@ export default async function OwnerModulePage({
 
   if (module === "booking-agent") {
     return <AgentView clientSlug={client} />;
+  }
+
+  if (module === "patients") {
+    return <PatientsView clientSlug={client} />;
+  }
+
+  if (module === "calendar") {
+    return <CalendarView clientSlug={client} />;
+  }
+
+  if (module === "today") {
+    return <TodayView clientSlug={client} />;
+  }
+
+  if (module === "payments") {
+    return <PaymentsView clientSlug={client} />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {

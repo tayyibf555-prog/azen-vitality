@@ -1,6 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import {
   LayoutDashboard,
+  CalendarCheck,
+  CalendarDays,
+  Users,
+  Wallet,
   Sparkles,
   Zap,
   PhoneCall,
@@ -45,6 +49,39 @@ export const CLIENT_NAV: NavGroup[] = [
     label: "Overview",
     items: [
       { slug: "", label: "Overview", icon: LayoutDashboard, status: "live" },
+    ],
+  },
+  {
+    label: "Clinic",
+    items: [
+      {
+        slug: "today",
+        label: "Today",
+        icon: CalendarCheck,
+        status: "live",
+        note: "A live snapshot of today's diary across every site: appointments, who has been seen, who is still to come, and no-shows.",
+      },
+      {
+        slug: "calendar",
+        label: "Calendar",
+        icon: CalendarDays,
+        status: "live",
+        note: "The live Dentally diary. Move day by day, filter by site, and see who is booked in and their appointment state.",
+      },
+      {
+        slug: "patients",
+        label: "Patients",
+        icon: Users,
+        status: "live",
+        note: "The patient database from Dentally. Search by name or contact, see recall and last visit, and open a record.",
+      },
+      {
+        slug: "payments",
+        label: "Payments",
+        icon: Wallet,
+        status: "live",
+        note: "Outstanding balances across accepted treatment plans, ranked by what is owed, live from Dentally.",
+      },
     ],
   },
   {
