@@ -202,10 +202,10 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
   const age = ageFrom(patient.dateOfBirth, now);
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button type="button" aria-label="Close panel" onClick={onClose} className="absolute inset-0 bg-navy/40 backdrop-blur-[1px]" />
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[460px] flex-col overflow-y-auto border-l border-line bg-card shadow-2xl">
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
+      <div className="relative z-10 flex max-h-[85vh] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-2xl">
+        <header className="flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
             <h2 className="truncate text-lg font-extrabold text-navy">{patient.name}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -223,7 +223,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
           </button>
         </header>
 
-        <div className="flex-1 space-y-6 px-6 py-5">
+        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
           <div className="grid grid-cols-2 gap-2">
             <Stat icon={Clock} label="Last seen" value={lastSeen ? relativeTime(lastSeen, now) : "No record"} />
             <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
@@ -330,7 +330,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
             </>
           )}
         </div>
-      </aside>
+      </div>
     </div>
   );
 }
