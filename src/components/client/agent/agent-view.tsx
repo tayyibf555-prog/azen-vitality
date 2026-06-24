@@ -10,15 +10,15 @@ import {
 import { getClient, getSites, NOW } from "@/lib/mock/clients";
 import { AgentControls } from "./agent-controls";
 
-async function load(siteIds: string[]): Promise<{
+async function load(siteIds: string[], channel?: "sms" | "whatsapp"): Promise<{
   analytics: AgentAnalytics;
   conversations: DashboardConversation[];
   allEnabled: boolean;
 }> {
   try {
     const [analytics, conversations, settings] = await Promise.all([
-      getAgentAnalytics(siteIds),
-      listDashboardConversations(siteIds),
+      getAgentAnalytics(siteIds, channel),
+      listDashboardConversations(siteIds, channel),
       getAgentSettings(siteIds),
     ]);
     return { analytics, conversations, allEnabled: siteIds.every((id) => settings[id]) };
@@ -31,21 +31,26 @@ async function load(siteIds: string[]): Promise<{
   }
 }
 
-export async function AgentView({ clientSlug }: { clientSlug: string }) {
+export async function AgentView({ clientSlug, channel }: { clientSlug: string; channel?: "sms" | "whatsapp" }) {
   const client = getClient(clientSlug);
+  const isWhatsapp = channel === "whatsapp";
 
   if (!client) {
-    return <PageHeader title="Booking agent" description="This client could not be found." />;
+    return <PageHeader title={isWhatsapp ? "WhatsApp agent" : "Booking agent"} description="This client could not be found." />;
   }
 
   const siteIds = getSites(client.id).map((s) => s.id);
-  const { analytics, conversations, allEnabled } = await load(siteIds);
+  const { analytics, conversations, allEnabled } = await load(siteIds, channel);
 
   return (
     <>
       <PageHeader
-        title="AI Booking Agent"
-        description="A two way SMS agent that recognises any patient by their number, answers their replies and enquiries, books them in, and hands clinical questions, complaints and anything it is unsure about to your team. Live across every site."
+        title={isWhatsapp ? "WhatsApp Agent" : "AI Booking Agent"}
+        description={
+          isWhatsapp
+            ? "A two way WhatsApp agent that recognises any patient by their number, answers their messages, and books, reschedules or cancels appointments. It also guides patients on treatments and onboards new ones, and hands clinical questions, complaints and anything it is unsure about to your team. Live across every site."
+            : "A two way SMS agent that recognises any patient by their number, answers their replies, and books, reschedules or cancels appointments. It also guides patients on treatments and onboards new ones, and hands clinical questions, complaints and anything it is unsure about to your team. Live across every site."
+        }
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

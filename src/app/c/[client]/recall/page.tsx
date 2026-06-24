@@ -1,7 +1,12 @@
-"use client";
+import { RecallView } from "@/components/client/recall/recall-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="recall" />;
+export default async function RecallPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  return <RecallView clientSlug={clientSlug} />;
 }

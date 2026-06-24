@@ -3,6 +3,7 @@ import {
   patientsForSite,
   MOCK_PATIENTS,
   appointmentsForPatient,
+  addPatient,
   dobForPatient,
   type MockPatient,
 } from "@/app/api/mock-dentally/_fixtures";
@@ -52,4 +53,47 @@ export async function GET(request: Request): Promise<Response> {
   let all = siteId ? patientsForSite(siteId) : MOCK_PATIENTS;
   if (phone) all = all.filter((p) => phoneMatches(p.mobile_phone, phone));
   return Response.json({ patients: all.map(serialise) });
+}
+
+function randomPatientId(): string {
+  return `pat-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// POST /api/mock-dentally/v1/patients — register (onboard) a new patient.
+// Reads the real Dentally shape { "patient": {...} }, stores it, and returns it.
+export async function POST(request: Request): Promise<Response> {
+  const unauthorized = unauthorizedIfMissingBearer(request);
+  if (unauthorized) return unauthorized;
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return Response.json(
+      { error: { type: "invalid_request_error", message: "Request body must be valid JSON." } },
+      { status: 400 },
+    );
+  }
+
+  const p =
+    payload.patient && typeof payload.patient === "object"
+      ? (payload.patient as Record<string, unknown>)
+      : {};
+  const str = (k: string): string | undefined => (typeof p[k] === "string" ? (p[k] as string) : undefined);
+  const bool = (k: string, dflt: boolean): boolean => (typeof p[k] === "boolean" ? (p[k] as boolean) : dflt);
+
+  const created: MockPatient = {
+    id: randomPatientId(),
+    first_name: str("first_name") ?? "New",
+    last_name: str("last_name") ?? "Patient",
+    email_address: str("email_address") ?? str("email") ?? "",
+    mobile_phone: str("mobile_phone") ?? str("phone") ?? "",
+    use_sms: bool("use_sms", true),
+    use_email: bool("use_email", true),
+    marketing: typeof p.marketing === "number" ? (p.marketing as number) : 1,
+    active: true,
+    site_id: str("site_id") ?? "site-cc",
+  };
+  addPatient(created);
+  return Response.json({ patient: serialise(created) }, { status: 201 });
 }

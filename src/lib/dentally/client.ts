@@ -47,6 +47,21 @@ export class DentallyClient {
   }
   getPatient(id: string) { return this.get<{ patient: unknown }>(`/v1/patients/${id}`); }
 
+  /** Register a new patient (onboarding). */
+  async createPatient(payload: Record<string, unknown>) {
+    const url = this.buildUrl("/v1/patients");
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
+        "Content-Type": "application/json", Accept: "application/json",
+      },
+      body: JSON.stringify({ patient: payload }),
+    });
+    if (!res.ok) throw new DentallyError(res.status, await res.text());
+    return (await res.json()) as { patient: { id: string } };
+  }
+
   /**
    * Find patients by mobile phone number. Used to recognise an inbound SMS from
    * any number, not just reactivation targets. The exact filter param is to be
@@ -97,5 +112,31 @@ export class DentallyClient {
     });
     if (!res.ok) throw new DentallyError(res.status, await res.text());
     return (await res.json()) as { appointment: { id: string } };
+  }
+
+  /** Edit an existing appointment, e.g. move it to a new start_time (reschedule). */
+  async updateAppointment(id: string, payload: Record<string, unknown>) {
+    const url = this.buildUrl(`/v1/appointments/${id}`);
+    const res = await this.fetchImpl(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
+        "Content-Type": "application/json", Accept: "application/json",
+      },
+      body: JSON.stringify({ appointment: payload }),
+    });
+    if (!res.ok) throw new DentallyError(res.status, await res.text());
+    return (await res.json()) as { appointment: { id: string; start_time?: string; state?: string } };
+  }
+
+  /** Cancel an existing appointment (sets its state to cancelled). */
+  async cancelAppointment(id: string) {
+    const url = this.buildUrl(`/v1/appointments/${id}`);
+    const res = await this.fetchImpl(url, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent, Accept: "application/json" },
+    });
+    if (!res.ok) throw new DentallyError(res.status, await res.text());
+    return (await res.json()) as { appointment: { id: string; state?: string } };
   }
 }

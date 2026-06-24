@@ -2,6 +2,7 @@ import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
 import {
   appointmentsForPatient,
   appointmentsForSite,
+  addAppointment,
   findPatient,
   type MockAppointment,
 } from "@/app/api/mock-dentally/_fixtures";
@@ -86,11 +87,26 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const appointment = asRecord(payload["appointment"]);
+  const id = randomId();
+  const str = (k: string): string | undefined =>
+    typeof appointment[k] === "string" ? (appointment[k] as string) : undefined;
+
+  // Persist it so it can be found, rescheduled or cancelled later in this session.
+  addAppointment({
+    id,
+    patient_id: str("patient_id") ?? "unknown",
+    site_id: str("site_id") ?? "site-cc",
+    start_time: str("start_time") ?? str("start") ?? new Date().toISOString(),
+    state: "pending",
+    patient_name: str("patient_name"),
+    reason: str("treatment") ?? str("reason"),
+    duration: 30,
+  });
 
   return Response.json(
     {
       appointment: {
-        id: randomId(),
+        id,
         ...appointment,
         booked_via_api: true,
         state: "pending",

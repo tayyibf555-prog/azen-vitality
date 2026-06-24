@@ -7,9 +7,12 @@ import {
 } from "@/lib/reactivation/normalise";
 import { rankTargets } from "@/lib/reactivation/scoring";
 import { upsertTargets, getSyncState, setSyncState } from "@/lib/reactivation/repository";
+import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES } from "@/lib/mock/clients";
+import { cronUnauthorized } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const RESOURCE = "reactivation";
 const PER_PAGE = 100;
@@ -164,6 +167,10 @@ async function syncSite(
   const updatedAfter = state?.highWaterMark ?? undefined;
   const now = new Date();
 
+  // Patients with an open recall target (due or in cadence), so an overdue recall
+  // is not chased by both modules at once (recall owns it until it hands off).
+  const openRecall = await listOpenRecallPatientKeys([siteId]);
+
   // 1. Index the site's open treatment plans by patient (carries outstanding + accepted_at).
   const openByPatient = new Map<string, OpenPlan>();
   for (let pp = 1; ; pp++) {
@@ -205,7 +212,9 @@ async function syncSite(
       };
 
       const target = toReactivationTarget(input, now, cfg);
-      if (target) targets.push(target);
+      if (target && !(target.reason === "overdue_recall" && openRecall.has(target.id))) {
+        targets.push(target);
+      }
 
       const updated = patientUpdatedAt(p);
       if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
@@ -221,7 +230,10 @@ async function syncSite(
   return { siteId, pulled, upserted: ranked.length };
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const unauth = cronUnauthorized(request);
+  if (unauth) return unauth;
+
   const apiKey = process.env.DENTALLY_API_KEY;
   if (!apiKey) {
     return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
@@ -237,3 +249,6 @@ export async function POST() {
   }
   return Response.json({ ok: true, perSite });
 }
+
+// Vercel Cron triggers with GET; reuse the same handler.
+export const GET = POST;

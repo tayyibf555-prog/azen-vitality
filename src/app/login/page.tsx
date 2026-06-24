@@ -1,54 +1,34 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, Stethoscope, Headset, ArrowRight } from "lucide-react";
-import type { Role } from "@/lib/types";
-import { MOCK_USERS, useAuth } from "@/lib/auth/mock-auth";
-import { cn } from "@/lib/utils";
-
-/** Where each role lands after sign-in. */
-function destinationFor(role: Role): string {
-  if (role === "agency_admin") return "/agency";
-  const clientId = MOCK_USERS[role].clientId ?? "vitality";
-  if (role === "client_owner") return `/owner/${clientId}`;
-  return `/c/${clientId}`;
-}
-
-const ROLE_CARDS: {
-  role: Role;
-  icon: typeof Building2;
-  blurb: string;
-}[] = [
-  {
-    role: "agency_admin",
-    icon: Building2,
-    blurb: "Azen's cross-client cockpit. Oversee every deployment, leads, bookings and recovered revenue across all sites.",
-  },
-  {
-    role: "client_owner",
-    icon: Stethoscope,
-    blurb: "The practice owner view. Full funnel across all sites, every module, real-time performance.",
-  },
-  {
-    role: "client_coordinator",
-    icon: Headset,
-    blurb: "The front-desk view. The day's prioritised tasks, recalls, follow-ups and bookings.",
-  },
-];
-
-const ROLE_LABEL: Record<Role, string> = {
-  agency_admin: "Agency admin",
-  client_owner: "Practice owner",
-  client_coordinator: "Coordinator",
-};
+import { Loader2 } from "lucide-react";
+import { supabaseBrowser } from "@/lib/supabase/auth-browser";
+import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  function enter(role: Role) {
-    login(role);
-    router.push(destinationFor(role));
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    const { error: signInError } = await supabaseBrowser().auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+    if (signInError) {
+      setError("That email and password did not match. Please try again.");
+      setBusy(false);
+      return;
+    }
+    // Land on the root, which redirects to the right place for this user's role.
+    router.push("/");
+    router.refresh();
   }
 
   return (
@@ -76,43 +56,50 @@ export default function LoginPage() {
 
       {/* Sign-in panel */}
       <section className="flex items-center justify-center bg-cream px-6 py-12">
-        <div className="w-full max-w-md space-y-7">
+        <form onSubmit={submit} className="w-full max-w-sm space-y-6">
           <div className="space-y-1">
             <span className="lg:hidden mb-3 inline-flex items-center gap-2 font-extrabold text-navy">
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-dark text-white">A</span>
               Azen
             </span>
-            <h2 className="text-2xl text-navy">Choose a view to enter</h2>
-            <p className="text-sm text-muted">
-              Mock sign-in for the foundation build. Real authentication lands in a later session.
-            </p>
+            <h2 className="text-2xl text-navy">Sign in</h2>
+            <p className="text-sm text-muted">Use the email and password for your practice account.</p>
           </div>
 
           <div className="space-y-3">
-            {ROLE_CARDS.map(({ role, icon: Icon, blurb }) => (
-              <button
-                key={role}
-                onClick={() => enter(role)}
-                className={cn(
-                  "group flex w-full items-center gap-4 rounded-xl border border-line bg-card p-4 text-left transition-all",
-                  "hover:border-blue-dark/40 hover:shadow-[0_4px_16px_rgba(10,14,26,0.08)]",
-                )}
-              >
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
-                  <Icon size={20} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2">
-                    <span className="font-bold text-navy">{ROLE_LABEL[role]}</span>
-                    <span className="text-xs text-muted">{MOCK_USERS[role].name}</span>
-                  </span>
-                  <span className="mt-0.5 block text-sm text-muted">{blurb}</span>
-                </span>
-                <ArrowRight size={18} className="shrink-0 text-muted transition-colors group-hover:text-blue-dark" />
-              </button>
-            ))}
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Email</span>
+              <input
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+              />
+            </label>
           </div>
-        </div>
+
+          {error ? (
+            <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+          ) : null}
+
+          <Button type="submit" variant="primary" className="w-full" disabled={busy}>
+            {busy ? <Loader2 size={16} className="animate-spin" /> : null}
+            Sign in
+          </Button>
+        </form>
       </section>
     </main>
   );

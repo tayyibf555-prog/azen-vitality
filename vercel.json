@@ -1,6 +1,10 @@
 {
   "crons": [
+    { "path": "/api/sync/dentally", "schedule": "0 * * * *" },
+    { "path": "/api/sync/reactivation", "schedule": "5 * * * *" },
+    { "path": "/api/sync/recall", "schedule": "10 * * * *" },
     { "path": "/api/reactivation/sweep", "schedule": "*/10 * * * *" },
+    { "path": "/api/recall/sweep", "schedule": "*/10 * * * *" },
     { "path": "/api/messaging/drain", "schedule": "*/5 * * * *" }
   ]
 }

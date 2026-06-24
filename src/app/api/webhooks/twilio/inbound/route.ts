@@ -8,6 +8,12 @@ import {
   updateCadence,
   getTargetContext,
 } from "@/lib/reactivation/repository";
+import {
+  findTargetByAddress as findRecallTargetByAddress,
+  getCadenceByTarget as getRecallCadenceByTarget,
+  updateCadence as updateRecallCadence,
+  insertInboundTouch as insertRecallInboundTouch,
+} from "@/lib/recall/repository";
 import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
@@ -49,7 +55,12 @@ export async function POST(request: Request): Promise<Response> {
   for (const [k, v] of form.entries()) params[k] = String(v);
 
   const token = process.env.TWILIO_AUTH_TOKEN;
-  if (token) {
+  if (!token) {
+    // Fail closed in production: never accept unsigned webhooks on a public deploy.
+    if (process.env.NODE_ENV === "production") {
+      return Response.json({ error: "TWILIO_AUTH_TOKEN not configured" }, { status: 403 });
+    }
+  } else {
     const sig = request.headers.get("x-twilio-signature") ?? "";
     if (!verifyTwilioSignature(publicUrl("/api/webhooks/twilio/inbound"), params, sig, token)) {
       return Response.json({ error: "bad signature" }, { status: 403 });
@@ -71,6 +82,8 @@ export async function POST(request: Request): Promise<Response> {
   // Who is texting us? Reactivation linkage drives cadence side-effects; the
   // identity drives who the agent thinks it is talking to. Either may be absent.
   const target = await findTargetByAddress(from);
+  // A reply may instead correlate to a recall outbound (recall has its own outbox).
+  const recallTarget = target ? null : await findRecallTargetByAddress(from);
   let identity: PhoneIdentity | null = await identifyByPhone(from, { dentally });
 
   // When the directory and Dentally both miss but this number is in a cadence,
@@ -91,9 +104,11 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  const siteId = identity?.siteId || target?.siteId || DEFAULT_SITE_ID;
+  const siteId = identity?.siteId || target?.siteId || recallTarget?.siteId || DEFAULT_SITE_ID;
 
-  // Reactivation cadence side-effects (only when this number is in a cadence).
+  // Cadence side-effects when this number is in a cadence. A reply pauses the
+  // active sequence so we stop chasing once the patient engages. The reply may
+  // correlate to either a reactivation or a recall cadence.
   if (target) {
     const cadence = await getCadenceByTarget(target.targetId);
     await insertInboundTouch({
@@ -106,12 +121,26 @@ export async function POST(request: Request): Promise<Response> {
     if (cadence && cadence.status === "active") {
       await updateCadence(cadence.id, { status: "paused" });
     }
+  } else if (recallTarget) {
+    const cadence = await getRecallCadenceByTarget(recallTarget.targetId);
+    await insertRecallInboundTouch({
+      targetId: recallTarget.targetId,
+      cadenceId: cadence?.id ?? null,
+      siteId: recallTarget.siteId,
+      channel,
+      body,
+    });
+    if (cadence && cadence.status === "active") {
+      await updateRecallCadence(cadence.id, { status: "paused" });
+    }
   }
 
   // STOP keyword: suppress the right ref and do not reply.
   if (isStopKeyword(body)) {
     if (target) {
       await addSuppression(target.siteId, channel, `patient:${target.targetId.split(":")[1]}`, "stop");
+    } else if (recallTarget) {
+      await addSuppression(recallTarget.siteId, channel, `patient:${recallTarget.targetId.split(":")[1]}`, "stop");
     } else if (identity) {
       await addSuppression(siteId, channel, `patient:${identity.patientId}`, "stop");
     }
@@ -152,6 +181,7 @@ export async function POST(request: Request): Promise<Response> {
   const context: AgentContext = {
     patientId,
     siteId,
+    phone: from,
     patientName: identity ? identity.patientName : "there",
     treatment: conversation.treatment,
     fundingType: conversation.fundingType,
@@ -186,6 +216,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const outbound = replyText || "Thanks, a member of our team will be in touch shortly.";
   await appendMessage({ conversationId: conversation.id, role: "agent", body: outbound });
-  await sendMessage({ channel, to: from, body: outbound });
+  try {
+    await sendMessage({ channel, to: from, body: outbound });
+  } catch {
+    // Delivery failed (a transient provider error, or the recipient is not reachable
+    // on this channel yet). The reply is already logged. Swallow so we still return
+    // 200 and Twilio does not retry the webhook and double-run the agent. Leave the
+    // conversation active so the agent keeps responding; delivery state is tracked
+    // separately by the Twilio status webhook.
+  }
   return twiml();
 }

@@ -16,6 +16,7 @@ describe("buildDraftPrompt", () => {
     expect(system).not.toContain("—"); // no em-dash in our own instructions
     expect(system.toLowerCase()).toContain("no em-dash");
     expect(system).toContain("£");
+    expect(system.toLowerCase()).toContain("nhs or private"); // no funding jargon to patients
   });
 
   it("includes patient, treatment, outstanding value and channel in the user message", () => {

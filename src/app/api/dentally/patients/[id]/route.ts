@@ -1,4 +1,5 @@
 import { getPatientDetail } from "@/lib/dentally/read";
+import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,12 @@ export async function GET(
 ): Promise<Response> {
   const { id } = await ctx.params;
   const siteId = new URL(request.url).searchParams.get("siteId") ?? "";
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
+  if (siteId) {
+    const denied = requireSiteAccess(auth, siteId);
+    if (denied) return denied;
+  }
   try {
     const detail = await getPatientDetail(id, siteId);
     return Response.json({ ok: true, ...detail });

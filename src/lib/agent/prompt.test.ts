@@ -14,6 +14,10 @@ describe("buildSystemPrompt", () => {
     expect(s.toLowerCase()).toContain("confirm");
     expect(s).not.toContain("—");
     expect(s).toContain("£");
+    expect(s.toLowerCase()).toContain("nhs or private"); // no funding jargon to patients
+    expect(s.toLowerCase()).toContain("reschedule");
+    expect(s.toLowerCase()).toContain("cancel");
+    expect(s.toLowerCase()).toContain("treatment_info"); // can guide on treatments
   });
 
   it("locks scope on-topic and lists the human-escalation triggers", () => {
@@ -53,6 +57,7 @@ describe("buildSystemPrompt", () => {
     });
     expect(s).toContain("does NOT match anyone on our records");
     expect(s.toLowerCase()).toContain("brand new enquiry");
+    expect(s.toLowerCase()).toContain("register_patient"); // can onboard a new patient
     expect(s.toLowerCase()).toContain("escalate_to_human");
     expect(s).not.toContain("—");
   });

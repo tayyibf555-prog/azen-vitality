@@ -28,6 +28,8 @@ export interface AgentMessageRow {
 export interface AgentContext {
   patientId: string;
   siteId: string;
+  /** The inbound mobile number, used to onboard a new patient. */
+  phone?: string | null;
   patientName: string;
   treatment: string | null;
   fundingType: "nhs" | "private" | null;

@@ -14,6 +14,7 @@ import {
   setTargetStatus,
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
+import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -226,6 +227,13 @@ export async function POST(
     body = asRecord(await request.json());
   } catch {
     return badRequest("Request body must be valid JSON");
+  }
+
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
+  if (auth && typeof body.targetId === "string") {
+    const denied = requireSiteAccess(auth, body.targetId.split(":")[0]);
+    if (denied) return denied;
   }
 
   switch (action) {

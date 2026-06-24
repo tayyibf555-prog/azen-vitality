@@ -200,6 +200,59 @@ export const MOCK_PATIENTS: MockPatient[] = [
     site_id: "site-ng", archived: false, archived_reason: null,
     dentist_recall_date: null, hygienist_recall_date: null,
   },
+  // --- RECALL CONCIERGE cohort (recall due/overdue within the 0-60 day window,
+  // relative to NOW = 2026-06-18). pat-011 (164d overdue) deliberately stays in
+  // reactivation's territory, demonstrating the 60-day seam from the other side.
+  {
+    // DUE SOON: dentist recall ~10 days out (inside the lead window).
+    id: "pat-013", first_name: "Isabelle", last_name: "Moreau",
+    email_address: "isabelle.moreau@example.co.uk", mobile_phone: "+447700900013",
+    use_sms: true, use_email: true, marketing: 1, active: true,
+    site_id: "site-cc", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-06-28T00:00:00Z", hygienist_recall_date: null,
+  },
+  {
+    // HYGIENE recall ~24 days overdue; SMS consent only (no email).
+    id: "pat-014", first_name: "Owen", last_name: "Davies",
+    email_address: "owen.davies@example.co.uk", mobile_phone: "+447700900014",
+    use_sms: true, use_email: false, marketing: 1, active: true,
+    site_id: "site-rv", archived: false, archived_reason: null,
+    dentist_recall_date: null, hygienist_recall_date: "2026-05-25T00:00:00Z",
+  },
+  {
+    // BOTH recalls in window: dentist due soon, hygiene ~39 days overdue.
+    // Produces two independent worklist rows / cadences.
+    id: "pat-015", first_name: "Fatima", last_name: "Hassan",
+    email_address: "fatima.hassan@example.co.uk", mobile_phone: "+447700900015",
+    use_sms: true, use_email: true, marketing: 1, active: true,
+    site_id: "site-ng", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-07-01T00:00:00Z", hygienist_recall_date: "2026-05-10T00:00:00Z",
+  },
+  {
+    // NEAR THE SEAM: dentist recall ~57 days overdue (still inside the 60d grace,
+    // so recall owns it; one day later it would graduate to reactivation).
+    id: "pat-016", first_name: "George", last_name: "Whitmore",
+    email_address: "george.whitmore@example.co.uk", mobile_phone: "+447700900016",
+    use_sms: true, use_email: true, marketing: 1, active: true,
+    site_id: "site-cc", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-04-22T00:00:00Z", hygienist_recall_date: null,
+  },
+  {
+    // IN WINDOW but NO consent on any channel — demonstrates the recall consent gate.
+    id: "pat-017", first_name: "Lucia", last_name: "Romano",
+    email_address: "lucia.romano@example.co.uk", mobile_phone: "+447700900017",
+    use_sms: false, use_email: false, marketing: 0, active: true,
+    site_id: "site-rv", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-06-26T00:00:00Z", hygienist_recall_date: null,
+  },
+  {
+    // LIVE TEST PATIENT (Tayyib Arbab). Real mobile, dentist recall due soon, SMS consent.
+    id: "pat-018", first_name: "Tayyib", last_name: "Arbab",
+    email_address: "tayyibf555@gmail.com", mobile_phone: "+447403097379",
+    use_sms: true, use_email: true, marketing: 1, active: true,
+    site_id: "site-cc", archived: false, archived_reason: null,
+    dentist_recall_date: "2026-06-26T00:00:00Z", hygienist_recall_date: null,
+  },
 ];
 
 // --- Treatment plans ------------------------------------------------------
@@ -357,6 +410,13 @@ export const MOCK_APPOINTMENTS: MockAppointment[] = [
   { id: "appt-010a", patient_id: "pat-010", site_id: "site-cc", start_time: "2024-05-10T09:00:00Z", state: "completed" },
   { id: "appt-011a", patient_id: "pat-011", site_id: "site-rv", start_time: "2025-07-02T11:30:00Z", state: "completed" },
   { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "completed" },
+  // Recall concierge cohort — a past visit each, no future booking, recall now due/overdue.
+  { id: "appt-013a", patient_id: "pat-013", site_id: "site-cc", start_time: "2026-01-10T10:00:00Z", state: "completed" },
+  { id: "appt-014a", patient_id: "pat-014", site_id: "site-rv", start_time: "2025-11-20T10:00:00Z", state: "completed" },
+  { id: "appt-015a", patient_id: "pat-015", site_id: "site-ng", start_time: "2025-12-15T10:00:00Z", state: "completed" },
+  { id: "appt-016a", patient_id: "pat-016", site_id: "site-cc", start_time: "2025-10-15T10:00:00Z", state: "completed" },
+  { id: "appt-017a", patient_id: "pat-017", site_id: "site-rv", start_time: "2026-01-05T10:00:00Z", state: "completed" },
+  { id: "appt-018a", patient_id: "pat-018", site_id: "site-cc", start_time: "2025-12-20T10:00:00Z", state: "completed" },
   // An active patient WITH a future booking (must NOT appear in the dormant book).
   { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked" },
 
@@ -427,6 +487,8 @@ export const PATIENT_DOB: Record<string, string> = {
   "pat-004": "1990-06-21", "pat-005": "1986-01-30", "pat-006": "1971-09-05",
   "pat-007": "1995-12-11", "pat-008": "1983-04-27", "pat-009": "1989-02-14",
   "pat-010": "1949-07-08", "pat-011": "1985-07-15", "pat-012": "1968-10-22",
+  "pat-013": "1990-04-04", "pat-014": "1982-09-09", "pat-015": "1975-02-02",
+  "pat-016": "1968-11-11", "pat-017": "1995-06-06", "pat-018": "1996-03-15",
 };
 
 // --- Lookups --------------------------------------------------------------
@@ -445,11 +507,29 @@ export function treatmentPlansForSite(siteId: string): MockTreatmentPlan[] {
 export function patientsForSite(siteId: string): MockPatient[] {
   return MOCK_PATIENTS.filter((p) => p.site_id === siteId);
 }
+/** Persist a newly onboarded patient so they can then be found and booked. */
+export function addPatient(p: MockPatient): void {
+  MOCK_PATIENTS.push(p);
+}
 export function appointmentsForPatient(patientId: string): MockAppointment[] {
   return MOCK_APPOINTMENTS.filter((a) => a.patient_id === patientId);
 }
 export function appointmentsForSite(siteId: string): MockAppointment[] {
   return MOCK_APPOINTMENTS.filter((a) => a.site_id === siteId);
+}
+export function findAppointmentById(id: string): MockAppointment | undefined {
+  return MOCK_APPOINTMENTS.find((a) => a.id === id);
+}
+/** Persist an API-created appointment so it can later be found, rescheduled or cancelled. */
+export function addAppointment(a: MockAppointment): void {
+  MOCK_APPOINTMENTS.push(a);
+}
+/** Mutate an existing appointment in place (reschedule = new start_time; cancel = state). */
+export function updateAppointmentFields(id: string, patch: Partial<MockAppointment>): MockAppointment | undefined {
+  const a = MOCK_APPOINTMENTS.find((x) => x.id === id);
+  if (!a) return undefined;
+  Object.assign(a, patch);
+  return a;
 }
 export function invoicesForPatient(patientId: string): MockInvoice[] {
   return MOCK_INVOICES.filter((i) => i.patient_id === patientId);

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
+import { RecallView } from "@/components/client/recall/recall-view";
 import { AgentView } from "@/components/client/agent/agent-view";
 import { CopilotView } from "@/components/client/copilot/copilot-view";
 import { PatientsView } from "@/components/client/patients/patients-view";
@@ -33,8 +34,16 @@ export default async function OwnerModulePage({
     return <ReactivationView clientSlug={client} />;
   }
 
+  if (module === "recall") {
+    return <RecallView clientSlug={client} />;
+  }
+
   if (module === "booking-agent") {
-    return <AgentView clientSlug={client} />;
+    return <AgentView clientSlug={client} channel="sms" />;
+  }
+
+  if (module === "whatsapp") {
+    return <AgentView clientSlug={client} channel="whatsapp" />;
   }
 
   if (module === "co-pilot") {

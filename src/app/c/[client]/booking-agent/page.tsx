@@ -8,5 +8,5 @@ export default async function BookingAgentPage({
   params: Promise<{ client: string }>;
 }) {
   const { client: clientSlug } = await params;
-  return <AgentView clientSlug={clientSlug} />;
+  return <AgentView clientSlug={clientSlug} channel="sms" />;
 }

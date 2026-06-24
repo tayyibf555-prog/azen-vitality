@@ -1,14 +1,20 @@
 "use client";
 
 /**
- * Mock auth for the foundation build.
+ * Auth provider, now backed by real Supabase Auth (cookie sessions).
  *
- * This stands in for Supabase auth + RLS. It is deliberately shaped so the real
- * thing is a drop-in later: components consume `useAuth()` and never care whether
- * the session came from a mock or from Supabase. Roles map 1:1 to future RLS policy.
+ * The verified user is resolved on the server (root layout -> getSessionUser)
+ * and handed in as `initialUser`, then exposed through useAuth() — the same hook
+ * the chrome already consumes, so no consumer changed. Sign-in happens on the
+ * /login page; sign-out clears the Supabase session.
+ *
+ * MOCK_USERS is retained only for the dev-only RoleSwitcher (not mounted under
+ * real auth) and the legacy login/switchRole methods are no-ops here.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { supabaseBrowser } from "@/lib/supabase/auth-browser";
 import type { Role, SessionUser } from "@/lib/types";
 
 /** One representative user per role. clientId is the Vitality client slug-id. */
@@ -38,44 +44,39 @@ export const MOCK_USERS: Record<Role, SessionUser> = {
 
 interface AuthContextValue {
   user: SessionUser | null;
-  login: (role: Role) => void;
+  login: (role: Role) => void; // legacy shape; real sign-in is the /login page
   logout: () => void;
-  /** Quick role switch for previewing every view without re-login. */
-  switchRole: (role: Role) => void;
+  switchRole: (role: Role) => void; // legacy dev affordance (no-op under real auth)
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-const STORAGE_KEY = "azen.mockauth.role";
 
-export function MockAuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<SessionUser | null>(null);
+export function AuthProvider({
+  children,
+  initialUser,
+}: {
+  children: React.ReactNode;
+  initialUser: SessionUser | null;
+}) {
+  const router = useRouter();
 
-  // Rehydrate the chosen role on load (keeps the session across navigation).
-  useEffect(() => {
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
-    if (stored && stored in MOCK_USERS) {
-      setUser(MOCK_USERS[stored as Role]);
-    }
-  }, []);
-
-  const apply = useCallback((role: Role | null) => {
-    if (role) {
-      setUser(MOCK_USERS[role]);
-      window.localStorage.setItem(STORAGE_KEY, role);
-    } else {
-      setUser(null);
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
-  }, []);
+  const logout = useCallback(() => {
+    void supabaseBrowser()
+      .auth.signOut()
+      .finally(() => {
+        router.push("/login");
+        router.refresh();
+      });
+  }, [router]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      user,
-      login: (role) => apply(role),
-      logout: () => apply(null),
-      switchRole: (role) => apply(role),
+      user: initialUser,
+      login: () => router.push("/login"),
+      logout,
+      switchRole: () => {},
     }),
-    [user, apply],
+    [initialUser, logout, router],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -83,6 +84,6 @@ export function MockAuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within MockAuthProvider");
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }

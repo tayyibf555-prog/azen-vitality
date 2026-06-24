@@ -12,6 +12,7 @@ export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel)
     "- Give one clear next step (book a call or an appointment).",
     "- Under 90 words. Friendly, not pushy.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
+    "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
     "- Plain text only, suitable for the requested channel.",
   ].join("\n");
 

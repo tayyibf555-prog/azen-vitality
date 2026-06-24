@@ -193,12 +193,11 @@ export interface AgentAnalytics {
   needsHuman: number;
 }
 
-export async function getAgentAnalytics(siteIds: string[]): Promise<AgentAnalytics> {
+export async function getAgentAnalytics(siteIds: string[], channel?: string): Promise<AgentAnalytics> {
   const db = serviceClient();
-  const { data, error } = await db
-    .from("agent_conversation")
-    .select("status")
-    .in("site_id", siteIds);
+  let q = db.from("agent_conversation").select("status").in("site_id", siteIds);
+  if (channel) q = q.eq("channel", channel);
+  const { data, error } = await q;
   if (error) throw error;
   const rows = (data as { status: string }[]) ?? [];
   return {
@@ -222,14 +221,15 @@ export interface DashboardConversation {
 }
 
 /** Conversations for the dashboard, newest first, each with its latest message + count. */
-export async function listDashboardConversations(siteIds: string[], limit = 50): Promise<DashboardConversation[]> {
+export async function listDashboardConversations(
+  siteIds: string[],
+  channel?: string,
+  limit = 50,
+): Promise<DashboardConversation[]> {
   const db = serviceClient();
-  const { data: convs, error } = await db
-    .from("agent_conversation")
-    .select("*")
-    .in("site_id", siteIds)
-    .order("updated_at", { ascending: false })
-    .limit(limit);
+  let q = db.from("agent_conversation").select("*").in("site_id", siteIds);
+  if (channel) q = q.eq("channel", channel);
+  const { data: convs, error } = await q.order("updated_at", { ascending: false }).limit(limit);
   if (error) throw error;
   const conversations = (convs as ConvRow[]) ?? [];
   if (conversations.length === 0) return [];

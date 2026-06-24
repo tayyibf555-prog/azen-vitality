@@ -30,6 +30,7 @@ export function buildDraftPrompt(t: ReactivationTarget, channel: TouchChannel, s
     "- Under 90 words. Friendly, not pushy.",
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
+    "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
     "- Plain text only, suitable for the requested channel.",
   ].join("\n");
 

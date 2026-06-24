@@ -13,6 +13,7 @@ import type {
   TouchChannel,
   TreatmentOpportunity,
 } from "@/lib/coordinator/types";
+import { requireUser } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -240,6 +241,9 @@ export async function POST(
   } catch {
     return badRequest("Request body must be valid JSON");
   }
+
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
 
   switch (action) {
     case "draft":

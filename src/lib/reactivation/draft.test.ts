@@ -19,6 +19,7 @@ describe("buildDraftPrompt", () => {
     expect(system).not.toContain("—"); // em-dash
     expect(system.toLowerCase()).toContain("no em-dash");
     expect(system).toContain("£"); // £
+    expect(system.toLowerCase()).toContain("nhs or private"); // no funding jargon to patients
   });
 
   it("includes patient, channel, step purpose and the stalled-plan value", () => {

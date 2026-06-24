@@ -135,7 +135,7 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "recall",
         label: "Recall concierge",
         icon: CalendarClock,
-        status: "placeholder",
+        status: "live",
         note: "Reads the exact dentist and hygienist recall dates clinicians set in Dentally and books patients back in via SMS/email. Respect consent flags before any outbound.",
       },
       {
@@ -182,7 +182,7 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "whatsapp",
         label: "WhatsApp agent",
         icon: MessageCircle,
-        status: "placeholder",
+        status: "live",
         note: "Booking, rescheduling, cancelling, reminders, recalls and follow-ups over the WhatsApp Business API, with human escalation and takeover. Connected live to Dentally.",
       },
     ],

@@ -1,4 +1,5 @@
 import { listMessages } from "@/lib/agent/repository";
+import { requireUser } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,8 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const { id } = await ctx.params;
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
   try {
     const messages = await listMessages(id);
     return Response.json({ ok: true, messages });

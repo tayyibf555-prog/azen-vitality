@@ -1,5 +1,6 @@
 import { getClient, getSites } from "@/lib/mock";
 import { listPatients } from "@/lib/dentally/read";
+import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,10 @@ export async function GET(request: Request): Promise<Response> {
   const slug = new URL(request.url).searchParams.get("client") ?? "";
   const client = getClient(slug);
   if (!client) return Response.json({ ok: false, patients: [] }, { status: 404 });
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
+  const denied = requireClientAccess(auth, client.id);
+  if (denied) return denied;
   const siteIds = getSites(client.id).map((s) => s.id);
   try {
     const patients = await listPatients(siteIds);

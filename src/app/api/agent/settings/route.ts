@@ -1,4 +1,5 @@
 import { setAgentEnabled } from "@/lib/agent/repository";
+import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,10 @@ export async function POST(request: Request): Promise<Response> {
   if (typeof enabled !== "boolean") {
     return Response.json({ error: "enabled (boolean) is required" }, { status: 400 });
   }
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
+  const denied = requireSiteAccess(auth, siteId);
+  if (denied) return denied;
   await setAgentEnabled(siteId, enabled);
   return Response.json({ ok: true, siteId, enabled });
 }

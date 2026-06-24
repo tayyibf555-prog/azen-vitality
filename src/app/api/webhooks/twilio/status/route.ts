@@ -1,5 +1,6 @@
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
-import { updateOutboxStatusByMessageId } from "@/lib/reactivation/repository";
+import { updateOutboxStatusByMessageId as updateReactivationStatus } from "@/lib/reactivation/repository";
+import { updateOutboxStatusByMessageId as updateRecallStatus } from "@/lib/recall/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,12 @@ export async function POST(request: Request): Promise<Response> {
   for (const [k, v] of form.entries()) params[k] = String(v);
 
   const token = process.env.TWILIO_AUTH_TOKEN;
-  if (token) {
+  if (!token) {
+    // Fail closed in production: never accept unsigned status callbacks on a public deploy.
+    if (process.env.NODE_ENV === "production") {
+      return Response.json({ error: "TWILIO_AUTH_TOKEN not configured" }, { status: 403 });
+    }
+  } else {
     const sig = request.headers.get("x-twilio-signature") ?? "";
     if (!verifyTwilioSignature(publicUrl("/api/webhooks/twilio/status"), params, sig, token)) {
       return Response.json({ error: "bad signature" }, { status: 403 });
@@ -24,7 +30,9 @@ export async function POST(request: Request): Promise<Response> {
   const status = params["MessageStatus"]; // queued|sent|delivered|undelivered|failed
   if (sid && status) {
     const mapped = status === "delivered" ? "delivered" : status === "undelivered" || status === "failed" ? "failed" : "sent";
-    await updateOutboxStatusByMessageId(sid, mapped);
+    // The message id lives in exactly one outbox; the other update is a no-op.
+    await updateReactivationStatus(sid, mapped);
+    await updateRecallStatus(sid, mapped);
   }
   return new Response(null, { status: 204 });
 }

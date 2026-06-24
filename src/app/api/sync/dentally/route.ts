@@ -7,8 +7,10 @@ import {
   upsertOpportunities,
 } from "@/lib/coordinator/repository";
 import { SITES } from "@/lib/mock/clients";
+import { cronUnauthorized } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const RESOURCE = "treatment_plans";
 const PER_PAGE = 100;
@@ -206,7 +208,10 @@ async function syncSite(
   return { siteId, pulled, upserted: ranked.length };
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const unauth = cronUnauthorized(request);
+  if (unauth) return unauth;
+
   const apiKey = process.env.DENTALLY_API_KEY;
   if (!apiKey) {
     return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
@@ -224,3 +229,6 @@ export async function POST() {
 
   return Response.json({ ok: true, perSite });
 }
+
+// Vercel Cron triggers with GET; reuse the same handler.
+export const GET = POST;

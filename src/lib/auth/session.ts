@@ -1,0 +1,64 @@
+import "server-only";
+import { supabaseServer } from "@/lib/supabase/auth-server";
+import { serviceClient } from "@/lib/supabase/server";
+import { SITES, getSites } from "@/lib/mock/clients";
+import type { Role } from "@/lib/types";
+
+export interface AuthedUser {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  /** null for agency_admin (spans all clients). */
+  clientId: string | null;
+  /** Site ids this user may access (agency_admin: all sites; client users: their client's). */
+  siteIds: string[];
+}
+
+interface AppUserRow {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  client_id: string | null;
+}
+
+/**
+ * The verified signed in user for this request, or null if not authenticated.
+ *
+ * Verifies the Supabase Auth session server-side (auth.getUser hits the auth
+ * server, so a forged cookie does not pass), then resolves the user's role +
+ * client from app_user. Site scope is derived here, never trusted from input.
+ */
+export async function getSessionUser(): Promise<AuthedUser | null> {
+  const supabase = await supabaseServer();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const email = user?.email?.toLowerCase();
+  if (!email) return null;
+
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("app_user")
+    .select("id, email, name, role, client_id")
+    .eq("email", email)
+    .maybeSingle();
+  if (error || !data) return null;
+
+  const row = data as AppUserRow;
+  const siteIds = row.client_id ? getSites(row.client_id).map((s) => s.id) : SITES.map((s) => s.id);
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    clientId: row.client_id,
+    siteIds,
+  };
+}
+
+/** Whether this user may access the given client slug. */
+export function canAccessClient(user: AuthedUser, clientId: string): boolean {
+  return user.role === "agency_admin" || user.clientId === clientId;
+}

@@ -4,6 +4,7 @@ import { getClient, getSites } from "@/lib/mock";
 import { runAgentTurn } from "@/lib/agent/run";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "@/lib/copilot/tools";
 import { buildCopilotSystemPrompt } from "@/lib/copilot/prompt";
+import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,17 @@ export async function POST(request: Request): Promise<Response> {
 
   // Resolve the practice's sites so the co-pilot's tools query the right data.
   const client = body.client ? getClient(body.client) : null;
+
+  // Authz: a verified user with access to this client (enforced once the
+  // service-role key is set). The co-pilot exposes full patient data, so this
+  // is the gate that stops anonymous exfiltration.
+  const auth = await requireUser();
+  if (auth instanceof Response) return auth;
+  if (client) {
+    const denied = requireClientAccess(auth, client.id);
+    if (denied) return denied;
+  }
+
   const siteIds = client ? getSites(client.id).map((s) => s.id) : [];
 
   try {
