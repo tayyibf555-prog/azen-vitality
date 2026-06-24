@@ -33,7 +33,7 @@ export async function POST(request: Request): Promise<Response> {
     const history: MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
     const result = await runAgentTurn(history, {
       anthropic: new Anthropic(),
-      dispatch: makeCopilotDispatch(siteIds),
+      dispatch: makeCopilotDispatch(siteIds, client?.id ?? ""),
       systemPrompt: buildCopilotSystemPrompt(),
       tools: COPILOT_TOOLS,
     });

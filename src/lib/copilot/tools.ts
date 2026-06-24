@@ -11,6 +11,7 @@ import {
 import { listTargets } from "@/lib/reactivation/repository";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { getAgentAnalytics } from "@/lib/agent/repository";
+import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 
 const todayIso = () => NOW.toISOString().slice(0, 10);
 const siteName = (id: string) => getSite(id)?.name ?? id;
@@ -55,6 +56,16 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
       "A high level snapshot of the whole practice right now: patient counts, today's diary, total outstanding, reactivation (dormant patients and recoverable value), treatment recovery, and the AI booking agent's activity.",
     input_schema: { type: "object", properties: {} },
   },
+  {
+    name: "search_knowledge",
+    description:
+      "Search the practice's knowledge base (the self-learning brain): pricing, USPs, SOPs, scripts, protocols, workflows, marketing and team knowledge the practice has captured. Use for any 'how do we...', 'what is our...', policy, pricing or script question. Returns matching knowledge with a snippet. Answer only from what it returns, cite the titles you use, and if nothing comes back say it is not in the brain yet.",
+    input_schema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    },
+  },
 ];
 
 function patientSummary(p: PatientRecord) {
@@ -69,7 +80,7 @@ function patientSummary(p: PatientRecord) {
   };
 }
 
-export function makeCopilotDispatch(siteIds: string[]) {
+export function makeCopilotDispatch(siteIds: string[], clientId: string) {
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
     try {
       switch (name) {
@@ -169,6 +180,23 @@ export function makeCopilotDispatch(siteIds: string[]) {
               recoverableValue: openOpps.reduce((s, o) => s + o.amountOutstanding, 0),
             },
             bookingAgent: agent,
+          });
+        }
+
+        case "search_knowledge": {
+          const q = String(input.query ?? "").trim();
+          // Owner co-pilot has full clearance (tier 4); employee scoping is handled later.
+          const results = await searchKnowledge(clientId, q, 4);
+          return JSON.stringify({
+            count: results.length,
+            knowledge: results.map((r) => ({
+              id: r.node.id,
+              title: r.node.title,
+              snippet: r.snippet,
+              body: r.node.body,
+              tier: r.node.tier,
+              tags: r.node.tags,
+            })),
           });
         }
 
