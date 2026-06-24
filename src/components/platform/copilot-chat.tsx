@@ -2,6 +2,7 @@
 
 import { X, Bot } from "lucide-react";
 import { CopilotConversation } from "./copilot-conversation";
+import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 
 export function CopilotChat({
   open,
@@ -12,6 +13,7 @@ export function CopilotChat({
   onClose: () => void;
   clientSlug: string;
 }) {
+  useEscapeKey(onClose, open);
   if (!open) return null;
 
   return (

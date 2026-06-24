@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { StatusPill, type Tone } from "@/components/primitives";
 import { gbp, relativeTime } from "@/lib/utils";
+import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import type {
   OpportunityStatus,
   TouchChannel,
@@ -69,6 +70,7 @@ export function OpportunityDrawer({
   nowIso: string;
   onClose: () => void;
 }) {
+  useEscapeKey(onClose);
   const now = new Date(nowIso);
   const [touches, setTouches] = useState<SessionTouch[]>([]);
 

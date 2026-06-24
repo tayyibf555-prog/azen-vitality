@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { X, Loader2, RefreshCw, MessageSquare } from "lucide-react";
 import { StatusPill, type Tone } from "@/components/primitives";
 import { cn, relativeTime } from "@/lib/utils";
+import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import type { ConversationStatus, MessageRole } from "@/lib/agent/types";
 import type { DashboardConversation } from "@/lib/agent/repository";
 
@@ -36,6 +37,7 @@ export function ConversationDrawer({
   nowIso: string;
   onClose: () => void;
 }) {
+  useEscapeKey(onClose);
   const now = new Date(nowIso);
   const firstName = conversation.patientName.split(" ")[0] || conversation.patientName;
   const [messages, setMessages] = useState<ThreadMessage[]>([]);

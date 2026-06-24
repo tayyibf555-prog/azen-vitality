@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, gbp, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
+import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import {
   Search, X, Phone, Mail, MessageSquare, CalendarClock, Clock, Loader2, History, ReceiptText,
   StickyNote, CalendarPlus, Activity, PoundSterling, Cake,
@@ -173,6 +174,7 @@ function ageFrom(dob: string | null, now: Date): number | null {
 }
 
 function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now: Date; onClose: () => void }) {
+  useEscapeKey(onClose);
   const s = statusOf(patient);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [plans, setPlans] = useState<PlanRecord[]>([]);

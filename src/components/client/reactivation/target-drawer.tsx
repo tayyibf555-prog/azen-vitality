@@ -5,6 +5,7 @@ import { X, CalendarPlus, Loader2, Check, Pause, Play, MessageSquare, Mail, Cale
 import { Button } from "@/components/ui/button";
 import { StatusPill, type Tone } from "@/components/primitives";
 import { gbp, relativeTime } from "@/lib/utils";
+import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import type { ReactivationCadence, ReactivationReason, ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
 import { CadenceTimeline } from "./cadence-timeline";
 import { DraftEditor, type DraftSent } from "./draft-editor";
@@ -51,6 +52,7 @@ export function TargetDrawer({
   nowIso: string;
   onClose: () => void;
 }) {
+  useEscapeKey(onClose);
   const now = new Date(nowIso);
   const [touches, setTouches] = useState<SessionTouch[]>([]);
   const [paused, setPaused] = useState(cadence?.status === "paused");
