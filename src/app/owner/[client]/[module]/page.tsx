@@ -8,6 +8,7 @@ import { PatientsView } from "@/components/client/patients/patients-view";
 import { CalendarView } from "@/components/client/calendar/calendar-view";
 import { TodayView } from "@/components/client/today/today-view";
 import { PaymentsView } from "@/components/client/payments/payments-view";
+import { PracticeBrainView } from "@/components/client/practice-brain";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 
@@ -38,6 +39,10 @@ export default async function OwnerModulePage({
 
   if (module === "co-pilot") {
     return <CopilotView clientSlug={client} />;
+  }
+
+  if (module === "practice-brain") {
+    return <PracticeBrainView />;
   }
 
   if (module === "patients") {

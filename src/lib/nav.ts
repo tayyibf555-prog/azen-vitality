@@ -18,7 +18,6 @@ import {
   MessageCircle,
   Bot,
   Sunrise,
-  BrainCircuit,
   Settings,
 } from "lucide-react";
 
@@ -199,11 +198,11 @@ export const CLIENT_NAV: NavGroup[] = [
         note: "Every morning, reads the diary and hands each role a prioritised action list: who to chase, gaps to fill, no-show risks, high-value treatment arriving today.",
       },
       {
-        slug: "practice-brain",
-        label: "Practice brain",
-        icon: BrainCircuit,
-        status: "placeholder",
-        note: "Basic internal knowledge base for the pilot: protocols, scripts, pricing and Dentally workflows. One standard answer across every site.",
+        slug: "co-pilot",
+        label: "Ask the brain",
+        icon: Bot,
+        status: "live",
+        note: "Practice co-pilot. Ask the knowledge base anything; answers are grounded in stored knowledge and filtered to your access level.",
       },
     ],
   },

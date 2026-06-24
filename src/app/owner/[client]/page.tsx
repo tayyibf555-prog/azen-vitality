@@ -7,6 +7,8 @@ import {
   type Column,
 } from "@/components/primitives";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
+import { OwnerViewSwitch } from "@/components/owner/owner-view-switch";
+import { SystemsCatalog } from "@/components/owner/systems-catalog";
 import { getClient, getSites, getSite } from "@/lib/mock";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
@@ -96,9 +98,13 @@ export default async function OwnerManagementPage({
     <>
       <PageHeader
         title="Management"
-        description="Your owner command view across every site. Live treatment recovery up top, then the full cross-site funnel below."
+        description="Your owner command view. Switch between practice operations and the AI systems running them."
       />
 
+      <OwnerViewSwitch
+        systems={<SystemsCatalog />}
+        operations={
+          <>
       <SectionCard
         title="Treatment recovery"
         description="Accepted but incomplete treatment across all sites, live from the coordinator."
@@ -143,6 +149,9 @@ export default async function OwnerManagementPage({
       </SectionCard>
 
       <OverviewDashboard />
+          </>
+        }
+      />
     </>
   );
 }
