@@ -44,10 +44,12 @@ export function ClientSidebar() {
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-navy-line bg-navy">
       {/* Client context */}
       <div className="flex items-center gap-4 px-5 py-5">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white p-0.5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/copilot-logo.png" alt="Vitality Dental" className="h-full w-full object-contain" />
-        </span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/copilot-logo.png"
+          alt="Vitality Dental"
+          className="h-11 w-11 shrink-0 object-contain brightness-0 invert"
+        />
         <p className="truncate text-sm font-bold text-on-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 

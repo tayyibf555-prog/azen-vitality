@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Sparkles, FolderTree } from "lucide-react";
 import type { KnowledgeNode } from "@/lib/practice-brain/types";
-import { PageHeader } from "@/components/primitives";
 import { Constellation } from "./constellation";
 import { FileTree } from "./file-view";
 import { CapturePanel } from "./capture-panel";
@@ -87,20 +86,22 @@ export function PracticeBrainView() {
   }, [focusId, nodes]);
 
   return (
-    <>
-      <PageHeader
-        title="Practice brain"
-        description="The practice knowledge hub. Branches grow as you add knowledge; the co-pilot will draw from it."
-      />
+    <div className="-mx-8 -my-7 min-h-[calc(100vh-3.5rem)] bg-navy px-8 py-7 text-on-navy">
+      <div className="mb-5">
+        <h1 className="text-2xl font-extrabold tracking-tight text-on-navy">Practice brain</h1>
+        <p className="mt-1 text-sm text-on-navy-muted">
+          The practice knowledge hub. Branches grow as you add knowledge; the co-pilot draws from it.
+        </p>
+      </div>
 
       {checking ? (
-        <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Checking access...</div>
+        <div className="rounded-xl border border-navy-line bg-navy-soft p-8 text-center text-sm text-on-navy-muted">Checking access...</div>
       ) : !unlocked ? (
         <PasswordGate onUnlocked={() => { void load(); }} />
       ) : (
         <>
           <div className="mb-3 flex flex-wrap items-center gap-3">
-            <div className="inline-flex rounded-xl border border-line bg-card p-0.5">
+            <div className="inline-flex rounded-xl border border-navy-line bg-navy-soft p-0.5">
               {([["brain", "Brain", Sparkles], ["files", "Files", FolderTree]] as const).map(([key, label, Icon]) => {
                 const active = view === key;
                 return (
@@ -109,7 +110,7 @@ export function PracticeBrainView() {
                     type="button"
                     aria-pressed={active}
                     onClick={() => setView(key)}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${active ? "bg-navy text-on-navy" : "text-muted hover:text-ink"}`}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${active ? "bg-on-navy/15 text-on-navy" : "text-on-navy-muted hover:text-on-navy"}`}
                   >
                     <Icon size={14} className="shrink-0" />
                     {label}
@@ -120,11 +121,11 @@ export function PracticeBrainView() {
 
             {view === "brain" ? (
               <div className="flex items-center gap-2">
-                <button onClick={() => { setFocusId(null); setActiveHubId(null); }} className="text-xs text-muted hover:text-ink">
+                <button onClick={() => { setFocusId(null); setActiveHubId(null); }} className="text-xs text-on-navy-muted hover:text-on-navy">
                   Practice brain
                 </button>
                 {breadcrumb.map((b) => (
-                  <span key={b.id} className="text-xs text-muted">/ {b.title}</span>
+                  <span key={b.id} className="text-xs text-on-navy-muted">/ {b.title}</span>
                 ))}
               </div>
             ) : null}
@@ -133,12 +134,12 @@ export function PracticeBrainView() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={view === "brain" ? "Search the brain..." : "Search files..."}
-              className="ml-auto w-48 rounded-lg border border-line bg-card-muted px-2 py-1 text-sm"
+              className="ml-auto w-48 rounded-lg border border-navy-line bg-navy-soft px-2 py-1 text-sm text-on-navy placeholder:text-on-navy-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-light/40"
             />
           </div>
 
           {loading ? (
-            <div className="rounded-xl border border-line bg-card p-8 text-center text-sm text-muted">Loading...</div>
+            <div className="rounded-xl border border-navy-line bg-navy-soft p-8 text-center text-sm text-on-navy-muted">Loading...</div>
           ) : view === "brain" ? (
             <Constellation
               nodes={nodes}
@@ -180,6 +181,6 @@ export function PracticeBrainView() {
           </div>
         </>
       )}
-    </>
+    </div>
   );
 }

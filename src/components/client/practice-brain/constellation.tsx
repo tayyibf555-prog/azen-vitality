@@ -212,7 +212,7 @@ export function Constellation({ nodes, focusId, query, onSelectItem }: Props) {
   const focusedHub = focusIndex !== null ? hubs[focusIndex] : null;
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "clamp(380px, 52vh, 540px)", background: "radial-gradient(70% 110% at 50% 44%, #14204A 0%, #0C1226 42%, #080C18 72%, #060911 100%)", borderRadius: 16, overflow: "hidden", border: "0.5px solid rgba(150,170,210,0.18)", boxShadow: "inset 0 1px 0 rgba(170,200,255,0.06), inset 0 0 140px 36px rgba(4,6,13,0.55)" }}>
+    <div style={{ position: "relative", width: "100%", height: "clamp(440px, 72vh, 820px)", background: "radial-gradient(70% 110% at 50% 44%, #14204A 0%, #0C1226 42%, #080C18 72%, #060911 100%)", borderRadius: 16, overflow: "hidden", border: "0.5px solid rgba(150,170,210,0.18)", boxShadow: "inset 0 1px 0 rgba(170,200,255,0.06), inset 0 0 140px 36px rgba(4,6,13,0.55)" }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }} role="img" aria-label="Practice brain constellation">
         <defs>
           <radialGradient id="pbCoreGlow" cx="50%" cy="50%" r="50%">
