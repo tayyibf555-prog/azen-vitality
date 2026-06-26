@@ -20,6 +20,11 @@ export const dynamic = "force-dynamic";
 const TEST_PATIENT = { siteId: "site-cc", dentallyPatientId: "pat-010", patientName: "Harold Pemberton" };
 
 export async function POST(request: Request): Promise<Response> {
+  // Dev-only harness: it runs the booking agent with no auth, so it must never
+  // be reachable in production (the live deploy locks every other route down).
+  if (process.env.NODE_ENV === "production") {
+    return new Response("Not found", { status: 404 });
+  }
   const body = (await request.json().catch(() => ({}))) as {
     message?: string;
     treatment?: string;

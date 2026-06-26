@@ -1,7 +1,12 @@
-"use client";
+import { NoshowView } from "@/components/client/noshow/noshow-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="no-show-defence" />;
+export default async function NoshowPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  return <NoshowView clientSlug={clientSlug} />;
 }

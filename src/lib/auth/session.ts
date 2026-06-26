@@ -58,6 +58,19 @@ export async function getSessionUser(): Promise<AuthedUser | null> {
   };
 }
 
+/**
+ * The verified email on the Auth session, regardless of whether an app_user
+ * profile exists. Lets callers distinguish "signed in but unprovisioned" from
+ * "not signed in" — the former is a confusing silent failure otherwise.
+ */
+export async function getAuthEmail(): Promise<string | null> {
+  const supabase = await supabaseServer();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user?.email?.toLowerCase() ?? null;
+}
+
 /** Whether this user may access the given client slug. */
 export function canAccessClient(user: AuthedUser, clientId: string): boolean {
   return user.role === "agency_admin" || user.clientId === clientId;

@@ -163,7 +163,7 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "no-show-defence",
         label: "No-show defence",
         icon: ShieldCheck,
-        status: "placeholder",
+        status: "live",
         note: "Smart confirmations and reminders driven off the live Dentally diary and appointment state machine.",
       },
     ],

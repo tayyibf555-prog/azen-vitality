@@ -10,7 +10,14 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    // A successful sign-in with no matching practice profile bounces back here;
+    // say so explicitly instead of looking like a bad password.
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("error") === "no_profile") {
+      return "You're signed in, but this account isn't linked to a practice yet. Ask your administrator to finish setting it up.";
+    }
+    return null;
+  });
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {

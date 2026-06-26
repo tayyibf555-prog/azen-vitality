@@ -13,7 +13,7 @@ import type {
   TouchChannel,
   TreatmentOpportunity,
 } from "@/lib/coordinator/types";
-import { requireUser } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -244,6 +244,16 @@ export async function POST(
 
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+
+  // Per-site authz: every coordinator action carries an opportunityId. Resolve
+  // its site and gate, mirroring recall/reactivation, so a user can't drive
+  // outreach/booking on another tenant's opportunity by id.
+  if (auth && typeof body.opportunityId === "string" && body.opportunityId !== "") {
+    const opp = await getOpportunity(body.opportunityId);
+    if (!opp) return Response.json({ error: "Opportunity not found" }, { status: 404 });
+    const denied = requireSiteAccess(auth, opp.siteId);
+    if (denied) return denied;
+  }
 
   switch (action) {
     case "draft":

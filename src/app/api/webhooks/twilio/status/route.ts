@@ -1,6 +1,7 @@
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
 import { updateOutboxStatusByMessageId as updateReactivationStatus } from "@/lib/reactivation/repository";
 import { updateOutboxStatusByMessageId as updateRecallStatus } from "@/lib/recall/repository";
+import { updateOutboxStatusByMessageId as updateNoshowStatus } from "@/lib/noshow/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +31,10 @@ export async function POST(request: Request): Promise<Response> {
   const status = params["MessageStatus"]; // queued|sent|delivered|undelivered|failed
   if (sid && status) {
     const mapped = status === "delivered" ? "delivered" : status === "undelivered" || status === "failed" ? "failed" : "sent";
-    // The message id lives in exactly one outbox; the other update is a no-op.
+    // The message id lives in exactly one outbox; the others are no-ops.
     await updateReactivationStatus(sid, mapped);
     await updateRecallStatus(sid, mapped);
+    await updateNoshowStatus(sid, mapped);
   }
   return new Response(null, { status: 204 });
 }

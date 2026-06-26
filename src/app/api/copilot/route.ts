@@ -34,10 +34,11 @@ export async function POST(request: Request): Promise<Response> {
   // is the gate that stops anonymous exfiltration.
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
-  if (client) {
-    const denied = requireClientAccess(auth, client.id);
-    if (denied) return denied;
-  }
+  // Never run un-scoped: an unknown/omitted client would query zero sites and
+  // quietly burn tokens, so reject it before reaching Claude.
+  if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
+  const denied = requireClientAccess(auth, client.id);
+  if (denied) return denied;
 
   const siteIds = client ? getSites(client.id).map((s) => s.id) : [];
 

@@ -14,6 +14,7 @@ import {
   updateCadence as updateRecallCadence,
   insertInboundTouch as insertRecallInboundTouch,
 } from "@/lib/recall/repository";
+import { handleNoshowInbound } from "@/lib/noshow/inbound";
 import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
@@ -78,6 +79,22 @@ export async function POST(request: Request): Promise<Response> {
     apiKey: process.env.DENTALLY_API_KEY ?? "",
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
   });
+
+  // No-show defence: a structured YES/CANCEL reply to a confirmation, or a
+  // YES/NO to a waitlist slot offer, is handled before the general agent. If
+  // handled we reply and stop; otherwise (free-text, e.g. a reschedule request)
+  // we fall through to the booking agent below.
+  const noshow = await handleNoshowInbound({ from, body, channel, dentally });
+  if (noshow.handled) {
+    if (noshow.reply) {
+      try {
+        await sendMessage({ channel, to: from, body: noshow.reply });
+      } catch {
+        // Reply logged intent only; swallow delivery errors so Twilio does not retry.
+      }
+    }
+    return twiml();
+  }
 
   // Who is texting us? Reactivation linkage drives cadence side-effects; the
   // identity drives who the agent thinks it is talking to. Either may be absent.

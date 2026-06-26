@@ -1,10 +1,22 @@
-"use client";
-
 import { ClientSidebar } from "@/components/client/client-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
+import { guardPage } from "@/lib/auth/page-guard";
 
-export default function ClientLayout({ children }: { children: React.ReactNode }) {
+export const dynamic = "force-dynamic";
+
+export default async function ClientLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: Promise<{ client: string }>;
+}) {
+  const { client } = await params;
+  await guardPage({
+    roles: ["agency_admin", "client_owner", "client_coordinator"],
+    clientSlug: client,
+  });
   return (
     <div className="flex min-h-screen bg-cream">
       <ClientSidebar />

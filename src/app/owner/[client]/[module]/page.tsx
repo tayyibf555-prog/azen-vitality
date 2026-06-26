@@ -3,6 +3,7 @@ import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
 import { RecallView } from "@/components/client/recall/recall-view";
+import { NoshowView } from "@/components/client/noshow/noshow-view";
 import { AgentView } from "@/components/client/agent/agent-view";
 import { CopilotView } from "@/components/client/copilot/copilot-view";
 import { PatientsView } from "@/components/client/patients/patients-view";
@@ -36,6 +37,10 @@ export default async function OwnerModulePage({
 
   if (module === "recall") {
     return <RecallView clientSlug={client} />;
+  }
+
+  if (module === "no-show-defence") {
+    return <NoshowView clientSlug={client} />;
   }
 
   if (module === "booking-agent") {

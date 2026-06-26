@@ -105,6 +105,15 @@ export async function upsertPhoneIdentity(phone: string, identity: PhoneIdentity
   if (error) throw error;
 }
 
+/** One conversation by id (incl. its site), or null. Used to authz reads by site. */
+export async function getConversation(id: string): Promise<AgentConversation | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("agent_conversation").select("*").eq("id", id).maybeSingle();
+  if (error || !data) return null;
+  return toConv(data as ConvRow);
+}
+
 export async function listMessages(conversationId: string): Promise<AgentMessageRow[]> {
   const db = serviceClient();
   const { data, error } = await db

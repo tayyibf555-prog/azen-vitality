@@ -253,6 +253,44 @@ export const MOCK_PATIENTS: MockPatient[] = [
     site_id: "site-cc", archived: false, archived_reason: null,
     dentist_recall_date: "2026-06-26T00:00:00Z", hygienist_recall_date: null,
   },
+  // --- No-show defence demo cohort. Each has an upcoming appointment (added
+  // relative to the present, below) and an attendance history (static, below)
+  // that gives a different no-show risk band.
+  {
+    // HIGH risk: a run of missed appointments, never attended.
+    id: "pat-019", first_name: "Liam", last_name: "Brennan",
+    email_address: "liam.brennan@example.co.uk", mobile_phone: "+447700900019",
+    use_sms: true, use_email: true, marketing: 1, active: true, site_id: "site-cc",
+  },
+  {
+    // MEDIUM risk: mixed record, one prior no-show.
+    id: "pat-020", first_name: "Chloe", last_name: "Davies",
+    email_address: "chloe.davies@example.co.uk", mobile_phone: "+447700900020",
+    use_sms: true, use_email: true, marketing: 1, active: true, site_id: "site-rv",
+  },
+  {
+    // LOW risk: reliable attendance.
+    id: "pat-021", first_name: "Sofia", last_name: "Marino",
+    email_address: "sofia.marino@example.co.uk", mobile_phone: "+447700900021",
+    use_sms: true, use_email: true, marketing: 1, active: true, site_id: "site-ng",
+  },
+  {
+    // LOW risk site-cc appointment, used to demo cancellation -> waitlist fill.
+    id: "pat-023", first_name: "Maya", last_name: "Sharma",
+    email_address: "maya.sharma@example.co.uk", mobile_phone: "+447700900023",
+    use_sms: true, use_email: true, marketing: 1, active: true, site_id: "site-cc",
+  },
+  // Waitlist patients wanting a sooner slot at site-cc.
+  {
+    id: "pat-024", first_name: "Freya", last_name: "Stewart",
+    email_address: "freya.stewart@example.co.uk", mobile_phone: "+447700900024",
+    use_sms: true, use_email: true, marketing: 1, active: true, site_id: "site-cc",
+  },
+  {
+    id: "pat-025", first_name: "Noah", last_name: "Clarke",
+    email_address: "noah.clarke@example.co.uk", mobile_phone: "+447700900025",
+    use_sms: true, use_email: true, marketing: 1, active: true, site_id: "site-cc",
+  },
 ];
 
 // --- Treatment plans ------------------------------------------------------
@@ -442,7 +480,36 @@ export const MOCK_APPOINTMENTS: MockAppointment[] = [
   { id: "appt-d14", patient_id: "pat-007", patient_name: "Megan Lloyd",      site_id: "site-cc", start_time: "2026-06-19T09:00:00Z", duration: 30, state: "booked",        reason: "Implant fit",      practitioner: "Dr James Shah" },
   { id: "appt-d15", patient_id: "new-103", patient_name: "Olivia Hughes",    site_id: "site-ng", start_time: "2026-06-19T11:30:00Z", duration: 30, state: "booked",        reason: "New patient exam", practitioner: "Dr Priya Adeyemi" },
   { id: "appt-d16", patient_id: "pat-005", patient_name: "Aisha Begum",      site_id: "site-rv", start_time: "2026-06-22T11:00:00Z", duration: 30, state: "booked",        reason: "Hygiene",          practitioner: "Sarah Okoro (Hygienist)" },
+
+  // --- No-show defence: attendance history that sets each patient's risk band ---
+  { id: "appt-019h1", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-02-10T09:00:00Z", state: "did_not_attend" },
+  { id: "appt-019h2", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-03-15T09:00:00Z", state: "did_not_attend" },
+  { id: "appt-019h3", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-04-20T09:00:00Z", state: "did_not_attend" },
+  { id: "appt-020h1", patient_id: "pat-020", site_id: "site-rv", start_time: "2026-03-01T10:00:00Z", state: "completed" },
+  { id: "appt-020h2", patient_id: "pat-020", site_id: "site-rv", start_time: "2026-04-10T10:00:00Z", state: "did_not_attend" },
+  { id: "appt-021h1", patient_id: "pat-021", site_id: "site-ng", start_time: "2026-02-01T11:00:00Z", state: "completed" },
+  { id: "appt-021h2", patient_id: "pat-021", site_id: "site-ng", start_time: "2026-04-01T11:00:00Z", state: "completed" },
+  { id: "appt-023h1", patient_id: "pat-023", site_id: "site-cc", start_time: "2026-03-20T14:00:00Z", state: "completed" },
 ];
+
+// No-show defence demo: upcoming appointments anchored to the present so the
+// worklist is always populated regardless of today's date. Risk varies by each
+// patient's attendance history above.
+function noshowUpcomingAppointments(): MockAppointment[] {
+  const now = Date.now();
+  const at = (days: number, hour: number): string => {
+    const d = new Date(now + days * 86_400_000);
+    d.setUTCHours(hour, 0, 0, 0);
+    return d.toISOString();
+  };
+  return [
+    { id: "appt-ns19", patient_id: "pat-019", patient_name: "Liam Brennan", site_id: "site-cc", start_time: at(2, 9), duration: 30, state: "booked", reason: "Checkup", practitioner: "Dr James Shah" },
+    { id: "appt-ns20", patient_id: "pat-020", patient_name: "Chloe Davies", site_id: "site-rv", start_time: at(3, 10), duration: 30, state: "booked", reason: "Hygiene", practitioner: "Sarah Okoro (Hygienist)" },
+    { id: "appt-ns21", patient_id: "pat-021", patient_name: "Sofia Marino", site_id: "site-ng", start_time: at(4, 11), duration: 30, state: "booked", reason: "Checkup", practitioner: "Dr Priya Adeyemi" },
+    { id: "appt-ns23", patient_id: "pat-023", patient_name: "Maya Sharma", site_id: "site-cc", start_time: at(5, 14), duration: 30, state: "booked", reason: "Filling", practitioner: "Dr James Shah" },
+  ];
+}
+MOCK_APPOINTMENTS.push(...noshowUpcomingAppointments());
 
 // Paid invoices = lifetime spend proxy.
 export const MOCK_INVOICES: MockInvoice[] = [

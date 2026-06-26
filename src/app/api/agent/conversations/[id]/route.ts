@@ -1,5 +1,5 @@
-import { listMessages } from "@/lib/agent/repository";
-import { requireUser } from "@/lib/auth/guard";
+import { getConversation, listMessages } from "@/lib/agent/repository";
+import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,14 @@ export async function GET(
   const { id } = await ctx.params;
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+  // Scope the read to the caller's sites so conversation ids can't be probed
+  // across tenants. A missing or out-of-scope id looks the same (404).
+  if (auth) {
+    const conversation = await getConversation(id);
+    if (!conversation) return Response.json({ ok: false, messages: [] }, { status: 404 });
+    const denied = requireSiteAccess(auth, conversation.siteId);
+    if (denied) return Response.json({ ok: false, messages: [] }, { status: 404 });
+  }
   try {
     const messages = await listMessages(id);
     return Response.json({ ok: true, messages });
