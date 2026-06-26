@@ -1,11 +1,13 @@
-import { getClient, getSites, getSite } from "@/lib/mock/clients";
-import { scoreAssessment } from "@/lib/smile-assessment/scoring";
+import { getClient, getSites } from "@/lib/mock/clients";
+import { scoreAssessment, type ScoreTuning } from "@/lib/smile-assessment/scoring";
 import { QUIZ_QUESTION_IDS, Q_TREATMENT, questionById } from "@/lib/smile-assessment/quiz";
 import { countRecent, insertResponse, setResponseLead } from "@/lib/smile-assessment/repository";
 import type { AssessmentChannel } from "@/lib/smile-assessment/types";
 import { contactLead } from "@/lib/speed-to-lead/contact";
 import { insertLead, findOpenLeadByAddress } from "@/lib/speed-to-lead/repository";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
+import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
+import { goalLabel } from "@/lib/smile-assessment/campaign";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 
 export const dynamic = "force-dynamic";
@@ -119,15 +121,31 @@ export async function POST(request: Request): Promise<Response> {
       return bad("at least one valid quiz answer is required");
     }
 
-    // Resolve the site: an explicit (valid) siteId wins, else the client's first site.
+    // Resolve the campaign (if this came through a targeted /assess/<client>/<slug>
+    // landing). It overrides the site, tunes the scoring to the campaign's goal +
+    // budget, and is recorded against every response for attribution. A paused or
+    // unknown slug resolves to null (we fall back to the generic quiz behaviour).
+    const clientSlug = str(body.clientSlug);
+    const campaignSlug = str(body.campaignSlug);
+    const client = clientSlug ? getClient(clientSlug) : undefined;
+    const campaign =
+      client && campaignSlug ? await getActiveCampaignBySlug(client.id, campaignSlug) : null;
+
+    // Resolve the site: the campaign's site wins; otherwise the site MUST belong to
+    // the resolved client. Never trust a free-floating siteId on this public write,
+    // which would let a caller attribute a response (and an outbound SMS) to a site
+    // they have no relationship with. An explicit siteId is honoured only if it is
+    // one of the resolved client's own sites; otherwise we use the client's first.
     const explicitSite = str(body.siteId);
     let siteId: string | undefined;
-    if (explicitSite && getSite(explicitSite)) {
-      siteId = explicitSite;
-    } else {
-      const clientSlug = str(body.clientSlug);
-      const client = clientSlug ? getClient(clientSlug) : undefined;
-      if (client) siteId = getSites(client.id)[0]?.id;
+    if (campaign) {
+      siteId = campaign.siteId;
+    } else if (client) {
+      const clientSites = getSites(client.id);
+      siteId =
+        explicitSite && clientSites.some((s) => s.id === explicitSite)
+          ? explicitSite
+          : clientSites[0]?.id;
     }
     if (!siteId) return bad("could not resolve a site from clientSlug or siteId");
 
@@ -146,12 +164,22 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
 
-    // Score (intent/fit only) and denormalise the treatment interest for the worklist.
-    const { rawScore, band } = scoreAssessment(responses);
+    // Score (intent/fit only). A campaign tunes the score to its goal + budget band.
+    const tuning: ScoreTuning | undefined = campaign
+      ? { goal: campaign.goal, targetBudget: campaign.targetBudget }
+      : undefined;
+    const { rawScore, band } = scoreAssessment(responses, tuning);
+
+    // Denormalise the treatment interest for the worklist: the patient's own answer
+    // wins; if they didn't pick one, fall back to the campaign's goal label.
     const treatmentValue = responses[Q_TREATMENT];
     const treatmentInterest = treatmentValue
       ? questionById(Q_TREATMENT)?.options.find((o) => o.value === treatmentValue)?.label ?? null
-      : null;
+      : campaign
+        ? goalLabel(campaign.goal)
+        : null;
+
+    const source = campaign ? `smile:${campaign.slug}` : "quiz";
 
     const response = await insertResponse({
       siteId,
@@ -163,6 +191,8 @@ export async function POST(request: Request): Promise<Response> {
       responses,
       rawScore,
       band,
+      source,
+      campaignId: campaign?.id ?? null,
     });
 
     // BRIDGE: a high score with a reachable contact becomes a Speed-to-lead lead
@@ -203,16 +233,22 @@ export async function POST(request: Request): Promise<Response> {
           phone: phone ?? null,
           channel: safeChannel,
           treatmentInterest,
-          source: "smile-assessment",
+          source: campaign ? `smile:${campaign.slug}` : "smile-assessment",
           score: rawScore,
           consent,
         });
         await setResponseLead(response.id, lead.id);
         leadCreated = true;
-        // Fire first contact in-request so the patient hears back instantly.
-        // contactLead swallows its own send errors; guard anyway.
+        // Fire first contact in-request so the patient hears back instantly. For a
+        // campaign, pass its goal + ideal customer so the opener is tailored (never
+        // quote internal targeting/funding terms — contactLead/draft enforce that).
         try {
-          await contactLead(lead);
+          await contactLead(
+            lead,
+            campaign
+              ? { goal: goalLabel(campaign.goal), idealCustomer: campaign.idealCustomer }
+              : undefined,
+          );
         } catch {
           // The SLA sweep on the speed-to-lead side will retry; the lead is recorded.
         }

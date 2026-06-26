@@ -1,6 +1,7 @@
 import { Sparkles, Flame, Gauge, Leaf, Zap } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { ResponsesTable } from "./responses-table";
+import { CampaignsPanel } from "./campaigns-panel";
 import { getClient, getSites } from "@/lib/mock/clients";
 import { listResponses } from "@/lib/smile-assessment/repository";
 import type { AssessmentResponse } from "@/lib/smile-assessment/types";
@@ -47,6 +48,8 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
         <StatCard label="Medium" value={String(medium.length)} icon={Gauge} hint="Worth a follow-up" />
         <StatCard label="Low" value={String(low.length)} icon={Leaf} hint="Nurture for later" />
       </div>
+
+      <CampaignsPanel clientSlug={clientSlug} />
 
       {responses.length === 0 ? (
         <EmptyState

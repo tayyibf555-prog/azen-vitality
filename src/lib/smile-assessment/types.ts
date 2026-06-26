@@ -16,6 +16,7 @@ export interface AssessmentResponse {
   id: string;
   siteId: string;
   leadId: string | null;
+  campaignId: string | null;
   firstName: string;
   email: string | null;
   phone: string | null;

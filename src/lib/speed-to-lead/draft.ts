@@ -8,7 +8,23 @@ function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] || name.trim();
 }
 
-export function buildFirstContactPrompt(lead: SpeedToLeadLead, channel: LeadChannel, client?: Client) {
+/**
+ * Optional campaign tailoring. When a lead came through a targeted Smile Assessment
+ * campaign, the goal orients the message and the ideal-customer note tunes the TONE
+ * only. The ideal-customer text is INTERNAL targeting copy and must never be quoted
+ * back to the patient.
+ */
+export interface CampaignContext {
+  goal: string; // human label, e.g. "Dental implants"
+  idealCustomer: string | null;
+}
+
+export function buildFirstContactPrompt(
+  lead: SpeedToLeadLead,
+  channel: LeadChannel,
+  client?: Client,
+  campaign?: CampaignContext,
+) {
   const practice = client?.name ?? "our dental practice";
   const system = [
     "You are a warm, professional patient coordinator for a UK dental practice.",
@@ -21,12 +37,20 @@ export function buildFirstContactPrompt(lead: SpeedToLeadLead, channel: LeadChan
     lead.treatmentInterest
       ? `- Mention what they enquired about (${lead.treatmentInterest}) naturally, without overpromising.`
       : "- Keep it general, since they did not say what they are interested in.",
+    campaign
+      ? `- This enquiry came through a campaign about ${campaign.goal}. Orient the message gently around that area.`
+      : null,
+    campaign?.idealCustomer
+      ? `- INTERNAL audience note (never quote this back to them, use it only to pitch the tone): ${campaign.idealCustomer}`
+      : null,
     "- Under 60 words. Friendly, brief, never pushy.",
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
     "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
     "- Plain text only, suitable for the requested channel.",
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
 
   const user = [
     `Channel: ${channel}`,
@@ -46,9 +70,10 @@ export async function draftFirstContact(
   lead: SpeedToLeadLead,
   channel: LeadChannel,
   client?: Client,
+  campaign?: CampaignContext,
   anthropic: Anthropic = new Anthropic(),
 ): Promise<FirstContactResult> {
-  const { system, user } = buildFirstContactPrompt(lead, channel, client);
+  const { system, user } = buildFirstContactPrompt(lead, channel, client, campaign);
   const msg = await anthropic.messages.create({
     model: SONNET,
     max_tokens: 300,

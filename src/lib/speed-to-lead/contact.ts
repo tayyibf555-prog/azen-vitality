@@ -3,7 +3,7 @@ import { findOrCreateConversation, appendMessage } from "@/lib/agent/repository"
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { getClient, getSite } from "@/lib/mock/clients";
-import { draftFirstContact } from "./draft";
+import { draftFirstContact, type CampaignContext } from "./draft";
 import {
   insertAttempt,
   recordFirstResponse,
@@ -40,7 +40,7 @@ function channelConsented(lead: SpeedToLeadLead): boolean {
  * Shared by the intake route (in-request, for instant contact) and the sweep
  * (the failsafe for anything the intake missed).
  */
-export async function contactLead(lead: SpeedToLeadLead): Promise<void> {
+export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignContext): Promise<void> {
   const to = toAddress(lead);
   if (!to || !channelConsented(lead)) return;
 
@@ -52,7 +52,7 @@ export async function contactLead(lead: SpeedToLeadLead): Promise<void> {
   }
 
   const client = getClient(getSite(lead.siteId)?.clientId ?? "");
-  const { body } = await draftFirstContact(lead, lead.channel, client);
+  const { body } = await draftFirstContact(lead, lead.channel, client, campaign);
 
   // Thread an agent conversation keyed `lead:<phone>` so a reply on Twilio's
   // inbound webhook (which keys unknown numbers `lead:${from}`) routes here.

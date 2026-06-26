@@ -14,6 +14,7 @@ interface ResponseRow {
   id: string;
   site_id: string;
   lead_id: string | null;
+  campaign_id: string | null;
   first_name: string;
   email: string | null;
   phone: string | null;
@@ -31,6 +32,7 @@ function rowToResponse(r: ResponseRow): AssessmentResponse {
     id: r.id,
     siteId: r.site_id,
     leadId: r.lead_id,
+    campaignId: r.campaign_id,
     firstName: r.first_name,
     email: r.email,
     phone: r.phone,
@@ -60,6 +62,7 @@ export interface InsertResponseInput {
   band: AssessmentBand;
   source?: string;
   leadId?: string | null;
+  campaignId?: string | null;
 }
 
 export async function insertResponse(input: InsertResponseInput): Promise<AssessmentResponse> {
@@ -69,6 +72,7 @@ export async function insertResponse(input: InsertResponseInput): Promise<Assess
     .insert({
       site_id: input.siteId,
       lead_id: input.leadId ?? null,
+      campaign_id: input.campaignId ?? null,
       first_name: input.firstName,
       email: input.email ?? null,
       phone: input.phone ?? null,
