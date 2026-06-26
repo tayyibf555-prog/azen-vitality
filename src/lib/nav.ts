@@ -149,14 +149,14 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "treatment-coordinator",
         label: "Treatment Coordinator",
         icon: HeartPulse,
-        status: "placeholder",
+        status: "live",
         note: "Highest-value module. Finds accepted-but-incomplete treatment, ranks by value, re-presents finance, follows up and books the next step.",
       },
       {
         slug: "after-hours",
         label: "After-hours capture",
         icon: PhoneMissed,
-        status: "placeholder",
+        status: "live",
         note: "Answers and books missed calls after hours and on genuine overflow only. A live-hours AI receptionist is explicitly out of scope.",
       },
       {
@@ -194,7 +194,7 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "daily-brief",
         label: "Daily brief",
         icon: Sunrise,
-        status: "placeholder",
+        status: "live",
         note: "Every morning, reads the diary and hands each role a prioritised action list: who to chase, gaps to fill, no-show risks, high-value treatment arriving today.",
       },
       {

@@ -1,7 +1,12 @@
-"use client";
+import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="after-hours" />;
+export default async function AfterHoursPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  return <AfterHoursView clientSlug={clientSlug} />;
 }

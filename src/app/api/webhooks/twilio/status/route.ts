@@ -2,6 +2,7 @@ import { verifyTwilioSignature } from "@/lib/messaging/signature";
 import { updateOutboxStatusByMessageId as updateReactivationStatus } from "@/lib/reactivation/repository";
 import { updateOutboxStatusByMessageId as updateRecallStatus } from "@/lib/recall/repository";
 import { updateOutboxStatusByMessageId as updateNoshowStatus } from "@/lib/noshow/repository";
+import { updateOutboxStatusByMessageId as updateCoordinatorStatus } from "@/lib/coordinator/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ export async function POST(request: Request): Promise<Response> {
     await updateReactivationStatus(sid, mapped);
     await updateRecallStatus(sid, mapped);
     await updateNoshowStatus(sid, mapped);
+    await updateCoordinatorStatus(sid, mapped);
   }
   return new Response(null, { status: 204 });
 }

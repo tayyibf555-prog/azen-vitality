@@ -1,7 +1,12 @@
-"use client";
+import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="daily-brief" />;
+export default async function DailyBriefPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  return <DailyBriefView clientSlug={clientSlug} />;
 }

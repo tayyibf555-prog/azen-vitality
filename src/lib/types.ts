@@ -31,11 +31,25 @@ export interface Client {
   siteIds: string[];
 }
 
+export type Weekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+/** Opening window per weekday: "HH:MM-HH:MM" (local time) or null = closed. */
+export type OpeningHours = Record<Weekday, string | null>;
+
 export interface Site {
   id: string; // maps to Dentally site_id
   clientId: string;
   name: string; // generic label, e.g. "City Centre" — no hardcoded city in fixtures
   timezone: string;
+  /** Local opening windows, used by the after-hours capture module. */
+  openingHours?: OpeningHours;
 }
 
 export interface SessionUser {

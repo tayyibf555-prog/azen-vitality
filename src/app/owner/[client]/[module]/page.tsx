@@ -4,6 +4,8 @@ import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatm
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
 import { RecallView } from "@/components/client/recall/recall-view";
 import { NoshowView } from "@/components/client/noshow/noshow-view";
+import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
+import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
 import { AgentView } from "@/components/client/agent/agent-view";
 import { CopilotView } from "@/components/client/copilot/copilot-view";
 import { PatientsView } from "@/components/client/patients/patients-view";
@@ -41,6 +43,14 @@ export default async function OwnerModulePage({
 
   if (module === "no-show-defence") {
     return <NoshowView clientSlug={client} />;
+  }
+
+  if (module === "after-hours") {
+    return <AfterHoursView clientSlug={client} />;
+  }
+
+  if (module === "daily-brief") {
+    return <DailyBriefView clientSlug={client} />;
   }
 
   if (module === "booking-agent") {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   TrendingUp,
@@ -154,6 +155,30 @@ export function OverviewDashboard() {
   const params = useParams<{ client: string }>();
   const client = getClient(params.client);
 
+  // Live daily-brief headline. Computed on read by /api/daily-brief from the
+  // real module repositories; falls back to the mock so the section never blanks.
+  const [liveBrief, setLiveBrief] = useState<BriefItem[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    // Reset on client change so a switch never renders the previous client's
+    // brief while the new fetch is in flight or if it errors (falls back to mock).
+    setLiveBrief(null);
+    if (!params.client) return;
+    fetch(`/api/daily-brief?client=${encodeURIComponent(params.client)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("brief fetch failed"))))
+      .then((j: { ok?: boolean; brief?: { headline?: BriefItem[] } }) => {
+        if (active && j.ok && Array.isArray(j.brief?.headline)) {
+          setLiveBrief(j.brief.headline);
+        }
+      })
+      .catch(() => {
+        // Network or server error: keep the mock fallback (liveBrief stays null).
+      });
+    return () => {
+      active = false;
+    };
+  }, [params.client]);
+
   if (!client) {
     return <PageHeader title="Overview" description="This client could not be found." />;
   }
@@ -167,7 +192,8 @@ export function OverviewDashboard() {
     ? Math.round(siteMetrics.reduce((a, s) => a + s.costPerBooking, 0) / siteMetrics.length)
     : 0;
 
-  const briefs = [...BRIEF_ITEMS]
+  const briefSource = liveBrief ?? BRIEF_ITEMS;
+  const briefs = [...briefSource]
     .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority])
     .slice(0, 5);
 

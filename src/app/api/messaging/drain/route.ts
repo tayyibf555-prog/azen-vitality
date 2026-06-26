@@ -21,6 +21,12 @@ import {
   markOutboxFailed as markNoshowFailed,
   markOutboxBlocked as markNoshowBlocked,
 } from "@/lib/noshow/repository";
+import {
+  listQueuedOutbox as listCoordinatorQueued,
+  recordOutboxSent as recordCoordinatorSent,
+  markOutboxFailed as markCoordinatorFailed,
+  markOutboxBlocked as markCoordinatorBlocked,
+} from "@/lib/coordinator/repository";
 import { SITES } from "@/lib/mock/clients";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +65,7 @@ const SOURCES: OutboxSource[] = [
   { name: "reactivation", list: listReactivationQueued, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
   { name: "recall", list: listRecallQueued, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
   { name: "noshow", list: listNoshowQueued, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked },
+  { name: "coordinator", list: listCoordinatorQueued, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },
 ];
 
 async function drainSource(

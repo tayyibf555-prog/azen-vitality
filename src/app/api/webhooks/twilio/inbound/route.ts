@@ -15,6 +15,12 @@ import {
   insertInboundTouch as insertRecallInboundTouch,
 } from "@/lib/recall/repository";
 import { handleNoshowInbound } from "@/lib/noshow/inbound";
+import {
+  findTargetByAddress as findCoordinatorTargetByAddress,
+  insertInboundTouch as insertCoordinatorInboundTouch,
+} from "@/lib/coordinator/repository";
+import { isOutsideHours, getSiteById } from "@/lib/after-hours/hours";
+import { insertCapture, hasOpenCaptureFrom } from "@/lib/after-hours/repository";
 import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
@@ -123,6 +129,28 @@ export async function POST(request: Request): Promise<Response> {
 
   const siteId = identity?.siteId || target?.siteId || recallTarget?.siteId || DEFAULT_SITE_ID;
 
+  // After-hours capture: if this message landed while the site was closed, log it
+  // to the after-hours worklist so staff see overnight contact. Best-effort and
+  // non-blocking: the booking agent below still responds normally. Deduped so a
+  // back-and-forth in one closed evening makes at most one open capture.
+  try {
+    if (isOutsideHours(getSiteById(siteId), new Date())) {
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      if (!(await hasOpenCaptureFrom(siteId, from, dayAgoIso))) {
+        await insertCapture({
+          siteId,
+          fromNumber: from,
+          dentallyPatientId: identity?.patientId ?? null,
+          patientName: identity?.patientName ?? `Unknown ${from.slice(-4)}`,
+          channel,
+          body,
+        });
+      }
+    }
+  } catch {
+    // Capture is a side log; never let it affect the agent reply.
+  }
+
   // Cadence side-effects when this number is in a cadence. A reply pauses the
   // active sequence so we stop chasing once the patient engages. The reply may
   // correlate to either a reactivation or a recall cadence.
@@ -149,6 +177,19 @@ export async function POST(request: Request): Promise<Response> {
     });
     if (cadence && cadence.status === "active") {
       await updateRecallCadence(cadence.id, { status: "paused" });
+    }
+  } else {
+    // A reply may instead correlate to a treatment-coordinator follow-up. Log it
+    // as an inbound coordinator_touch so the coordinator sweep pauses the cadence
+    // (it skips any opportunity with an inbound touch) and stops chasing.
+    const coordTarget = await findCoordinatorTargetByAddress(from);
+    if (coordTarget) {
+      await insertCoordinatorInboundTouch({
+        opportunityId: coordTarget.opportunityId,
+        siteId: coordTarget.siteId,
+        channel,
+        body,
+      });
     }
   }
 
