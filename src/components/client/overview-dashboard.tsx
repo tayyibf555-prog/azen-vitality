@@ -179,6 +179,29 @@ export function OverviewDashboard() {
     };
   }, [params.client]);
 
+  // Live leads from Speed-to-lead (real enquiries arriving via intake / the quiz),
+  // so the "Recent enquiries" panel reflects what is actually coming in. Falls
+  // back to the mock when empty/erroring so the panel never blanks.
+  const [liveLeads, setLiveLeads] = useState<Lead[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    setLiveLeads(null);
+    if (!params.client) return;
+    fetch(`/api/speed-to-lead/list?client=${encodeURIComponent(params.client)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("leads fetch failed"))))
+      .then((j: { ok?: boolean; leads?: Lead[] }) => {
+        if (active && j.ok && Array.isArray(j.leads) && j.leads.length > 0) {
+          setLiveLeads(j.leads);
+        }
+      })
+      .catch(() => {
+        // Keep the mock fallback on error.
+      });
+    return () => {
+      active = false;
+    };
+  }, [params.client]);
+
   if (!client) {
     return <PageHeader title="Overview" description="This client could not be found." />;
   }
@@ -197,7 +220,7 @@ export function OverviewDashboard() {
     .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority])
     .slice(0, 5);
 
-  const leads = [...LEADS].sort(
+  const leads = [...(liveLeads ?? LEADS)].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 

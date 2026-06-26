@@ -1,7 +1,12 @@
-"use client";
+import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="speed-to-lead" />;
+export default async function SpeedToLeadPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  return <SpeedToLeadView clientSlug={clientSlug} />;
 }

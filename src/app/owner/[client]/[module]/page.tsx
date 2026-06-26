@@ -4,6 +4,8 @@ import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatm
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
 import { RecallView } from "@/components/client/recall/recall-view";
 import { NoshowView } from "@/components/client/noshow/noshow-view";
+import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
+import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
 import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
 import { AgentView } from "@/components/client/agent/agent-view";
@@ -43,6 +45,14 @@ export default async function OwnerModulePage({
 
   if (module === "no-show-defence") {
     return <NoshowView clientSlug={client} />;
+  }
+
+  if (module === "smile-assessment") {
+    return <SmileAssessmentView clientSlug={client} />;
+  }
+
+  if (module === "speed-to-lead") {
+    return <SpeedToLeadView clientSlug={client} />;
   }
 
   if (module === "after-hours") {

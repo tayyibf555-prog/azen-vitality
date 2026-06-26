@@ -1,7 +1,12 @@
-"use client";
+import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="smile-assessment" />;
+export default async function SmileAssessmentPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  return <SmileAssessmentView clientSlug={clientSlug} />;
 }

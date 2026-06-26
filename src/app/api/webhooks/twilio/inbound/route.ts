@@ -201,6 +201,10 @@ export async function POST(request: Request): Promise<Response> {
       await addSuppression(recallTarget.siteId, channel, `patient:${recallTarget.targetId.split(":")[1]}`, "stop");
     } else if (identity) {
       await addSuppression(siteId, channel, `patient:${identity.patientId}`, "stop");
+    } else {
+      // Unrecognised number (e.g. a speed-to-lead lead): suppress by address so
+      // the opt-out is honoured on the channel they actually used.
+      await addSuppression(siteId, channel, from, "stop");
     }
     return twiml();
   }
