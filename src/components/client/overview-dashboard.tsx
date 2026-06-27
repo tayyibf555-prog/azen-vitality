@@ -9,6 +9,7 @@ import {
   Clock,
   Target,
   Flame,
+  ListChecks,
 } from "lucide-react";
 import {
   PageHeader,
@@ -202,6 +203,29 @@ export function OverviewDashboard() {
     };
   }, [params.client]);
 
+  // Live open-task count from the Task queue (computed across every module). A
+  // small "needs attention" line links straight into the worklist. Resets on
+  // client change and falls back to nothing (null) on error so it never misleads.
+  const [openTasks, setOpenTasks] = useState<number | null>(null);
+  useEffect(() => {
+    let active = true;
+    setOpenTasks(null);
+    if (!params.client) return;
+    fetch(`/api/task-queue/list?client=${encodeURIComponent(params.client)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("tasks fetch failed"))))
+      .then((j: { ok?: boolean; counts?: { total?: number } }) => {
+        if (active && j.ok && typeof j.counts?.total === "number") {
+          setOpenTasks(j.counts.total);
+        }
+      })
+      .catch(() => {
+        // Keep nothing on error.
+      });
+    return () => {
+      active = false;
+    };
+  }, [params.client]);
+
   if (!client) {
     return <PageHeader title="Overview" description="This client could not be found." />;
   }
@@ -281,7 +305,21 @@ export function OverviewDashboard() {
           )}
         </SectionCard>
 
-        <SectionCard title="Today" description="Highest-priority actions right now">
+        <SectionCard
+          title="Today"
+          description="Highest-priority actions right now"
+          actions={
+            openTasks && openTasks > 0 ? (
+              <a
+                href={`/c/${client.slug}/task-queue`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-blue-dark/20 bg-blue-dark/10 px-2.5 py-0.5 text-xs font-semibold text-blue-dark transition-colors hover:bg-blue-dark/15"
+              >
+                <ListChecks size={12} />
+                {openTasks} {openTasks === 1 ? "task needs attention" : "tasks need attention"}
+              </a>
+            ) : null
+          }
+        >
           <ul className="space-y-3">
             {briefs.map((b) => (
               <li key={b.id} className="flex items-start gap-3">

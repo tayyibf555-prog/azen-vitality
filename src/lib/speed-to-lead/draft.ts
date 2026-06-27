@@ -1,6 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SONNET } from "@/lib/ai/models";
 import type { Client } from "@/lib/types";
+import { getSite } from "@/lib/mock/clients";
+import { uspPromptLine } from "@/lib/usp/prompt";
+import { listActiveUspTexts } from "@/lib/usp/repository";
 import type { LeadChannel, SpeedToLeadLead } from "./types";
 
 /** First name for a warm opener, falling back to the whole name. */
@@ -24,6 +27,7 @@ export function buildFirstContactPrompt(
   channel: LeadChannel,
   client?: Client,
   campaign?: CampaignContext,
+  usps?: string[],
 ) {
   const practice = client?.name ?? "our dental practice";
   const system = [
@@ -47,6 +51,7 @@ export function buildFirstContactPrompt(
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
     "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
+    uspPromptLine(usps),
     "- Plain text only, suitable for the requested channel.",
   ]
     .filter((line): line is string => line !== null)
@@ -73,7 +78,8 @@ export async function draftFirstContact(
   campaign?: CampaignContext,
   anthropic: Anthropic = new Anthropic(),
 ): Promise<FirstContactResult> {
-  const { system, user } = buildFirstContactPrompt(lead, channel, client, campaign);
+  const usps = await listActiveUspTexts(getSite(lead.siteId)?.clientId ?? "");
+  const { system, user } = buildFirstContactPrompt(lead, channel, client, campaign, usps);
   const msg = await anthropic.messages.create({
     model: SONNET,
     max_tokens: 300,

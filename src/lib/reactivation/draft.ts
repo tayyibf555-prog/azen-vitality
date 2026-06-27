@@ -2,6 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { CadenceStep } from "./cadence";
 import type { ReactivationReason, TouchChannel, ReactivationTarget } from "./types";
 import { gbp } from "@/lib/utils";
+import { getSite } from "@/lib/mock/clients";
+import { uspPromptLine } from "@/lib/usp/prompt";
+import { listActiveUspTexts } from "@/lib/usp/repository";
 
 const REASON_GUIDANCE: Record<ReactivationReason, string> = {
   lapsed:
@@ -18,7 +21,12 @@ const PURPOSE_TONE: Record<CadenceStep["purpose"], string> = {
   final: "This is a final, polite touch. Make it easy to say yes and signal we will not keep chasing.",
 };
 
-export function buildDraftPrompt(t: ReactivationTarget, channel: TouchChannel, step: CadenceStep) {
+export function buildDraftPrompt(
+  t: ReactivationTarget,
+  channel: TouchChannel,
+  step: CadenceStep,
+  usps?: string[],
+) {
   const system = [
     "You are a warm, professional patient coordinator for a UK dental practice.",
     "Write a short re-engagement message to a dormant patient.",
@@ -31,8 +39,11 @@ export function buildDraftPrompt(t: ReactivationTarget, channel: TouchChannel, s
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
     "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
+    uspPromptLine(usps),
     "- Plain text only, suitable for the requested channel.",
-  ].join("\n");
+  ]
+    .filter((l): l is string => l !== null)
+    .join("\n");
 
   const user = [
     `Channel: ${channel}`,
@@ -62,7 +73,8 @@ export async function draftReactivation(
   step: CadenceStep,
   client: Anthropic = new Anthropic(),
 ): Promise<DraftResult> {
-  const { system, user } = buildDraftPrompt(t, channel, step);
+  const usps = await listActiveUspTexts(getSite(t.siteId)?.clientId ?? "");
+  const { system, user } = buildDraftPrompt(t, channel, step, usps);
   const rationale = REASON_RATIONALE[t.reason](t);
   const msg = await client.messages.create({
     model: "claude-sonnet-4-6",

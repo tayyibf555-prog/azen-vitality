@@ -1,3 +1,4 @@
+import { uspPromptLine } from "@/lib/usp/prompt";
 import type { AgentContext } from "./types";
 
 function formatDate(iso: string): string {
@@ -70,6 +71,18 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     "- Never use internal funding or treatment category wording like NHS or private when messaging the patient. These are internal labels, not patient-facing language.",
     "- If they say stop or that they are not interested, thank them and do not push.",
   );
+
+  // Practice selling points (owner-configured USPs), woven in for conversion. The
+  // helper enforces the patient-facing guardrails (no em-dash, no over-promise,
+  // never a clinical guarantee) and returns null when there are none.
+  const uspLine = uspPromptLine(ctx.usps);
+  if (uspLine) {
+    lines.push(
+      "",
+      "PRACTICE SELLING POINTS:",
+      uspLine,
+    );
+  }
 
   return lines.join("\n");
 }

@@ -1,7 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { TouchChannel, TreatmentOpportunity } from "./types";
+import { getSite } from "@/lib/mock/clients";
+import { uspPromptLine } from "@/lib/usp/prompt";
+import { listActiveUspTexts } from "@/lib/usp/repository";
 
-export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel) {
+export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel, usps?: string[]) {
   const system = [
     "You are a warm, professional treatment coordinator for a UK dental practice.",
     "Write a short outreach message to a patient who accepted treatment but has not completed it.",
@@ -13,8 +16,11 @@ export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel)
     "- Under 90 words. Friendly, not pushy.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
     "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
+    uspPromptLine(usps),
     "- Plain text only, suitable for the requested channel.",
-  ].join("\n");
+  ]
+    .filter((l): l is string => l !== null)
+    .join("\n");
 
   const user = [
     `Channel: ${channel}`,
@@ -36,7 +42,8 @@ export async function draftOutreach(
   channel: TouchChannel,
   client: Anthropic = new Anthropic(),
 ): Promise<DraftResult> {
-  const { system, user } = buildDraftPrompt(o, channel);
+  const usps = await listActiveUspTexts(getSite(o.siteId)?.clientId ?? "");
+  const { system, user } = buildDraftPrompt(o, channel, usps);
   const rationale =
     `£${o.amountOutstanding} outstanding on ${o.treatment}, ` +
     `${o.financePresented ? "finance presented" : "finance not yet presented"}.`;

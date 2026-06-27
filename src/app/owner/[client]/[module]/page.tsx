@@ -5,6 +5,7 @@ import { ReactivationView } from "@/components/client/reactivation/reactivation-
 import { RecallView } from "@/components/client/recall/recall-view";
 import { NoshowView } from "@/components/client/noshow/noshow-view";
 import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
+import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
 import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
@@ -14,6 +15,7 @@ import { PatientsView } from "@/components/client/patients/patients-view";
 import { CalendarView } from "@/components/client/calendar/calendar-view";
 import { TodayView } from "@/components/client/today/today-view";
 import { PaymentsView } from "@/components/client/payments/payments-view";
+import { TaskQueueView } from "@/components/client/task-queue/task-queue-view";
 import { PracticeBrainView } from "@/components/client/practice-brain";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
@@ -93,6 +95,14 @@ export default async function OwnerModulePage({
 
   if (module === "payments") {
     return <PaymentsView clientSlug={client} />;
+  }
+
+  if (module === "usps") {
+    return <UspsView clientSlug={client} />;
+  }
+
+  if (module === "task-queue") {
+    return <TaskQueueView clientSlug={client} />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {

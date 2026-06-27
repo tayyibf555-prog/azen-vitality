@@ -42,6 +42,8 @@ export interface AgentContext {
    * agent treats it as a brand new enquiry and does not claim to know them.
    */
   isKnownPatient?: boolean;
+  /** The practice's active USP texts, woven into the prompt for conversion. */
+  usps?: string[];
 }
 
 /** A patient resolved from an inbound phone number. */

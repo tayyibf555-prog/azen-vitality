@@ -25,6 +25,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
+import { getSite } from "@/lib/mock/clients";
+import { listActiveUspTexts } from "@/lib/usp/repository";
 import { AGENT_TOOLS, makeDispatch } from "@/lib/agent/tools";
 import { runAgentTurn } from "@/lib/agent/run";
 import { identifyByPhone } from "@/lib/agent/identify";
@@ -240,6 +242,11 @@ export async function POST(request: Request): Promise<Response> {
     return twiml(); // already handed over; log only
   }
 
+  // The practice's selling points, so the agent can weave them in for conversion.
+  // Resilient: listActiveUspTexts already swallows errors and returns [].
+  const uspClientId = getSite(siteId)?.clientId;
+  const usps = uspClientId ? await listActiveUspTexts(uspClientId) : [];
+
   const context: AgentContext = {
     patientId,
     siteId,
@@ -250,6 +257,7 @@ export async function POST(request: Request): Promise<Response> {
     lastVisitAt: identity?.lastVisitAt ?? null,
     recallDueAt: identity?.recallDueAt ?? null,
     isKnownPatient: knownPatient,
+    usps,
   };
 
   let replyText = "";

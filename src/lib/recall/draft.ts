@@ -3,6 +3,9 @@ import type { CadenceStep } from "./cadence";
 import type { RecallTarget, RecallType } from "./types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { SONNET } from "@/lib/ai/models";
+import { getSite } from "@/lib/mock/clients";
+import { uspPromptLine } from "@/lib/usp/prompt";
+import { listActiveUspTexts } from "@/lib/usp/repository";
 
 const RECALL_TYPE_GUIDANCE: Record<RecallType, string> = {
   dentist:
@@ -17,7 +20,12 @@ const PURPOSE_TONE: Record<CadenceStep["purpose"], string> = {
   final: "This is a final, polite reminder. Make it easy to say yes and signal we will not keep chasing.",
 };
 
-export function buildRecallPrompt(t: RecallTarget, channel: TouchChannel, step: CadenceStep) {
+export function buildRecallPrompt(
+  t: RecallTarget,
+  channel: TouchChannel,
+  step: CadenceStep,
+  usps?: string[],
+) {
   const system = [
     "You are a warm, professional patient coordinator for a UK dental practice.",
     "Write a short recall reminder inviting a patient to book their due appointment.",
@@ -30,8 +38,11 @@ export function buildRecallPrompt(t: RecallTarget, channel: TouchChannel, step: 
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
     "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
+    uspPromptLine(usps),
     "- Plain text only, suitable for the requested channel.",
-  ].join("\n");
+  ]
+    .filter((l): l is string => l !== null)
+    .join("\n");
 
   const overdue =
     t.overdueDays > 0
@@ -67,7 +78,8 @@ export async function draftRecall(
   step: CadenceStep,
   client: Anthropic = new Anthropic(),
 ): Promise<DraftResult> {
-  const { system, user } = buildRecallPrompt(t, channel, step);
+  const usps = await listActiveUspTexts(getSite(t.siteId)?.clientId ?? "");
+  const { system, user } = buildRecallPrompt(t, channel, step, usps);
   const rationale = RECALL_RATIONALE[t.recallType](t);
   const msg = await client.messages.create({
     model: SONNET,

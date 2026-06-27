@@ -9,7 +9,6 @@ import {
   Zap,
   PhoneCall,
   ListChecks,
-  Tags,
   CalendarClock,
   RotateCcw,
   HeartPulse,
@@ -19,6 +18,7 @@ import {
   Bot,
   Sunrise,
   Settings,
+  BadgeCheck,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -116,15 +116,15 @@ export const CLIENT_NAV: NavGroup[] = [
         slug: "task-queue",
         label: "Task queue",
         icon: ListChecks,
-        status: "placeholder",
+        status: "live",
         note: "Feeds coordinators the next prioritised task instead of a drag-and-drop pipeline. Follow-up cadence baked in (fast first touch, then spaced retries before a lead goes cold).",
       },
       {
-        slug: "pricing-usps",
-        label: "Pricing & USPs",
-        icon: Tags,
-        status: "placeholder",
-        note: "Canonical, lightweight source of truth for pricing and USPs, configurable at service and site level so messaging is consistent everywhere.",
+        slug: "usps",
+        label: "USPs",
+        icon: BadgeCheck,
+        status: "live",
+        note: "The practice's selling points, managed by the owner and woven into the AI agents' conversion messaging. Short, truthful, never a clinical guarantee.",
       },
     ],
   },
