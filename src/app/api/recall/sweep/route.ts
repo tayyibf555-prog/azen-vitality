@@ -4,6 +4,7 @@ import { shouldGraduate } from "@/lib/recall/normalise";
 import {
   listDueCadences,
   getTarget,
+  listTouches,
   incrementPriorAttempts,
   updateCadence,
   setTargetStatus,
@@ -11,10 +12,10 @@ import {
   insertTouch,
   approveTouch,
   enqueueOutbox,
-  markTouchSent,
 } from "@/lib/recall/repository";
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,15 @@ async function settleExhausted(target: RecallTarget, now: Date): Promise<void> {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  // Never overlap with another recall sweep: two runs would both see the same
+  // due cadences and draft+queue duplicates. Lease for just under maxDuration so
+  // a crashed run self-heals on the next tick.
+  if (!(await acquireCronLock("sweep-recall", 280))) {
+    return Response.json({ ok: true, skipped: "another run in progress" });
+  }
+
+  try {
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
@@ -62,6 +72,21 @@ export async function POST(request: Request) {
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
     if (!target) continue;
+
+    // Skip if an outbound touch is already pending (approved-but-unsent etc.):
+    // the manual approve→send flow enqueues at approve and only advances the
+    // cadence at send, so a coordinator who approves without sending leaves the
+    // cadence 'due'; without this guard the next sweep would draft a SECOND
+    // message for the same step and the drain would send both. Mirrors the
+    // coordinator sweep predicate exactly.
+    const touches = await listTouches(target.id);
+    const hasPending = touches.some(
+      (t) => t.direction !== "inbound" && t.status !== "sent" && t.status !== "failed",
+    );
+    if (hasPending) {
+      paused += 1;
+      continue;
+    }
 
     const step = stepDef(cadence.currentStep + 1, RECALL_CADENCE);
     if (!step) {
@@ -106,7 +131,10 @@ export async function POST(request: Request) {
       toRef: patientToRef(target),
       body,
     });
-    await markTouchSent(touch.id);
+    // Do NOT markTouchSent here. Leaving the outbox row 'queued' lets the shared
+    // drain deliver it via Twilio and write to_address (the only thing inbound
+    // reply correlation matches on). Marking it sent here would stub the send and
+    // orphan replies. Mirrors the coordinator auto-send path.
     await incrementPriorAttempts(target.id);
 
     const adv = advanceAfter(step.step, now, RECALL_CADENCE);
@@ -129,6 +157,9 @@ export async function POST(request: Request) {
     exhausted,
     graduated,
   });
+  } finally {
+    await releaseCronLock("sweep-recall");
+  }
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

@@ -270,7 +270,7 @@ export function OpportunityDrawer({
                         <p className="text-xs font-semibold text-navy">
                           {t.kind === "booking"
                             ? "Booking"
-                            : `${t.channel ? CHANNEL_LABEL[t.channel] : "Message"} sent (simulated)`}
+                            : `${t.channel ? CHANNEL_LABEL[t.channel] : "Message"} sent`}
                           <span className="ml-2 font-normal text-muted">
                             {relativeTime(t.at, now)}
                           </span>

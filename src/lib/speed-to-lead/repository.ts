@@ -162,6 +162,46 @@ export async function setLeadStage(id: string, stage: LeadStage): Promise<void> 
   if (error) throw error;
 }
 
+/**
+ * Atomically claim a lead for first-contact by the SLA sweep. A single
+ * conditional UPDATE flips stage 'new' → 'contacting' and returns the row only if
+ * it was still 'new'; exactly one caller can win. The sweep contacts only on a
+ * true return, so it can never race the in-request intake contact (which already
+ * owns its brand-new lead). On a send failure the caller must reset the claimed
+ * lead back to 'new' so the next sweep can retry it.
+ *
+ * Returns true iff THIS call won the claim (a row was flipped).
+ */
+export async function claimLeadForContact(id: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .update({ stage: "contacting", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("stage", "new")
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Release a claim made by {@link claimLeadForContact} IFF the lead is still
+ * 'contacting' — a conditional UPDATE 'contacting' → 'new'. Idempotent and safe to
+ * call after every contact attempt: if the contact succeeded (lead now
+ * 'contacted') or progressed, this is a no-op; only a stranded claim (contactLead
+ * threw, or returned early for no-consent/no-address without advancing) is reset
+ * to 'new' so the SLA sweep can re-pick it up.
+ */
+export async function releaseLeadClaim(id: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("speed_to_lead_lead")
+    .update({ stage: "new", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("stage", "contacting");
+  if (error) throw error;
+}
+
 export async function recordFirstResponse(
   id: string,
   fields: { firstResponseAt: string; conversationId: string | null },
@@ -237,7 +277,7 @@ export async function findOpenLeadByAddress(
       .select("*")
       .eq("site_id", siteId)
       .eq(col, val)
-      .in("stage", ["new", "contacted", "qualifying"])
+      .in("stage", ["new", "contacting", "contacted", "qualifying"])
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -279,6 +319,42 @@ export async function insertAttempt(input: InsertAttemptInput): Promise<SpeedToL
     .single();
   if (error) throw error;
   return rowToAttempt(data as AttemptRow);
+}
+
+/**
+ * Update a first-contact attempt's delivery status from a Twilio status callback,
+ * matched by provider_message_id (the attempt that carried this SID; rows for other
+ * leads are untouched). On a terminal FAILURE (failed/undelivered) the lead is reset
+ * to a retryable state — stage back to 'new' and first_response_at cleared — so the
+ * SLA sweep (`listUncontacted`) re-picks it up and the contact is retried. Without
+ * this a silently-failed first SMS would be invisible and never retried.
+ */
+export async function updateAttemptStatusByMessageId(
+  providerMessageId: string,
+  status: "sent" | "delivered" | "failed",
+): Promise<void> {
+  const db = serviceClient();
+
+  // The attempt row stores only 'sent' | 'failed'; 'delivered' confirms a send.
+  const attemptStatus: "sent" | "failed" = status === "failed" ? "failed" : "sent";
+  const { data, error } = await db
+    .from("speed_to_lead_attempt")
+    .update({ status: attemptStatus })
+    .eq("provider_message_id", providerMessageId)
+    .select("lead_id")
+    .maybeSingle();
+  if (error) throw error;
+  // No matching attempt: this SID belongs to another module's outbox (no-op).
+  if (!data) return;
+
+  if (status === "failed") {
+    const leadId = (data as { lead_id: string }).lead_id;
+    const { error: leadErr } = await db
+      .from("speed_to_lead_lead")
+      .update({ stage: "new", first_response_at: null, updated_at: new Date().toISOString() })
+      .eq("id", leadId);
+    if (leadErr) throw leadErr;
+  }
 }
 
 export async function listAttempts(leadId: string): Promise<SpeedToLeadAttempt[]> {

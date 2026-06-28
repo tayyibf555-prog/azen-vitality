@@ -9,6 +9,7 @@ import type { Lead, LeadStage } from "@/lib/types";
 
 const STAGE_TONE: Record<LeadStage, Tone> = {
   new: "info",
+  contacting: "info", // transient in-flight claim; display like 'new'
   contacted: "success",
   qualifying: "info",
   booked: "success",
@@ -16,6 +17,7 @@ const STAGE_TONE: Record<LeadStage, Tone> = {
 };
 const STAGE_LABEL: Record<LeadStage, string> = {
   new: "New",
+  contacting: "New", // transient; reads as still-new to staff
   contacted: "Contacted",
   qualifying: "Qualifying",
   booked: "Booked",
@@ -35,6 +37,7 @@ function whenLabel(iso: string): string {
     month: "long",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Europe/London",
   });
 }
 

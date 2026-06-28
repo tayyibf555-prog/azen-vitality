@@ -11,6 +11,7 @@ import {
 import type { TouchChannel, TreatmentOpportunity } from "@/lib/coordinator/types";
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -43,6 +44,14 @@ export async function POST(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
+  // Never overlap with another coordinator sweep: two runs would both see the
+  // same open opportunities and draft+queue duplicates. Lease for just under
+  // maxDuration so a crashed run self-heals on the next tick.
+  if (!(await acquireCronLock("sweep-coordinator", 280))) {
+    return Response.json({ ok: true, skipped: "another run in progress" });
+  }
+
+  try {
   const now = new Date();
   const opportunities = await listOpportunities({
     siteIds: vitalitySiteIds(),
@@ -150,6 +159,9 @@ export async function POST(request: Request) {
   }
 
   return Response.json({ ok: true, swept, drafted, autoSent, awaitingApproval, skipped });
+  } finally {
+    await releaseCronLock("sweep-coordinator");
+  }
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

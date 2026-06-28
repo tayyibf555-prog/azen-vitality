@@ -1,5 +1,6 @@
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
 import { sendMessage } from "@/lib/messaging/send";
+import { isSuppressed } from "@/lib/messaging/suppression";
 import { identifyByPhone } from "@/lib/agent/identify";
 import { DentallyClient } from "@/lib/dentally/client";
 import { insertCapture, markFollowUpSent, hasOpenCaptureFrom } from "@/lib/after-hours/repository";
@@ -112,14 +113,20 @@ export async function POST(request: Request): Promise<Response> {
 
   if (outside) {
     // Send an SMS follow-up so the caller can book by text, then record that we did.
+    // Honour the opt-out list first: a number that texted STOP must not be texted,
+    // even off the back of a missed call. The call is still logged for a callback.
     try {
-      await sendMessage({
-        channel: "sms",
-        to: from,
-        body:
-          "Hi, sorry we missed you at Vitality Dental. We're currently closed but I can help you book by text, just reply here with what you need.",
-      });
-      if (captureId) await markFollowUpSent(captureId);
+      if (await isSuppressed(siteId, "sms", from)) {
+        // Suppressed: skip the SMS. The capture row remains for a manual callback.
+      } else {
+        await sendMessage({
+          channel: "sms",
+          to: from,
+          body:
+            "Hi, sorry we missed you at Vitality Dental. We're currently closed but I can help you book by text, just reply here with what you need.",
+        });
+        if (captureId) await markFollowUpSent(captureId);
+      }
     } catch {
       // Delivery failed (no key, dry-run off, unreachable): the call is still
       // logged. Swallow so Twilio gets a clean TwiML response and does not retry.

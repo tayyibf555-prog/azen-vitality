@@ -26,12 +26,15 @@ export async function GET(request: Request): Promise<Response> {
 
   const byStage: Record<LeadStage, number> = {
     new: 0,
+    contacting: 0,
     contacted: 0,
     qualifying: 0,
     booked: 0,
     lost: 0,
   };
-  for (const r of rows) byStage[r.stage] += 1;
+  // 'contacting' is a transient in-flight claim; count it as 'new' so the stats
+  // (built from STAGES, which omits 'contacting') stay correct and stable.
+  for (const r of rows) byStage[r.stage === "contacting" ? "new" : r.stage] += 1;
 
   // Average first-response time across leads we actually contacted.
   const responses = rows

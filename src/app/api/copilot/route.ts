@@ -39,6 +39,13 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // The co-pilot can read ANY patient record for the practice, so restrict it to
+  // the owner (and agency admins). A coordinator/employee login must not get the
+  // full-DB co-pilot until per-role tool scoping exists. (auth is null only when
+  // enforcement is off, i.e. local/dev, where everything is already open.)
+  if (auth && auth.role !== "client_owner" && auth.role !== "agency_admin") {
+    return Response.json({ ok: false, error: "The co-pilot is available to the practice owner." }, { status: 403 });
+  }
 
   const siteIds = client ? getSites(client.id).map((s) => s.id) : [];
 

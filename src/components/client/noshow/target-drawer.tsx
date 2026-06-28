@@ -17,6 +17,7 @@ function whenLabel(iso: string): string {
     month: "long",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Europe/London",
   });
 }
 
@@ -103,7 +104,7 @@ export function TargetDrawer({
       });
       setStatus("confirmed");
       setShowBook(false);
-      setNote(`Rebooked for ${new Date(start).toLocaleString("en-GB")}.`);
+      setNote(`Rebooked for ${new Date(start).toLocaleString("en-GB", { timeZone: "Europe/London" })}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not rebook.");
     } finally {

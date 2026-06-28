@@ -47,7 +47,7 @@ function longDate(now: Date): string {
     weekday: "long",
     day: "numeric",
     month: "long",
-    timeZone: "UTC",
+    timeZone: "Europe/London",
   });
 }
 

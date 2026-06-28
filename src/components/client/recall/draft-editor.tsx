@@ -203,7 +203,7 @@ export function DraftEditor({
       {phase === "sent" ? (
         <div className="flex items-center justify-center gap-2 rounded-lg border border-success/20 bg-success/10 py-3 text-sm font-semibold text-success">
           <Check size={16} />
-          Sent (simulated)
+          Sent
         </div>
       ) : null}
 

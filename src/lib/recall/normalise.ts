@@ -1,3 +1,5 @@
+import { londonOverdueDays } from "@/lib/time/london";
+
 import type { RecallTarget, RecallType } from "./types";
 
 export interface RecallConfig {
@@ -31,16 +33,6 @@ export interface RecallInput {
   futureBookingExists: boolean;   // any appointment in the future
 }
 
-const DAY = 86_400_000;
-
-/** (now - dueIso) in days. Positive = overdue, negative = due in future. */
-function overdueDaysBetween(dueIso: string, now: Date): number {
-  const t = new Date(dueIso).getTime();
-  // An unparseable date must never enter the window; fail safe to "too early".
-  if (Number.isNaN(t)) return Number.NEGATIVE_INFINITY;
-  return (now.getTime() - t) / DAY;
-}
-
 const RECALL_DATES: { type: RecallType; key: "dentist_recall_date" | "hygienist_recall_date" }[] = [
   { type: "dentist", key: "dentist_recall_date" },
   { type: "hygienist", key: "hygienist_recall_date" },
@@ -71,7 +63,10 @@ export function classifyRecall(
     const due = i.patient[key];
     if (typeof due !== "string" || due === "") continue;
 
-    const overdue = overdueDaysBetween(due, now);
+    // Whole-day London overdue delta (positive = overdue), stable across the
+    // local midnight boundary. NEGATIVE_INFINITY for an unparseable date keeps
+    // it out of the window (fail safe to "too early").
+    const overdue = londonOverdueDays(due, now);
     // Inside the window: due within the lead, and not past the grace boundary.
     if (overdue < -cfg.leadWindowDays || overdue > cfg.graceDays) continue;
 

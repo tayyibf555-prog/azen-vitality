@@ -24,6 +24,10 @@ export const maxDuration = 300;
 
 const RESOURCE = "noshow";
 const DAY = 86_400_000;
+// Hard per-run cap on appointments processed, so a large day's book can't blow the
+// 300s function limit. Anything over the cap is reported as remaining and picked up
+// on the next cron tick (the appointment window is re-queried each run).
+const MAX_APPOINTMENTS_PER_RUN = 300;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -142,7 +146,7 @@ async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: NoshowConfig,
-): Promise<{ siteId: string; pulled: number; upserted: number; enrolled: number }> {
+): Promise<{ siteId: string; pulled: number; upserted: number; enrolled: number; processed: number; remaining: number }> {
   const now = new Date();
   const toDate = new Date(now.getTime() + cfg.leadDays * DAY);
 
@@ -150,13 +154,29 @@ async function syncSite(
   const rawAppts = Array.isArray(res.appointments) ? res.appointments : [];
 
   const targets = [];
+  let processed = 0;
+  let remaining = 0;
   for (const rawAppt of rawAppts) {
     const appt = mapAppointment(rawAppt);
     if (!appt) continue;
 
+    // Cap reached: count the rest as remaining for the next tick and stop processing.
+    if (processed >= MAX_APPOINTMENTS_PER_RUN) {
+      remaining += 1;
+      continue;
+    }
+
     const patientRes = await client.getPatient(appt.patientId).catch(() => ({ patient: {} }));
     const consent = mapPatientConsent(asRecord(patientRes.patient));
-    const history = summariseHistory(await client.getPatientAppointments(appt.patientId), now);
+    // One bad record must not kill the run: on a failed secondary call, skip this
+    // appointment and move on to the next.
+    let historyRes: { appointments: unknown[] };
+    try {
+      historyRes = await client.getPatientAppointments(appt.patientId);
+    } catch {
+      continue;
+    }
+    const history = summariseHistory(historyRes, now);
 
     const input: NoshowInput = {
       siteId,
@@ -179,6 +199,7 @@ async function syncSite(
 
     const target = toNoshowTarget(input, cfg);
     if (target) targets.push(target);
+    processed += 1;
   }
 
   // Preserve a target's lifecycle status + attempt count across re-syncs, so a
@@ -211,7 +232,7 @@ async function syncSite(
   }
 
   await setSyncState(siteId, RESOURCE, now.toISOString());
-  return { siteId, pulled: rawAppts.length, upserted: ranked.length, enrolled };
+  return { siteId, pulled: rawAppts.length, upserted: ranked.length, enrolled, processed, remaining };
 }
 
 export async function POST(request: Request) {
@@ -227,9 +248,15 @@ export async function POST(request: Request) {
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
   });
   const cfg = config();
-  const perSite = [];
+  // One site's failure must not abort the rest: record the error and move on so a
+  // partial failure is observable and self-heals next tick (no all-or-nothing 500).
+  const perSite: Array<Record<string, unknown>> = [];
   for (const siteId of vitalitySiteIds()) {
-    perSite.push(await syncSite(client, siteId, cfg));
+    try {
+      perSite.push(await syncSite(client, siteId, cfg));
+    } catch (e) {
+      perSite.push({ siteId, error: String(e) });
+    }
   }
   return Response.json({ ok: true, perSite });
 }

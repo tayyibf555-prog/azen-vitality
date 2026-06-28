@@ -65,7 +65,11 @@ export interface SessionUser {
  * Operational entities (all site-scoped)
  * -------------------------------------------------------------------------- */
 
-export type LeadStage = "new" | "contacted" | "qualifying" | "booked" | "lost";
+// "contacting" is a transient in-flight claim: the speed-to-lead SLA sweep moves a
+// lead 'new' → 'contacting' atomically before sending, so it can't race the
+// in-request intake contact. It resets to 'new' on send failure and advances to
+// 'contacted' on success, so it is short-lived; the worklist treats it like 'new'.
+export type LeadStage = "new" | "contacting" | "contacted" | "qualifying" | "booked" | "lost";
 export type Channel = "sms" | "email" | "whatsapp" | "phone";
 
 export interface Lead {

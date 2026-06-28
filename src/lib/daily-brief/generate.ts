@@ -7,6 +7,8 @@ import { listTargets as listReactivationTargets } from "@/lib/reactivation/repos
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { listCaptures } from "@/lib/after-hours/repository";
 
+import { londonDayKey } from "@/lib/time/london";
+
 import type { BriefContext, BriefItem, BriefLine, BriefSection, DailyBrief } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -23,14 +25,14 @@ const DAY_MS = 86_400_000;
 const PRIORITY_RANK: Record<BriefItem["priority"], number> = { high: 0, medium: 1, low: 2 };
 const HIGH_VALUE_OUTSTANDING = 1000; // GBP threshold for "large balance"
 
-/** YYYY-MM-DD for a date in UTC (the diary stores ISO instants). */
+/** YYYY-MM-DD for the Europe/London calendar day of an instant. */
 function dayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return londonDayKey(d);
 }
 
-/** Whether an ISO instant falls on the given UTC day. */
+/** Whether an ISO instant falls on the given Europe/London day. */
 function isOnDay(iso: string, day: string): boolean {
-  return typeof iso === "string" && iso.slice(0, 10) === day;
+  return typeof iso === "string" && londonDayKey(new Date(iso)) === day;
 }
 
 /** A safe read: run the loader, fall back to the given empty value on any error. */

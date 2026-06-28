@@ -1,5 +1,5 @@
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
-import { isStopKeyword, addSuppression } from "@/lib/messaging/suppression";
+import { isStopKeyword, addSuppression, isSuppressed } from "@/lib/messaging/suppression";
 import type { MessageChannel } from "@/lib/messaging/types";
 import {
   findTargetByAddress,
@@ -240,6 +240,20 @@ export async function POST(request: Request): Promise<Response> {
   }
   if (conversation.status === "needs_human") {
     return twiml(); // already handed over; log only
+  }
+
+  // Opt-out gate: if this number texted STOP (suppressed by address or, for a known
+  // patient, by patient id), do NOT let the conversion-oriented agent auto-reply.
+  // Hand to a human so an opted-out patient is never re-engaged by an automated,
+  // promotional message. Their inbound is already logged above for a manual reply.
+  // Structured transactional no-show replies (YES/CANCEL) are handled earlier and
+  // are exempt, since those answer the patient's own action.
+  const optedOut =
+    (await isSuppressed(siteId, channel, from)) ||
+    (identity ? await isSuppressed(siteId, channel, `patient:${identity.patientId}`) : false);
+  if (optedOut) {
+    await setConversationStatus(conversation.id, "needs_human");
+    return twiml();
   }
 
   // The practice's selling points, so the agent can weave them in for conversion.

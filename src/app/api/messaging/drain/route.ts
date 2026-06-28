@@ -2,6 +2,7 @@ import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import type { MessageChannel } from "@/lib/messaging/types";
 import {
   listQueuedOutbox as listReactivationQueued,
@@ -78,11 +79,32 @@ async function drainSource(
   let sent = 0, failed = 0, blocked = 0;
   for (const row of rows) {
     const channel = row.channel as MessageChannel;
-    try {
-      const to = await resolveRecipient(row.toRef, channel, client);
-      if (!to) { await source.markFailed(row.id); failed += 1; continue; }
-      if (await isSuppressed(row.siteId, channel, row.toRef)) { await source.markBlocked(row.id); blocked += 1; continue; }
 
+    // Resolve the recipient first. A THROW here is transient (e.g. Dentally briefly
+    // unavailable): leave the row 'queued' so the next drain retries, rather than
+    // marking it permanently failed.
+    let to: string | null;
+    try {
+      to = await resolveRecipient(row.toRef, channel, client);
+    } catch {
+      continue;
+    }
+    // No deliverable contact on file is permanent: mark failed.
+    if (!to) { await source.markFailed(row.id); failed += 1; continue; }
+
+    // Honour opt-out by the touch ref (patient:<id>) AND the resolved address, so a
+    // STOP recorded against either form blocks the send (a number that opted out
+    // while unidentified is suppressed by address, not by patient id).
+    if (
+      (await isSuppressed(row.siteId, channel, row.toRef)) ||
+      (await isSuppressed(row.siteId, channel, to))
+    ) {
+      await source.markBlocked(row.id);
+      blocked += 1;
+      continue;
+    }
+
+    try {
       const result = await sendMessage({
         channel,
         to,
@@ -96,6 +118,8 @@ async function drainSource(
       });
       sent += 1;
     } catch {
+      // Delivery threw. Mark failed; the Twilio status webhook tracks terminal
+      // delivery state separately for any retryable handling.
       await source.markFailed(row.id);
       failed += 1;
     }
@@ -108,25 +132,37 @@ export async function POST(request: Request): Promise<Response> {
 
   const apiKey = process.env.DENTALLY_API_KEY;
   if (!apiKey) return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
-  const client = new DentallyClient({ apiKey, baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co" });
 
-  // Twilio rejects a StatusCallback that is not publicly reachable, so only
-  // attach it when PUBLIC_BASE_URL is a real https endpoint (deployed app or tunnel).
-  const base = process.env.PUBLIC_BASE_URL ?? "";
-  const statusCallbackUrl = base.startsWith("https://")
-    ? `${base}/api/webhooks/twilio/status`
-    : undefined;
-
-  const siteIds = vitalitySiteIds();
-  let drained = 0, sent = 0, failed = 0, blocked = 0;
-  const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number }> = {};
-  for (const source of SOURCES) {
-    const r = await drainSource(source, client, siteIds, statusCallbackUrl);
-    perSource[source.name] = r;
-    drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
+  // Never overlap with another drain run: two drains would list the same 'queued'
+  // rows and both send, double-texting the patient. Lease for just under the
+  // function's maxDuration so a crashed run self-heals on the next tick.
+  if (!(await acquireCronLock("drain", 280))) {
+    return Response.json({ ok: true, skipped: "another drain run is in progress" });
   }
 
-  return Response.json({ ok: true, drained, sent, failed, blocked, perSource });
+  const client = new DentallyClient({ apiKey, baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co" });
+
+  try {
+    // Twilio rejects a StatusCallback that is not publicly reachable, so only
+    // attach it when PUBLIC_BASE_URL is a real https endpoint (deployed app or tunnel).
+    const base = process.env.PUBLIC_BASE_URL ?? "";
+    const statusCallbackUrl = base.startsWith("https://")
+      ? `${base}/api/webhooks/twilio/status`
+      : undefined;
+
+    const siteIds = vitalitySiteIds();
+    let drained = 0, sent = 0, failed = 0, blocked = 0;
+    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number }> = {};
+    for (const source of SOURCES) {
+      const r = await drainSource(source, client, siteIds, statusCallbackUrl);
+      perSource[source.name] = r;
+      drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
+    }
+
+    return Response.json({ ok: true, drained, sent, failed, blocked, perSource });
+  } finally {
+    await releaseCronLock("drain");
+  }
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

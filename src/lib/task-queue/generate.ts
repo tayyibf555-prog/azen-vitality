@@ -6,6 +6,7 @@ import { listOpportunities } from "@/lib/coordinator/repository";
 import { listTargets as listNoshowTargets } from "@/lib/noshow/repository";
 import { listCaptures } from "@/lib/after-hours/repository";
 import { listResponses } from "@/lib/smile-assessment/repository";
+import { londonDateTimeLabel } from "@/lib/time/london";
 import { computePriority, applyOverlay } from "./logic";
 import { getOverlayMap } from "./repository";
 import type { CandidateTask, Task, TaskOverlayState } from "./types";
@@ -37,9 +38,7 @@ function overdueHint(days: number): string {
 }
 
 function apptHint(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "soon";
-  return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return londonDateTimeLabel(iso);
 }
 
 // --- Per-module candidate builders -----------------------------------------

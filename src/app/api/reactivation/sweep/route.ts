@@ -3,15 +3,16 @@ import { stepDef, advanceAfter } from "@/lib/reactivation/cadence";
 import {
   listDueCadences,
   getTarget,
+  listTouches,
   insertTouch,
   approveTouch,
   enqueueOutbox,
-  markTouchSent,
   incrementPriorAttempts,
   updateCadence,
   setTargetStatus,
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,15 @@ function patientToRef(t: ReactivationTarget): string {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  // Never overlap with another reactivation sweep: two runs would both see the
+  // same due cadences and draft+queue duplicates. Lease for just under
+  // maxDuration so a crashed run self-heals on the next tick.
+  if (!(await acquireCronLock("sweep-reactivation", 280))) {
+    return Response.json({ ok: true, skipped: "another run in progress" });
+  }
+
+  try {
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
@@ -48,6 +58,20 @@ export async function POST(request: Request) {
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
     if (!target) continue;
+
+    // Skip if an outbound touch is already pending (approved-but-unsent etc.):
+    // the manual approve→send flow enqueues at approve and only advances the
+    // cadence at send, so an approval without a send leaves the cadence 'due';
+    // without this guard the next sweep would draft a SECOND message for the
+    // same step and the drain would send both. Mirrors the coordinator sweep.
+    const touches = await listTouches(target.id);
+    const hasPending = touches.some(
+      (t) => t.direction !== "inbound" && t.status !== "sent" && t.status !== "failed",
+    );
+    if (hasPending) {
+      paused += 1;
+      continue;
+    }
 
     const step = stepDef(cadence.currentStep + 1);
     if (!step) {
@@ -78,7 +102,10 @@ export async function POST(request: Request) {
     drafted += 1;
 
     if (target.recoverableValue < autoSendThreshold()) {
-      // Low value: auto approve, queue, send (stub), advance.
+      // Low value: auto approve + queue. Do NOT markTouchSent here; leaving the
+      // outbox row 'queued' lets the shared drain deliver it and write to_address
+      // (the only thing inbound reply correlation matches on). Stubbing it here
+      // would orphan replies and skip the real send. Mirrors the coordinator sweep.
       await approveTouch(touch.id, "auto");
       await enqueueOutbox({
         touchId: touch.id,
@@ -87,7 +114,6 @@ export async function POST(request: Request) {
         toRef: patientToRef(target),
         body,
       });
-      await markTouchSent(touch.id);
       await incrementPriorAttempts(target.id);
       const adv = advanceAfter(step.step, now);
       await updateCadence(cadence.id, {
@@ -114,6 +140,9 @@ export async function POST(request: Request) {
     paused,
     exhausted,
   });
+  } finally {
+    await releaseCronLock("sweep-reactivation");
+  }
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

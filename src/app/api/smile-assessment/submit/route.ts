@@ -100,7 +100,13 @@ export async function POST(request: Request): Promise<Response> {
   // auto-contact path to anonymous web traffic; tracked separately.
   const requiredKey = process.env.SMILE_ASSESSMENT_SUBMIT_KEY;
   const providedKey = request.headers.get("x-intake-key") ?? str(body.intakeKey);
-  const trusted = !requiredKey || providedKey === requiredKey;
+  // "Trusted" submits may auto-send a real SMS. With a key configured, require it.
+  // With NO key configured: trusted only outside production. In production an unset
+  // key fails closed (record + score, never auto-SMS) so an un-gated deploy can
+  // never be used as an open SMS relay.
+  const trusted = requiredKey
+    ? providedKey === requiredKey
+    : process.env.NODE_ENV !== "production";
 
   try {
     const firstName = str(body.firstName);

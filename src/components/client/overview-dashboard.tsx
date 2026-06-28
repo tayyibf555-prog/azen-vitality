@@ -48,6 +48,7 @@ const METRIC_LABEL: Record<BriefItem["metric"], string> = {
 };
 const STAGE_TONE: Record<Lead["stage"], Tone> = {
   new: "info",
+  contacting: "info", // transient in-flight claim; display like 'new'
   contacted: "info",
   qualifying: "warning",
   booked: "success",

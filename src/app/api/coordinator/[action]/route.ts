@@ -5,7 +5,6 @@ import {
   enqueueOutbox,
   getOpportunity,
   insertTouch,
-  markTouchSent,
   setLastTouchAt,
 } from "@/lib/coordinator/repository";
 import type {
@@ -163,11 +162,13 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
     return badRequest("opportunityId is required");
   }
 
-  // STUB adapter: mark the touch (and its outbox row) sent, provider 'stub'.
-  await markTouchSent(touchId);
+  // The approved touch was already enqueued by handleApprove; the shared drain
+  // delivers it via Twilio and writes to_address (inbound-reply correlation). Do
+  // NOT stub-send it here. This just records that the opportunity was actioned.
+  void touchId;
   await setLastTouchAt(opportunityId, new Date().toISOString());
 
-  return Response.json({ ok: true, sentVia: "stub" });
+  return Response.json({ ok: true });
 }
 
 async function handleBook(body: Record<string, unknown>): Promise<Response> {

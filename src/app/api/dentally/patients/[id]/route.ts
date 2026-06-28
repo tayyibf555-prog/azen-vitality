@@ -13,10 +13,12 @@ export async function GET(
   const siteId = new URL(request.url).searchParams.get("siteId") ?? "";
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
-  if (siteId) {
-    const denied = requireSiteAccess(auth, siteId);
-    if (denied) return denied;
-  }
+  // siteId is MANDATORY and the site guard ALWAYS runs. Previously the guard was
+  // skipped when siteId was omitted, so any caller could read any patient's full
+  // record by id with no tenant check (IDOR). Fail closed instead.
+  if (!siteId) return Response.json({ ok: false, error: "siteId is required" }, { status: 400 });
+  const denied = requireSiteAccess(auth, siteId);
+  if (denied) return denied;
   try {
     const detail = await getPatientDetail(id, siteId);
     return Response.json({ ok: true, ...detail });

@@ -36,7 +36,7 @@ function whenLabel(t: RecallTarget): string {
 }
 
 function whyNow(t: RecallTarget): string {
-  const due = new Date(t.dueAt).toLocaleDateString("en-GB");
+  const due = new Date(t.dueAt).toLocaleDateString("en-GB", { timeZone: "Europe/London" });
   if (t.recallType === "dentist") {
     return `Dentist checkup recall due ${due}, ${whenLabel(t)}. Book the checkup.`;
   }
@@ -106,7 +106,7 @@ export function TargetDrawer({
       setShowBook(false);
       setTouches((prev) => [
         ...prev,
-        { id: `b-${prev.length}`, kind: "booking", body: `Recall booked for ${new Date(start).toLocaleString("en-GB")}`, at: new Date().toISOString() },
+        { id: `b-${prev.length}`, kind: "booking", body: `Recall booked for ${new Date(start).toLocaleString("en-GB", { timeZone: "Europe/London" })}`, at: new Date().toISOString() },
       ]);
     } catch (err) {
       setBookError(err instanceof Error ? err.message : "Could not book the appointment.");
@@ -221,7 +221,7 @@ export function TargetDrawer({
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-semibold text-navy">
-                          {t.kind === "booking" ? "Booking" : `${t.channel ? CHANNEL_LABEL[t.channel] : "Message"} sent (simulated)`}
+                          {t.kind === "booking" ? "Booking" : `${t.channel ? CHANNEL_LABEL[t.channel] : "Message"} sent`}
                           <span className="ml-2 font-normal text-muted">{relativeTime(t.at, now)}</span>
                         </p>
                         <p className="mt-0.5 line-clamp-3 text-sm text-ink">{t.body}</p>

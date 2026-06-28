@@ -8,6 +8,18 @@ export class DentallyError extends Error {
 
 interface Opts { apiKey: string; baseUrl: string; fetchImpl?: FetchImpl; userAgent?: string; }
 
+/**
+ * Hard per-request timeout. Without it a hung connection stalls until the 300s
+ * function limit, killing an entire unattended sync run. Abort at 15s and
+ * surface it as a DentallyError so callers treat it like any other failure.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/** True for an aborted/timed-out fetch (DOMException 'AbortError' or a TimeoutError). */
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
+}
+
 export interface ListPlansArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface ListPatientsArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface AvailabilityArgs { siteId: string; fromDate?: string; toDate?: string; duration?: number; }
@@ -33,9 +45,16 @@ export class DentallyClient {
   private async get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
     const url = this.buildUrl(path);
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
-    const res = await this.fetchImpl(url, {
-      headers: { Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent, Accept: "application/json" },
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        headers: { Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (isAbortError(e)) throw new DentallyError(0, `request timed out after ${REQUEST_TIMEOUT_MS}ms: GET ${path}`);
+      throw e;
+    }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
     return (await res.json()) as T;
   }
@@ -50,14 +69,21 @@ export class DentallyClient {
   /** Register a new patient (onboarding). */
   async createPatient(payload: Record<string, unknown>) {
     const url = this.buildUrl("/v1/patients");
-    const res = await this.fetchImpl(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
-        "Content-Type": "application/json", Accept: "application/json",
-      },
-      body: JSON.stringify({ patient: payload }),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
+          "Content-Type": "application/json", Accept: "application/json",
+        },
+        body: JSON.stringify({ patient: payload }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (isAbortError(e)) throw new DentallyError(0, `request timed out after ${REQUEST_TIMEOUT_MS}ms: POST /v1/patients`);
+      throw e;
+    }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
     return (await res.json()) as { patient: { id: string } };
   }
@@ -102,14 +128,21 @@ export class DentallyClient {
 
   async createAppointment(payload: Record<string, unknown>) {
     const url = this.buildUrl("/v1/appointments");
-    const res = await this.fetchImpl(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
-        "Content-Type": "application/json", Accept: "application/json",
-      },
-      body: JSON.stringify({ appointment: payload }),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
+          "Content-Type": "application/json", Accept: "application/json",
+        },
+        body: JSON.stringify({ appointment: payload }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (isAbortError(e)) throw new DentallyError(0, `request timed out after ${REQUEST_TIMEOUT_MS}ms: POST /v1/appointments`);
+      throw e;
+    }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
     return (await res.json()) as { appointment: { id: string } };
   }
@@ -117,14 +150,21 @@ export class DentallyClient {
   /** Edit an existing appointment, e.g. move it to a new start_time (reschedule). */
   async updateAppointment(id: string, payload: Record<string, unknown>) {
     const url = this.buildUrl(`/v1/appointments/${id}`);
-    const res = await this.fetchImpl(url, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
-        "Content-Type": "application/json", Accept: "application/json",
-      },
-      body: JSON.stringify({ appointment: payload }),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
+          "Content-Type": "application/json", Accept: "application/json",
+        },
+        body: JSON.stringify({ appointment: payload }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (isAbortError(e)) throw new DentallyError(0, `request timed out after ${REQUEST_TIMEOUT_MS}ms: PUT /v1/appointments/${id}`);
+      throw e;
+    }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
     return (await res.json()) as { appointment: { id: string; start_time?: string; state?: string } };
   }
@@ -132,10 +172,17 @@ export class DentallyClient {
   /** Cancel an existing appointment (sets its state to cancelled). */
   async cancelAppointment(id: string) {
     const url = this.buildUrl(`/v1/appointments/${id}`);
-    const res = await this.fetchImpl(url, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent, Accept: "application/json" },
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (isAbortError(e)) throw new DentallyError(0, `request timed out after ${REQUEST_TIMEOUT_MS}ms: DELETE /v1/appointments/${id}`);
+      throw e;
+    }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
     return (await res.json()) as { appointment: { id: string; state?: string } };
   }

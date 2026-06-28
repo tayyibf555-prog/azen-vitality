@@ -9,7 +9,6 @@ import {
   insertTouch,
   approveTouch,
   enqueueOutbox,
-  markTouchSent,
   incrementPriorAttempts,
   setTargetStatus,
 } from "@/lib/reactivation/repository";
@@ -140,7 +139,10 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
   if (typeof step !== "number") return badRequest("step (number) is required");
 
   const now = new Date();
-  await markTouchSent(touchId);
+  // The approved touch was already enqueued by handleApprove; the shared drain
+  // delivers it and writes to_address. Do NOT stub-send it here (that would orphan
+  // replies). We only advance the cadence and attempt bookkeeping.
+  void touchId;
   await incrementPriorAttempts(targetId);
 
   // Advance the cadence position past the step we just sent.
@@ -156,7 +158,7 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
     if (adv.status === "exhausted") await setTargetStatus(targetId, "exhausted");
   }
 
-  return Response.json({ ok: true, sentVia: "stub" });
+  return Response.json({ ok: true });
 }
 
 async function handlePauseResume(body: Record<string, unknown>, resume: boolean): Promise<Response> {

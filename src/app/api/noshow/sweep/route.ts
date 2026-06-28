@@ -16,6 +16,7 @@ import {
 import type { NoshowTarget } from "@/lib/noshow/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { cronUnauthorized } from "@/lib/cron";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,15 @@ function patientToRef(t: NoshowTarget): string {
 export async function POST(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
+
+  // Never overlap with another no-show sweep: two runs would both see the same
+  // due cadences (and expired offers) and double-send / double-reoffer. Lease for
+  // just under maxDuration so a crashed run self-heals on the next tick.
+  if (!(await acquireCronLock("sweep-noshow", 280))) {
+    return Response.json({ ok: true, skipped: "another run in progress" });
+  }
+
+  try {
   const now = new Date();
 
   // A) Send due confirmations / reminders.
@@ -119,6 +129,9 @@ export async function POST(request: Request) {
   }
 
   return Response.json({ ok: true, swept: due.length, sent, ended, offersExpired, reoffered });
+  } finally {
+    await releaseCronLock("sweep-noshow");
+  }
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

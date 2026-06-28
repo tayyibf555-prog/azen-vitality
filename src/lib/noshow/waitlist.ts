@@ -29,7 +29,11 @@ export function pickCandidate(
   slot: FreedSlot,
   excludeIds: Set<string> = new Set(),
 ): WaitlistEntry | null {
-  const eligible = entries.filter((e) => !excludeIds.has(e.id) && matches(e, slot));
+  // The slot offer is sent by SMS, so only consider candidates who consent to SMS;
+  // otherwise we would text someone who never opted in. Skips to the next in line.
+  const eligible = entries.filter(
+    (e) => !excludeIds.has(e.id) && e.consent?.sms === true && matches(e, slot),
+  );
   if (eligible.length === 0) return null;
   eligible.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   return eligible[0];

@@ -21,6 +21,10 @@ export const maxDuration = 300;
 
 const RESOURCE = "coordinator";
 const PER_PAGE = 100;
+// Hard per-run cap on patients processed, so a large backlog can't blow the 300s
+// function limit. The high-water mark only advances past fully-processed records,
+// so the next cron tick resumes where this one stopped.
+const MAX_PATIENTS_PER_RUN = 300;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -102,7 +106,7 @@ function vitalitySiteIds(): string[] {
 async function syncSite(
   client: DentallyClient,
   siteId: string,
-): Promise<{ siteId: string; pulled: number; upserted: number; retired: number }> {
+): Promise<{ siteId: string; pulled: number; upserted: number; retired: number; processed: number; remaining: number }> {
   const state = await getSyncState(siteId, RESOURCE);
   const updatedAfter = state?.highWaterMark ?? undefined;
   const now = new Date();
@@ -133,11 +137,16 @@ async function syncSite(
   // 2. Page patients, join to their open plan, and map each accepted-but-incomplete
   //    plan into an opportunity.
   const opportunities = [];
+  // Only advance the mark once at least one record actually contributed a parsed
+  // updatedAt; never fall back to `now` (that would skip records on an early exit).
   let highWaterMark = updatedAfter ?? null;
   let pulled = 0;
+  let processed = 0;
+  let remaining = 0;
+  let capped = false;
   let page = 1;
 
-  for (;;) {
+  outer: for (;;) {
     const res = await client.listPatients({ siteId, updatedAfter, page, perPage: PER_PAGE });
     const rawPatients = Array.isArray(res.patients) ? res.patients : [];
     pulled += rawPatients.length;
@@ -147,6 +156,14 @@ async function syncSite(
       const patient = mapPatient(p, "");
       if (!patient.id) continue;
 
+      // Cap reached: stop before processing this patient and leave the mark at the
+      // last fully-processed record so the next tick resumes from here.
+      if (processed >= MAX_PATIENTS_PER_RUN) {
+        remaining += 1;
+        capped = true;
+        continue;
+      }
+
       const plan = plansByPatient.get(patient.id);
       if (plan) {
         const input: CoordinatorInput = { siteId, patient, plan, lastTouchAt: null };
@@ -154,10 +171,13 @@ async function syncSite(
         if (opportunity) opportunities.push(opportunity);
       }
 
+      // Advance the mark only after this record is fully processed.
       const updated = patientUpdatedAt(p);
       if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
+      processed += 1;
     }
 
+    if (capped) break outer;
     if (rawPatients.length < PER_PAGE) break;
     page += 1;
   }
@@ -188,8 +208,10 @@ async function syncSite(
     }
   }
 
-  await setSyncState(siteId, RESOURCE, highWaterMark ?? now.toISOString());
-  return { siteId, pulled, upserted: ranked.length, retired };
+  // Leave the prior mark UNCHANGED when no record contributed one, so the next run
+  // re-fetches rather than skipping. Only persist when we actually advanced it.
+  if (highWaterMark) await setSyncState(siteId, RESOURCE, highWaterMark);
+  return { siteId, pulled, upserted: ranked.length, retired, processed, remaining };
 }
 
 export async function POST(request: Request) {
@@ -204,9 +226,15 @@ export async function POST(request: Request) {
     apiKey,
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
   });
-  const perSite = [];
+  // One site's failure must not abort the rest: record the error and move on so a
+  // partial failure is observable and self-heals next tick (no all-or-nothing 500).
+  const perSite: Array<Record<string, unknown>> = [];
   for (const siteId of vitalitySiteIds()) {
-    perSite.push(await syncSite(client, siteId));
+    try {
+      perSite.push(await syncSite(client, siteId));
+    } catch (e) {
+      perSite.push({ siteId, error: String(e) });
+    }
   }
   return Response.json({ ok: true, perSite });
 }
