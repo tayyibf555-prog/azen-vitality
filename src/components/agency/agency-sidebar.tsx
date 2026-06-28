@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, CreditCard, Settings, LogOut, type LucideIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth/mock-auth";
@@ -36,6 +37,14 @@ export function AgencySidebar() {
 
   const displayName = user?.name ?? "Agency";
 
+  // Optimistic active state: highlight the clicked tab instantly rather than after
+  // the route commits. Cleared once the new path lands.
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  useEffect(() => setPendingHref(null), [pathname]);
+  const markPending = (href: string) => (e: React.MouseEvent) => {
+    if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) setPendingHref(href);
+  };
+
   return (
     <aside className="fixed inset-y-0 left-0 z-20 flex w-[248px] flex-col bg-navy text-on-navy">
       {/* Wordmark lockup */}
@@ -52,7 +61,11 @@ export function AgencySidebar() {
       {/* Nav */}
       <nav className="flex-1 space-y-1 px-3 py-2">
         {NAV.map((item) => {
-          const active = item.href ? pathname === item.href || pathname.startsWith(item.href + "/") : false;
+          const active = item.href
+            ? pendingHref !== null
+              ? pendingHref === item.href
+              : pathname === item.href || pathname.startsWith(item.href + "/")
+            : false;
           const Icon = item.icon;
 
           if (item.soon || !item.href) {
@@ -77,6 +90,7 @@ export function AgencySidebar() {
             <Link
               key={item.label}
               href={item.href}
+              onClick={markPending(item.href)}
               className={cn(
                 "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                 active

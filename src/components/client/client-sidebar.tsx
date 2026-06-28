@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
@@ -34,8 +35,16 @@ export function ClientSidebar() {
   const client = getClient(clientSlug);
   const base = `/c/${clientSlug}`;
 
+  // Optimistic active state: highlight the clicked tab instantly instead of waiting
+  // for usePathname to commit after the server render. Cleared once the route lands.
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  useEffect(() => setPendingHref(null), [pathname]);
+
+  const hrefFor = (slug: string) => (slug === "" ? base : `${base}/${slug}`);
   const isActive = (slug: string) => {
-    const href = slug === "" ? base : `${base}/${slug}`;
+    const href = hrefFor(slug);
+    // While a click is in flight, only the clicked tab is active.
+    if (pendingHref !== null) return pendingHref === href;
     if (slug === "") return pathname === base || pathname === `${base}/`;
     return pathname === href || pathname.startsWith(`${href}/`);
   };
@@ -69,6 +78,12 @@ export function ClientSidebar() {
                   <li key={item.slug || "overview"}>
                     <Link
                       href={href}
+                      onClick={(e) => {
+                        // Plain left-click only (not cmd/ctrl/shift = open in new tab).
+                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          setPendingHref(href);
+                        }
+                      }}
                       className={cn(
                         "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                         active

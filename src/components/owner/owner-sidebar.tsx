@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { Gauge, Wand2, BrainCircuit, LogOut } from "lucide-react";
@@ -38,10 +39,21 @@ export function OwnerSidebar() {
   // reserved for the Management view rather than the funnel Overview.
   const hrefFor = (slug: string) => (slug === "" ? `${base}/overview` : `${base}/${slug}`);
 
-  const isManagementActive = pathname === base || pathname === `${base}/`;
+  // Optimistic active state: highlight the clicked tab instantly instead of waiting
+  // for usePathname to commit after the server render. Cleared once the route lands.
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  useEffect(() => setPendingHref(null), [pathname]);
+  const markPending = (href: string) => (e: React.MouseEvent) => {
+    // Plain left-click only (not cmd/ctrl/shift = open in new tab).
+    if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) setPendingHref(href);
+  };
+
+  const isManagementActive =
+    pendingHref !== null ? pendingHref === base : pathname === base || pathname === `${base}/`;
 
   const isActive = (slug: string) => {
     const href = hrefFor(slug);
+    if (pendingHref !== null) return pendingHref === href; // clicked tab wins while in flight
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
@@ -69,6 +81,7 @@ export function OwnerSidebar() {
             <li>
               <Link
                 href={base}
+                onClick={markPending(base)}
                 className={cn(
                   "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                   isManagementActive
@@ -86,6 +99,7 @@ export function OwnerSidebar() {
             <li>
               <Link
                 href={hrefFor("co-pilot")}
+                onClick={markPending(hrefFor("co-pilot"))}
                 className={cn(
                   "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                   isActive("co-pilot")
@@ -103,6 +117,7 @@ export function OwnerSidebar() {
             <li>
               <Link
                 href={hrefFor("practice-brain")}
+                onClick={markPending(hrefFor("practice-brain"))}
                 className={cn(
                   "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                   isActive("practice-brain")
@@ -134,6 +149,7 @@ export function OwnerSidebar() {
                   <li key={item.slug || "overview"}>
                     <Link
                       href={href}
+                      onClick={markPending(href)}
                       className={cn(
                         "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                         active
