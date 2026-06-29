@@ -9,47 +9,12 @@ import {
   MessageSquare,
   MessageCircle,
   Mail,
-  // option icons
-  AlignHorizontalJustifyCenter,
-  Replace,
   Sparkles,
-  Sparkle,
-  Sun,
-  Brush,
-  MoreHorizontal,
-  Zap,
-  CalendarDays,
-  CalendarRange,
-  Search,
-  Wallet,
-  CreditCard,
-  ShieldCheck,
-  HelpCircle,
-  CalendarCheck,
-  Clock,
-  Info,
-  PartyPopper,
-  Hourglass,
-  ThumbsUp,
-  Compass,
-  ClipboardCheck,
-  Scale,
-  Circle,
-  Grip,
-  Grid3x3,
-  SignalLow,
-  SignalMedium,
-  SignalHigh,
-  PencilRuler,
-  Wand2,
-  Building2,
-  Waves,
-  Landmark,
-  Map,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
+import { iconFor } from "./option-icons";
 
 // Shared Smile Assessment quiz UI — an ADAPTIVE, one-question-at-a-time funnel.
 // The first question is deterministic (instant, no network); after each answer
@@ -103,64 +68,6 @@ interface Props {
   intro?: string | null;
   /** Practice display name for the branded header (e.g. "Vitality Dental"). */
   practiceName?: string;
-}
-
-// Each answer option maps to an icon by its (stable) value, so every option
-// renders as a box with a relevant glyph. Within any one question the icons are
-// distinct, so the icon column carries meaning rather than repeating. Unknown
-// values fall back to a neutral dot.
-const OPTION_ICONS: Record<string, LucideIcon> = {
-  // treatment
-  invisalign: AlignHorizontalJustifyCenter,
-  implants: Replace,
-  veneers: Sparkles,
-  whitening: Sun,
-  hygiene: Brush,
-  other: MoreHorizontal,
-  // timeline
-  asap: Zap,
-  "1_2_months": CalendarDays,
-  "3_6_months": CalendarRange,
-  researching: Search,
-  // budget
-  ready: Wallet,
-  finance: CreditCard,
-  covered: ShieldCheck,
-  unsure: HelpCircle,
-  // readiness
-  book_now: CalendarCheck,
-  soon: Clock,
-  info: Info,
-  // motivation
-  event: PartyPopper,
-  long_time: Hourglass,
-  recommended: ThumbsUp,
-  exploring: Compass,
-  // experience
-  consulted_deciding: ClipboardCheck,
-  comparing: Scale,
-  first_time: Sparkle,
-  // implant scope (a clear one -> cluster -> grid escalation)
-  one: Circle,
-  few: Grip,
-  many: Grid3x3,
-  // alignment detail
-  slight: SignalLow,
-  noticeable: SignalMedium,
-  significant: SignalHigh,
-  // cosmetic goal
-  brighter: Sun,
-  shape: PencilRuler,
-  makeover: Wand2,
-  // location (a distinct glyph per practice)
-  "site-cc": Building2,
-  "site-rv": Waves,
-  "site-ng": Landmark,
-  any: Map,
-};
-
-function iconFor(value: string): LucideIcon {
-  return OPTION_ICONS[value] ?? Circle;
 }
 
 /** Normalise the first deterministic question into a FunnelQuestion. */

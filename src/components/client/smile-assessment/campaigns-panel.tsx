@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 import { GOAL_CATALOG, BUDGET_CATALOG } from "@/lib/smile-assessment/campaign";
+import { getClient } from "@/lib/mock/clients";
+import { AssessmentPreview } from "@/components/assess/assessment-preview";
 
 // One campaign as returned by the admin API (GET/POST). Mirrors the toAdminView
 // shape on the server: the raw campaign plus labels, the public url/path and a
@@ -185,6 +187,8 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
     }
   }
 
+  const practiceName = getClient(clientSlug)?.name ?? "";
+
   const slugPreview = (form.slug || form.name)
     .toLowerCase()
     .trim()
@@ -213,9 +217,10 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
       }
     >
       <div className="space-y-5">
-        {/* Create form */}
+        {/* Create form, with a live preview of the public funnel's landing screen. */}
         {showForm ? (
-          <form onSubmit={submit} className="rounded-xl border border-line-strong bg-card-muted/40 p-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <form onSubmit={submit} className="rounded-xl border border-line-strong bg-card-muted/40 p-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <label htmlFor="ca-name" className={labelClass}>
@@ -353,6 +358,9 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
               </Button>
             </div>
           </form>
+
+            <AssessmentPreview practiceName={practiceName} headline={form.headline} intro={form.intro} />
+          </div>
         ) : null}
 
         {/* Just-created confirmation with the public URL. */}
