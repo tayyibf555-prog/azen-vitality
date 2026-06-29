@@ -5,6 +5,7 @@ import { questionById, type QuizQuestion } from "@/lib/smile-assessment/quiz";
 import { candidateQuestions, deterministicNext, shouldFinish, answeredCount } from "@/lib/smile-assessment/funnel";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
+import { consumeBudget } from "@/lib/rate-budget";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
@@ -19,6 +20,9 @@ export const maxDuration = 15;
 
 const IP_LIMIT = 80; // next-question calls per IP per hour (~13 full funnels)
 const HOUR_MS = 60 * 60 * 1000;
+// The real spend ceiling: a SHARED global budget across all instances (the per-IP
+// map below is only a cheap first line and is best-effort on serverless).
+const GLOBAL_LIMIT_PER_MIN = 300; // hard cap on funnel calls/min, far above legit use
 
 const ipHits = new Map<string, number[]>();
 function tooManyForIp(ip: string, now: number): boolean {
@@ -32,9 +36,17 @@ function tooManyForIp(ip: string, now: number): boolean {
   return hits.length > IP_LIMIT;
 }
 function clientIp(request: Request): string {
+  // Prefer the platform-set x-real-ip (not client-spoofable). Fall back to the
+  // LAST x-forwarded-for entry (Vercel appends the real connecting IP at the end);
+  // the leftmost entry is attacker-controlled, so never trust it.
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]!.trim();
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
+  if (fwd) {
+    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "unknown";
+  }
+  return "unknown";
 }
 
 function cleanLine(s: string): string {
@@ -93,7 +105,10 @@ async function pickNext(
       .join("\n");
     const user = `Answers so far:\n${answeredLines || "(none yet)"}\n\nCandidate next questions (id | dimension | prompt):\n${candidateLines}`;
 
-    const anthropic = new Anthropic();
+    // maxRetries: 0 — a slow/erroring pick must fall straight through to the
+    // deterministic fallback within the 9s budget, not silently retry (which would
+    // triple the cost and blow past the route's maxDuration).
+    const anthropic = new Anthropic({ maxRetries: 0 });
     const msg = await anthropic.messages.create(
       { model: HAIKU, max_tokens: 200, system, messages: [{ role: "user", content: user }] },
       { timeout: 9000 },
@@ -130,6 +145,11 @@ export async function POST(request: Request): Promise<Response> {
 
   if (tooManyForIp(clientIp(request), Date.now())) {
     return Response.json({ ok: false, error: "too many requests, please slow down" }, { status: 429 });
+  }
+  // Shared global budget: the real ceiling on AI spend, independent of IP spoofing
+  // or how many instances are warm.
+  if (!(await consumeBudget("sa-next", GLOBAL_LIMIT_PER_MIN, 60))) {
+    return Response.json({ ok: false, error: "the assessment is busy, please try again shortly" }, { status: 429 });
   }
 
   const answers = parseAnswers(body.answers);
