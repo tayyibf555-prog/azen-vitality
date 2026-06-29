@@ -31,9 +31,9 @@ export const BAND_HIGH = 70;
 export const BAND_MEDIUM = 40;
 
 /**
- * The best possible raw total: for each question, its highest-weighted option.
- * Computed from the quiz so it stays correct if weights change. Used to normalise
- * any submission onto a stable 0-100 scale regardless of how many questions exist.
+ * The best possible raw total if EVERY question in the bank were answered with its
+ * top option. The adaptive funnel only asks a subset, so this is not the scoring
+ * denominator (see below) — it is kept for reference/diagnostics.
  */
 export const MAX_RAW_TOTAL: number = QUIZ_QUESTIONS.reduce(
   (sum, q) => sum + Math.max(0, ...q.options.map((o) => o.weight)),
@@ -48,27 +48,33 @@ export function bandFor(score: number): AssessmentBand {
 
 /**
  * Score a set of responses. `responses` maps question id -> selected option value.
- * Unknown question ids and unknown/missing option values contribute nothing
- * (a partial submission simply scores lower), so this never throws on bad input.
+ * Unknown question ids and unknown/missing option values contribute nothing, so
+ * this never throws on bad input.
  *
- * The raw weight sum is normalised against MAX_RAW_TOTAL so the score is a stable
- * 0-100 percentage of the best achievable intent/fit signal.
+ * The funnel is ADAPTIVE: each lead answers a different subset of the bank. So the
+ * score is the raw weight sum normalised against the best achievable total for the
+ * questions ACTUALLY ANSWERED (per-answered max), not the whole bank. That keeps
+ * the 0-100 scale meaningful regardless of which path the AI took. When all four
+ * original core questions are answered the denominator is the same as before, so
+ * the static-form scores are unchanged.
  */
 export function scoreAssessment(
   responses: Record<string, string>,
   tuning?: ScoreTuning,
 ): { rawScore: number; band: AssessmentBand } {
   let raw = 0;
+  let maxRaw = 0;
   for (const [questionId, value] of Object.entries(responses)) {
     const question = questionById(questionId);
     if (!question) continue;
     const option = question.options.find((o) => o.value === value);
     if (!option) continue;
     raw += option.weight;
+    maxRaw += Math.max(0, ...question.options.map((o) => o.weight));
   }
 
   let rawScore =
-    MAX_RAW_TOTAL > 0 ? Math.max(0, Math.min(100, Math.round((raw / MAX_RAW_TOTAL) * 100))) : 0;
+    maxRaw > 0 ? Math.max(0, Math.min(100, Math.round((raw / maxRaw) * 100))) : 0;
 
   // Campaign tuning: additive, bounded bonuses for matching the campaign's goal
   // treatment and target budget band. Re-clamped to 0-100 so the scale is stable.

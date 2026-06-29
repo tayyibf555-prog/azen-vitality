@@ -5,12 +5,16 @@ import {
   Q_TIMELINE,
   Q_BUDGET,
   Q_LOCATION,
+  QUIZ_QUESTIONS,
 } from "./quiz";
 
 describe("MAX_RAW_TOTAL", () => {
-  it("is the sum of each question's best option (intent/fit only)", () => {
-    // treatment 20 + timeline 30 + budget 30 + location 10 = 90
-    expect(MAX_RAW_TOTAL).toBe(90);
+  it("is the best-option sum across the whole bank (reference, not the denominator)", () => {
+    const expected = QUIZ_QUESTIONS.reduce(
+      (s, q) => s + Math.max(...q.options.map((o) => o.weight)),
+      0,
+    );
+    expect(MAX_RAW_TOTAL).toBe(expected);
   });
 });
 
@@ -50,23 +54,25 @@ describe("scoreAssessment", () => {
     expect(band).toBe("medium");
   });
 
-  it("handles a partial submission (missing answers score lower, never throws)", () => {
-    const { rawScore, band } = scoreAssessment({
-      [Q_TIMELINE]: "asap", // 30, everything else missing
+  it("scores on the questions actually answered (adaptive path), never throws", () => {
+    // Two questions answered: a top timeline + a weak budget.
+    const { rawScore } = scoreAssessment({
+      [Q_TIMELINE]: "asap", // 30 / 30
+      [Q_BUDGET]: "unsure", // 4 / 30
     });
-    // 30 / 90 = 33
-    expect(rawScore).toBe(33);
-    expect(band).toBe("low");
+    // (30 + 4) / (30 + 30) = 57
+    expect(rawScore).toBe(57);
+    // A single top answer is 100% of that dimension.
+    expect(scoreAssessment({ [Q_TIMELINE]: "asap" }).rawScore).toBe(100);
   });
 
   it("ignores unknown question ids and unknown option values", () => {
     const { rawScore } = scoreAssessment({
       not_a_question: "asap",
       [Q_TIMELINE]: "not_an_option",
-      [Q_BUDGET]: "ready", // 30 — the only valid contribution
+      [Q_BUDGET]: "ready", // 30 / 30 — the only valid contribution
     });
-    // 30 / 90 = 33
-    expect(rawScore).toBe(33);
+    expect(rawScore).toBe(100); // scored only on the one valid answer
   });
 
   it("scores an empty submission as 0 / low", () => {
