@@ -14,9 +14,14 @@ export interface AgentRunDeps {
   dispatch: (name: string, input: Record<string, unknown>) => Promise<string>;
   systemPrompt: string;
   tools: Tool[];
+  /** Max tool-calling rounds before giving up (default 4). */
+  maxRounds?: number;
+  /** Max output tokens per model call (default 700). */
+  maxTokens?: number;
 }
 
-const MAX_ROUNDS = 4;
+const DEFAULT_MAX_ROUNDS = 4;
+const DEFAULT_MAX_TOKENS = 700;
 const MODEL = "claude-sonnet-4-6";
 
 export async function runAgentTurn(
@@ -27,10 +32,11 @@ export async function runAgentTurn(
   const toolCalls: { name: string; input: Record<string, unknown> }[] = [];
   let escalated = false;
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
+  const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
+  for (let round = 0; round < maxRounds; round++) {
     const msg = await deps.anthropic.messages.create({
       model: MODEL,
-      max_tokens: 700,
+      max_tokens: deps.maxTokens ?? DEFAULT_MAX_TOKENS,
       system: deps.systemPrompt,
       tools: deps.tools,
       messages,

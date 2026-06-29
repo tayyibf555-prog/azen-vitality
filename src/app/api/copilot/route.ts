@@ -50,12 +50,15 @@ export async function POST(request: Request): Promise<Response> {
   const siteIds = client ? getSites(client.id).map((s) => s.id) : [];
 
   try {
+    const actor = auth?.id ?? "owner";
     const history: MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
     const result = await runAgentTurn(history, {
       anthropic: new Anthropic(),
-      dispatch: makeCopilotDispatch(siteIds, client?.id ?? ""),
+      dispatch: makeCopilotDispatch(siteIds, client?.id ?? "", actor),
       systemPrompt: buildCopilotSystemPrompt(),
       tools: COPILOT_TOOLS,
+      maxRounds: 6,
+      maxTokens: 1400,
     });
     return Response.json({ ok: true, reply: result.replyText || "Sorry, I could not respond just now." });
   } catch {

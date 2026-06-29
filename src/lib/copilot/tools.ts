@@ -12,6 +12,10 @@ import { listTargets } from "@/lib/reactivation/repository";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { getAgentAnalytics } from "@/lib/agent/repository";
 import { searchKnowledge } from "@/lib/practice-brain/retrieval";
+import { sendMessage } from "@/lib/messaging/send";
+import { isSuppressed } from "@/lib/messaging/suppression";
+import type { MessageChannel } from "@/lib/messaging/types";
+import { logCopilotAction } from "./actions";
 
 const todayIso = () => NOW.toISOString().slice(0, 10);
 const siteName = (id: string) => getSite(id)?.name ?? id;
@@ -66,6 +70,35 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
       required: ["query"],
     },
   },
+  {
+    name: "send_sms",
+    description:
+      "Send a text message (SMS) to a patient. TWO STEPS: call first WITHOUT confirm to PREVIEW (it checks the patient and consent and returns what would be sent, but does NOT send); then, only after the owner says yes, call again with confirm true to actually send. It only sends if the patient has consented to SMS and has not opted out. Messages currently go out in test mode (recorded, not delivered) until the practice goes live.",
+    input_schema: {
+      type: "object",
+      properties: {
+        patient: { type: "string", description: "Patient name or phone number, to identify exactly one patient" },
+        message: { type: "string", description: "The exact SMS text to send" },
+        confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to preview without sending." },
+      },
+      required: ["patient", "message"],
+    },
+  },
+  {
+    name: "send_email",
+    description:
+      "Send an email to a patient. TWO STEPS: call first WITHOUT confirm to PREVIEW, then call again with confirm true after the owner says yes. It only sends if the patient has consented to email and has not opted out. Test mode applies as with SMS.",
+    input_schema: {
+      type: "object",
+      properties: {
+        patient: { type: "string", description: "Patient name or email, to identify exactly one patient" },
+        subject: { type: "string" },
+        message: { type: "string", description: "The email body" },
+        confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to preview without sending." },
+      },
+      required: ["patient", "subject", "message"],
+    },
+  },
 ];
 
 function patientSummary(p: PatientRecord) {
@@ -80,7 +113,7 @@ function patientSummary(p: PatientRecord) {
   };
 }
 
-export function makeCopilotDispatch(siteIds: string[], clientId: string) {
+export function makeCopilotDispatch(siteIds: string[], clientId: string, actor = "owner") {
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
     try {
       switch (name) {
@@ -197,6 +230,100 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string) {
               tier: r.node.tier,
               tags: r.node.tags,
             })),
+          });
+        }
+
+        case "send_sms":
+        case "send_email": {
+          const channel: MessageChannel = name === "send_sms" ? "sms" : "email";
+          const q = String(input.patient ?? "").toLowerCase().trim();
+          const message = String(input.message ?? "").trim();
+          const subject = String(input.subject ?? "").trim();
+          if (!q || !message) {
+            return JSON.stringify({ sent: false, error: "Need a patient and a message." });
+          }
+          if (channel === "email" && !subject) {
+            return JSON.stringify({ sent: false, error: "An email needs a subject." });
+          }
+
+          const patients = await listPatients(siteIds);
+          const matches = patients.filter(
+            (p) => p.name.toLowerCase().includes(q) || (p.phone ?? "").includes(q) || (p.email ?? "").toLowerCase().includes(q),
+          );
+          if (matches.length === 0) return JSON.stringify({ sent: false, error: "No patient matches that." });
+          if (matches.length > 1) {
+            return JSON.stringify({
+              sent: false,
+              multiple: true,
+              matches: matches.slice(0, 10).map(patientSummary),
+              note: "Several patients match. Ask the owner which one before sending.",
+            });
+          }
+
+          const p = matches[0];
+          const targetRef = `patient:${p.id}`;
+          const audit = {
+            clientId,
+            siteId: p.siteId,
+            actor,
+            action: name,
+            targetRef,
+            targetName: p.name,
+            channel,
+            // Capture the subject too, so the audit row reflects exactly what was sent.
+            body: channel === "email" ? `Subject: ${subject}\n\n${message}` : message,
+          };
+
+          const consented = channel === "sms" ? p.smsConsent : p.emailConsent;
+          if (!consented) {
+            await logCopilotAction({ ...audit, status: "blocked:no_consent" });
+            return JSON.stringify({ sent: false, reason: "no_consent", message: `${p.name} has not consented to ${channel}, so nothing was sent.` });
+          }
+
+          const to = channel === "sms" ? p.phone : p.email;
+          if (!to) {
+            await logCopilotAction({ ...audit, status: "blocked:no_destination" });
+            return JSON.stringify({ sent: false, reason: "no_destination", message: `${p.name} has no ${channel === "sms" ? "mobile number" : "email"} on file.` });
+          }
+
+          if (await isSuppressed(p.siteId, channel, targetRef)) {
+            await logCopilotAction({ ...audit, status: "blocked:suppressed" });
+            return JSON.stringify({ sent: false, reason: "opted_out", message: `${p.name} has opted out of ${channel}, so nothing was sent.` });
+          }
+
+          // Two-step gate: without an explicit confirm this is a PREVIEW only. It
+          // has verified the patient and consent but sends nothing. The owner must
+          // confirm before a real send (this is enforced here, not just in the
+          // prompt, so a model that skips the confirmation cannot dispatch).
+          if (input.confirm !== true) {
+            return JSON.stringify({
+              sent: false,
+              preview: true,
+              patient: p.name,
+              channel,
+              ...(channel === "email" ? { subject } : {}),
+              message,
+              note: `Ready to send to ${p.name} (consent is in place, nothing sent yet). Show this to the owner and, only once they confirm, call ${name} again with confirm true.`,
+            });
+          }
+
+          const result = await sendMessage({
+            channel,
+            to,
+            body: message,
+            subject: channel === "email" ? subject : undefined,
+          });
+          const dryRun = result.provider === "dry-run";
+          await logCopilotAction({ ...audit, status: dryRun ? "dry_run" : result.status });
+          return JSON.stringify({
+            sent: true,
+            patient: p.name,
+            channel,
+            dryRun,
+            status: result.status,
+            note: dryRun
+              ? "Recorded in test mode (dry run); it was not delivered to the patient. It will go out for real once the practice switches messaging live."
+              : "Sent.",
           });
         }
 
