@@ -409,13 +409,15 @@ function QuestionStep({
 
       <fieldset className="space-y-3" disabled={thinking}>
         <legend className="mb-2 text-base font-semibold text-navy">{question.prompt}</legend>
-        <div className="grid gap-2">
+        <div className="grid gap-2" role="radiogroup" aria-label={question.prompt}>
           {question.options.map((o) => {
             const checked = selected === o.value;
             return (
               <button
                 key={o.value}
                 type="button"
+                role="radio"
+                aria-checked={checked}
                 onClick={() => onChoose(o.value)}
                 disabled={thinking}
                 className={[
