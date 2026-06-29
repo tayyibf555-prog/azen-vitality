@@ -77,6 +77,7 @@ export default async function CampaignAssessmentPage({
       campaignSlug={slug}
       headline={pub.headline}
       intro={pub.intro}
+      practiceName={clientRecord.name}
     />
   );
 }

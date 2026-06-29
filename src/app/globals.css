@@ -14,6 +14,7 @@
   --card-muted: #f6f3ee;
   --blue-light: #5bc4f7;
   --blue-dark: #2b8ac0;
+  --blue-deep: #1c6f9e; /* AA-contrast blue for small text on white (>=4.5:1) */
   --ink: #333b4d;
   --whatsapp: #25d366;
 
@@ -49,6 +50,7 @@
   --color-card-muted: var(--card-muted);
   --color-blue-light: var(--blue-light);
   --color-blue-dark: var(--blue-dark);
+  --color-blue-deep: var(--blue-deep);
   --color-ink: var(--ink);
   --color-whatsapp: var(--whatsapp);
   --color-line: var(--line);

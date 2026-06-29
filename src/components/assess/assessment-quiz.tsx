@@ -1,7 +1,53 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { Loader2, CheckCircle2, Sparkles, ArrowLeft } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Loader2,
+  CheckCircle2,
+  ArrowLeft,
+  ChevronRight,
+  MessageSquare,
+  MessageCircle,
+  Mail,
+  // option icons
+  AlignHorizontalJustifyCenter,
+  Replace,
+  Sparkles,
+  Sparkle,
+  Sun,
+  Brush,
+  MoreHorizontal,
+  Zap,
+  CalendarDays,
+  CalendarRange,
+  Search,
+  Wallet,
+  CreditCard,
+  ShieldCheck,
+  HelpCircle,
+  CalendarCheck,
+  Clock,
+  Info,
+  PartyPopper,
+  Hourglass,
+  ThumbsUp,
+  Compass,
+  ClipboardCheck,
+  Scale,
+  Circle,
+  Grip,
+  Grid3x3,
+  SignalLow,
+  SignalMedium,
+  SignalHigh,
+  PencilRuler,
+  Wand2,
+  Building2,
+  Waves,
+  Landmark,
+  Map,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
 
@@ -55,6 +101,66 @@ interface Props {
   campaignSlug?: string;
   headline?: string | null;
   intro?: string | null;
+  /** Practice display name for the branded header (e.g. "Vitality Dental"). */
+  practiceName?: string;
+}
+
+// Each answer option maps to an icon by its (stable) value, so every option
+// renders as a box with a relevant glyph. Within any one question the icons are
+// distinct, so the icon column carries meaning rather than repeating. Unknown
+// values fall back to a neutral dot.
+const OPTION_ICONS: Record<string, LucideIcon> = {
+  // treatment
+  invisalign: AlignHorizontalJustifyCenter,
+  implants: Replace,
+  veneers: Sparkles,
+  whitening: Sun,
+  hygiene: Brush,
+  other: MoreHorizontal,
+  // timeline
+  asap: Zap,
+  "1_2_months": CalendarDays,
+  "3_6_months": CalendarRange,
+  researching: Search,
+  // budget
+  ready: Wallet,
+  finance: CreditCard,
+  covered: ShieldCheck,
+  unsure: HelpCircle,
+  // readiness
+  book_now: CalendarCheck,
+  soon: Clock,
+  info: Info,
+  // motivation
+  event: PartyPopper,
+  long_time: Hourglass,
+  recommended: ThumbsUp,
+  exploring: Compass,
+  // experience
+  consulted_deciding: ClipboardCheck,
+  comparing: Scale,
+  first_time: Sparkle,
+  // implant scope (a clear one -> cluster -> grid escalation)
+  one: Circle,
+  few: Grip,
+  many: Grid3x3,
+  // alignment detail
+  slight: SignalLow,
+  noticeable: SignalMedium,
+  significant: SignalHigh,
+  // cosmetic goal
+  brighter: Sun,
+  shape: PencilRuler,
+  makeover: Wand2,
+  // location (a distinct glyph per practice)
+  "site-cc": Building2,
+  "site-rv": Waves,
+  "site-ng": Landmark,
+  any: Map,
+};
+
+function iconFor(value: string): LucideIcon {
+  return OPTION_ICONS[value] ?? Circle;
 }
 
 /** Normalise the first deterministic question into a FunnelQuestion. */
@@ -91,7 +197,7 @@ function parseQuestion(raw: NextResponse["question"]): FunnelQuestion | null {
   return { id: r.id, prompt: r.prompt, options };
 }
 
-export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro }: Props) {
+export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, practiceName }: Props) {
   // The funnel history: history[history.length - 1] is the live question.
   const [history, setHistory] = useState<Step[]>(() => [firstStep()]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -277,25 +383,36 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro }: Pr
     setBusy(false);
   }
 
+  const name = practiceName?.trim() || "Smile Assessment";
+
   return (
-    <main className="mx-auto flex min-h-screen max-w-xl flex-col px-5 py-10">
+    <main className="relative mx-auto flex min-h-screen max-w-xl flex-col justify-center px-5 py-10">
       <style>{ENTER_KEYFRAMES}</style>
 
-      <header className="mb-8 flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-dark text-white">
-          <Sparkles size={18} />
+      {/* Soft brand glow behind the card. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,rgba(91,196,247,0.20),transparent_72%)]"
+      />
+
+      <header className="mb-6 flex flex-col items-center gap-3 text-center">
+        <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-card shadow-[0_4px_16px_rgba(10,14,26,0.10)]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/copilot-logo.png" alt={`${name} logo`} width={44} height={44} className="h-11 w-11 object-contain" />
         </span>
-        <div>
-          <p className="text-lg font-extrabold tracking-tight text-navy">Smile Assessment</p>
-          <p className="text-xs text-muted">A quick check to point you to the right next step.</p>
+        <div className="space-y-0.5">
+          {/* Quiet brand chrome: the practice name sits as an anchor, the in-card
+              question owns the visual weight. */}
+          <p className="text-lg font-bold tracking-tight text-navy">{name}</p>
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-blue-deep">Smile Assessment</p>
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-line bg-card shadow-[0_1px_3px_rgba(10,14,26,0.06)]">
+      <div className="overflow-hidden rounded-[1.4rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
         {/* Progress track — grows as steps complete, full at contact/thanks. */}
-        <div className="h-1 w-full bg-card-muted" aria-hidden>
+        <div className="h-1.5 w-full bg-card-muted" aria-hidden>
           <div
-            className="h-full bg-blue-dark transition-[width] duration-300 ease-out"
+            className="h-full rounded-r-full bg-blue-dark transition-[width] duration-300 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -338,6 +455,10 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro }: Pr
           )}
         </div>
       </div>
+
+      <p className="mt-5 text-center text-[0.7rem] text-muted">
+        Your answers help us point you to the right next step. Nothing here is medical advice.
+      </p>
     </main>
   );
 }
@@ -376,15 +497,28 @@ function QuestionStep({
   const isFirst = step === 1;
   const selected = pendingValue ?? answers[question.id] ?? null;
 
+  // On advancing to a later question, move focus to the question region so a
+  // screen reader announces the new step (the screen changed under the user).
+  // Skipped on the first screen, which reads naturally top-down on load.
+  const regionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (step > 1) regionRef.current?.focus();
+  }, [step]);
+
   return (
-    <div key={animKey} className="motion-safe:[animation:assessEnter_220ms_ease-out]">
+    <div
+      key={animKey}
+      ref={regionRef}
+      tabIndex={-1}
+      className="outline-none motion-safe:[animation:assessEnter_240ms_ease-out]"
+    >
       <div className="mb-5 flex items-center justify-between">
         {canGoBack ? (
           <button
             type="button"
             onClick={onBack}
             disabled={thinking}
-            className="inline-flex items-center gap-1 text-xs font-semibold text-muted transition-colors hover:text-navy disabled:opacity-40"
+            className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
           >
             <ArrowLeft size={14} />
             Back
@@ -392,52 +526,69 @@ function QuestionStep({
         ) : (
           <span />
         )}
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted">Question {step}</span>
+        <span className="rounded-full bg-card-muted px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-wide text-muted">
+          Question {step}
+        </span>
       </div>
 
       {isFirst ? (
-        <div className="mb-6 space-y-1">
-          <h1 className="text-2xl text-navy">{headline || "Let's find your best next step"}</h1>
+        <div className="mb-4 space-y-1">
+          {headline ? <p className="text-sm font-semibold text-navy">{headline}</p> : null}
           <p className="text-sm text-muted">
-            {intro ||
-              "A few quick questions. There are no wrong answers, and nothing here is medical advice."}
+            {intro || "A few quick questions, tailored as you go. There are no wrong answers."}
           </p>
         </div>
       ) : transition ? (
-        <p className="mb-5 text-sm text-muted">{transition}</p>
+        <p className="mb-4 flex items-start gap-2 text-sm text-blue-deep">
+          <Sparkles size={15} className="mt-0.5 shrink-0" />
+          <span>{transition}</span>
+        </p>
       ) : null}
 
-      <fieldset className="space-y-3" disabled={thinking}>
-        <legend className="mb-2 text-base font-semibold text-navy">{question.prompt}</legend>
-        <div className="grid gap-2" role="radiogroup" aria-label={question.prompt}>
+      <fieldset disabled={thinking}>
+        {/* The question is the hero on every screen. */}
+        <legend className="mb-4 text-[1.4rem] font-bold leading-snug text-navy">{question.prompt}</legend>
+        <div className="grid gap-2.5">
           {question.options.map((o) => {
             const checked = selected === o.value;
+            const Icon = iconFor(o.value);
             return (
               <button
                 key={o.value}
                 type="button"
-                role="radio"
-                aria-checked={checked}
+                aria-pressed={checked}
                 onClick={() => onChoose(o.value)}
                 disabled={thinking}
                 className={[
-                  "flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors",
+                  "group flex items-center gap-3.5 rounded-xl border px-3.5 py-3 text-left transition duration-150 ease-out",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
                   checked
-                    ? "border-blue-dark/40 bg-blue-dark/10 text-navy"
-                    : "border-line-strong bg-card text-ink hover:bg-card-muted",
+                    ? "border-blue-dark bg-blue-dark/[0.08] shadow-[0_3px_14px_rgba(43,138,192,0.14)]"
+                    : "border-line bg-card hover:border-blue-dark/40 hover:bg-card-muted motion-safe:hover:-translate-y-0.5",
                   thinking ? "cursor-default" : "cursor-pointer",
                 ].join(" ")}
               >
                 <span
                   className={[
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                    checked ? "border-blue-dark" : "border-line-strong",
+                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+                    checked
+                      ? "bg-blue-dark text-white"
+                      : "bg-blue-dark/10 text-blue-dark group-hover:bg-blue-dark/15",
                   ].join(" ")}
                   aria-hidden
                 >
-                  {checked ? <span className="h-2 w-2 rounded-full bg-blue-dark" /> : null}
+                  <Icon size={18} strokeWidth={2} />
                 </span>
-                <span>{o.label}</span>
+                <span className={["flex-1 text-sm font-medium", checked ? "text-navy" : "text-ink"].join(" ")}>
+                  {o.label}
+                </span>
+                <span className="shrink-0" aria-hidden>
+                  {checked ? (
+                    <CheckCircle2 size={18} className="text-blue-dark" />
+                  ) : (
+                    <ChevronRight size={16} className="text-muted/70 transition-colors group-hover:text-blue-dark" />
+                  )}
+                </span>
               </button>
             );
           })}
@@ -489,87 +640,105 @@ function ContactStep({
   onSubmit: (e: React.FormEvent) => void;
   onBack: () => void;
 }) {
+  const channels: { key: Channel; label: string; icon: LucideIcon }[] = [
+    { key: "sms", label: "Text", icon: MessageSquare },
+    { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+    { key: "email", label: "Email", icon: Mail },
+  ];
+
   return (
     <form
       key={animKey}
       onSubmit={onSubmit}
-      className="space-y-5 motion-safe:[animation:assessEnter_220ms_ease-out]"
+      className="space-y-5 motion-safe:[animation:assessEnter_240ms_ease-out]"
     >
       <button
         type="button"
         onClick={onBack}
         disabled={busy}
-        className="inline-flex items-center gap-1 text-xs font-semibold text-muted transition-colors hover:text-navy disabled:opacity-40"
+        className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
       >
         <ArrowLeft size={14} />
         Back
       </button>
 
-      <div className="space-y-1">
-        <h2 className="text-xl text-navy">Where should we send your next step?</h2>
-        <p className="text-xs text-muted">We'll only use this to follow up about your enquiry.</p>
+      <div className="flex items-start gap-3">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-dark/10 text-blue-dark">
+          <CheckCircle2 size={20} />
+        </span>
+        <div className="space-y-1">
+          <h2 className="text-xl leading-tight text-navy">Where should we send your next step?</h2>
+          <p className="text-xs text-muted">We'll only use this to follow up about your enquiry.</p>
+        </div>
       </div>
 
       <label className="block">
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">First name</span>
+        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">First name</span>
         <input
           type="text"
           autoComplete="given-name"
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
-          className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+          className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
         />
       </label>
 
       <div>
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
           How would you like us to reply?
         </span>
-        <div className="flex flex-wrap gap-2">
-          {(["sms", "whatsapp", "email"] as Channel[]).map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setChannel(c)}
-              className={[
-                "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
-                channel === c
-                  ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark"
-                  : "border-line-strong bg-card text-muted hover:bg-card-muted",
-              ].join(" ")}
-            >
-              {c === "sms" ? "Text" : c === "whatsapp" ? "WhatsApp" : "Email"}
-            </button>
-          ))}
+        <div className="grid grid-cols-3 gap-2">
+          {channels.map((c) => {
+            const active = channel === c.key;
+            const Icon = c.icon;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => setChannel(c.key)}
+                aria-pressed={active}
+                className={[
+                  "flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-semibold transition duration-150 ease-out",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+                  active
+                    ? "border-blue-dark bg-blue-dark/[0.08] text-blue-deep shadow-[0_3px_14px_rgba(43,138,192,0.12)]"
+                    : "border-line bg-card text-muted hover:border-blue-dark/40 hover:bg-card-muted motion-safe:hover:-translate-y-0.5",
+                ].join(" ")}
+              >
+                <Icon size={18} />
+                {c.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {channel === "email" ? (
         <label className="block">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Email</span>
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">Email</span>
           <input
             type="email"
             autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+            className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
           />
         </label>
       ) : (
         <label className="block">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Mobile number</span>
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">Mobile number</span>
           <input
             type="tel"
             autoComplete="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+            className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
           />
         </label>
       )}
 
       {error ? (
-        <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+        <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-[#b3261e]">{error}</p>
       ) : null}
 
       <Button type="submit" variant="primary" className="w-full" disabled={!canSubmit || busy}>
@@ -577,7 +746,7 @@ function ContactStep({
         See my next step
       </Button>
       <p className="text-center text-xs text-muted">
-        By sending this you agree we can contact you about your enquiry. Prices in GBP (£).
+        By sending this you agree we can contact you about your enquiry.
       </p>
     </form>
   );
@@ -589,9 +758,9 @@ function ContactStep({
 
 function ThankYou({ result }: { result: SubmitResult }) {
   return (
-    <div className="flex flex-col items-center gap-4 py-6 text-center motion-safe:[animation:assessEnter_220ms_ease-out]">
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-success/10 text-success">
-        <CheckCircle2 size={24} />
+    <div className="flex flex-col items-center gap-4 py-6 text-center motion-safe:[animation:assessEnter_240ms_ease-out]">
+      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-success/10 text-success">
+        <CheckCircle2 size={28} />
       </span>
       <h1 className="text-2xl text-navy">Thank you</h1>
       <p className="max-w-sm text-sm text-muted">{result.message}</p>
@@ -601,4 +770,4 @@ function ThankYou({ result }: { result: SubmitResult }) {
 
 // Opacity + small translateY only (no layout-property animation). Gated behind
 // motion-safe: at the call site so prefers-reduced-motion users get no movement.
-const ENTER_KEYFRAMES = `@keyframes assessEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }`;
+const ENTER_KEYFRAMES = `@keyframes assessEnter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }`;
