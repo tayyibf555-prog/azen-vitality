@@ -251,12 +251,11 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     const q = current.question;
     const nextAnswers = { ...answers, [q.id]: value };
 
-    // Show the chosen option as selected, then drop into the thinking state.
+    // Highlight the chosen option and start fetching the next question right
+    // away (no artificial delay) so it loads as fast as possible.
     setPendingValue(value);
     setAnswers(nextAnswers);
     setError(null);
-    // A brief beat so the selection registers before the spinner replaces it.
-    await new Promise((r) => setTimeout(r, 260));
     setThinking(true);
 
     const got = await fetchNext(nextAnswers);
@@ -412,7 +411,10 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         {/* Progress track — grows as steps complete, full at contact/thanks. */}
         <div className="h-1.5 w-full bg-card-muted" aria-hidden>
           <div
-            className="h-full rounded-r-full bg-blue-dark transition-[width] duration-300 ease-out"
+            className={[
+              "h-full rounded-r-full bg-blue-dark transition-[width] duration-300 ease-out",
+              thinking ? "motion-safe:animate-pulse" : "",
+            ].join(" ")}
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -583,7 +585,9 @@ function QuestionStep({
                   {o.label}
                 </span>
                 <span className="shrink-0" aria-hidden>
-                  {checked ? (
+                  {checked && thinking ? (
+                    <Loader2 size={18} className="text-blue-dark motion-safe:animate-spin" />
+                  ) : checked ? (
                     <CheckCircle2 size={18} className="text-blue-dark" />
                   ) : (
                     <ChevronRight size={16} className="text-muted/70 transition-colors group-hover:text-blue-dark" />
@@ -595,12 +599,12 @@ function QuestionStep({
         </div>
       </fieldset>
 
-      {thinking ? (
-        <p className="mt-5 flex items-center gap-2 text-xs text-muted" role="status" aria-live="polite">
-          <Loader2 size={14} className="motion-safe:animate-spin" />
-          Finding your next question...
-        </p>
-      ) : null}
+      {/* No visible loading message: the chosen option shows an inline spinner
+          while the next question loads. An sr-only live region keeps screen
+          readers informed. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {thinking ? "Loading the next question" : ""}
+      </span>
     </div>
   );
 }

@@ -110,7 +110,9 @@ async function pickNext(
     // triple the cost and blow past the route's maxDuration).
     const anthropic = new Anthropic({ maxRetries: 0 });
     const msg = await anthropic.messages.create(
-      { model: HAIKU, max_tokens: 200, system, messages: [{ role: "user", content: user }] },
+      // Small output budget: the reply is just an id + a one-line transition, so a
+      // low cap keeps generation (and the patient's wait) fast.
+      { model: HAIKU, max_tokens: 120, system, messages: [{ role: "user", content: user }] },
       { timeout: 9000 },
     );
     const text = msg.content
