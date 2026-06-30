@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { HAIKU } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildReadinessPrompt, cleanLine } from "@/lib/compliance/ai";
 import { READINESS, MOCK_AUDITS, MOCK_POLICIES, MOCK_TRAINING_RECORDS, MOCK_STAFF } from "@/lib/compliance/mock";
 import { TRAINING_REQUIREMENTS } from "@/lib/compliance/knowledge";
@@ -40,6 +40,8 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const staffName = (id: string) => MOCK_STAFF.find((s) => s.id === id)?.name ?? "a team member";
   const reqName = (id: string) => TRAINING_REQUIREMENTS.find((r) => r.id === id)?.name ?? "training";

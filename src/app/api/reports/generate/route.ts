@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { HAIKU } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildReportPrompt, cleanLine } from "@/lib/reports/ai";
 import { buildSnapshot, type ReportPeriod } from "@/lib/reports/snapshot";
 
@@ -40,6 +40,8 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const period: ReportPeriod = body.period === "week" ? "week" : "month";
   const snapshot = buildSnapshot(period);

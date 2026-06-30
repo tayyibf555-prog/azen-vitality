@@ -125,7 +125,7 @@ const TOUCH_SOURCES: TouchSource[] = [
   { name: "recall", touchTable: "recall_touch", parentKey: "target_id", parentTable: "recall_target" },
   { name: "noshow", touchTable: "noshow_touch", parentKey: "target_id", parentTable: "noshow_target" },
   { name: "coordinator", touchTable: "coordinator_touch", parentKey: "opportunity_id", parentTable: "treatment_opportunity" },
-  { name: "reviews", touchTable: "review_touch", parentKey: "opportunity_id", parentTable: "review_request" },
+  { name: "reviews", touchTable: "review_touch", parentKey: "request_id", parentTable: "review_request" },
 ];
 
 async function loadTouchSource(source: TouchSource, siteIds: string[]): Promise<InboxMessage[]> {
@@ -191,7 +191,14 @@ async function loadAllMessages(siteIds: string[]): Promise<InboxMessage[]> {
   // rest. This mirrors the resilience the module views already use.
   const results = await Promise.all([
     loadAgentMessages(siteIds).catch(() => [] as InboxMessage[]),
-    ...TOUCH_SOURCES.map((s) => loadTouchSource(s, siteIds).catch(() => [] as InboxMessage[])),
+    ...TOUCH_SOURCES.map((s) =>
+      loadTouchSource(s, siteIds).catch((err) => {
+        // Surface the error (e.g. an FK column mismatch) instead of silently
+        // dropping the source, so a misconfigured source is not invisible.
+        console.warn(`inbox: failed to load touch source "${s.name}"`, err);
+        return [] as InboxMessage[];
+      }),
+    ),
   ]);
   return results.flat();
 }

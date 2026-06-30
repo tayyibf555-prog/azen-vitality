@@ -3,6 +3,7 @@ import { getClient } from "@/lib/mock/clients";
 import { serviceClient } from "@/lib/supabase/server";
 import { ONBOARDING_BUCKET } from "@/lib/onboarding/repository";
 import type { OnboardingFile } from "@/lib/onboarding/types";
+import { consumeBudget } from "@/lib/rate-budget";
 
 export const dynamic = "force-dynamic";
 
@@ -46,9 +47,17 @@ function tooManyForIp(ip: string, now: number): boolean {
 }
 
 function clientIp(request: Request): string {
+  // Prefer the platform-set x-real-ip (not client-spoofable). Fall back to the
+  // LAST x-forwarded-for entry (Vercel appends the real connecting IP at the end);
+  // the leftmost entry is attacker-controlled, so never trust it.
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]!.trim();
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
+  if (fwd) {
+    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "unknown";
+  }
+  return "unknown";
 }
 
 function bad(message: string, status = 400): Response {
@@ -75,6 +84,25 @@ export async function POST(request: Request): Promise<Response> {
     // Per-IP cap first (cheap) so a flood is blunted before reading the body.
     if (tooManyForIp(clientIp(request), Date.now())) {
       return bad("Too many uploads, please try again later", 429);
+    }
+    // Shared global budget: the real ceiling across all instances, immune to IP
+    // spoofing. Bounds abuse + orphaned-object flooding regardless of warm instances.
+    if (!(await consumeBudget("onboarding-upload", 400, 60))) {
+      return Response.json(
+        { ok: false, error: "the form is busy, please try again shortly" },
+        { status: 429 },
+      );
+    }
+
+    // Fast Content-Length guard: reject an oversized body before parsing it. A bit
+    // above the 10MB file cap to allow multipart overhead. The post-parse size check
+    // below remains the authoritative limit (Content-Length can be absent or lied about).
+    const contentLength = request.headers.get("content-length");
+    if (contentLength) {
+      const declared = Number(contentLength);
+      if (Number.isFinite(declared) && declared > 12_000_000) {
+        return bad("That file is too large (max 10MB)", 413);
+      }
     }
 
     let form: FormData;

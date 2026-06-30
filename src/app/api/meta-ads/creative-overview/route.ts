@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { HAIKU } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildOverviewPrompt, cleanCopy } from "@/lib/meta-ads/ai";
 import { MOCK_AD_LIBRARY } from "@/lib/meta-ads/mock";
 
@@ -37,6 +37,8 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const { system, user } = buildOverviewPrompt(MOCK_AD_LIBRARY, client.name);
   try {

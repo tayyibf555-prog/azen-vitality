@@ -32,6 +32,18 @@ export function requireClientAccess(user: AuthedUser | null, clientId: string): 
   return null;
 }
 
+/**
+ * 403 Response if an enforced user is not an owner-level role; else null.
+ * Owner-only modules (AI generation, USPs) are restricted to the practice owner
+ * and the agency admin. No-op when user is null, matching requireClientAccess.
+ */
+export function requireOwnerRole(user: AuthedUser | null): Response | null {
+  if (user && user.role !== "client_owner" && user.role !== "agency_admin") {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+  return null;
+}
+
 /** 403 Response if an enforced user may not act on this site; else null. */
 export function requireSiteAccess(user: AuthedUser | null, siteId: string): Response | null {
   if (user && !user.siteIds.includes(siteId)) {

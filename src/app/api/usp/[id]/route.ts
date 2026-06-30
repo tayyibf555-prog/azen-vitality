@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { updateUsp, deleteUsp, InvalidUspError } from "@/lib/usp/repository";
 import { USP_CATEGORIES, type UspCategory } from "@/lib/usp/types";
@@ -53,6 +53,8 @@ export async function PATCH(
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   // Only carry the fields the caller actually supplied.
   const fields: UpdateUspInput = {};
@@ -106,6 +108,8 @@ export async function DELETE(
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   await deleteUsp(id, client.id);
   return Response.json({ ok: true });

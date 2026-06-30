@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SONNET } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildCopyPrompt, cleanCopy } from "@/lib/meta-ads/ai";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +26,8 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const treatment = typeof body.treatment === "string" ? body.treatment.trim() : "";
   if (!treatment) return Response.json({ ok: false, error: "treatment is required" }, { status: 400 });

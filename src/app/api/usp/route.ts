@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { insertUsp, listUsps, InvalidUspError } from "@/lib/usp/repository";
 import { USP_CATEGORIES, type UspCategory } from "@/lib/usp/types";
@@ -42,6 +42,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const usps = await listUsps(client.id);
   return Response.json({ ok: true, usps });
@@ -66,6 +68,8 @@ export async function POST(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const text = str(body.text, 280);
   if (!text) return bad("text is required");

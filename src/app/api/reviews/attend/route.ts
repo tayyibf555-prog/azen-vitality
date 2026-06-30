@@ -57,12 +57,20 @@ export async function POST(request: Request): Promise<Response> {
   // caller sees the unchanged state (a prior attend is not undone here).
   if (!attended) {
     const existing = await getByAppointment(appointmentId);
+    // Never echo a review_request that belongs to another tenant's site.
+    if (auth && existing && !auth.siteIds.includes(existing.siteId)) {
+      return Response.json({ ok: false, error: "not found" }, { status: 404 });
+    }
     return Response.json({ ok: true, attended: false, request: existing });
   }
 
   // Already scheduled/sent for this appointment: idempotent, return as-is.
   const existing = await getByAppointment(appointmentId);
   if (existing) {
+    // Never echo a review_request that belongs to another tenant's site.
+    if (auth && !auth.siteIds.includes(existing.siteId)) {
+      return Response.json({ ok: false, error: "not found" }, { status: 404 });
+    }
     return Response.json({ ok: true, attended: true, request: existing, status: existing.status });
   }
 

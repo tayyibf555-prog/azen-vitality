@@ -2,6 +2,7 @@ import { getClient, getSites } from "@/lib/mock/clients";
 import { parseSubmission } from "@/lib/onboarding/validate";
 import { ONBOARDING_STEPS } from "@/lib/onboarding/steps";
 import { createSubmission } from "@/lib/onboarding/repository";
+import { consumeBudget } from "@/lib/rate-budget";
 import type {
   OnboardingConsent,
   OnboardingFile,
@@ -42,9 +43,17 @@ function tooManyForIp(ip: string, now: number): boolean {
 }
 
 function clientIp(request: Request): string {
+  // Prefer the platform-set x-real-ip (not client-spoofable). Fall back to the
+  // LAST x-forwarded-for entry (Vercel appends the real connecting IP at the end);
+  // the leftmost entry is attacker-controlled, so never trust it.
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]!.trim();
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
+  if (fwd) {
+    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "unknown";
+  }
+  return "unknown";
 }
 
 function bad(message: string, status = 400): Response {
@@ -122,6 +131,14 @@ export async function POST(request: Request): Promise<Response> {
     // Per-IP cap first (cheap, in-process) so a flood is blunted before any DB hit.
     if (tooManyForIp(clientIp(request), Date.now())) {
       return bad("Too many submissions, please try again later", 429);
+    }
+    // Shared global budget: the real ceiling across all instances, immune to IP
+    // spoofing. Bounds abuse + orphaned-object flooding regardless of warm instances.
+    if (!(await consumeBudget("onboarding-submit", 240, 60))) {
+      return Response.json(
+        { ok: false, error: "the form is busy, please try again shortly" },
+        { status: 429 },
+      );
     }
 
     // Validate + normalise the answers against the form definition.

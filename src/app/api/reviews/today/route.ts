@@ -4,6 +4,7 @@ import type { AuthedUser } from "@/lib/auth/session";
 import { listAppointments } from "@/lib/dentally/read";
 import { listByAppointments } from "@/lib/reviews/repository";
 import type { ReviewStatus } from "@/lib/reviews/types";
+import { londonDayKey } from "@/lib/time/london";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,7 @@ export async function GET(request: Request): Promise<Response> {
   const allSiteIds = getSites(client.id).map((s) => s.id);
   const siteIds = auth ? allSiteIds.filter((id) => auth.siteIds.includes(id)) : allSiteIds;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = londonDayKey(new Date());
   const appts = await listAppointments(siteIds, { from: today, to: today });
 
   const requests = await listByAppointments(appts.map((a) => a.id));
