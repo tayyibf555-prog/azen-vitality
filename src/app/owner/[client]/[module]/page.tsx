@@ -14,6 +14,7 @@ import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
 import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
 import { AgentView } from "@/components/client/agent/agent-view";
+import { InboxView } from "@/components/client/inbox/inbox-view";
 import { CopilotView } from "@/components/client/copilot/copilot-view";
 import { PatientsView } from "@/components/client/patients/patients-view";
 import { CalendarView } from "@/components/client/calendar/calendar-view";
@@ -83,6 +84,10 @@ export default async function OwnerModulePage({
 
   if (module === "daily-brief") {
     return <DailyBriefView clientSlug={client} />;
+  }
+
+  if (module === "conversations") {
+    return <InboxView clientSlug={client} />;
   }
 
   if (module === "booking-agent") {

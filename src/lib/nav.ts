@@ -15,6 +15,7 @@ import {
   PhoneMissed,
   ShieldCheck,
   MessageCircle,
+  MessagesSquare,
   Bot,
   Sunrise,
   Settings,
@@ -201,6 +202,13 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Conversational",
     items: [
+      {
+        slug: "conversations",
+        label: "Conversations",
+        icon: MessagesSquare,
+        status: "live",
+        note: "One inbox for every patient conversation across SMS, WhatsApp, after-hours and the lifecycle agents, grouped per person, with the ability to take over and reply yourself. Replies honour consent and opt-outs and are in test mode until go-live.",
+      },
       {
         slug: "booking-agent",
         label: "Booking agent",
