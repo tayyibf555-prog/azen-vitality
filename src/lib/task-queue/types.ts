@@ -9,7 +9,8 @@ export type TaskModule =
   | "coordinator"
   | "noshow"
   | "after-hours"
-  | "smile-assessment";
+  | "smile-assessment"
+  | "compliance";
 
 export type TaskKind =
   | "contact_lead"
@@ -18,7 +19,10 @@ export type TaskKind =
   | "follow_up_plan"
   | "confirm_appt"
   | "after_hours_callback"
-  | "action_assessment";
+  | "action_assessment"
+  | "compliance_audit"
+  | "compliance_policy"
+  | "compliance_training";
 
 export type TaskStatus = "open" | "done" | "snoozed" | "dismissed";
 
@@ -30,9 +34,19 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   confirm_appt: "Confirm appointment",
   after_hours_callback: "After-hours callback",
   action_assessment: "Review assessment",
+  compliance_audit: "Compliance audit",
+  compliance_policy: "Compliance policy",
+  compliance_training: "Staff training",
 };
 
-/** A computed actionable item, before the overlay is applied. */
+/**
+ * A computed actionable item, before the overlay is applied.
+ *
+ * Most tasks are patient/lead work, but compliance tasks (audits, policies,
+ * training) carry no patient. For those, `patientName` holds the item name (it
+ * is only used as the secondary sort key and the row label), so the field stays
+ * a stable, non-empty string across every module.
+ */
 export interface CandidateTask {
   key: string; // stable: `<module>:<entityId>:<kind>`
   module: TaskModule;

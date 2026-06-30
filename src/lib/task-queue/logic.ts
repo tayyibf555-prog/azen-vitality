@@ -9,6 +9,12 @@ export const KIND_BASE: Record<TaskKind, number> = {
   contact_lead: 82, // a fresh enquiry, speed matters most
   after_hours_callback: 80, // someone tried to reach the practice out of hours
   action_assessment: 74, // a high-intent quiz lead not yet picked up
+  // Compliance: a base that sits below the time-critical patient work, then an
+  // overdue boost (passed as overdueDays) lifts a breached item near the top.
+  // due_soon items pass no boost and stay in the medium band.
+  compliance_audit: 68, // an overdue regulatory audit (HTM 01-05, fire, etc.)
+  compliance_policy: 64, // a missing / review-due required policy
+  compliance_training: 60, // overdue / expiring mandatory staff training
   follow_up_plan: 62, // money on the table, but not time-critical
   reactivate: 54,
   chase_recall: 48,

@@ -6,6 +6,7 @@ import { listOpportunities } from "@/lib/coordinator/repository";
 import { listTargets as listNoshowTargets } from "@/lib/noshow/repository";
 import { listCaptures } from "@/lib/after-hours/repository";
 import { listResponses } from "@/lib/smile-assessment/repository";
+import { complianceTasks } from "@/lib/compliance/tasks";
 import { londonDateTimeLabel } from "@/lib/time/london";
 import { computePriority, applyOverlay } from "./logic";
 import { getOverlayMap } from "./repository";
@@ -158,6 +159,13 @@ async function smileAssessmentCandidates(ctx: TaskQueueContext): Promise<Candida
     }));
 }
 
+async function complianceCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
+  // Compliance is a pure, practice-wide source (no per-site read): every overdue
+  // or due-soon audit, policy and training record becomes a task. siteId is the
+  // first site so the task carries a valid site, matching CandidateTask's shape.
+  return complianceTasks({ clientSlug: ctx.clientSlug, siteId: ctx.siteIds[0] ?? "" });
+}
+
 // --- Aggregate --------------------------------------------------------------
 
 export async function generateTasks(ctx: TaskQueueContext): Promise<Task[]> {
@@ -169,6 +177,7 @@ export async function generateTasks(ctx: TaskQueueContext): Promise<Task[]> {
     safe(() => noshowCandidates(ctx)),
     safe(() => afterHoursCandidates(ctx)),
     safe(() => smileAssessmentCandidates(ctx)),
+    safe(() => complianceCandidates(ctx)),
   ]);
   const candidates = groups.flat();
 

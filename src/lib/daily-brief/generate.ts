@@ -6,6 +6,7 @@ import { listTargets as listRecallTargets } from "@/lib/recall/repository";
 import { listTargets as listReactivationTargets } from "@/lib/reactivation/repository";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { listCaptures } from "@/lib/after-hours/repository";
+import { MOCK_AUDITS, MOCK_POLICIES, MOCK_TRAINING_RECORDS } from "@/lib/compliance/mock";
 
 import { londonDayKey } from "@/lib/time/london";
 
@@ -235,6 +236,52 @@ async function buildMoneySection(ctx: BriefContext): Promise<BriefSection> {
   return { key: "money", title: "Money", items };
 }
 
+async function buildComplianceSection(ctx: BriefContext): Promise<BriefSection> {
+  // Compliance is a pure, practice-wide source (no per-site read). Surface the
+  // breached items first (overdue audits, missing policies, expired training)
+  // and the approaching ones as a softer line, so the owner / manager sees the
+  // regulatory position in the same morning brief as everything else.
+  const overdueAudits = MOCK_AUDITS.filter((a) => a.status === "overdue");
+  const dueAudits = MOCK_AUDITS.filter((a) => a.status === "due_soon");
+  const missingPolicies = MOCK_POLICIES.filter((p) => p.status === "missing");
+  const reviewPolicies = MOCK_POLICIES.filter((p) => p.status === "review_due");
+  const overdueTraining = MOCK_TRAINING_RECORDS.filter((t) => t.status === "overdue");
+  const dueTraining = MOCK_TRAINING_RECORDS.filter((t) => t.status === "due_soon");
+
+  const breached = overdueAudits.length + missingPolicies.length + overdueTraining.length;
+  const approaching = dueAudits.length + reviewPolicies.length + dueTraining.length;
+
+  const items: BriefLine[] = [];
+
+  if (breached > 0) {
+    // Name the most recognisable breached items so the line is actionable.
+    const names: string[] = [
+      ...overdueAudits.map((a) => a.name),
+      ...missingPolicies.map((p) => p.name),
+    ].slice(0, 2);
+    const named = names.length > 0 ? `: ${names.join(", ")}` : "";
+    items.push({
+      title: `${breached} compliance item${breached === 1 ? "" : "s"} overdue`,
+      detail: `Regulatory work past its due date${named}. Clear these first.`,
+      priority: "high",
+      count: breached,
+      href: "compliance",
+    });
+  }
+
+  if (approaching > 0) {
+    items.push({
+      title: `${approaching} compliance item${approaching === 1 ? "" : "s"} due soon`,
+      detail: "Audits, policy reviews and staff training approaching their due date.",
+      priority: "medium",
+      count: approaching,
+      href: "compliance",
+    });
+  }
+
+  return { key: "compliance", title: "Compliance and CQC readiness", items };
+}
+
 // ---------------------------------------------------------------------------
 // Formatting (local, so the generator has no React/UI dependency).
 // ---------------------------------------------------------------------------
@@ -261,7 +308,7 @@ function lineToBriefItem(
   const metric: BriefItem["metric"] =
     section.key === "money" || line.value !== undefined
       ? "revenue"
-      : section.key === "noshow"
+      : section.key === "noshow" || section.key === "compliance"
         ? "risk"
         : section.key === "overnight"
           ? "time"
@@ -303,6 +350,9 @@ export async function generateBrief(ctx: BriefContext): Promise<DailyBrief> {
     buildChaseSection(ctx).catch(() => emptySection("chase", "Who to chase")),
     buildOvernightSection(ctx).catch(() => emptySection("overnight", "Overnight after-hours")),
     buildMoneySection(ctx).catch(() => emptySection("money", "Money")),
+    buildComplianceSection(ctx).catch(() =>
+      emptySection("compliance", "Compliance and CQC readiness"),
+    ),
   ];
   const built = await Promise.all(builders);
 
@@ -348,8 +398,8 @@ function orderSectionsForRole(sections: BriefSection[], role: BriefContext["role
   const byKey = new Map(sections.map((s) => [s.key, s]));
   const order =
     role === "client_coordinator"
-      ? ["arriving", "noshow", "overnight", "chase", "money", "diary"]
-      : ["diary", "arriving", "noshow", "chase", "overnight", "money"];
+      ? ["arriving", "noshow", "overnight", "chase", "money", "diary", "compliance"]
+      : ["diary", "arriving", "noshow", "chase", "overnight", "money", "compliance"];
   const out: BriefSection[] = [];
   for (const key of order) {
     const s = byKey.get(key);

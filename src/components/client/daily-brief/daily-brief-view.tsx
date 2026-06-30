@@ -3,6 +3,7 @@ import {
   CalendarDays,
   PoundSterling,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   PhoneMissed,
   ListChecks,
@@ -34,6 +35,7 @@ const SECTION_ICON: Record<string, LucideIcon> = {
   chase: ListChecks,
   overnight: PhoneMissed,
   money: Wallet,
+  compliance: ShieldCheck,
 };
 
 const ROLE_GREETING: Record<Role, string> = {
