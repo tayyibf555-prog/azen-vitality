@@ -21,6 +21,7 @@ import {
   BadgeCheck,
   Megaphone,
   ClipboardCheck,
+  Star,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -174,6 +175,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: ShieldCheck,
         status: "live",
         note: "Smart confirmations and reminders driven off the live Dentally diary and appointment state machine.",
+      },
+      {
+        slug: "reviews",
+        label: "Reviews",
+        icon: Star,
+        status: "live",
+        note: "After each appointment, staff mark who attended and a compliant Google review request is sent automatically a few hours later or the next day, through the consent-aware messaging layer. Requesting reviews is distinct from using testimonials in ads.",
       },
     ],
   },

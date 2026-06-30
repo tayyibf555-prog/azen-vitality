@@ -7,6 +7,7 @@ import { NoshowView } from "@/components/client/noshow/noshow-view";
 import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
 import { MetaAdsView } from "@/components/client/meta-ads/meta-ads-view";
 import { ComplianceView } from "@/components/client/compliance/compliance-view";
+import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
@@ -61,6 +62,10 @@ export default async function OwnerModulePage({
 
   if (module === "compliance") {
     return <ComplianceView clientSlug={client} />;
+  }
+
+  if (module === "reviews") {
+    return <ReviewsView clientSlug={client} />;
   }
 
   if (module === "speed-to-lead") {

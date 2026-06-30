@@ -3,6 +3,7 @@ import { updateOutboxStatusByMessageId as updateReactivationStatus } from "@/lib
 import { updateOutboxStatusByMessageId as updateRecallStatus } from "@/lib/recall/repository";
 import { updateOutboxStatusByMessageId as updateNoshowStatus } from "@/lib/noshow/repository";
 import { updateOutboxStatusByMessageId as updateCoordinatorStatus } from "@/lib/coordinator/repository";
+import { updateOutboxStatusByMessageId as updateReviewsStatus } from "@/lib/reviews/repository";
 import { updateAttemptStatusByMessageId as updateSpeedToLeadStatus } from "@/lib/speed-to-lead/repository";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,7 @@ export async function POST(request: Request): Promise<Response> {
     await updateRecallStatus(sid, mapped);
     await updateNoshowStatus(sid, mapped);
     await updateCoordinatorStatus(sid, mapped);
+    await updateReviewsStatus(sid, mapped);
     await updateSpeedToLeadStatus(sid, mapped);
   }
   return new Response(null, { status: 204 });
