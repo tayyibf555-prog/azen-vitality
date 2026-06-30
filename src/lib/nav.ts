@@ -26,6 +26,7 @@ import {
   TrendingUp,
   FileText,
   UserPlus,
+  Bell,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -257,6 +258,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: Sunrise,
         status: "live",
         note: "Every morning, reads the diary and hands each role a prioritised action list: who to chase, gaps to fill, no-show risks, high-value treatment arriving today.",
+      },
+      {
+        slug: "notifications",
+        label: "Notifications",
+        icon: Bell,
+        status: "live",
+        note: "Alerts that need attention now, gathered from compliance, no-show risk, new onboarding submissions and new enquiries.",
       },
       {
         slug: "co-pilot",

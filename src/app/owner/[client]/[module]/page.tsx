@@ -23,6 +23,7 @@ import { CalendarView } from "@/components/client/calendar/calendar-view";
 import { TodayView } from "@/components/client/today/today-view";
 import { PaymentsView } from "@/components/client/payments/payments-view";
 import { TaskQueueView } from "@/components/client/task-queue/task-queue-view";
+import { NotificationsView } from "@/components/client/notifications/notifications-view";
 import { PracticeBrainView } from "@/components/client/practice-brain";
 import { SettingsView } from "@/components/client/settings/settings-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
@@ -139,6 +140,10 @@ export default async function OwnerModulePage({
 
   if (module === "task-queue") {
     return <TaskQueueView clientSlug={client} />;
+  }
+
+  if (module === "notifications") {
+    return <NotificationsView clientSlug={client} />;
   }
 
   if (module === "settings") {
