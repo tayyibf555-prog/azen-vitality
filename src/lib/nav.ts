@@ -22,6 +22,7 @@ import {
   Megaphone,
   ClipboardCheck,
   Star,
+  TrendingUp,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -51,6 +52,18 @@ export const CLIENT_NAV: NavGroup[] = [
     label: "Overview",
     items: [
       { slug: "", label: "Overview", icon: LayoutDashboard, status: "live" },
+    ],
+  },
+  {
+    label: "Insights",
+    items: [
+      {
+        slug: "roi",
+        label: "ROI",
+        icon: TrendingUp,
+        status: "live",
+        note: "Practice-wide growth view: how acquisition spend turns into leads, booked patients and treatment revenue, by channel, with cost per new patient and return on spend. Mock until the live sources are connected.",
+      },
     ],
   },
   {
