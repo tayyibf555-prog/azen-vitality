@@ -19,6 +19,7 @@ import {
   Sunrise,
   Settings,
   BadgeCheck,
+  Megaphone,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -86,6 +87,13 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Acquisition",
     items: [
+      {
+        slug: "meta-ads",
+        label: "Meta Ads",
+        icon: Megaphone,
+        status: "live",
+        note: "Plan, build and track Facebook and Instagram ad campaigns: ready-to-launch templates, AI ad copy, a step-by-step launch guide, performance analytics, and a library of winning dental ads with an AI creative overview. UK GDC and ASA compliant. Campaign data is mock until the Meta account is connected.",
+      },
       {
         slug: "smile-assessment",
         label: "Smile Assessment",

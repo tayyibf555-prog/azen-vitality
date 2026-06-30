@@ -5,6 +5,7 @@ import { ReactivationView } from "@/components/client/reactivation/reactivation-
 import { RecallView } from "@/components/client/recall/recall-view";
 import { NoshowView } from "@/components/client/noshow/noshow-view";
 import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
+import { MetaAdsView } from "@/components/client/meta-ads/meta-ads-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
@@ -51,6 +52,10 @@ export default async function OwnerModulePage({
 
   if (module === "smile-assessment") {
     return <SmileAssessmentView clientSlug={client} />;
+  }
+
+  if (module === "meta-ads") {
+    return <MetaAdsView clientSlug={client} />;
   }
 
   if (module === "speed-to-lead") {
