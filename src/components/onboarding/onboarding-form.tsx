@@ -19,6 +19,7 @@ import type {
   OnboardingConsent,
   OnboardingField,
   OnboardingFile,
+  OnboardingStep,
 } from "@/lib/onboarding/types";
 
 // Public, branded new-patient onboarding form, one step per screen. It mirrors the
@@ -26,18 +27,17 @@ import type {
 // a card with a thin progress bar, ONE step on screen at a time, Back, the assessEnter
 // ease-out keyframe gated behind motion-safe:, focus-visible rings, a ThankYou screen).
 //
-// Unlike the assessment (an adaptive AI funnel) this is a fixed, generic sequence: it
-// renders ONBOARDING_STEPS by field type, validates required fields before advancing,
-// has a dedicated optional documents-upload screen, then a final consent screen, and
-// POSTs everything to /api/onboarding/submit.
+// Unlike the assessment (an adaptive AI funnel) this is a configurable, generic
+// sequence: it renders the resolved `steps` by field type, validates required fields
+// before advancing, has a dedicated optional documents-upload screen, then a final
+// consent screen, and POSTs everything to /api/onboarding/submit.
+//
+// The steps are resolved per-practice on the server (see resolveSteps) and passed in.
+// When no steps are provided we fall back to the hardcoded default flow so the form
+// still works on its own. The documents step (id "documents", no fields) is always the
+// final resolved step and is rendered specially; consent is a synthetic screen after it.
 //
 // British English throughout. No clinical advice, no NHS/private framing.
-
-// The fixed flow: every defined step, then consent as a final synthetic screen. The
-// documents step already exists in ONBOARDING_STEPS (id "documents", no fields) and is
-// rendered specially.
-const STEPS = ONBOARDING_STEPS;
-const TOTAL = STEPS.length + 1; // +1 for the consent screen.
 
 const DOCUMENTS_STEP_ID = "documents";
 const MAX_FILES = 8;
@@ -48,6 +48,12 @@ interface Props {
   clientSlug: string;
   /** Practice display name for the branded header (e.g. "Vitality Dental"). */
   practiceName?: string;
+  /**
+   * The resolved form steps for this practice (from resolveSteps). Defaults to the
+   * hardcoded ONBOARDING_STEPS so the form still works if rendered without a config.
+   * The last step is expected to be the documents step (id "documents", no fields).
+   */
+  steps?: OnboardingStep[];
 }
 
 /** A file in the middle of, or finished, uploading — tracked per picked file. */
@@ -71,7 +77,11 @@ const DEFAULT_CONSENT: OnboardingConsent = {
   data: false,
 };
 
-export function OnboardingForm({ clientSlug, practiceName }: Props) {
+export function OnboardingForm({ clientSlug, practiceName, steps }: Props) {
+  // The flow: every resolved step, then consent as a final synthetic screen.
+  const STEPS = steps && steps.length > 0 ? steps : ONBOARDING_STEPS;
+  const TOTAL = STEPS.length + 1; // +1 for the consent screen.
+
   const [index, setIndex] = useState(0); // index into STEPS
   const [phase, setPhase] = useState<Phase>("step");
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -361,7 +371,7 @@ function StepScreen({
   removeUpload,
 }: {
   animKey: number;
-  step: (typeof ONBOARDING_STEPS)[number];
+  step: OnboardingStep;
   position: number;
   total: number;
   answers: Record<string, string>;

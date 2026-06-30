@@ -1,6 +1,7 @@
 import { getClient, getSites } from "@/lib/mock/clients";
 import { parseSubmission } from "@/lib/onboarding/validate";
-import { ONBOARDING_STEPS } from "@/lib/onboarding/steps";
+import { getConfig } from "@/lib/onboarding/config-repository";
+import { resolveSteps } from "@/lib/onboarding/resolve";
 import { createSubmission } from "@/lib/onboarding/repository";
 import { consumeBudget } from "@/lib/rate-budget";
 import type {
@@ -141,8 +142,13 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    // Validate + normalise the answers against the form definition.
-    const parsedAnswers = parseSubmission(body.answers, ONBOARDING_STEPS);
+    // Validate + normalise the answers against THIS practice's resolved form. Loading
+    // the saved config and resolving it here (the same resolveSteps the public page
+    // uses) means enabled/custom questions are accepted and disabled ones rejected, so
+    // the allow-list always matches what the patient was actually shown.
+    const config = await getConfig(client.id);
+    const steps = resolveSteps(config);
+    const parsedAnswers = parseSubmission(body.answers, steps);
     if (!parsedAnswers.ok) return bad(parsedAnswers.error);
     const a = parsedAnswers.answers;
 
@@ -188,6 +194,15 @@ export async function POST(request: Request): Promise<Response> {
     const hasAny = (o: Record<string, unknown>): boolean =>
       Object.values(o).some((v) => v !== undefined);
 
+    // Custom questions: parseSubmission already validated these against this practice's
+    // resolved form (so only keys the patient was actually shown survive). Library
+    // answers map into their dedicated columns/jsonb above; everything keyed custom-
+    // is collected here into its own jsonb group so it is never lost.
+    const custom: Record<string, string> = {};
+    for (const [key, value] of Object.entries(a)) {
+      if (key.startsWith("custom-")) custom[key] = value;
+    }
+
     const submission: OnboardingSubmission = await createSubmission({
       clientId: client.id,
       siteId,
@@ -202,6 +217,7 @@ export async function POST(request: Request): Promise<Response> {
       heardAbout: a.heard_about ?? null,
       files,
       consent,
+      custom: hasAny(custom) ? custom : null,
     });
 
     // Do not leak the row id or internals to the public caller; a friendly ack only.

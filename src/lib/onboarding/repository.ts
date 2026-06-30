@@ -37,6 +37,7 @@ interface SubmissionRow {
   heard_about: string | null;
   files: OnboardingFile[] | null;
   consent: OnboardingConsent | null;
+  custom: Record<string, string> | null;
   status: string;
   created_at: string;
 }
@@ -57,6 +58,7 @@ function rowToSubmission(r: SubmissionRow): OnboardingSubmission {
     heardAbout: r.heard_about,
     files: Array.isArray(r.files) ? r.files : [],
     consent: r.consent,
+    custom: r.custom ?? null,
     status: r.status as OnboardingStatus,
     createdAt: r.created_at,
   };
@@ -80,6 +82,7 @@ export interface CreateSubmissionInput {
   heardAbout?: string | null;
   files?: OnboardingFile[];
   consent?: OnboardingConsent | null;
+  custom?: Record<string, string> | null;
 }
 
 export async function createSubmission(
@@ -102,6 +105,7 @@ export async function createSubmission(
       heard_about: input.heardAbout ?? null,
       files: input.files ?? [],
       consent: input.consent ?? null,
+      custom: input.custom ?? null,
     })
     .select("*")
     .single();

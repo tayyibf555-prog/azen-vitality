@@ -67,6 +67,8 @@ export interface OnboardingSubmission {
   heardAbout: string | null;
   files: OnboardingFile[];
   consent: OnboardingConsent | null;
+  /** Answers to the practice's own custom questions, keyed by their custom- key. */
+  custom: Record<string, string> | null;
   status: OnboardingStatus;
   createdAt: string; // ISO
 }
@@ -106,4 +108,66 @@ export interface OnboardingStep {
   intro?: string;
   /** 1 to 2 fields per step so the public form is one or two questions per screen. */
   fields: OnboardingField[];
+}
+
+// ---------------------------------------------------------------------------
+// Configurable form — a per-practice library + custom questions, saved as a
+// config the PUBLIC form reads. The owner/coordinator picks which pre-loaded
+// library questions to include and adds their own, and resolveSteps() turns the
+// config into the OnboardingStep[] the form renders.
+// ---------------------------------------------------------------------------
+
+/** Where a question sits in the flow. Used to group questions into sensible steps. */
+export type OnboardingCategory =
+  | "personal"
+  | "contact"
+  | "address"
+  | "medical"
+  | "dental"
+  | "preferences"
+  | "marketing";
+
+/**
+ * A pre-loaded question the owner can include in their form. Stable `key` is the
+ * contract the submit mapper reads by name, so library keys never change once shipped.
+ */
+export interface LibraryQuestion {
+  /** Stable kebab-case key. The submit mapper reads answers by key, so keep it fixed. */
+  key: string;
+  label: string;
+  /** Reuses the public form's field types so the renderer needs no new cases. */
+  type: OnboardingFieldType;
+  category: OnboardingCategory;
+  /** For select / yesno questions. */
+  options?: OnboardingFieldOption[];
+  /** True for the questions the default flow includes out of the box. */
+  defaultEnabled: boolean;
+  /** Whether the owner is allowed to mark this question required. */
+  requirable: boolean;
+  help?: string;
+}
+
+/** A practice's own question, written in the builder. Keys are generated, prefixed custom-. */
+export interface CustomQuestion {
+  /** Generated, always prefixed `custom-` so it can never collide with a library key. */
+  key: string;
+  label: string;
+  type: OnboardingFieldType;
+  /** For select / yesno questions. */
+  options?: OnboardingFieldOption[];
+  required: boolean;
+  category: OnboardingCategory;
+}
+
+/**
+ * The saved per-practice form configuration. `enabledKeys` are library keys the owner
+ * has switched on; `required` overrides a library question's default required flag by
+ * key; `custom` are the practice's own questions (which carry their own required flag).
+ * A null/empty config means "use the default flow".
+ */
+export interface OnboardingConfig {
+  enabledKeys: string[];
+  required: Record<string, boolean>;
+  custom: CustomQuestion[];
+  updatedAt?: string;
 }
