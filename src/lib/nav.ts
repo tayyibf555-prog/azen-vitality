@@ -20,6 +20,7 @@ import {
   Settings,
   BadgeCheck,
   Megaphone,
+  ClipboardCheck,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -198,6 +199,13 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Staff & Ops",
     items: [
+      {
+        slug: "compliance",
+        label: "Compliance",
+        icon: ClipboardCheck,
+        status: "live",
+        note: "CQC and GDC compliance, organised: a readiness dashboard across the five key lines of enquiry, the recurring audit and check calendar (HTM 01-05, IPC, radiography, fire, Legionella), the required policy library, and the staff training matrix, with an AI readiness check. Decision-support and an organiser, not legal advice or a substitute for the practice's compliance lead or CQC sign-off. Mock data for now.",
+      },
       {
         slug: "daily-brief",
         label: "Daily brief",
