@@ -25,6 +25,7 @@ import {
   Star,
   TrendingUp,
   FileText,
+  UserPlus,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -131,6 +132,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: Zap,
         status: "live",
         note: "Contact a new enquiry within ~30 seconds across SMS, email and WhatsApp. Instrument first-response time (5+ min delay correlates with ~9x lower conversion).",
+      },
+      {
+        slug: "onboarding",
+        label: "Onboarding",
+        icon: UserPlus,
+        status: "live",
+        note: "A branded new-patient onboarding form at /onboard/<client>: contact, brief medical intake, documents upload and consent, collected step by step. Submissions land here for the team to review and register.",
       },
     ],
   },

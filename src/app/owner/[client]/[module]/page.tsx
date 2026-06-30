@@ -12,6 +12,7 @@ import { ComplianceView } from "@/components/client/compliance/compliance-view";
 import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
+import { OnboardingView } from "@/components/client/onboarding/onboarding-view";
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
 import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
 import { AgentView } from "@/components/client/agent/agent-view";
@@ -81,6 +82,10 @@ export default async function OwnerModulePage({
 
   if (module === "speed-to-lead") {
     return <SpeedToLeadView clientSlug={client} />;
+  }
+
+  if (module === "onboarding") {
+    return <OnboardingView clientSlug={client} />;
   }
 
   if (module === "after-hours") {
