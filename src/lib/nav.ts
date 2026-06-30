@@ -24,6 +24,7 @@ import {
   ClipboardCheck,
   Star,
   TrendingUp,
+  FileText,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -64,6 +65,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: TrendingUp,
         status: "live",
         note: "Practice-wide growth view: how acquisition spend turns into leads, booked patients and treatment revenue, by channel, with cost per new patient and return on spend. Mock until the live sources are connected.",
+      },
+      {
+        slug: "reports",
+        label: "Reports",
+        icon: FileText,
+        status: "live",
+        note: "AI weekly and monthly business reviews across acquisition, conversion, lifecycle and compliance, with recommendations. Mock until the live sources connect.",
       },
     ],
   },

@@ -7,6 +7,7 @@ import { NoshowView } from "@/components/client/noshow/noshow-view";
 import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
 import { MetaAdsView } from "@/components/client/meta-ads/meta-ads-view";
 import { RoiView } from "@/components/client/roi/roi-view";
+import { ReportsView } from "@/components/client/reports/reports-view";
 import { ComplianceView } from "@/components/client/compliance/compliance-view";
 import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
@@ -64,6 +65,10 @@ export default async function OwnerModulePage({
 
   if (module === "roi") {
     return <RoiView clientSlug={client} />;
+  }
+
+  if (module === "reports") {
+    return <ReportsView clientSlug={client} />;
   }
 
   if (module === "compliance") {
