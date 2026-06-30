@@ -1,7 +1,12 @@
-"use client";
+import { SettingsView } from "@/components/client/settings/settings-view";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="settings" />;
+export default async function SettingsPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client } = await params;
+  return <SettingsView clientSlug={client} />;
 }

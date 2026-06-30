@@ -270,7 +270,7 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Account",
     items: [
-      { slug: "settings", label: "Settings", icon: Settings, status: "placeholder", note: "Site preferences, consent defaults, Dentally connection, team and roles." },
+      { slug: "settings", label: "Settings", icon: Settings, status: "live", note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
     ],
   },
 ];
