@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
-import { CLIENT_NAV } from "@/lib/nav";
+import { CLIENT_NAV, navForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,12 @@ export function ClientSidebar() {
   const client = getClient(clientSlug);
   const base = `/c/${clientSlug}`;
 
+  // Filter the nav to what this role may reach. With no verified role (dev /
+  // un-enforced, where getSessionUser returns null) we show everything — the
+  // owner view — so local behaviour is unchanged. The server-side guard is the
+  // real boundary; this just hides what a coordinator cannot reach.
+  const nav = user?.role ? navForRole(user.role) : CLIENT_NAV;
+
   // Optimistic active state: highlight the clicked tab instantly instead of waiting
   // for usePathname to commit after the server render. Cleared once the route lands.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -64,7 +70,7 @@ export function ClientSidebar() {
 
       {/* Nav groups */}
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {CLIENT_NAV.map((group) => (
+        {nav.map((group) => (
           <div key={group.label} className="mb-4">
             <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
               {group.label}

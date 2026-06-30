@@ -1,7 +1,8 @@
 import "server-only";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { authEnforced } from "./guard";
 import { canAccessClient, getAuthEmail, getSessionUser } from "./session";
+import { canRoleAccessModule } from "@/lib/nav";
 import type { Role } from "@/lib/types";
 
 /**
@@ -25,4 +26,23 @@ export async function guardPage(opts: { roles: Role[]; clientSlug?: string }): P
   }
   if (!opts.roles.includes(user.role)) redirect("/");
   if (opts.clientSlug && !canAccessClient(user, opts.clientSlug)) redirect("/");
+}
+
+/**
+ * Per-module authorization, so directly visiting an owner-only module's URL as a
+ * coordinator is blocked, not merely hidden in the sidebar. Layered on top of the
+ * layout's `guardPage` (which has already confirmed the user is signed in and may
+ * access this client). No-op until enforcement is on, mirroring the rest of the
+ * auth layer, so the un-enforced demo keeps rendering every module.
+ *
+ * On a role that may not reach the slug we `notFound()` — a coordinator should not
+ * even learn the owner-only module exists. Owner/agency roles pass through, so
+ * there is no functional change for them.
+ */
+export async function requireModuleAccess(slug: string): Promise<void> {
+  if (!authEnforced()) return;
+  const user = await getSessionUser();
+  // A missing user is the layout guard's concern (it redirects to /login); here we
+  // only enforce role -> module. If somehow unresolved, fall through to notFound.
+  if (!user || !canRoleAccessModule(user.role, slug)) notFound();
 }

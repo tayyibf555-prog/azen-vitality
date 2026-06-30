@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { Gauge, Wand2, BrainCircuit, LogOut } from "lucide-react";
-import { CLIENT_NAV } from "@/lib/nav";
+import { CLIENT_NAV, navForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,11 @@ export function OwnerSidebar() {
   const clientSlug = params.client;
   const client = getClient(clientSlug);
   const base = `/owner/${clientSlug}`;
+
+  // The owner shell only renders for owner/agency roles (the /owner layout guard
+  // bounces coordinators), so this normally yields the full nav. We still filter
+  // by role for defence in depth; no verified role (dev) shows everything.
+  const nav = user?.role ? navForRole(user.role) : CLIENT_NAV;
 
   // The owner Overview lives at /owner/[client]/overview, so the base path is
   // reserved for the Management view rather than the funnel Overview.
@@ -135,7 +140,7 @@ export function OwnerSidebar() {
           </ul>
         </div>
 
-        {CLIENT_NAV.map((group) => (
+        {nav.map((group) => (
           <div key={group.label} className="mb-4">
             <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
               {group.label}

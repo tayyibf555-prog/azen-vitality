@@ -1,4 +1,5 @@
 import { MetaAdsView } from "@/components/client/meta-ads/meta-ads-view";
+import { requireModuleAccess } from "@/lib/auth/page-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -8,5 +9,6 @@ export default async function MetaAdsPage({
   params: Promise<{ client: string }>;
 }) {
   const { client: clientSlug } = await params;
+  await requireModuleAccess("meta-ads");
   return <MetaAdsView clientSlug={clientSlug} />;
 }

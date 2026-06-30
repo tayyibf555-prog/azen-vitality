@@ -28,6 +28,7 @@ import { PracticeBrainView } from "@/components/client/practice-brain";
 import { SettingsView } from "@/components/client/settings/settings-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
+import { requireModuleAccess } from "@/lib/auth/page-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,10 @@ export default async function OwnerModulePage({
   params: Promise<{ client: string; module: string }>;
 }) {
   const { client, module } = await params;
+
+  // Block direct-URL access to owner-only modules for roles that may not reach
+  // them (no-op when enforcement is off, and a pass-through for owner/agency).
+  await requireModuleAccess(module);
 
   if (module === "overview") {
     return <OverviewDashboard />;

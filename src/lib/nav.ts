@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import type { Role } from "@/lib/types";
 import {
   LayoutDashboard,
   CalendarCheck,
@@ -39,7 +40,16 @@ export interface NavItem {
   status: ModuleStatus;
   /** PILOT spec behaviour, surfaced on the placeholder page so a future session can pick it up cold. */
   note?: string;
+  /**
+   * Roles allowed to see and reach this item. Undefined = visible to every role.
+   * An item with `roles` requires the current role to be in the list; this is how
+   * owner-only modules are hidden from coordinators in nav and gated on direct URL.
+   */
+  roles?: Role[];
 }
+
+/** Roles that may see the owner-only modules: the practice owner and agency admins. */
+export const OWNER_ROLES: Role[] = ["agency_admin", "client_owner"];
 
 export interface NavGroup {
   label: string;
@@ -66,6 +76,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "ROI",
         icon: TrendingUp,
         status: "live",
+        roles: OWNER_ROLES,
         note: "Practice-wide growth view: how acquisition spend turns into leads, booked patients and treatment revenue, by channel, with cost per new patient and return on spend. Mock until the live sources are connected.",
       },
       {
@@ -73,6 +84,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Reports",
         icon: FileText,
         status: "live",
+        roles: OWNER_ROLES,
         note: "AI weekly and monthly business reviews across acquisition, conversion, lifecycle and compliance, with recommendations. Mock until the live sources connect.",
       },
     ],
@@ -118,6 +130,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Meta Ads",
         icon: Megaphone,
         status: "live",
+        roles: OWNER_ROLES,
         note: "Plan, build and track Facebook and Instagram ad campaigns: ready-to-launch templates, AI ad copy, a step-by-step launch guide, performance analytics, and a library of winning dental ads with an AI creative overview. UK GDC and ASA compliant. Campaign data is mock until the Meta account is connected.",
       },
       {
@@ -165,6 +178,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "USPs",
         icon: BadgeCheck,
         status: "live",
+        roles: OWNER_ROLES,
         note: "The practice's selling points, managed by the owner and woven into the AI agents' conversion messaging. Short, truthful, never a clinical guarantee.",
       },
     ],
@@ -250,6 +264,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Compliance",
         icon: ClipboardCheck,
         status: "live",
+        roles: OWNER_ROLES,
         note: "CQC and GDC compliance, organised: a readiness dashboard across the five key lines of enquiry, the recurring audit and check calendar (HTM 01-05, IPC, radiography, fire, Legionella), the required policy library, and the staff training matrix, with an AI readiness check. Decision-support and an organiser, not legal advice or a substitute for the practice's compliance lead or CQC sign-off. Mock data for now.",
       },
       {
@@ -271,6 +286,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Ask the brain",
         icon: Bot,
         status: "live",
+        roles: OWNER_ROLES,
         note: "Practice co-pilot. Ask the knowledge base anything; answers are grounded in stored knowledge and filtered to your access level.",
       },
     ],
@@ -278,10 +294,46 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Account",
     items: [
-      { slug: "settings", label: "Settings", icon: Settings, status: "live", note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
+      { slug: "settings", label: "Settings", icon: Settings, status: "live", roles: OWNER_ROLES, note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
     ],
   },
 ];
 
 /** Flat lookup of every client module path (used for placeholder route generation + guards). */
 export const CLIENT_MODULE_SLUGS = CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug));
+
+/** Whether a role may see/reach a single nav item. No `roles` = open to all. */
+function roleCanSeeItem(role: Role, item: NavItem): boolean {
+  return !item.roles || item.roles.includes(role);
+}
+
+/**
+ * The nav groups visible to a role: items the role may not see are dropped, and
+ * any group left empty is removed. An item with no `roles` is allowed for all.
+ */
+export function navForRole(role: Role): NavGroup[] {
+  return CLIENT_NAV.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => roleCanSeeItem(role, item)),
+  })).filter((group) => group.items.length > 0);
+}
+
+/**
+ * Slugs that are NOT in CLIENT_NAV but still render under an owner shell and must
+ * stay owner-only when reached by direct URL (e.g. the owner-only Practice brain).
+ */
+const EXTRA_OWNER_ONLY_SLUGS = new Set<string>(["practice-brain"]);
+
+/**
+ * Whether a role may access a module by its slug — the single source of truth for
+ * both the sidebar filter and the server-side direct-URL guard. A slug with no
+ * `roles` entry in CLIENT_NAV is open to all roles; owner-only slugs require an
+ * owner/agency role. Slugs not in the nav (e.g. practice-brain) are treated as
+ * owner-only when listed in EXTRA_OWNER_ONLY_SLUGS, otherwise open.
+ */
+export function canRoleAccessModule(role: Role, slug: string): boolean {
+  if (EXTRA_OWNER_ONLY_SLUGS.has(slug)) return OWNER_ROLES.includes(role);
+  const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === slug);
+  if (!item) return true; // unknown slug: not owner-restricted here (the page itself 404s)
+  return roleCanSeeItem(role, item);
+}
