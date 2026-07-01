@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { LogOut, ChevronDown } from "lucide-react";
 import { CLIENT_NAV, navForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
@@ -55,6 +55,30 @@ export function ClientSidebar() {
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
+  // Collapsible nav groups (each section's items branch down under its header).
+  // Track which groups are COLLAPSED (default: all open). The sidebar lives in the
+  // layout, so this state persists across page navigation.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleGroup = (label: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+
+  // Whichever group holds the active item is always kept open when you navigate in.
+  const activeGroupLabel = nav.find((g) => g.items.some((i) => isActive(i.slug)))?.label ?? null;
+  useEffect(() => {
+    if (!activeGroupLabel) return;
+    setCollapsed((prev) => {
+      if (!prev.has(activeGroupLabel)) return prev;
+      const next = new Set(prev);
+      next.delete(activeGroupLabel);
+      return next;
+    });
+  }, [activeGroupLabel]);
+
   return (
     <aside className="chrome-nav flex h-screen w-64 shrink-0 flex-col border-r border-navy-line">
       {/* Client context */}
@@ -68,14 +92,31 @@ export function ClientSidebar() {
         <p className="truncate text-sm font-bold text-on-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 
-      {/* Nav groups */}
+      {/* Nav groups (collapsible: each section's items branch down under its header) */}
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {nav.map((group) => (
-          <div key={group.label} className="mb-4">
-            <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
-              {group.label}
-            </p>
-            <ul className="space-y-0.5">
+        {nav.map((group) => {
+          const open = !collapsed.has(group.label);
+          return (
+          <div key={group.label} className="mb-1.5">
+            <button
+              type="button"
+              onClick={() => toggleGroup(group.label)}
+              aria-expanded={open}
+              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted transition-colors hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+            >
+              <span>{group.label}</span>
+              <ChevronDown
+                size={13}
+                className={cn("shrink-0 transition-transform duration-200", open ? "" : "-rotate-90")}
+              />
+            </button>
+            <div
+              className={cn(
+                "grid transition-[grid-template-rows] duration-200 ease-out",
+                open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+              )}
+            >
+              <ul className="space-y-0.5 overflow-hidden pt-0.5">
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const href = item.slug === "" ? base : `${base}/${item.slug}`;
@@ -108,9 +149,11 @@ export function ClientSidebar() {
                   </li>
                 );
               })}
-            </ul>
+              </ul>
+            </div>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* User chip + logout */}
