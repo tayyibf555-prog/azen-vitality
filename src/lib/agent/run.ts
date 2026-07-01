@@ -62,11 +62,29 @@ export async function runAgentTurn(
       content: msg.content as unknown as ContentBlockParam[],
     });
 
+    // If the model asks to escalate in this round, a human is taking over: do
+    // NOT also run any mutating tool it emitted in the same round (book,
+    // reschedule, cancel, register_patient). Otherwise an escalate alongside a
+    // book would still hit Dentally before the handover. Read-only tools may
+    // still run so their tool_result is available, but the mutation is skipped.
+    const escalatingThisRound = toolUses.some((tu) => tu.name === "escalate_to_human");
+    const MUTATING = new Set(["book", "reschedule", "cancel", "register_patient"]);
+
     const results: ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
       const input = (tu.input ?? {}) as Record<string, unknown>;
       toolCalls.push({ name: tu.name, input });
       if (tu.name === "escalate_to_human") escalated = true;
+      if (escalatingThisRound && MUTATING.has(tu.name)) {
+        // Short-circuit: skip the mutation, hand the model a refusal result so it
+        // does not believe the action happened.
+        results.push({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: JSON.stringify({ error: "Skipped: handing over to a human." }),
+        });
+        continue;
+      }
       const result = await deps.dispatch(tu.name, input);
       results.push({ type: "tool_result", tool_use_id: tu.id, content: result });
     }

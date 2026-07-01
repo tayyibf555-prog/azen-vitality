@@ -33,16 +33,37 @@ function channelConsented(lead: SpeedToLeadLead): boolean {
  * agent picks it up), sends the message DIRECTLY (speed matters, not the drain),
  * and stamps first_response_at + advances the stage to 'contacted'.
  *
- * No consent for the chosen channel, or no address: skip silently and leave the
- * lead at stage 'new' (nothing recorded). On send failure: record a 'failed'
- * attempt and leave the stage 'new' so the SLA sweep retries.
+ * No address: skip silently and leave the lead at stage 'new' (a later intake
+ * that captures a number can still reach it). No consent for the chosen channel,
+ * or the address is suppressed (opted out): the lead can NEVER be contacted, so
+ * retire it to the terminal 'lost' stage with the reason recorded on the attempt
+ * — otherwise listUncontacted would re-pick it every sweep forever. On send
+ * failure: record a 'failed' attempt and leave the stage 'new' so the sweep
+ * retries.
  *
  * Shared by the intake route (in-request, for instant contact) and the sweep
  * (the failsafe for anything the intake missed).
  */
 export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignContext): Promise<void> {
   const to = toAddress(lead);
-  if (!to || !channelConsented(lead)) return;
+  // No deliverable address yet: nothing to send to and nothing to retire on;
+  // leave at 'new' so a later enquiry that supplies an address can be contacted.
+  if (!to) return;
+
+  // No consent on the chosen channel: this lead is not contactable and never will
+  // be on its own. Record why and retire it to the terminal 'lost' stage so the
+  // SLA sweep (listUncontacted) stops re-selecting it every tick.
+  if (!channelConsented(lead)) {
+    await insertAttempt({
+      leadId: lead.id,
+      channel: lead.channel,
+      toAddress: to,
+      body: "Retired: no consent for the chosen channel.",
+      status: "failed",
+    });
+    await setLeadStage(lead.id, "lost");
+    return;
+  }
 
   // Honour the opt-out list (a number that texted STOP must never be re-contacted,
   // even via the public intake). Suppression for an unknown lead is keyed on its
@@ -54,7 +75,16 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
       ? await isSuppressed(lead.siteId, lead.channel, `patient:${lead.dentallyPatientId}`)
       : false);
   if (suppressed) {
-    await insertAttempt({ leadId: lead.id, channel: lead.channel, toAddress: to, body: "", status: "failed" });
+    // Opted out: also terminal. Record the reason and retire to 'lost' so the
+    // sweep does not re-pick it forever.
+    await insertAttempt({
+      leadId: lead.id,
+      channel: lead.channel,
+      toAddress: to,
+      body: "Retired: contact is suppressed (opted out).",
+      status: "failed",
+    });
+    await setLeadStage(lead.id, "lost");
     return;
   }
 

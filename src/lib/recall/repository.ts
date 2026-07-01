@@ -397,6 +397,25 @@ export async function enqueueOutbox(input: {
   return rowToOutbox(data as OutboxRow);
 }
 
+/**
+ * True when an outbox row already exists for this touch that has not failed.
+ * recall_outbox has no unique constraint on touch_id (schema changes are out of
+ * scope), so the approve→enqueue path enforces idempotency here: a double-click /
+ * retry / concurrent approve must not enqueue a second patient message for the
+ * same touch. A failed row is not counted (a genuine re-attempt is allowed).
+ */
+export async function hasPendingOutboxForTouch(touchId: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("recall_outbox")
+    .select("id")
+    .eq("touch_id", touchId)
+    .neq("status", "failed")
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
 export async function markTouchSent(touchId: string): Promise<void> {
   const db = serviceClient();
   const nowIso = new Date().toISOString();

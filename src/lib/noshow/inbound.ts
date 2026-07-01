@@ -40,6 +40,11 @@ export async function handleNoshowInbound(input: {
   body: string;
   channel: MessageChannel;
   dentally: DentallyClient;
+  // The site this inbound belongs to, when the caller can determine it. In a
+  // multi-site practice sharing one number, this prevents a YES/NO reply from
+  // resolving against a live offer on a DIFFERENT site. Optional: when unknown,
+  // findOpenOfferByAddress pins to the most-recent offer's own site instead.
+  siteId?: string;
   now?: Date;
 }): Promise<NoshowInboundResult> {
   const now = input.now ?? new Date();
@@ -49,8 +54,9 @@ export async function handleNoshowInbound(input: {
   // offer decline. Fall through so the webhook records the suppression.
   if (isStopKeyword(input.body)) return { handled: false };
 
-  // 1) An open waitlist offer to this number takes priority.
-  const offer = await findOpenOfferByAddress(input.from);
+  // 1) An open waitlist offer to this number takes priority. Site-scoped so a
+  // reply cannot resolve an offer on a different site sharing this number.
+  const offer = await findOpenOfferByAddress(input.from, input.siteId);
   if (offer) {
     const taken = "Sorry, that slot has just been taken. We will keep you on the list for the next opening.";
     if (isYes(input.body)) {

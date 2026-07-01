@@ -35,6 +35,14 @@ export async function offerSlotToNextCandidate(
   slot: FreedSlot,
   now: Date = new Date(),
 ): Promise<{ waitlistId: string } | null> {
+  // Never offer a slot that no longer exists in time. A cancellation can arrive
+  // after the appointment has already started, and an offer's TTL can outlive a
+  // near-term slot, so both the inbound and sweep re-offer paths can reach here
+  // with a past start. Offering it would text a patient an appointment they can
+  // never attend and create an offer with a future expiry for a dead slot.
+  const startAt = new Date(slot.startAt).getTime();
+  if (Number.isNaN(startAt) || startAt <= now.getTime()) return null;
+
   const prior = await listOffersForSlot(slot.appointmentId);
   if (prior.some((o) => o.status === "filled")) return null; // slot already taken
   if (prior.some((o) => o.status === "offered")) return null; // a live offer is out

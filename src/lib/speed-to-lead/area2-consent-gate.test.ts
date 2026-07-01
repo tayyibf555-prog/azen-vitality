@@ -66,11 +66,13 @@ beforeEach(() => {
 });
 
 describe("contactLead consent gate", () => {
-  it("never sends or records when the chosen channel has no consent", async () => {
+  it("never sends when the chosen channel has no consent, and retires the lead", async () => {
     await contactLead(lead({ consent: {} }));
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(insertAttempt).not.toHaveBeenCalled();
-    expect(setLeadStage).not.toHaveBeenCalled();
+    // The block is recorded (failed attempt) and the lead is retired to a terminal
+    // stage so the SLA sweep stops re-selecting it forever.
+    expect(insertAttempt).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(setLeadStage).toHaveBeenCalledWith("lead-1", "lost");
   });
 
   it("does not treat email consent as SMS consent", async () => {
@@ -89,9 +91,10 @@ describe("contactLead suppression beats consent", () => {
     isSuppressed.mockImplementation(async (_site: string, _ch: string, ref: string) => ref === "+447700900123");
     await contactLead(lead());
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(setLeadStage).not.toHaveBeenCalled();
-    // The block is recorded (failed attempt), not silently lost.
+    // The block is recorded (failed attempt) and the lead is retired to a terminal
+    // stage so the SLA sweep stops re-selecting a lead that can never be contacted.
     expect(insertAttempt).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(setLeadStage).toHaveBeenCalledWith("lead-1", "lost");
   });
 
   it("blocks a consented lead whose known patient id is on the opt-out list", async () => {
@@ -100,7 +103,7 @@ describe("contactLead suppression beats consent", () => {
     isSuppressed.mockImplementation(async (_site: string, _ch: string, ref: string) => ref === "patient:p-42");
     await contactLead(lead({ dentallyPatientId: "p-42" }));
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(setLeadStage).not.toHaveBeenCalled();
+    expect(setLeadStage).toHaveBeenCalledWith("lead-1", "lost");
   });
 });
 

@@ -60,9 +60,11 @@ describe("makeDispatch", () => {
     expect(out).not.toContain("appt-cancelled");
   });
 
-  it("reschedule moves an appointment via updateAppointment", async () => {
+  it("reschedule moves an appointment via updateAppointment (own appointment)", async () => {
     const dentally = {
-      getAvailability: vi.fn(), createAppointment: vi.fn(), getPatientAppointments: vi.fn(),
+      getAvailability: vi.fn(), createAppointment: vi.fn(),
+      // Ownership check re-derives the caller's appointments; appt-9 is theirs.
+      getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [{ id: "appt-9", state: "booked" }] }),
       updateAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-9", start_time: "2026-07-01T10:00:00Z" } }),
       cancelAppointment: vi.fn(),
     };
@@ -73,9 +75,10 @@ describe("makeDispatch", () => {
     expect(out).toContain("appt-9");
   });
 
-  it("cancel cancels an appointment via cancelAppointment", async () => {
+  it("cancel cancels an appointment via cancelAppointment (own appointment)", async () => {
     const dentally = {
-      getAvailability: vi.fn(), createAppointment: vi.fn(), getPatientAppointments: vi.fn(), updateAppointment: vi.fn(),
+      getAvailability: vi.fn(), createAppointment: vi.fn(), updateAppointment: vi.fn(),
+      getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [{ id: "appt-9", state: "booked" }] }),
       cancelAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-9", state: "cancelled" } }),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });

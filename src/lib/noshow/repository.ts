@@ -775,21 +775,48 @@ export async function slotHasLiveOffer(freedAppointmentId: string): Promise<bool
   return (data as unknown[]).length > 0;
 }
 
-/** The open offer whose offer SMS was delivered to this address, for inbound YES/NO. */
-export async function findOpenOfferByAddress(toAddress: string): Promise<SlotOffer | null> {
+/**
+ * The open offer whose offer SMS was delivered to this address, for inbound YES/NO.
+ *
+ * Site scoping: one practice number can serve several sites in a multi-site
+ * practice, so the same patient number may have a live offer on more than one
+ * site at once. Matching purely on to_address could therefore resolve a reply
+ * against the WRONG site's offer and mis-book a patient.
+ *
+ * - When the caller knows the site (siteId given), both the outbox and offer
+ *   queries are filtered by site_id, so a reply can only ever resolve an offer
+ *   from that one site.
+ * - When the site is genuinely unknown upfront (the single-number inbound path,
+ *   which resolves the site only after this lookup), we still resolve
+ *   deterministically: we pin to the site of the MOST RECENT offer SMS actually
+ *   delivered to this number, and only consider offers from that same site. A
+ *   reply can never flip an offer belonging to a different site.
+ */
+export async function findOpenOfferByAddress(
+  toAddress: string,
+  siteId?: string,
+): Promise<SlotOffer | null> {
   const db = serviceClient();
-  const { data, error } = await db
+  let outboxQuery = db
     .from("noshow_outbox")
-    .select("touch_id")
-    .eq("to_address", toAddress)
-    .order("created_at", { ascending: false })
-    .limit(5);
+    .select("touch_id, site_id")
+    .eq("to_address", toAddress);
+  if (siteId) outboxQuery = outboxQuery.eq("site_id", siteId);
+  const { data, error } = await outboxQuery.order("created_at", { ascending: false }).limit(5);
   if (error) throw error;
-  const touchIds = (data as Array<{ touch_id: string }>).map((r) => r.touch_id);
+  const outboxRows = (data as Array<{ touch_id: string; site_id: string }>) ?? [];
+  if (outboxRows.length === 0) return null;
+  // Pin to a single site: the caller's site if given, else the site of the most
+  // recent offer SMS to this number. Never mix touch_ids across sites.
+  const resolvedSiteId = siteId ?? outboxRows[0].site_id;
+  const touchIds = outboxRows
+    .filter((r) => r.site_id === resolvedSiteId)
+    .map((r) => r.touch_id);
   if (touchIds.length === 0) return null;
   const { data: offers, error: oErr } = await db
     .from("noshow_slot_offer")
     .select("*")
+    .eq("site_id", resolvedSiteId)
     .in("touch_id", touchIds)
     .eq("status", "offered")
     .order("offered_at", { ascending: false })

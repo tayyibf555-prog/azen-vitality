@@ -116,6 +116,26 @@ export interface ToolDeps {
 export function makeDispatch(deps: ToolDeps) {
   // When a new patient is onboarded mid-conversation, book under their new id.
   let registeredPatientId: string | null = null;
+
+  // Server-side ownership check for a mutation on an existing appointment. A
+  // patient can only ever reschedule/cancel an appointment that is on THEIR own
+  // record. We re-derive the set of the texting patient's appointment ids from
+  // Dentally (the same source find_appointments uses) and reject any id that is
+  // not in it. This closes the IDOR where a crafted message supplies another
+  // patient's appointment id. Matches the trust model of `book`, which injects
+  // context.patientId itself rather than trusting a model-supplied id.
+  async function ownsAppointment(appointmentId: string): Promise<boolean> {
+    const patientId = registeredPatientId ?? deps.context.patientId;
+    // A lead not yet registered has no appointments of their own to act on.
+    if (!appointmentId || patientId.startsWith("lead:")) return false;
+    const res = await deps.dentally.getPatientAppointments(patientId);
+    const raw = Array.isArray(res.appointments) ? res.appointments : [];
+    return raw.some((a) => {
+      const row = a && typeof a === "object" ? (a as Record<string, unknown>) : {};
+      return String(row.id) === String(appointmentId);
+    });
+  }
+
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
     switch (name) {
       case "find_slots": {
@@ -174,7 +194,11 @@ export function makeDispatch(deps: ToolDeps) {
         return JSON.stringify({ appointments: upcoming });
       }
       case "reschedule": {
-        const { appointment } = await deps.dentally.updateAppointment(String(input.appointmentId), {
+        const appointmentId = String(input.appointmentId);
+        if (!(await ownsAppointment(appointmentId))) {
+          return JSON.stringify({ error: "I could not find that appointment on your record." });
+        }
+        const { appointment } = await deps.dentally.updateAppointment(appointmentId, {
           start_time: input.newSlotStart,
         });
         return JSON.stringify({
@@ -184,7 +208,11 @@ export function makeDispatch(deps: ToolDeps) {
         });
       }
       case "cancel": {
-        const { appointment } = await deps.dentally.cancelAppointment(String(input.appointmentId));
+        const appointmentId = String(input.appointmentId);
+        if (!(await ownsAppointment(appointmentId))) {
+          return JSON.stringify({ error: "I could not find that appointment on your record." });
+        }
+        const { appointment } = await deps.dentally.cancelAppointment(appointmentId);
         return JSON.stringify({ cancelled: true, appointmentId: appointment.id, state: appointment.state ?? "cancelled" });
       }
       case "register_patient": {

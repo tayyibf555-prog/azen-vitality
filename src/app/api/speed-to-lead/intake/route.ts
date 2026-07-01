@@ -68,15 +68,25 @@ export async function POST(request: Request): Promise<Response> {
       return bad("a valid phone number is required for the sms or whatsapp channel");
     }
 
-    // Resolve the site: an explicit siteId wins, else the client's first site.
+    // Resolve the site from the resolved CLIENT. Never trust a free-floating
+    // siteId on this public write, which would let a caller attribute a lead (and
+    // an outbound SMS) to another tenant's site they have no relationship with. An
+    // explicit siteId is honoured only if it is one of the resolved client's own
+    // sites; otherwise we fall back to the client's first site. This mirrors the
+    // smile-assessment intake, which scopes the siteId the same way.
     const explicitSite = str(body.siteId);
+    const clientSlug = str(body.clientSlug);
+    const client = clientSlug ? getClient(clientSlug) : undefined;
     let siteId: string | undefined;
-    if (explicitSite && getSite(explicitSite)) {
+    if (client) {
+      const clientSites = getSites(client.id);
+      siteId =
+        explicitSite && clientSites.some((s) => s.id === explicitSite)
+          ? explicitSite
+          : clientSites[0]?.id;
+    } else if (explicitSite && getSite(explicitSite)) {
+      // No clientSlug supplied: honour a bare siteId (legacy single-tenant forms).
       siteId = explicitSite;
-    } else {
-      const clientSlug = str(body.clientSlug);
-      const client = clientSlug ? getClient(clientSlug) : undefined;
-      if (client) siteId = getSites(client.id)[0]?.id;
     }
     if (!siteId) return bad("could not resolve a site from clientSlug or siteId");
 

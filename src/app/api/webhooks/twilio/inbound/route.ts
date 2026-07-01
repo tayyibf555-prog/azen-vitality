@@ -30,6 +30,9 @@ import { listActiveUspTexts } from "@/lib/usp/repository";
 import { AGENT_TOOLS, makeDispatch } from "@/lib/agent/tools";
 import { runAgentTurn } from "@/lib/agent/run";
 import { identifyByPhone } from "@/lib/agent/identify";
+import { checkAgentReply, SAFE_HANDOVER } from "@/lib/agent/guardrail";
+import { claimInboundMessage } from "@/lib/agent/idempotency";
+import { consumeBudget } from "@/lib/rate-budget";
 import {
   findOrCreateConversation,
   listMessages,
@@ -46,6 +49,12 @@ export const dynamic = "force-dynamic";
 // Site to attribute an inbound from an unrecognised number to (one practice
 // number serves every site in this pilot). Overridable per deployment.
 const DEFAULT_SITE_ID = process.env.AGENT_DEFAULT_SITE_ID ?? "site-cc";
+
+// Per-sender cost/rate ceiling on the agent turn. A spammer texting the practice
+// number must not be able to run unbounded Claude tool-loops. Matches the
+// consumeBudget() guard the sibling public AI endpoints use. Overridable.
+const SENDER_BUDGET_LIMIT = Number(process.env.AGENT_SENDER_BUDGET_LIMIT ?? "20");
+const SENDER_BUDGET_WINDOW_SECONDS = Number(process.env.AGENT_SENDER_BUDGET_WINDOW ?? "3600");
 
 function publicUrl(path: string): string {
   return `${process.env.PUBLIC_BASE_URL ?? "http://localhost:3000"}${path}`;
@@ -90,6 +99,16 @@ export async function POST(request: Request): Promise<Response> {
   const body = params["Body"] ?? "";
   if (!from) return twiml();
 
+  // Idempotency: Twilio retries an inbound webhook on a timeout, which would
+  // otherwise re-run the whole agent turn (double book / double reply). Claim the
+  // MessageSid once; a retry of the same SID is a clean no-op. Status and voice
+  // webhooks lean on natural dedup; the agent turn has no such key so we gate on
+  // the SID here.
+  const messageSid = params["MessageSid"] ?? "";
+  if (!(await claimInboundMessage(messageSid))) {
+    return twiml();
+  }
+
   const dentally = new DentallyClient({
     apiKey: process.env.DENTALLY_API_KEY ?? "",
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
@@ -99,6 +118,13 @@ export async function POST(request: Request): Promise<Response> {
   // YES/NO to a waitlist slot offer, is handled before the general agent. If
   // handled we reply and stop; otherwise (free-text, e.g. a reschedule request)
   // we fall through to the booking agent below.
+  //
+  // Site scoping: one practice number can serve several sites, so the same
+  // patient number may hold a live offer on more than one site. The site is not
+  // resolved until further below (line ~139), after several lookups this offer
+  // check must precede. We therefore let findOpenOfferByAddress pin the offer to
+  // the site of the most-recent offer SMS actually sent to this number, so a
+  // reply can never resolve or flip an offer belonging to a different site.
   const noshow = await handleNoshowInbound({ from, body, channel, dentally });
   if (noshow.handled) {
     if (noshow.reply) {
@@ -268,6 +294,28 @@ export async function POST(request: Request): Promise<Response> {
   const uspClientId = getSite(siteId)?.clientId;
   const usps = uspClientId ? await listActiveUspTexts(uspClientId) : [];
 
+  // Per-sender cost guard: bound how many agent turns a single sender can run in
+  // the window before we throttle. A spammer texting the number cannot run
+  // unbounded Claude spend; over the cap we send a safe throttle reply and never
+  // call the model. Fails OPEN on a DB error (consumeBudget), so a transient
+  // outage does not break genuine patients. Runs before any model call.
+  const withinBudget = await consumeBudget(
+    `agent-inbound:${from}`,
+    SENDER_BUDGET_LIMIT,
+    SENDER_BUDGET_WINDOW_SECONDS,
+  );
+  if (!withinBudget) {
+    const throttle = "Thanks for your messages. A member of our team will be in touch shortly.";
+    await appendMessage({ conversationId: conversation.id, role: "agent", body: throttle });
+    await setConversationStatus(conversation.id, "needs_human");
+    try {
+      await sendMessage({ channel, to: from, body: throttle });
+    } catch {
+      // Reply logged; swallow delivery errors so Twilio does not retry.
+    }
+    return twiml();
+  }
+
   const context: AgentContext = {
     patientId,
     siteId,
@@ -295,11 +343,24 @@ export async function POST(request: Request): Promise<Response> {
       tools: AGENT_TOOLS,
     });
     replyText = result.replyText;
-    const booked = result.toolCalls.some((t) => t.name === "book");
-    if (result.escalated || !replyText) {
+
+    // OUTPUT GUARDRAIL: the no-clinical-advice / no-unverified-price /
+    // no-NHS-or-private-or-funding rules are enforced in the prompt, but a prompt
+    // is a soft control. Scan the model's reply deterministically; on any hit do
+    // NOT send the model text. Replace it with a safe handover and hand the
+    // conversation to a human. This guarantees a violating reply never reaches the
+    // patient verbatim, whatever the model produced.
+    const guard = checkAgentReply(replyText);
+    if (!guard.ok) {
+      replyText = SAFE_HANDOVER;
       await setConversationStatus(conversation.id, "needs_human");
-    } else if (booked) {
-      await setConversationStatus(conversation.id, "booked");
+    } else {
+      const booked = result.toolCalls.some((t) => t.name === "book");
+      if (result.escalated || !replyText) {
+        await setConversationStatus(conversation.id, "needs_human");
+      } else if (booked) {
+        await setConversationStatus(conversation.id, "booked");
+      }
     }
   } catch {
     await setConversationStatus(conversation.id, "needs_human");

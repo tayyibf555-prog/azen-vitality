@@ -185,9 +185,42 @@ function rowToOutbox(r: OutboxRow): ReactivationOutboxItem {
 export async function upsertTargets(targets: ReactivationTarget[]): Promise<void> {
   if (targets.length === 0) return;
   const db = serviceClient();
+
+  // Cadence progress (status, prior_attempts) is owned by the reactivation
+  // engine, NOT by Dentally. A periodic re-sync re-classifies every re-pulled
+  // patient and hands us a FRESH target that always carries status='dormant',
+  // prior_attempts=0 (see normalise.toReactivationTarget). If we let the upsert
+  // overwrite those columns on an already-enrolled, mid-cadence target, the row
+  // is reset to dormant/0 — restarting the cadence and re-contacting the
+  // patient. So: only set status/prior_attempts on INSERT; on conflict, keep the
+  // existing in-flight values. All other columns (fresh Dentally facts) are
+  // refreshed as normal.
+  const ids = targets.map((t) => t.id);
+  const { data: existingData, error: selErr } = await db
+    .from("reactivation_target")
+    .select("id, status, prior_attempts")
+    .in("id", ids);
+  if (selErr) throw selErr;
+  const existing = new Map(
+    (existingData as Array<{ id: string; status: string; prior_attempts: number | string }> | null ?? []).map(
+      (r) => [r.id, r],
+    ),
+  );
+
+  const rows = targets.map((t) => {
+    const row = targetToRow(t);
+    const prior = existing.get(t.id);
+    if (prior) {
+      // Preserve engine-owned cadence progress; do not clobber with dormant/0.
+      row.status = prior.status;
+      row.prior_attempts = prior.prior_attempts;
+    }
+    return row;
+  });
+
   const { error } = await db
     .from("reactivation_target")
-    .upsert(targets.map(targetToRow), { onConflict: "id" });
+    .upsert(rows, { onConflict: "id" });
   if (error) throw error;
 }
 

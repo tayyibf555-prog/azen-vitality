@@ -13,6 +13,8 @@ import {
   insertTouch,
   approveTouch,
   enqueueOutbox,
+  listTouches,
+  hasPendingOutboxForTouch,
 } from "@/lib/recall/repository";
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
@@ -43,6 +45,20 @@ function patientToRef(t: RecallTarget): string {
 }
 function badRequest(message: string): Response {
   return Response.json({ error: message }, { status: 400 });
+}
+
+/**
+ * True when the target already has an outbound touch in flight (drafted, approved
+ * or queued but not yet sent/failed). Mirrors the SWEEP path's `hasPending`
+ * predicate exactly so a manual draft/approve+enqueue is idempotent: a double-
+ * click, retry, or concurrent coordinator action must not enqueue a second
+ * patient message for the same target+step.
+ */
+async function hasPendingTouch(targetId: string): Promise<boolean> {
+  const touches = await listTouches(targetId);
+  return touches.some(
+    (t) => t.direction !== "inbound" && t.status !== "sent" && t.status !== "failed",
+  );
 }
 
 /** Settle the target once a cadence exhausts: graduate to reactivation if past grace, else done. */
@@ -81,6 +97,13 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
 
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
+
+  // Idempotency guard (mirrors the sweep's hasPending check): if an outbound touch
+  // is already in flight for this target+step, a repeat draft (double-click / retry)
+  // must not insert a fresh touch and enqueue a second patient message.
+  if (await hasPendingTouch(targetId)) {
+    return Response.json({ skipped: true, reason: "pending_touch", autoQueued: false });
+  }
 
   const cadence = await getCadenceByTarget(targetId);
   const stepNumber = (cadence?.currentStep ?? 0) + 1;
@@ -135,6 +158,14 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
 
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
+
+  // Idempotency guard: recall_outbox has no unique constraint on touch_id, so a
+  // double-click / retry / concurrent approve would enqueue a second patient
+  // message for the same touch. Skip if this touch already has a non-failed
+  // outbox row (pending or queued).
+  if (await hasPendingOutboxForTouch(touchId)) {
+    return Response.json({ ok: true, skipped: true, reason: "already_enqueued" });
+  }
 
   const touch = await approveTouch(touchId, "coordinator");
   await enqueueOutbox({
