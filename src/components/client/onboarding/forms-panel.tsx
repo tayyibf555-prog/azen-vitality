@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Loader2, Copy, Check, ExternalLink, UserPlus, X, Pause, Play, Search } from "lucide-react";
+import { Plus, Loader2, Copy, Check, ExternalLink, UserPlus, X, Pause, Play, Search, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 import { getClient } from "@/lib/mock/clients";
+import { resolveSteps } from "@/lib/onboarding/resolve";
+import { OnboardingPreview } from "@/components/onboarding/onboarding-preview";
+import type { OnboardingConfig, OnboardingStep } from "@/lib/onboarding/types";
 
 // The Forms tab: owner-created onboarding forms, each a shareable /onboard/<client>/<slug>
 // link to send to patients. Mirrors the Smile Assessment campaigns panel: create a named
@@ -99,6 +102,13 @@ export function FormsPanel({ clientSlug }: { clientSlug: string }) {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
+  // The form whose preview is open at the side. The list does not carry the question
+  // config, so on select we fetch the form and resolve its config into the steps a
+  // patient would actually see.
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+  const [previewSteps, setPreviewSteps] = useState<OnboardingStep[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -121,8 +131,41 @@ export function FormsPanel({ clientSlug }: { clientSlug: string }) {
     setFormError(null);
     setCreatedUrl(null);
     setQuery("");
+    setSelectedSlug(null);
     void load();
   }, [load]);
+
+  // Fetch + resolve the selected form's question config for the side preview.
+  useEffect(() => {
+    if (!selectedSlug) {
+      setPreviewSteps(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewSteps(null);
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/onboarding/form/${encodeURIComponent(selectedSlug)}?client=${encodeURIComponent(clientSlug)}`,
+        );
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          form?: { config?: OnboardingConfig };
+        };
+        if (cancelled) return;
+        const config = res.ok && data.ok ? data.form?.config ?? null : null;
+        setPreviewSteps(resolveSteps(config));
+      } catch {
+        if (!cancelled) setPreviewSteps(resolveSteps(null));
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSlug, clientSlug]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -184,6 +227,7 @@ export function FormsPanel({ clientSlug }: { clientSlug: string }) {
   }
 
   const practiceName = getClient(clientSlug)?.name ?? "";
+  const selected = forms.find((f) => f.slug === selectedSlug) ?? null;
 
   const slugPreview = (form.slug || form.name)
     .toLowerCase()
@@ -375,59 +419,128 @@ export function FormsPanel({ clientSlug }: { clientSlug: string }) {
             No forms match your search.
           </p>
         ) : (
-          <ul className="space-y-3">
-            {filtered.map((f) => (
-              <li
-                key={f.id}
-                className="rounded-xl border border-line bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-navy">{f.name}</span>
-                      <StatusPill tone={f.status === "active" ? "success" : "neutral"}>
-                        {f.status === "active" ? "Active" : "Paused"}
-                      </StatusPill>
-                    </div>
-                    <p className="mt-1 text-xs text-muted">
-                      <span className="font-semibold tabular-nums text-ink">{f.submissionCount}</span>{" "}
-                      {f.submissionCount === 1 ? "submission" : "submissions"}
-                      {f.headline ? (
-                        <>
-                          <span className="px-1.5 text-line-strong">/</span>
-                          <span className="text-ink">{f.headline}</span>
-                        </>
-                      ) : null}
-                    </p>
-                  </div>
-
-                  <Button variant="secondary" size="sm" onClick={() => toggleStatus(f)} disabled={togglingId !== null}>
-                    {togglingId === f.id ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : f.status === "active" ? (
-                      <Pause size={14} />
-                    ) : (
-                      <Play size={14} />
+          <div className={cn("grid gap-4", selected ? "lg:grid-cols-[minmax(0,1fr)_300px]" : "")}>
+            <ul className="space-y-3">
+              {filtered.map((f) => {
+                const isSel = f.slug === selectedSlug;
+                return (
+                  <li
+                    key={f.id}
+                    className={cn(
+                      "rounded-xl border bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)] transition-colors",
+                      isSel ? "border-blue-dark/50 ring-1 ring-blue-dark/20" : "border-line",
                     )}
-                    {f.status === "active" ? "Pause" : "Activate"}
-                  </Button>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                  <span className={cn("truncate text-xs text-muted", "min-w-0 flex-1")}>{f.url}</span>
-                  <CopyLink url={f.url} />
-                  <a
-                    href={f.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-2.5 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
                   >
-                    <ExternalLink size={13} /> Open
-                  </a>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      {/* Click the name/meta to open its preview at the side. */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSlug(isSel ? null : f.slug)}
+                        aria-pressed={isSel}
+                        aria-label={`Preview ${f.name}`}
+                        className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <ChevronRight
+                            size={14}
+                            className={cn("shrink-0 text-muted transition-transform", isSel && "rotate-90 text-blue-dark")}
+                          />
+                          <span className="font-semibold text-navy">{f.name}</span>
+                          <StatusPill tone={f.status === "active" ? "success" : "neutral"}>
+                            {f.status === "active" ? "Active" : "Paused"}
+                          </StatusPill>
+                        </div>
+                        <p className="mt-1 pl-5 text-xs text-muted">
+                          <span className="font-semibold tabular-nums text-ink">{f.submissionCount}</span>{" "}
+                          {f.submissionCount === 1 ? "submission" : "submissions"}
+                          {f.headline ? (
+                            <>
+                              <span className="px-1.5 text-line-strong">/</span>
+                              <span className="text-ink">{f.headline}</span>
+                            </>
+                          ) : null}
+                        </p>
+                      </button>
+
+                      <Button variant="secondary" size="sm" onClick={() => toggleStatus(f)} disabled={togglingId !== null}>
+                        {togglingId === f.id ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : f.status === "active" ? (
+                          <Pause size={14} />
+                        ) : (
+                          <Play size={14} />
+                        )}
+                        {f.status === "active" ? "Pause" : "Activate"}
+                      </Button>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                      <span className={cn("truncate text-xs text-muted", "min-w-0 flex-1")}>{f.url}</span>
+                      <CopyLink url={f.url} />
+                      <a
+                        href={f.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-2.5 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
+                      >
+                        <ExternalLink size={13} /> Open
+                      </a>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {/* Side preview of the selected form: the questions a patient answers + details. */}
+            {selected ? (
+              <div className="lg:sticky lg:top-4 lg:self-start">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="truncate text-xs font-semibold text-navy">{selected.name}</p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSlug(null)}
+                    aria-label="Close preview"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-card-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
-              </li>
-            ))}
-          </ul>
+                {previewLoading || !previewSteps ? (
+                  <div className="flex items-center justify-center gap-2 rounded-[2rem] border border-line-strong bg-card py-16 text-sm text-muted">
+                    <Loader2 size={16} className="animate-spin" />
+                    Loading preview...
+                  </div>
+                ) : (
+                  <OnboardingPreview practiceName={practiceName} steps={previewSteps} />
+                )}
+                <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3 text-xs">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted">Questions</dt>
+                    <dd className="text-right font-semibold tabular-nums text-ink">
+                      {previewSteps ? Math.max(0, previewSteps.length - 1) : "..."}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted">Submissions</dt>
+                    <dd className="text-right font-semibold tabular-nums text-ink">{selected.submissionCount}</dd>
+                  </div>
+                  {selected.intro ? (
+                    <div className="border-t border-line pt-1.5">
+                      <dt className="text-muted">Intro</dt>
+                      <dd className="mt-0.5 text-ink">{selected.intro}</dd>
+                    </div>
+                  ) : null}
+                  <div className="border-t border-line pt-1.5">
+                    <dt className="text-muted">Link</dt>
+                    <dd className="mt-0.5 flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-ink">{selected.url}</span>
+                      <CopyLink url={selected.url} />
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            ) : null}
+          </div>
         )}
       </div>
     </SectionCard>
