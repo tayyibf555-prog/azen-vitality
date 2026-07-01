@@ -66,8 +66,11 @@ export async function POST(request: Request): Promise<Response> {
   if (unauth) return unauth;
 
   // Never overlap with another rota sweep: two runs would both see the same unnotified
-  // shifts and double-text. Lease for just under maxDuration so a crashed run self-heals.
-  if (!(await acquireCronLock("sweep-rota", 280))) {
+  // shifts and double-text. The lease must OUTLIVE maxDuration (300s): a shorter lease
+  // would expire while a slow run was still working, letting the next tick double-send.
+  // A crashed run still self-heals: the lease expires ~10s after the platform kills
+  // the function.
+  if (!(await acquireCronLock("sweep-rota", 310))) {
     return Response.json({ ok: true, skipped: "another run in progress" });
   }
 

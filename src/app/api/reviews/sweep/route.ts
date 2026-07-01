@@ -43,9 +43,11 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // Never overlap with another review sweep: two runs would both see the same due
-  // requests and double-enqueue. Lease for just under maxDuration so a crashed run
-  // self-heals on the next tick.
-  if (!(await acquireCronLock("sweep-reviews", 280))) {
+  // requests and double-enqueue. The lease must OUTLIVE maxDuration (300s): a
+  // shorter lease would expire while a slow run was still working, letting the
+  // next tick double-enqueue. A crashed run still self-heals: the lease expires
+  // ~10s after the platform kills the function.
+  if (!(await acquireCronLock("sweep-reviews", 310))) {
     return Response.json({ ok: true, skipped: "another run in progress" });
   }
 

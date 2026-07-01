@@ -23,9 +23,11 @@ export async function POST(request: Request): Promise<Response> {
   if (unauth) return unauth;
 
   // Never overlap with another SLA sweep: two runs would both list the same
-  // uncontacted leads and double first-contact. Lease for just under maxDuration
-  // so a crashed run self-heals on the next tick.
-  if (!(await acquireCronLock("sweep-speed-to-lead", 280))) {
+  // uncontacted leads and double first-contact. The lease must OUTLIVE
+  // maxDuration (300s): a shorter lease would expire while a slow run was still
+  // working, letting the next tick double-contact. A crashed run still
+  // self-heals: the lease expires ~10s after the platform kills the function.
+  if (!(await acquireCronLock("sweep-speed-to-lead", 310))) {
     return Response.json({ ok: true, skipped: "another run in progress" });
   }
 

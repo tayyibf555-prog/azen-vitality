@@ -59,7 +59,14 @@ function twiml(): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const form = await request.formData();
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    // Malformed / non-form POST (scanner, bad content-type): reject cleanly
+    // rather than throwing an unhandled 500. Matches the voice webhook.
+    return Response.json({ error: "malformed payload" }, { status: 400 });
+  }
   const params: Record<string, string> = {};
   for (const [k, v] of form.entries()) params[k] = String(v);
 

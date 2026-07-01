@@ -359,7 +359,10 @@ export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[
     .select("id, touch_id, site_id, channel, to_ref, body")
     .in("site_id", siteIds)
     .eq("status", "queued")
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    // Batch cap: bound a drain run so a large backlog cannot push it past
+    // maxDuration; the next 5-minute tick picks up the rest (oldest first).
+    .limit(100);
   if (error) throw error;
   return (data as Array<{
     id: string; touch_id: string; site_id: string; channel: string; to_ref: string; body: string;

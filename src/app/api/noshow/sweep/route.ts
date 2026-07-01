@@ -34,9 +34,11 @@ export async function POST(request: Request) {
   if (unauth) return unauth;
 
   // Never overlap with another no-show sweep: two runs would both see the same
-  // due cadences (and expired offers) and double-send / double-reoffer. Lease for
-  // just under maxDuration so a crashed run self-heals on the next tick.
-  if (!(await acquireCronLock("sweep-noshow", 280))) {
+  // due cadences (and expired offers) and double-send / double-reoffer. The lease
+  // must OUTLIVE maxDuration (300s): a shorter lease would expire while a slow run
+  // was still working, letting the next tick double-send. A crashed run still
+  // self-heals: the lease expires ~10s after the platform kills the function.
+  if (!(await acquireCronLock("sweep-noshow", 310))) {
     return Response.json({ ok: true, skipped: "another run in progress" });
   }
 

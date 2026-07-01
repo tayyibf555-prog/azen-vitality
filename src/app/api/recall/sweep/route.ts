@@ -53,9 +53,11 @@ export async function POST(request: Request) {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   // Never overlap with another recall sweep: two runs would both see the same
-  // due cadences and draft+queue duplicates. Lease for just under maxDuration so
-  // a crashed run self-heals on the next tick.
-  if (!(await acquireCronLock("sweep-recall", 280))) {
+  // due cadences and draft+queue duplicates. The lease must OUTLIVE maxDuration
+  // (300s): a shorter lease would expire while a slow run was still working,
+  // letting the next tick double-queue. A crashed run still self-heals: the
+  // lease expires ~10s after the platform kills the function.
+  if (!(await acquireCronLock("sweep-recall", 310))) {
     return Response.json({ ok: true, skipped: "another run in progress" });
   }
 

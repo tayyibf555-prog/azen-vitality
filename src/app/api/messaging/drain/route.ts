@@ -1,4 +1,4 @@
-import { DentallyClient } from "@/lib/dentally/client";
+import { DentallyClient, DentallyError } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
@@ -49,6 +49,11 @@ function vitalitySiteIds(): string[] {
   return SITES.filter((s) => s.clientId === "vitality").map((s) => s.id);
 }
 
+// Per-source, per-run cap on recipient-resolution throws. The rows themselves
+// stay 'queued' (no schema support for an attempt count), so this bounds the
+// time a run can lose to a failing upstream rather than retiring poison rows.
+const MAX_RESOLVE_FAILURES_PER_RUN = 5;
+
 interface QueuedRow {
   id: string;
   touchId: string;
@@ -84,16 +89,45 @@ async function drainSource(
 ): Promise<{ drained: number; sent: number; failed: number; blocked: number }> {
   const rows = await source.list(siteIds);
   let sent = 0, failed = 0, blocked = 0;
+  let resolveFailures = 0;
+  let examined = 0;
   for (const row of rows) {
     const channel = row.channel as MessageChannel;
 
     // Resolve the recipient first. A THROW here is transient (e.g. Dentally briefly
     // unavailable): leave the row 'queued' so the next drain retries, rather than
-    // marking it permanently failed.
+    // marking it permanently failed. The outbox tables have no attempts column, so
+    // a permanently-throwing row cannot be retired; instead cap resolve failures
+    // per run so a broken upstream (or a poison row) cannot burn the whole run's
+    // maxDuration on doomed lookups. Remaining rows stay queued for the next tick.
+    if (resolveFailures >= MAX_RESOLVE_FAILURES_PER_RUN) {
+      console.warn(
+        `[drain] ${source.name}: resolve-failure cap (${MAX_RESOLVE_FAILURES_PER_RUN}) reached; leaving remaining rows queued for the next tick`,
+      );
+      break;
+    }
+    examined += 1;
     let to: string | null;
     try {
       to = await resolveRecipient(row.toRef, channel, client);
-    } catch {
+    } catch (err) {
+      // A deleted/merged patient (Dentally 404/410) is PERMANENT: retire the row
+      // as failed rather than letting it sit at the head of the queue poisoning
+      // every future run (head-of-line blocking). Anything else (timeout, 5xx,
+      // 429) is transient: leave the row queued and count it against the cap.
+      if (err instanceof DentallyError && (err.status === 404 || err.status === 410)) {
+        await source.markFailed(row.id);
+        failed += 1;
+        console.warn(
+          `[drain] ${source.name}: recipient gone (Dentally ${err.status}) for outbox ${row.id}; marked failed`,
+        );
+        continue;
+      }
+      resolveFailures += 1;
+      console.warn(
+        `[drain] ${source.name}: resolveRecipient threw for outbox ${row.id} (${resolveFailures}/${MAX_RESOLVE_FAILURES_PER_RUN} this run); row stays queued`,
+        err,
+      );
       continue;
     }
     // No deliverable contact on file is permanent: mark failed.
@@ -131,7 +165,9 @@ async function drainSource(
       failed += 1;
     }
   }
-  return { drained: rows.length, sent, failed, blocked };
+  // 'drained' counts rows this run actually examined; rows deferred past a cap
+  // break stay queued for the next tick and are not counted.
+  return { drained: examined, sent, failed, blocked };
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -141,9 +177,13 @@ export async function POST(request: Request): Promise<Response> {
   if (!apiKey) return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
 
   // Never overlap with another drain run: two drains would list the same 'queued'
-  // rows and both send, double-texting the patient. Lease for just under the
-  // function's maxDuration so a crashed run self-heals on the next tick.
-  if (!(await acquireCronLock("drain", 280))) {
+  // rows and both send, double-texting the patient. The lease must OUTLIVE the
+  // function's maxDuration (300s): a shorter lease would expire while a slow run
+  // was still sending, letting the next tick acquire the lock and double-send the
+  // rows the slow run had not yet reached (and the slow run's finally-release
+  // would then drop the new holder's lease too). A crashed run still self-heals:
+  // the lease expires ~10s after the platform kills the function.
+  if (!(await acquireCronLock("drain", 310))) {
     return Response.json({ ok: true, skipped: "another drain run is in progress" });
   }
 

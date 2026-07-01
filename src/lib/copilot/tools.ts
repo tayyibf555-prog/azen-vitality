@@ -286,7 +286,13 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             return JSON.stringify({ sent: false, reason: "no_destination", message: `${p.name} has no ${channel === "sms" ? "mobile number" : "email"} on file.` });
           }
 
-          if (await isSuppressed(p.siteId, channel, targetRef)) {
+          // The co-pilot dispatches directly (not via the shared drain), so it must
+          // honour BOTH suppression forms itself: patient:<id> AND the raw address
+          // (a STOP from a number we could not identify is recorded by address).
+          if (
+            (await isSuppressed(p.siteId, channel, targetRef)) ||
+            (await isSuppressed(p.siteId, channel, to))
+          ) {
             await logCopilotAction({ ...audit, status: "blocked:suppressed" });
             return JSON.stringify({ sent: false, reason: "opted_out", message: `${p.name} has opted out of ${channel}, so nothing was sent.` });
           }

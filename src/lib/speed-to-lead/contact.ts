@@ -45,8 +45,15 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
   if (!to || !channelConsented(lead)) return;
 
   // Honour the opt-out list (a number that texted STOP must never be re-contacted,
-  // even via the public intake). Suppression for a lead is keyed on its address.
-  if (await isSuppressed(lead.siteId, lead.channel, to)) {
+  // even via the public intake). Suppression for an unknown lead is keyed on its
+  // address; a KNOWN patient's STOP is recorded as patient:<id> by the inbound
+  // webhook, so when the lead is matched to a Dentally patient check that ref too.
+  const suppressed =
+    (await isSuppressed(lead.siteId, lead.channel, to)) ||
+    (lead.dentallyPatientId
+      ? await isSuppressed(lead.siteId, lead.channel, `patient:${lead.dentallyPatientId}`)
+      : false);
+  if (suppressed) {
     await insertAttempt({ leadId: lead.id, channel: lead.channel, toAddress: to, body: "", status: "failed" });
     return;
   }

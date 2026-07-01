@@ -115,8 +115,13 @@ export async function POST(request: Request): Promise<Response> {
     // Send an SMS follow-up so the caller can book by text, then record that we did.
     // Honour the opt-out list first: a number that texted STOP must not be texted,
     // even off the back of a missed call. The call is still logged for a callback.
+    // Check BOTH suppression forms: an unknown number's STOP is recorded by address,
+    // but an identified patient's STOP is recorded as patient:<id>.
     try {
-      if (await isSuppressed(siteId, "sms", from)) {
+      const suppressed =
+        (await isSuppressed(siteId, "sms", from)) ||
+        (patientId ? await isSuppressed(siteId, "sms", `patient:${patientId}`) : false);
+      if (suppressed) {
         // Suppressed: skip the SMS. The capture row remains for a manual callback.
       } else {
         await sendMessage({

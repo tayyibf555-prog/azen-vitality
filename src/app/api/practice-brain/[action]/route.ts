@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { consumeBudget } from "@/lib/rate-budget";
 import { classifyKnowledge } from "@/lib/practice-brain/classify";
 import { visibleNodes } from "@/lib/practice-brain/clearance";
 import { askCopilot } from "@/lib/practice-brain/copilot";
@@ -12,6 +13,43 @@ import {
 const CLIENT_ID = "vitality";
 const COOKIE = "pb_session";
 const SESSION_MS = 1000 * 60 * 60 * 8;
+
+// Brute-force guard for the public unlock action: a single shared password per
+// tier is all that protects tier 1-4 practice knowledge, so cap guessing hard.
+// Per-IP first (cheap, in-process, best-effort on serverless), then a SHARED
+// durable budget across all instances (api_budget), mirroring the smile-funnel
+// and onboarding public-endpoint pattern.
+const UNLOCK_IP_LIMIT = 20; // unlock attempts per IP per hour
+const UNLOCK_GLOBAL_LIMIT = 100; // unlock attempts per hour across all instances
+const HOUR_MS = 60 * 60 * 1000;
+
+const unlockHits = new Map<string, number[]>();
+function tooManyUnlocksForIp(ip: string, now: number): boolean {
+  const cutoff = now - HOUR_MS;
+  const hits = (unlockHits.get(ip) ?? []).filter((t) => t > cutoff);
+  hits.push(now);
+  unlockHits.set(ip, hits);
+  if (unlockHits.size > 5000) {
+    for (const [k, v] of unlockHits) {
+      if (v.every((t) => t <= cutoff)) unlockHits.delete(k);
+    }
+  }
+  return hits.length > UNLOCK_IP_LIMIT;
+}
+
+function clientIp(req: NextRequest): string {
+  // Prefer the platform-set x-real-ip (not client-spoofable). Fall back to the
+  // LAST x-forwarded-for entry (Vercel appends the real connecting IP at the
+  // end); the leftmost entry is attacker-controlled, so never trust it.
+  const real = req.headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) {
+    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "unknown";
+  }
+  return "unknown";
+}
 
 function ok<T>(data: T) {
   return NextResponse.json({ success: true, data });
@@ -36,6 +74,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const password = String(body.password ?? "");
       if (!password) return fail("Password required.");
       if (!secret) return fail("Server missing PRACTICE_BRAIN_SESSION_SECRET.", 500);
+      // Rate-limit BEFORE touching the credential check so a bot cannot grind
+      // passwords: per-IP cap first, then the shared cross-instance budget.
+      if (tooManyUnlocksForIp(clientIp(req), Date.now())) {
+        return fail("Too many attempts. Please try again later.", 429);
+      }
+      if (!(await consumeBudget("pb-unlock", UNLOCK_GLOBAL_LIMIT, 3600))) {
+        return fail("Too many attempts. Please try again later.", 429);
+      }
       const cred = await verifyCredential(CLIENT_ID, password);
       if (!cred) return fail("Incorrect password.", 401);
       const token = signSession({ credentialId: cred.id, maxTier: cred.tier, exp: Date.now() + SESSION_MS }, secret);
@@ -73,13 +119,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const result = body.result as ClassificationResult | undefined;
       const rawInput = String(body.rawInput ?? "").trim();
       if (!result || !rawInput) return fail("Missing classification or note.");
-      const tier = result.tier as Tier;
+      // The classification arrives from the client, so never trust its tier or
+      // review flag. Only callers at or above the review gate (tier >= 3, the
+      // same gate as needs-review/gaps/resolve-review) may publish an active
+      // node or choose its tier; everyone else fails closed to needs_review at
+      // tier 4, per the ClassificationResult contract in types.ts. Invalid
+      // tier values fail closed to 4 too.
+      const canPublish = maxTier >= 3;
+      const tierNum = Math.round(Number(result.tier));
+      const claimedTier: Tier = [1, 2, 3, 4].includes(tierNum) ? (tierNum as Tier) : 4;
+      const tier: Tier = canPublish ? claimedTier : 4;
+      const needsReview = canPublish ? Boolean(result.needsReview) : true;
       const classification = {
         reasoning: result.reasoning,
         confidence: result.confidence,
         branchIsNew: result.branchIsNew,
       };
-      const parentId = result.needsReview || !result.branch
+      const parentId = needsReview || !result.branch
         ? null
         : await ensureBranch(CLIENT_ID, result.branch, tier);
       const node = await createItem({
@@ -90,7 +146,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         rawInput,
         tier,
         tags: result.tags,
-        status: result.needsReview ? "needs_review" : "active",
+        status: needsReview ? "needs_review" : "active",
         classification,
         createdBy: session.credentialId,
       });

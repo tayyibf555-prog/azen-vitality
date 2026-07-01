@@ -10,6 +10,7 @@ import { upsertTargets, getSyncState, setSyncState } from "@/lib/reactivation/re
 import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -274,22 +275,33 @@ export async function POST(request: Request) {
   if (!apiKey) {
     return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
   }
-  const client = new DentallyClient({
-    apiKey,
-    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
-  });
-  const cfg = config();
-  // One site's failure must not abort the rest: record the error and move on so a
-  // partial failure is observable and self-heals next tick (no all-or-nothing 500).
-  const perSite: Array<Record<string, unknown>> = [];
-  for (const siteId of vitalitySiteIds()) {
-    try {
-      perSite.push(await syncSite(client, siteId, cfg));
-    } catch (e) {
-      perSite.push({ siteId, error: String(e) });
-    }
+  // Never overlap with another reactivation sync: a slow run can outlive the next
+  // hourly tick, and two runs double the Dentally load and race the high-water
+  // mark. Lease slightly over maxDuration so a crashed run self-heals.
+  if (!(await acquireCronLock("sync-reactivation", 310))) {
+    return Response.json({ ok: true, skipped: "another run in progress" });
   }
-  return Response.json({ ok: true, perSite });
+
+  try {
+    const client = new DentallyClient({
+      apiKey,
+      baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    });
+    const cfg = config();
+    // One site's failure must not abort the rest: record the error and move on so a
+    // partial failure is observable and self-heals next tick (no all-or-nothing 500).
+    const perSite: Array<Record<string, unknown>> = [];
+    for (const siteId of vitalitySiteIds()) {
+      try {
+        perSite.push(await syncSite(client, siteId, cfg));
+      } catch (e) {
+        perSite.push({ siteId, error: String(e) });
+      }
+    }
+    return Response.json({ ok: true, perSite });
+  } finally {
+    await releaseCronLock("sync-reactivation");
+  }
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.
