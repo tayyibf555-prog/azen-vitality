@@ -1,22 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { Inbox, Wrench } from "lucide-react";
+import { Inbox, Wrench, Share2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SubmissionsWorklist } from "./submissions-worklist";
 import { FormBuilder } from "./form-builder";
+import { FormsPanel } from "./forms-panel";
 
-// Tabbed onboarding workspace. Two tabs:
-//   - Submissions: the staff worklist of completed onboarding forms (unchanged).
+// Tabbed onboarding workspace. Three tabs:
+//   - Forms: owner-created onboarding forms, each a shareable /onboard/<client>/<slug>
+//     link to send to patients (mirrors the Smile Assessment campaigns).
+//   - Submissions: the staff worklist of completed onboarding forms.
 //   - Form builder: pick the questions new patients answer, with a live phone preview.
 // The tab bar mirrors the meta-ads / compliance workspaces (active = blue-deep pill,
-// role=tablist/tab/tabpanel). The "Build form" affordance the owner asked for is the
-// Form builder tab.
+// role=tablist/tab/tabpanel).
 
-type TabKey = "submissions" | "builder";
+type TabKey = "forms" | "submissions" | "builder";
 
 const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
+  { key: "forms", label: "Forms", icon: Share2 },
   { key: "submissions", label: "Submissions", icon: Inbox },
   { key: "builder", label: "Form builder", icon: Wrench },
 ];
@@ -28,7 +31,7 @@ export function OnboardingWorkspace({
   clientSlug: string;
   practiceName: string;
 }) {
-  const [tab, setTab] = useState<TabKey>("submissions");
+  const [tab, setTab] = useState<TabKey>("forms");
 
   return (
     <div className="space-y-4">
@@ -80,7 +83,9 @@ export function OnboardingWorkspace({
         id={`onboarding-panel-${tab}`}
         aria-labelledby={`onboarding-tab-${tab}`}
       >
-        {tab === "submissions" ? (
+        {tab === "forms" ? (
+          <FormsPanel clientSlug={clientSlug} />
+        ) : tab === "submissions" ? (
           <SubmissionsWorklist clientSlug={clientSlug} />
         ) : (
           <FormBuilder clientSlug={clientSlug} practiceName={practiceName} />

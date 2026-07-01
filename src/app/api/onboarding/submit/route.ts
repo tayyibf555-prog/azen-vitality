@@ -1,6 +1,7 @@
 import { getClient, getSites } from "@/lib/mock/clients";
 import { parseSubmission } from "@/lib/onboarding/validate";
 import { getConfig } from "@/lib/onboarding/config-repository";
+import { getActiveFormBySlug } from "@/lib/onboarding/form-repository";
 import { resolveSteps } from "@/lib/onboarding/resolve";
 import { createSubmission } from "@/lib/onboarding/repository";
 import { consumeBudget } from "@/lib/rate-budget";
@@ -142,22 +143,36 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    // Validate + normalise the answers against THIS practice's resolved form. Loading
-    // the saved config and resolving it here (the same resolveSteps the public page
-    // uses) means enabled/custom questions are accepted and disabled ones rejected, so
-    // the allow-list always matches what the patient was actually shown.
-    const config = await getConfig(client.id);
+    // A named form (from /onboard/<client>/<slug>) uses ITS OWN config; the legacy
+    // /onboard/<client> flow uses the practice default config. A formSlug that does not
+    // resolve to an active form is rejected so a paused/unknown form cannot be submitted.
+    const formSlug = str(body.formSlug);
+    let formId: string | null = null;
+    let formSiteId: string | null = null;
+    let config = await getConfig(client.id);
+    if (formSlug) {
+      const form = await getActiveFormBySlug(client.id, formSlug);
+      if (!form) return bad("This form is no longer available", 404);
+      config = form.config;
+      formId = form.id;
+      formSiteId = form.siteId;
+    }
+
+    // Validate + normalise the answers against the resolved form. Loading the config and
+    // resolving it here (the same resolveSteps the public page uses) means enabled/custom
+    // questions are accepted and disabled ones rejected, so the allow-list always matches
+    // what the patient was actually shown.
     const steps = resolveSteps(config);
     const parsedAnswers = parseSubmission(body.answers, steps);
     if (!parsedAnswers.ok) return bad(parsedAnswers.error);
     const a = parsedAnswers.answers;
 
-    // Resolve the site: honour an explicit choice ONLY if it is one of the resolved
-    // client's own sites; "any" or anything else falls through to null (nullable col).
+    // Resolve the site: honour an explicit valid choice; else the form's own site (named
+    // form) or null (legacy flow). Never trust a site that is not one of this client's.
     const clientSites = getSites(client.id);
     const chosenSite = a.site;
     const siteId =
-      chosenSite && clientSites.some((s) => s.id === chosenSite) ? chosenSite : null;
+      chosenSite && clientSites.some((s) => s.id === chosenSite) ? chosenSite : formSiteId;
 
     // Validate + scope the uploaded-file references.
     const files = parseFiles(body.files, client.slug);
@@ -205,6 +220,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const submission: OnboardingSubmission = await createSubmission({
       clientId: client.id,
+      formId,
       siteId,
       firstName: a.first_name ?? null,
       lastName: a.last_name ?? null,

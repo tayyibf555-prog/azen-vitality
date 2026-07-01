@@ -70,6 +70,8 @@ function rowToSubmission(r: SubmissionRow): OnboardingSubmission {
 
 export interface CreateSubmissionInput {
   clientId: string;
+  /** The onboarding form this came from, or null for the default /onboard/<client> flow. */
+  formId?: string | null;
   siteId?: string | null;
   firstName?: string | null;
   lastName?: string | null;
@@ -93,6 +95,7 @@ export async function createSubmission(
     .from("onboarding_submission")
     .insert({
       client_id: input.clientId,
+      form_id: input.formId ?? null,
       site_id: input.siteId ?? null,
       first_name: input.firstName ?? null,
       last_name: input.lastName ?? null,

@@ -54,6 +54,12 @@ interface Props {
    * The last step is expected to be the documents step (id "documents", no fields).
    */
   steps?: OnboardingStep[];
+  /** The onboarding form slug (from /onboard/<client>/<slug>). Attributes the submission
+   *  to that named form; omitted for the default /onboard/<client> flow. */
+  formSlug?: string;
+  /** Optional public hero copy for a named form (shown under the practice name). */
+  headline?: string;
+  intro?: string;
 }
 
 /** A file in the middle of, or finished, uploading — tracked per picked file. */
@@ -77,7 +83,7 @@ const DEFAULT_CONSENT: OnboardingConsent = {
   data: false,
 };
 
-export function OnboardingForm({ clientSlug, practiceName, steps }: Props) {
+export function OnboardingForm({ clientSlug, practiceName, steps, formSlug, headline, intro }: Props) {
   // The flow: every resolved step, then consent as a final synthetic screen.
   const STEPS = steps && steps.length > 0 ? steps : ONBOARDING_STEPS;
   const TOTAL = STEPS.length + 1; // +1 for the consent screen.
@@ -248,6 +254,7 @@ export function OnboardingForm({ clientSlug, practiceName, steps }: Props) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           clientSlug,
+          formSlug,
           answers,
           files: uploadedFiles,
           consent,
@@ -298,6 +305,14 @@ export function OnboardingForm({ clientSlug, practiceName, steps }: Props) {
           </p>
         </div>
       </header>
+
+      {/* Optional per-form hero copy (named forms only). */}
+      {headline || intro ? (
+        <div className="mb-5 text-center">
+          {headline ? <h1 className="text-xl font-semibold text-navy">{headline}</h1> : null}
+          {intro ? <p className="mx-auto mt-1 max-w-md text-sm text-muted">{intro}</p> : null}
+        </div>
+      ) : null}
 
       <div className="overflow-hidden rounded-[1.4rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
         {/* Progress track — grows as steps complete, full at the thank-you screen. */}
