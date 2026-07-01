@@ -164,6 +164,7 @@ export function Worklist({
         <DataTable
           columns={columns}
           rows={rows}
+          maxRows={8}
           getRowKey={(o) => o.id}
           onRowClick={(o) => setSelectedId(o.id)}
           className="px-2 py-1"

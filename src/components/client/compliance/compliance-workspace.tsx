@@ -26,7 +26,7 @@ export function ComplianceWorkspace({ clientSlug }: { clientSlug: string }) {
   const [tab, setTab] = useState<TabKey>("readiness");
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div
         role="tablist"
         aria-label="Compliance sections"

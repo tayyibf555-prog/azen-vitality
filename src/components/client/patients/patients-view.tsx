@@ -27,7 +27,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Patients"
-        description="Your patient database, live from Dentally. Search by name or contact, see recall and last visit at a glance, and open any record."
+        description="Your patient database, live from Dentally, searchable by name or contact with recall and last visit at a glance."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

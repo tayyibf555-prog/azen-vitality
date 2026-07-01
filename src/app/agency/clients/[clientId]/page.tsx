@@ -88,7 +88,7 @@ export default function ClientDetailPage() {
       key: "recall",
       header: "Recall recovery",
       cell: (row) => (
-        <div className="flex min-w-[140px] items-center gap-2">
+        <div className="flex min-w-[112px] items-center gap-2">
           <ProgressMeter value={row.recallRecoveryRate} className="flex-1" />
           <span className="w-9 shrink-0 text-right text-xs font-semibold tabular-nums text-navy">
             {pct(row.recallRecoveryRate)}
@@ -117,7 +117,7 @@ export default function ClientDetailPage() {
   ];
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-6">
       <PageHeader
         title={client.name}
         description="Cross-site performance and connection health for this deployment."
@@ -135,6 +135,28 @@ export default function ClientDetailPage() {
           </>
         }
       />
+
+      {/* Dentally connection (compact meta strip) */}
+      <div className="flex flex-col gap-2 rounded-xl border border-line bg-card-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span className="flex items-center gap-2 font-semibold text-navy">
+            <Plug size={16} className={client.dentally.connected ? "text-success" : "text-danger"} />
+            Dentally
+          </span>
+          <StatusPill tone={client.dentally.connected ? "success" : "danger"}>
+            {client.dentally.connected ? "Connected" : "Disconnected"}
+          </StatusPill>
+          <span className="text-muted">
+            {client.dentally.connected && client.dentally.lastSyncedAt
+              ? `Last successful sync ${relativeTime(client.dentally.lastSyncedAt, NOW)}.`
+              : "No successful sync recorded. Re-authorise the Dentally connection to resume data flow."}
+          </span>
+        </div>
+        <p className="flex items-center gap-2 text-xs text-muted">
+          <RefreshCw size={14} className="shrink-0 text-blue-dark" />
+          Polled every 15 minutes. Figures shown are mock data for now.
+        </p>
+      </div>
 
       {/* Client totals */}
       {metrics ? (
@@ -175,6 +197,7 @@ export default function ClientDetailPage() {
           columns={columns}
           rows={siteMetrics}
           getRowKey={(row) => row.siteId}
+          maxRows={8}
           empty={
             <EmptyState
               icon={SearchX}
@@ -183,40 +206,6 @@ export default function ClientDetailPage() {
             />
           }
         />
-      </SectionCard>
-
-      {/* Dentally connection */}
-      <SectionCard
-        title="Dentally connection"
-        description="Integration status for this client."
-      >
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="rounded-xl border border-line bg-card-muted/40 p-4">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-sm font-semibold text-navy">
-                <Plug size={16} className={client.dentally.connected ? "text-success" : "text-danger"} />
-                Connection
-              </span>
-              <StatusPill tone={client.dentally.connected ? "success" : "danger"}>
-                {client.dentally.connected ? "Connected" : "Disconnected"}
-              </StatusPill>
-            </div>
-            <p className="mt-2 text-sm text-muted">
-              {client.dentally.connected && client.dentally.lastSyncedAt
-                ? `Last successful sync ${relativeTime(client.dentally.lastSyncedAt, NOW)}.`
-                : "No successful sync recorded. Re-authorise the Dentally connection to resume data flow."}
-            </p>
-          </div>
-          <div className="rounded-xl border border-line bg-card-muted/40 p-4">
-            <span className="flex items-center gap-2 text-sm font-semibold text-navy">
-              <RefreshCw size={16} className="text-blue-dark" />
-              Polling cadence
-            </span>
-            <p className="mt-2 text-sm text-muted">
-              Dentally has no webhooks, so we poll every 15 minutes for fresh appointment, recall and treatment data. Figures shown here are mock data for now.
-            </p>
-          </div>
-        </div>
       </SectionCard>
     </div>
   );

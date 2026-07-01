@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Sparkles, FolderTree } from "lucide-react";
+import { Sparkles, FolderTree, Wrench } from "lucide-react";
 import type { KnowledgeNode } from "@/lib/practice-brain/types";
 import { Constellation } from "./constellation";
 import { FileTree } from "./file-view";
@@ -22,7 +22,7 @@ export function PracticeBrainView() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"brain" | "files">("brain");
+  const [view, setView] = useState<"brain" | "files" | "tools">("brain");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,7 +102,7 @@ export function PracticeBrainView() {
         <>
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <div className="inline-flex rounded-xl border border-navy-line bg-navy-soft p-0.5">
-              {([["brain", "Brain", Sparkles], ["files", "Files", FolderTree]] as const).map(([key, label, Icon]) => {
+              {([["brain", "Brain", Sparkles], ["files", "Files", FolderTree], ["tools", "Ask + capture", Wrench]] as const).map(([key, label, Icon]) => {
                 const active = view === key;
                 return (
                   <button
@@ -130,12 +130,14 @@ export function PracticeBrainView() {
               </div>
             ) : null}
 
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={view === "brain" ? "Search the brain..." : "Search files..."}
-              className="ml-auto w-48 rounded-lg border border-navy-line bg-navy-soft px-2 py-1 text-sm text-on-navy placeholder:text-on-navy-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-light/40"
-            />
+            {view !== "tools" ? (
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={view === "brain" ? "Search the brain..." : "Search files..."}
+                className="ml-auto w-48 rounded-lg border border-navy-line bg-navy-soft px-2 py-1 text-sm text-on-navy placeholder:text-on-navy-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-light/40"
+              />
+            ) : null}
           </div>
 
           {loading ? (
@@ -149,36 +151,36 @@ export function PracticeBrainView() {
               onSelectHub={selectHub}
               onSelectItem={setSelectedItemId}
             />
-          ) : (
+          ) : view === "files" ? (
             <FileTree
               nodes={nodes}
               query={query}
               selectedItemId={selectedItemId}
               onSelectItem={setSelectedItemId}
             />
+          ) : (
+            <div className="space-y-4">
+              <CopilotPanel onCite={(id) => setSelectedItemId(id)} />
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <CapturePanel onSaved={load} />
+                {selectedItem ? (
+                  <ItemDetail node={selectedItem} onClose={() => setSelectedItemId(null)} />
+                ) : canReview ? (
+                  <>
+                    <div className="rounded-xl border border-line-strong bg-card p-4">
+                      <h3 className="mb-2 text-sm font-semibold text-ink">Needs review</h3>
+                      <NeedsReview onResolved={load} />
+                    </div>
+                    <div className="rounded-xl border border-line-strong bg-card p-4">
+                      <h3 className="mb-2 text-sm font-semibold text-ink">Co-pilot gaps</h3>
+                      <GapsQueue />
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
           )}
-
-          <div className="mt-4">
-            <CopilotPanel onCite={(id) => setSelectedItemId(id)} />
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <CapturePanel onSaved={load} />
-            {selectedItem ? (
-              <ItemDetail node={selectedItem} onClose={() => setSelectedItemId(null)} />
-            ) : canReview ? (
-              <>
-                <div className="rounded-xl border border-line-strong bg-card p-4">
-                  <h3 className="mb-2 text-sm font-semibold text-ink">Needs review</h3>
-                  <NeedsReview onResolved={load} />
-                </div>
-                <div className="rounded-xl border border-line-strong bg-card p-4 mt-4">
-                  <h3 className="mb-2 text-sm font-semibold text-ink">Co-pilot gaps</h3>
-                  <GapsQueue />
-                </div>
-              </>
-            ) : null}
-          </div>
         </>
       )}
     </div>

@@ -193,11 +193,83 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
 
   const checklistDone = checklist.filter((c) => c.done).length;
 
+  const integrationsPanel = (
+    <div className="divide-y divide-line">
+      {integrations.map((it) => {
+        const pill = STATE_PILL[it.state];
+        const Icon = it.icon;
+        return (
+          <div
+            key={it.name}
+            className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between"
+          >
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+                <Icon size={17} />
+              </span>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-navy">{it.name}</p>
+                <p className="text-xs text-muted">{it.powers}</p>
+                <p className="text-xs text-muted">{it.detail}</p>
+                {it.envKeys.length > 0 ? (
+                  <p className="text-xs text-muted">
+                    {it.envKeys.map((k, idx) => (
+                      <span key={k}>
+                        {idx > 0 ? " " : ""}Set{" "}
+                        <code className="rounded bg-card-muted px-1 py-0.5 font-mono text-[11px] text-ink">
+                          {k}
+                        </code>
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div className="pl-12 sm:pl-0">
+              <StatusPill tone={pill.tone}>{pill.label}</StatusPill>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const goLivePanel = (
+    <ul className="divide-y divide-line">
+      {checklist.map((item) => (
+        <li key={item.label} className="flex items-start gap-3 px-5 py-3">
+          {item.done ? (
+            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-success" aria-hidden />
+          ) : (
+            <Circle size={18} className="mt-0.5 shrink-0 text-muted" aria-hidden />
+          )}
+          <div className="space-y-0.5">
+            <p
+              className={
+                item.done
+                  ? "text-sm font-medium text-navy"
+                  : "text-sm font-medium text-ink"
+              }
+            >
+              {item.label}
+            </p>
+            <p className="text-xs text-muted">{item.hint}</p>
+          </div>
+          <span className="ml-auto self-center">
+            <StatusPill tone={item.done ? "success" : "neutral"}>
+              {item.done ? "Done" : "To do"}
+            </StatusPill>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Your integrations, messaging mode and go-live checklist in one place. Nothing here is editable yet: connection is done by setting the relevant keys before go-live."
+        description="Your integrations, messaging mode and go-live checklist in one place."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -227,53 +299,26 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
         />
       </div>
 
-      <SectionCard
-        title="Integrations"
-        description="Each service the practice relies on, what it powers and whether it is configured. Status reflects whether the relevant environment key is set, never its value."
-        className="mt-6"
-        bodyClassName="divide-y divide-line p-0"
-      >
-        {integrations.map((it) => {
-          const pill = STATE_PILL[it.state];
-          const Icon = it.icon;
-          return (
-            <div
-              key={it.name}
-              className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between"
-            >
-              <div className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
-                  <Icon size={17} />
-                </span>
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-navy">{it.name}</p>
-                  <p className="text-xs text-muted">{it.powers}</p>
-                  <p className="text-xs text-muted">{it.detail}</p>
-                  {it.envKeys.length > 0 ? (
-                    <p className="text-xs text-muted">
-                      {it.envKeys.map((k, idx) => (
-                        <span key={k}>
-                          {idx > 0 ? " " : ""}Set{" "}
-                          <code className="rounded bg-card-muted px-1 py-0.5 font-mono text-[11px] text-ink">
-                            {k}
-                          </code>
-                        </span>
-                      ))}
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-              <div className="pl-12 sm:pl-0">
-                <StatusPill tone={pill.tone}>{pill.label}</StatusPill>
-              </div>
-            </div>
-          );
-        })}
-      </SectionCard>
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <SectionCard
+          title="Integrations"
+          description={`${connectedCount} of ${totalIntegrations} connected.`}
+          bodyClassName="p-0"
+        >
+          {integrationsPanel}
+        </SectionCard>
+        <SectionCard
+          title="Go-live checklist"
+          description={`${checklistDone} of ${checklist.length} complete.`}
+          bodyClassName="p-0"
+        >
+          {goLivePanel}
+        </SectionCard>
+      </div>
 
-      <SectionCard title="Messaging mode" className="mt-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <SectionCard title="Messaging mode" description="Test records, live delivers.">
+          <div className="space-y-3">
             <div className="flex items-center gap-2">
               <span className="text-base font-semibold text-navy">
                 {dryRun ? "Test mode (dry run)" : "Live"}
@@ -282,85 +327,45 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
                 {dryRun ? "Test mode" : "Live"}
               </StatusPill>
             </div>
-            <p className="max-w-xl text-xs text-muted">
+            <p className="text-xs text-muted">
               {dryRun
                 ? "In test mode every message is recorded so you can review it, but nothing is delivered to patients. Going live flips MESSAGING_DRY_RUN, after which messages are sent for real through the consent-aware messaging layer."
                 : "Messages are being delivered to patients for real through the consent-aware messaging layer. To return to recording only, set MESSAGING_DRY_RUN back to true."}
             </p>
-          </div>
-          <span className="flex shrink-0 items-center gap-1.5 self-start rounded-lg bg-card-muted px-3 py-2 text-xs text-muted sm:self-center">
-            <Send size={14} />
-            Environment setting, not a runtime toggle
-          </span>
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="Practice"
-        description="Team and roles management is coming."
-        className="mt-6"
-      >
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
-              <Building2 size={17} />
+            <span className="flex w-fit items-center gap-1.5 rounded-lg bg-card-muted px-3 py-2 text-xs text-muted">
+              <Send size={14} />
+              Environment setting, not a runtime toggle
             </span>
-            <div>
-              <p className="text-sm font-semibold text-navy">{client.name}</p>
-              <p className="text-xs text-muted">
-                {sites.length} {sites.length === 1 ? "site" : "sites"}
-              </p>
-            </div>
           </div>
-          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {sites.map((site) => (
-              <li
-                key={site.id}
-                className="rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-navy"
-              >
-                {site.name}
-                <span className="block text-xs text-muted">{site.timezone}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </SectionCard>
+        </SectionCard>
 
-      <SectionCard
-        title="Go-live checklist"
-        description="Your path from demo to live. Each item ticks automatically when its key is set."
-        className="mt-6"
-        bodyClassName="p-0"
-      >
-        <ul className="divide-y divide-line">
-          {checklist.map((item) => (
-            <li key={item.label} className="flex items-start gap-3 px-5 py-3">
-              {item.done ? (
-                <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-success" aria-hidden />
-              ) : (
-                <Circle size={18} className="mt-0.5 shrink-0 text-muted" aria-hidden />
-              )}
-              <div className="space-y-0.5">
-                <p
-                  className={
-                    item.done
-                      ? "text-sm font-medium text-navy"
-                      : "text-sm font-medium text-ink"
-                  }
-                >
-                  {item.label}
-                </p>
-                <p className="text-xs text-muted">{item.hint}</p>
-              </div>
-              <span className="ml-auto self-center">
-                <StatusPill tone={item.done ? "success" : "neutral"}>
-                  {item.done ? "Done" : "To do"}
-                </StatusPill>
+        <SectionCard title="Practice" description="Team and roles are coming.">
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+                <Building2 size={17} />
               </span>
-            </li>
-          ))}
-        </ul>
-      </SectionCard>
+              <div>
+                <p className="text-sm font-semibold text-navy">{client.name}</p>
+                <p className="text-xs text-muted">
+                  {sites.length} {sites.length === 1 ? "site" : "sites"}
+                </p>
+              </div>
+            </div>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {sites.map((site) => (
+                <li
+                  key={site.id}
+                  className="rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-navy"
+                >
+                  {site.name}
+                  <span className="block text-xs text-muted">{site.timezone}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </SectionCard>
+      </div>
     </>
   );
 }

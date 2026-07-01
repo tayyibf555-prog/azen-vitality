@@ -53,13 +53,23 @@ function longDate(now: Date): string {
   });
 }
 
-function SectionBlock({ section }: { section: BriefSection }) {
+const SECTION_ROW_CAP = 5;
+
+function SectionBlock({ section, clientSlug }: { section: BriefSection; clientSlug: string }) {
   const Icon = SECTION_ICON[section.key] ?? ListChecks;
+  const visible = section.items.slice(0, SECTION_ROW_CAP);
+  const hiddenCount = section.items.length - visible.length;
+  // Prefer a deep link into the owning module for the overflow row, if the
+  // section's lines carry one. The brief lines hold a bare module slug (e.g.
+  // "recall"), so build the full client-scoped path. Falls back to a plain
+  // summary row so this stays a server component.
+  const moreSlug = section.items.find((line) => line.href)?.href;
+  const moreHref = moreSlug ? `/c/${clientSlug}/${moreSlug}` : undefined;
   return (
     <SectionCard title={section.title} bodyClassName="p-0">
       <ul className="divide-y divide-line">
-        {section.items.map((line, i) => (
-          <li key={`${section.key}-${i}`} className="flex items-start gap-3 px-5 py-3.5">
+        {visible.map((line, i) => (
+          <li key={`${section.key}-${i}`} className="flex items-start gap-3 px-5 py-3">
             <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
               <Icon size={15} />
             </span>
@@ -75,6 +85,22 @@ function SectionBlock({ section }: { section: BriefSection }) {
             </div>
           </li>
         ))}
+        {hiddenCount > 0 ? (
+          <li>
+            {moreHref ? (
+              <a
+                href={moreHref}
+                className="flex min-h-[44px] items-center px-5 py-2.5 text-xs font-semibold text-blue-dark transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark"
+              >
+                View all {section.items.length}
+              </a>
+            ) : (
+              <p className="px-5 py-2.5 text-xs font-medium text-muted">
+                {hiddenCount} more in this section
+              </p>
+            )}
+          </li>
+        ) : null}
       </ul>
     </SectionCard>
   );
@@ -150,9 +176,9 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
           description="When the diary fills up and work lands across your modules, your prioritised brief appears here every morning."
         />
       ) : (
-        <div className="space-y-6">
+        <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
           {brief.sections.map((section) => (
-            <SectionBlock key={section.key} section={section} />
+            <SectionBlock key={section.key} section={section} clientSlug={clientSlug} />
           ))}
         </div>
       )}

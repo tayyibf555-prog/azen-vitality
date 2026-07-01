@@ -58,7 +58,7 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
           return (
             <div
               key={it.label}
-              className="rounded-xl border border-line bg-card px-3.5 py-3 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
+              className="rounded-xl border border-line bg-card-muted/40 px-3.5 py-3"
             >
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
                 <Icon size={13} className="text-blue-dark" /> {it.label}
@@ -85,7 +85,7 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
 // the section cards, and a distinct recommendations list.
 function ReportPanel({ report, period }: { report: Report; period: ReportPeriod }) {
   return (
-    <div className="space-y-5 rounded-xl border border-line bg-card-muted/50 p-4 sm:p-5">
+    <div className="space-y-4 rounded-xl border border-line bg-card-muted/50 p-4 sm:p-5">
       <div className="flex items-center gap-2">
         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-card text-blue-dark shadow-sm">
           <Sparkles size={15} />

@@ -106,50 +106,49 @@ export default async function OwnerManagementPage({
         systems={<SystemsCatalog />}
         operations={
           <>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard
+          label="Recoverable value"
+          value={gbp(totalRecoverable)}
+          icon={PoundSterling}
+          hint="Outstanding across open plans"
+        />
+        <StatCard
+          label="Open opportunities"
+          value={String(openCount)}
+          icon={ListChecks}
+          hint="Plans not yet completed"
+        />
+        <StatCard
+          label="Recovered to date"
+          value={gbp(recoveredToDate)}
+          icon={CheckCircle2}
+          hint="Completed plan value"
+        />
+      </div>
+
       <SectionCard
         title="Treatment recovery"
         description="Accepted but incomplete treatment across all sites, live from the coordinator."
+        bodyClassName="p-0"
       >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <StatCard
-            label="Recoverable value"
-            value={gbp(totalRecoverable)}
-            icon={PoundSterling}
-            hint="Outstanding across open plans"
-          />
-          <StatCard
-            label="Open opportunities"
-            value={String(openCount)}
-            icon={ListChecks}
-            hint="Plans not yet completed"
-          />
-          <StatCard
-            label="Recovered to date"
-            value={gbp(recoveredToDate)}
-            icon={CheckCircle2}
-            hint="Completed plan value"
-          />
-        </div>
-
         {opportunities.length === 0 ? (
-          <p className="mt-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
+          <p className="m-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
             <Building2 size={15} className="shrink-0 text-blue-dark" />
             No opportunities synced yet. Run the Dentally sync to populate the per-site
             breakdown. This view stays empty until real data lands.
           </p>
         ) : (
-          <div className="mt-5 overflow-hidden rounded-lg border border-line">
-            <DataTable
-              columns={SITE_RECOVERY_COLUMNS}
-              rows={siteRecovery}
-              getRowKey={(r) => r.siteId}
-              className="px-2 py-1"
-            />
-          </div>
+          <DataTable
+            columns={SITE_RECOVERY_COLUMNS}
+            rows={siteRecovery}
+            getRowKey={(r) => r.siteId}
+            className="px-2 py-1"
+          />
         )}
       </SectionCard>
 
-      <OverviewDashboard />
+      <OverviewDashboard hideHero />
           </>
         }
       />

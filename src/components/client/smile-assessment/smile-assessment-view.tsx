@@ -1,7 +1,6 @@
-import { Sparkles, Flame, Gauge, Leaf, Zap } from "lucide-react";
-import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
-import { ResponsesTable } from "./responses-table";
-import { CampaignsPanel } from "./campaigns-panel";
+import { Sparkles, Flame, Gauge, Leaf } from "lucide-react";
+import { PageHeader, StatCard } from "@/components/primitives";
+import { SmileAssessmentWorkspace } from "./smile-assessment-workspace";
 import { getClient, getSites } from "@/lib/mock/clients";
 import { listResponses } from "@/lib/smile-assessment/repository";
 import type { AssessmentResponse } from "@/lib/smile-assessment/types";
@@ -34,7 +33,7 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
     <>
       <PageHeader
         title="Smile Assessment"
-        description="An embeddable quiz that qualifies each enquiry on intent and fit only: treatment interest, timeline, funding readiness and location. High scorers are fast-tracked to Speed-to-lead and contacted in moments; medium and low scorers are recorded for nurture. It never judges clinical suitability."
+        description="An embeddable quiz that scores each enquiry on intent and fit, fast-tracking high scorers to contact and recording the rest for nurture."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -49,17 +48,7 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
         <StatCard label="Low" value={String(low.length)} icon={Leaf} hint="Nurture for later" />
       </div>
 
-      <CampaignsPanel clientSlug={clientSlug} />
-
-      {responses.length === 0 ? (
-        <EmptyState
-          icon={Zap}
-          title="No assessments yet"
-          description="Embed the quiz on the practice website and link it to /assess. Submissions POST to the public endpoint and appear here the instant they land, with high scorers already contacted. This view is mock safe, so it stays empty until a submission arrives."
-        />
-      ) : (
-        <ResponsesTable responses={responses} nowIso={nowIso} />
-      )}
+      <SmileAssessmentWorkspace clientSlug={clientSlug} responses={responses} nowIso={nowIso} />
     </>
   );
 }

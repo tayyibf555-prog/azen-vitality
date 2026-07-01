@@ -48,8 +48,8 @@ export async function AgentView({ clientSlug, channel }: { clientSlug: string; c
         title={isWhatsapp ? "WhatsApp Agent" : "AI Booking Agent"}
         description={
           isWhatsapp
-            ? "A two way WhatsApp agent that recognises any patient by their number, answers their messages, and books, reschedules or cancels appointments. It also guides patients on treatments and onboards new ones, and hands clinical questions, complaints and anything it is unsure about to your team. Live across every site."
-            : "A two way SMS agent that recognises any patient by their number, answers their replies, and books, reschedules or cancels appointments. It also guides patients on treatments and onboards new ones, and hands clinical questions, complaints and anything it is unsure about to your team. Live across every site."
+            ? "Two way WhatsApp agent that books, reschedules and cancels for known patients, and hands clinical questions to your team. Live across every site."
+            : "Two way SMS agent that books, reschedules and cancels for known patients, and hands clinical questions to your team. Live across every site."
         }
       />
 

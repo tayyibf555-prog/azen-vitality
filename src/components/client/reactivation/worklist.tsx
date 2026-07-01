@@ -38,6 +38,9 @@ export function Worklist({
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const [filter, setFilter] = useState<FilterValue>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const WORKLIST_CAP = 8;
 
   const cadenceByTarget = useMemo(() => {
     const map = new Map<string, ReactivationCadence>();
@@ -52,6 +55,10 @@ export function Worklist({
   const rows = useMemo(
     () => (filter === "all" ? ranked : ranked.filter((t) => t.reason === filter)),
     [ranked, filter],
+  );
+  const visibleRows = useMemo(
+    () => (expanded ? rows : rows.slice(0, WORKLIST_CAP)),
+    [rows, expanded],
   );
   const rankByIndex = useMemo(() => {
     const map = new Map<string, number>();
@@ -116,7 +123,7 @@ export function Worklist({
         title="Worklist"
         description="Ranked by recoverable value and winnability. Open any patient to run their cadence."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Filter size={14} className="text-muted" />
             <div className="flex flex-wrap gap-1">
               {FILTERS.map((f) => (
@@ -135,13 +142,22 @@ export function Worklist({
                 </button>
               ))}
             </div>
+            {rows.length > WORKLIST_CAP ? (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="rounded-full border border-line-strong bg-card px-3 py-1 text-xs font-semibold text-blue-dark transition-colors hover:bg-card-muted"
+              >
+                {expanded ? "Show fewer" : `View all ${rows.length}`}
+              </button>
+            ) : null}
           </div>
         }
         bodyClassName="p-0"
       >
         <DataTable
           columns={columns}
-          rows={rows}
+          rows={visibleRows}
           getRowKey={(t) => t.id}
           onRowClick={(t) => setSelectedId(t.id)}
           className="px-2 py-1"

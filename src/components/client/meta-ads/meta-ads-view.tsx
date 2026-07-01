@@ -21,7 +21,7 @@ export function MetaAdsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Meta Ads"
-        description="Plan, build and track your Facebook and Instagram campaigns in one place: AI-written ad copy, a step-by-step launch guide, performance analytics and a library of winning dental ads. Campaign figures are mock until your Meta account is connected, and every piece of copy is built to UK GDC and ASA advertising rules."
+        description="Plan, build and track your Facebook and Instagram campaigns in one place, with AI-written ad copy, a launch guide, analytics and a library of winning dental ads."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

@@ -23,7 +23,7 @@ export function RoiView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="ROI"
-        description="How your patient-acquisition spend turns into booked patients and treatment revenue across every channel, with the cost of each new patient and the return on your spend. Figures are mock until the live sources (Meta and Dentally) are connected."
+        description="How your patient-acquisition spend turns into booked patients and treatment revenue across every channel."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

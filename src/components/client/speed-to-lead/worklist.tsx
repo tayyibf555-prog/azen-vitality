@@ -116,7 +116,7 @@ export function Worklist({ leads, nowIso }: { leads: Lead[]; nowIso: string }) {
     <>
       <SectionCard
         title="Enquiries"
-        description="Every new enquiry, newest first. Uncontacted leads float to the top. Open one to mark its outcome or resend first contact."
+        description="Every new enquiry, newest first, with uncontacted leads floated to the top."
         actions={
           <div className="flex items-center gap-2">
             <Filter size={14} className="text-muted" />
@@ -144,6 +144,7 @@ export function Worklist({ leads, nowIso }: { leads: Lead[]; nowIso: string }) {
         <DataTable
           columns={columns}
           rows={rows}
+          maxRows={8}
           getRowKey={(l) => l.id}
           onRowClick={(l) => setSelectedId(l.id)}
           className="px-2 py-1"

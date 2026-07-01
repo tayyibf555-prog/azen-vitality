@@ -1,7 +1,6 @@
-import { CalendarClock, ShieldCheck, CheckCircle2, AlertTriangle, Users } from "lucide-react";
-import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
-import { Worklist } from "./worklist";
-import { WaitlistPanel } from "./waitlist-panel";
+import { CalendarClock, CheckCircle2, AlertTriangle, Users } from "lucide-react";
+import { PageHeader, StatCard } from "@/components/primitives";
+import { NoshowTabs } from "./noshow-tabs";
 import { getClient, getSites } from "@/lib/mock/clients";
 import { listTargets, listWaitlist } from "@/lib/noshow/repository";
 import type { NoshowTarget, WaitlistEntry } from "@/lib/noshow/types";
@@ -40,8 +39,9 @@ export async function NoshowView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
+        hero
         title="No-show defence"
-        description="Confirms and reminds patients before every appointment, lets them confirm or cancel by reply, scores no-show risk so the team can focus, and auto-fills cancellations from the waitlist."
+        description="Confirms appointments, scores no-show risk, and auto-fills cancellations from the waitlist."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -51,17 +51,7 @@ export async function NoshowView({ clientSlug }: { clientSlug: string }) {
         <StatCard label="Waitlist" value={String(waiting.length)} icon={Users} hint="Ready to fill a gap" />
       </div>
 
-      {targets.length === 0 ? (
-        <EmptyState
-          icon={ShieldCheck}
-          title="No upcoming appointments yet"
-          description="Run the no-show sync to pull the upcoming diary from Dentally into this worklist. This view is mock safe, so it stays empty until data lands."
-        />
-      ) : (
-        <Worklist targets={targets} nowIso={nowIso} />
-      )}
-
-      <WaitlistPanel entries={waitlist} nowIso={nowIso} />
+      <NoshowTabs targets={targets} waitlist={waitlist} nowIso={nowIso} />
     </>
   );
 }

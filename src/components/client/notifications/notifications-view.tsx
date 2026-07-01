@@ -33,10 +33,10 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
     <>
       <PageHeader
         title="Notifications"
-        description="The alerts that need attention now, pulled together from compliance, no-shows, new onboarding submissions and new enquiries. This is mock until the live sources connect."
+        description="The alerts that need attention now, pulled from compliance, no-shows, onboarding and new enquiries."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid auto-rows-fr grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <StatCard
           label="High priority"
           value={String(highCount)}
@@ -56,24 +56,23 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
           icon={CalendarX}
           hint="High-risk appointments"
         />
-      </div>
-
-      {(byType.lead ?? 0) > 0 || (byType.onboarding ?? 0) > 0 ? (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {(byType.lead ?? 0) > 0 ? (
           <StatCard
             label="New enquiries"
             value={String(byType.lead ?? 0)}
             icon={Sparkles}
             hint="High-intent, to contact"
           />
+        ) : null}
+        {(byType.onboarding ?? 0) > 0 ? (
           <StatCard
             label="Onboarding"
             value={String(byType.onboarding ?? 0)}
             icon={UserPlus}
             hint="Submissions to review"
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       <NotificationsList items={items} />
     </>

@@ -53,8 +53,9 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
   return (
     <>
       <PageHeader
+        hero
         title="Treatment Coordinator"
-        description="Recover accepted but incomplete treatment. Every plan is ranked by recoverable value, so the highest impact patient is always at the top of the list."
+        description="Recover accepted but incomplete treatment, ranked so the highest impact patient is always at the top."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

@@ -39,8 +39,9 @@ export async function RecallView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
+        hero
         title="Recall concierge"
-        description="Reads the dentist and hygienist recall dates set in Dentally and books patients back in before they lapse. SMS and email on a cadence, consent respected. Recalls more than 60 days overdue hand off to Reactivation."
+        description="Books patients back in before their recall lapses, on an SMS and email cadence with consent respected."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

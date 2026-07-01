@@ -42,8 +42,9 @@ export async function AfterHoursView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
+        hero
         title="After-hours capture"
-        description="Answers and books missed calls after hours and on genuine overflow, follows up by text, and logs every out-of-hours call and message into a worklist the team can clear in the morning."
+        description="Answers missed and overflow calls out of hours, follows up by text, and logs every one into a worklist the team clears in the morning."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

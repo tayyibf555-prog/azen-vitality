@@ -39,8 +39,9 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
+        hero
         title="Reactivation"
-        description="Win back dormant patients. Lapsed visitors, overdue recalls and stalled treatment plans are ranked by recoverable value and worked through a multi step cadence. When a patient replies, the AI Booking Agent picks it up and books them in."
+        description="Dormant patients ranked by recoverable value and worked through a multi step cadence, with replies picked up by the AI Booking Agent."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

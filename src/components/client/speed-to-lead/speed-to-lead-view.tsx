@@ -46,7 +46,7 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Speed-to-lead"
-        description="Contacts every new enquiry within seconds across SMS, email and WhatsApp, then threads the reply straight to the booking agent. First-response time is instrumented, a delay past a few minutes correlates with far lower conversion."
+        description="Contacts every new enquiry within seconds across SMS, email and WhatsApp, then threads the reply straight to the booking agent."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

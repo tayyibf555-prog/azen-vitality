@@ -19,6 +19,7 @@ import {
   DataTable,
   BarChart,
   ProgressMeter,
+  Tabs,
   type Column,
   type Tone,
 } from "@/components/primitives";
@@ -153,7 +154,7 @@ const SITE_COLUMNS: Column<SiteMetrics>[] = [
   },
 ];
 
-export function OverviewDashboard() {
+export function OverviewDashboard({ hideHero = false }: { hideHero?: boolean }) {
   const params = useParams<{ client: string }>();
   const client = getClient(params.client);
 
@@ -253,11 +254,13 @@ export function OverviewDashboard() {
 
   return (
     <>
-      <PageHeader
-        hero
-        title="Overview"
-        description="Your live, cross-site view of the full funnel. Every enquiry, recall and treatment plan across all three practices, and the revenue and hours recovered from them."
-      />
+      {hideHero ? null : (
+        <PageHeader
+          hero
+          title="Overview"
+          description="Your live, cross-site view of the full funnel across all three practices, with the revenue and hours recovered."
+        />
+      )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
@@ -311,17 +314,6 @@ export function OverviewDashboard() {
         <SectionCard
           title="Today"
           description="Highest-priority actions right now"
-          actions={
-            openTasks && openTasks > 0 ? (
-              <a
-                href={`/c/${client.slug}/task-queue`}
-                className="inline-flex items-center gap-1.5 rounded-full border border-blue-dark/20 bg-blue-dark/10 px-2.5 py-0.5 text-xs font-semibold text-blue-dark transition-colors hover:bg-blue-dark/15"
-              >
-                <ListChecks size={12} />
-                {openTasks} {openTasks === 1 ? "task needs attention" : "tasks need attention"}
-              </a>
-            ) : null
-          }
         >
           <ul className="space-y-3">
             {briefs.map((b) => (
@@ -350,34 +342,54 @@ export function OverviewDashboard() {
       </div>
 
       <SectionCard
-        title="Performance by site"
-        description="The multi-site view. Compare every practice on the same funnel."
+        title="Funnel detail"
+        description="Recent enquiries and per-site performance across the funnel."
         bodyClassName="p-0"
       >
-        <DataTable
-          columns={SITE_COLUMNS}
-          rows={siteMetrics}
-          getRowKey={(m) => m.siteId}
-          className="px-2 py-1"
-        />
-      </SectionCard>
-
-      <SectionCard
-        title="Recent enquiries"
-        description="Newest first. Assessment score, source, speed-to-lead and stage."
-        actions={
-          <StatusPill tone="success">
-            <Flame size={12} />
-            {hotCount} hot
-          </StatusPill>
-        }
-        bodyClassName="p-0"
-      >
-        <DataTable
-          columns={ENQUIRY_COLUMNS}
-          rows={leads}
-          getRowKey={(l) => l.id}
-          className="px-2 py-1"
+        <Tabs
+          className="p-5"
+          tabs={[
+            {
+              key: "enquiries",
+              label: "Recent enquiries",
+              content: (
+                <DataTable
+                  columns={ENQUIRY_COLUMNS}
+                  rows={leads}
+                  getRowKey={(l) => l.id}
+                  maxRows={6}
+                />
+              ),
+            },
+            {
+              key: "site",
+              label: "By site",
+              content: (
+                <DataTable
+                  columns={SITE_COLUMNS}
+                  rows={siteMetrics}
+                  getRowKey={(m) => m.siteId}
+                />
+              ),
+            },
+          ]}
+          actions={
+            <>
+              <StatusPill tone="success">
+                <Flame size={12} />
+                {hotCount} hot
+              </StatusPill>
+              {openTasks && openTasks > 0 ? (
+                <a
+                  href={`/c/${client.slug}/task-queue`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-blue-dark/20 bg-blue-dark/10 px-2.5 py-0.5 text-xs font-semibold text-blue-dark transition-colors hover:bg-blue-dark/15"
+                >
+                  <ListChecks size={12} />
+                  {openTasks} {openTasks === 1 ? "task needs attention" : "tasks need attention"}
+                </a>
+              ) : null}
+            </>
+          }
         />
       </SectionCard>
     </>

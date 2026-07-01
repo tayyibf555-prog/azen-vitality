@@ -31,7 +31,7 @@ export function CopilotView() {
     <>
       <PageHeader
         title="Ask the brain"
-        description="Ask the practice knowledge anything. Answers are drawn only from the brain and filtered to your access level."
+        description="Ask the practice knowledge anything, with answers drawn only from the brain and filtered to your access level."
       />
 
       {checking ? (

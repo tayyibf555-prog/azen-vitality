@@ -12,7 +12,7 @@ export async function UspsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="USPs"
-        description="Your practice's selling points. The AI agents weave these into their conversion messages naturally, so the same true, on-brand reasons to choose you show up everywhere."
+        description="Your practice's selling points, which the AI agents weave naturally into their conversion messages everywhere."
       />
       <UspsPanel clientSlug={clientSlug} />
     </>

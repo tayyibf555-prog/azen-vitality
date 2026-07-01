@@ -115,6 +115,8 @@ export function ReviewsWorkspace({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actions, setActions] = useState<Record<string, RowAction>>({});
+  const [showAllItems, setShowAllItems] = useState(false);
+  const [showAllRequests, setShowAllRequests] = useState(false);
 
   const siteName = useMemo(() => {
     const map = new Map(siteNames.map((s) => [s.id, s.name]));
@@ -259,8 +261,13 @@ export function ReviewsWorkspace({
       .filter((r): r is NonNullable<typeof r> => r !== null);
   }, [items, actions]);
 
+  const ITEMS_CAP = 8;
+  const REQUESTS_CAP = 6;
+  const visibleItems = showAllItems ? items : items.slice(0, ITEMS_CAP);
+  const visibleRequests = showAllRequests ? requestRows : requestRows.slice(0, REQUESTS_CAP);
+
   return (
-    <div className="space-y-4">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
       <SectionCard
         title="Today's appointments"
         description="Mark who attended. A compliant Google review request is then sent automatically later, through the consent-aware messaging layer. There is no message to send by hand."
@@ -286,7 +293,7 @@ export function ReviewsWorkspace({
           />
         ) : (
           <ul className="divide-y divide-line">
-            {items.map((it) => {
+            {visibleItems.map((it) => {
               const action = actions[it.appointmentId];
               const alreadyHandled = it.hasReviewRequest && it.reviewStatus !== null;
               const settled = action?.done || alreadyHandled;
@@ -294,7 +301,7 @@ export function ReviewsWorkspace({
               return (
                 <li
                   key={it.appointmentId}
-                  className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -362,6 +369,15 @@ export function ReviewsWorkspace({
             })}
           </ul>
         )}
+        {!loading && !loadError && items.length > ITEMS_CAP ? (
+          <button
+            type="button"
+            onClick={() => setShowAllItems((v) => !v)}
+            className="mt-3 inline-flex min-h-[44px] items-center text-sm font-semibold text-blue-dark transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+          >
+            {showAllItems ? "Show fewer" : `Show all ${items.length}`}
+          </button>
+        ) : null}
         <p className="mt-4 text-xs text-muted">
           The review request sends automatically a few hours later or the next morning. Consent and
           opt-outs are always respected, and messages are in test mode until go-live.
@@ -380,7 +396,7 @@ export function ReviewsWorkspace({
           />
         ) : (
           <ul className="divide-y divide-line">
-            {requestRows.map((r) => (
+            {visibleRequests.map((r) => (
               <li
                 key={r.appointmentId}
                 className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
@@ -407,6 +423,15 @@ export function ReviewsWorkspace({
             ))}
           </ul>
         )}
+        {requestRows.length > REQUESTS_CAP ? (
+          <button
+            type="button"
+            onClick={() => setShowAllRequests((v) => !v)}
+            className="mt-3 inline-flex min-h-[44px] items-center text-sm font-semibold text-blue-dark transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+          >
+            {showAllRequests ? "Show fewer" : `View all ${requestRows.length}`}
+          </button>
+        ) : null}
       </SectionCard>
     </div>
   );

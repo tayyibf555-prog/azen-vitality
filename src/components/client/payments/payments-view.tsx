@@ -77,7 +77,7 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
             className="m-4"
           />
         ) : (
-          <DataTable columns={columns} rows={rows} getRowKey={(r, i) => `${r.patientId}-${i}`} className="px-2 py-1" />
+          <DataTable columns={columns} rows={rows} getRowKey={(r, i) => `${r.patientId}-${i}`} maxRows={8} className="px-2 py-1" />
         )}
       </SectionCard>
     </>

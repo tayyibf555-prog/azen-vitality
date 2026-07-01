@@ -111,7 +111,7 @@ export async function TodayView({ clientSlug }: { clientSlug: string }) {
             className="m-4"
           />
         ) : (
-          <DataTable columns={COLUMNS} rows={appts} getRowKey={(a) => a.id} className="px-2 py-1" />
+          <DataTable columns={COLUMNS} rows={appts} getRowKey={(a) => a.id} maxRows={8} className="px-2 py-1" />
         )}
       </SectionCard>
     </>

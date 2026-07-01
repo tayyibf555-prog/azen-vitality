@@ -14,7 +14,7 @@ export async function TaskQueueView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Task queue"
-        description="Everything that needs doing across the practice, most urgent first. Claim a task, mark it done, or snooze it for later."
+        description="Everything that needs doing across the practice, most urgent first, ready to claim, complete, or snooze."
       />
       <TaskQueueBoard clientSlug={clientSlug} />
     </>

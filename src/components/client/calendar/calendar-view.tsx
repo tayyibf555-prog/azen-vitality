@@ -33,7 +33,7 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Calendar"
-        description="The live diary from Dentally. Move day by day and filter by site to see who is booked in."
+        description="The live diary from Dentally, navigable by day or week and filterable by site."
       />
       <CalendarBoard
         appointments={appointments}
