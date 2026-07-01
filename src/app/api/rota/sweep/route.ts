@@ -79,6 +79,8 @@ export async function POST(request: Request): Promise<Response> {
     let notifiedStaff = 0;
     let notifiedShifts = 0;
     let skippedNoPhone = 0;
+    let sendFailures = 0;
+    const providers = new Set<string>();
 
     for (const client of CLIENTS) {
       const config = await getConfig(client.id);
@@ -116,7 +118,16 @@ export async function POST(request: Request): Promise<Response> {
         }
 
         const body = draftShiftMessage(person.name, name, toLines(staffShifts));
-        await sendMessage({ channel: "sms", to: person.phone, body });
+        // One staff member's send failing (bad number, provider error) must never
+        // abort the whole sweep or block the rest of the team. On failure we leave
+        // the shifts unnotified so a later run retries, and carry on.
+        try {
+          const result = await sendMessage({ channel: "sms", to: person.phone, body });
+          providers.add(result.provider);
+        } catch {
+          sendFailures += 1;
+          continue;
+        }
 
         // Only mark the shifts we actually texted, so a person added mid-window is
         // not silently skipped next run.
@@ -132,7 +143,16 @@ export async function POST(request: Request): Promise<Response> {
       notifiedStaff,
       notifiedShifts,
       skippedNoPhone,
+      sendFailures,
+      providers: [...providers],
     });
+  } catch (err) {
+    // Never let the sweep crash with an opaque 500: surface the reason so a
+    // failing run is diagnosable (no secrets are included in these messages).
+    return Response.json(
+      { ok: false, error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
   } finally {
     await releaseCronLock("sweep-rota");
   }
