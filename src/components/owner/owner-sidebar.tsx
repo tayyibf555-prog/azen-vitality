@@ -63,7 +63,7 @@ export function OwnerSidebar() {
   };
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-navy-line bg-navy">
+    <aside className="chrome-nav flex h-screen w-64 shrink-0 flex-col border-r border-navy-line">
       {/* Client context */}
       <div className="flex items-center gap-4 px-5 py-5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -88,14 +88,14 @@ export function OwnerSidebar() {
                 href={base}
                 onClick={markPending(base)}
                 className={cn(
-                  "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                  "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
                   isManagementActive
-                    ? "bg-navy-soft text-on-navy"
-                    : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                    ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
                 )}
               >
                 {isManagementActive ? (
-                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+                  <></>
                 ) : null}
                 <Gauge size={16} className="shrink-0" />
                 <span className="truncate">Management</span>
@@ -106,14 +106,14 @@ export function OwnerSidebar() {
                 href={hrefFor("co-pilot")}
                 onClick={markPending(hrefFor("co-pilot"))}
                 className={cn(
-                  "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                  "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
                   isActive("co-pilot")
-                    ? "bg-navy-soft text-on-navy"
-                    : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                    ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
                 )}
               >
                 {isActive("co-pilot") ? (
-                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+                  <></>
                 ) : null}
                 <Wand2 size={16} className="shrink-0" />
                 <span className="truncate">Co-pilot</span>
@@ -124,14 +124,14 @@ export function OwnerSidebar() {
                 href={hrefFor("practice-brain")}
                 onClick={markPending(hrefFor("practice-brain"))}
                 className={cn(
-                  "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                  "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
                   isActive("practice-brain")
-                    ? "bg-navy-soft text-on-navy"
-                    : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                    ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
                 )}
               >
                 {isActive("practice-brain") ? (
-                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+                  <></>
                 ) : null}
                 <BrainCircuit size={16} className="shrink-0" />
                 <span className="truncate">Practice brain</span>
@@ -156,14 +156,14 @@ export function OwnerSidebar() {
                       href={href}
                       onClick={markPending(href)}
                       className={cn(
-                        "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                        "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
                         active
-                          ? "bg-navy-soft text-on-navy"
-                          : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                          ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                          : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
                       )}
                     >
                       {active ? (
-                        <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-blue-light" />
+                        <></>
                       ) : null}
                       <Icon size={16} className="shrink-0" />
                       <span className="truncate">{item.label}</span>

@@ -1,31 +1,37 @@
 @import "tailwindcss";
 
 /*
-  Azen x Vitality brand tokens.
-  Light, premium look: cream app background, navy chrome, white cards, blue accents.
-  No OS dark-mode flipping. Everything here is the single source of truth for colour.
+  Azen x Vitality brand tokens. Blue-forward "bold" look: cool blue-grey app
+  background, a deep-blue gradient chrome (sidebar), floating white cards, and blue
+  as the dominant brand colour. No OS dark-mode flipping. Single source of truth.
 */
 
 :root {
-  /* Brand (from spec) */
-  --navy: #0a0e1a;
-  --cream: #eeeae4;
+  /* Brand. --navy is the deep-blue ink used for headings + the chrome's darkest stop. */
+  --navy: #0c2350;
+  --cream: #eef2f8; /* cool blue-grey page background (token name kept for compatibility) */
   --card: #ffffff;
-  --card-muted: #f6f3ee;
+  --card-muted: #e5edf7; /* muted surface, a touch deeper than the page bg */
   --blue-light: #5bc4f7;
   --blue-dark: #2b8ac0;
   --blue-deep: #1c6f9e; /* AA-contrast blue for small text on white (>=4.5:1) */
-  --ink: #333b4d;
+  --blue-royal: #1c66b8; /* the lead blue: hero bands, emphasis surfaces, chrome mid-stop */
+  --ink: #33405c;
   --whatsapp: #25d366;
 
-  /* Derived neutrals */
-  --line: #e4ded6; /* hairline borders on cream */
-  --line-strong: #d6cfc4;
-  --muted: #6b7280; /* secondary text */
-  --navy-soft: #161c2d; /* raised surface on navy chrome */
-  --navy-line: #232a3d; /* borders inside navy chrome */
-  --on-navy: #e9ecf3; /* primary text on navy */
-  --on-navy-muted: #9aa3b8; /* secondary text on navy */
+  /* Chrome gradient stops (deep to lead blue), used by .chrome-nav. */
+  --chrome-from: #0a2a5e;
+  --chrome-mid: #123f86;
+  --chrome-to: #1c66b8;
+
+  /* Derived neutrals (cool) */
+  --line: #dde5f0; /* hairline borders on the cool bg */
+  --line-strong: #c8d4e6;
+  --muted: #64748b; /* secondary text */
+  --navy-soft: #16407a; /* raised/hover surface on the blue chrome */
+  --navy-line: #274d86; /* borders inside the blue chrome */
+  --on-navy: #eaf1fb; /* primary text on the blue chrome */
+  --on-navy-muted: #a9c4ea; /* secondary text on the blue chrome */
 
   /* Semantic status */
   --success: #16a34a;
@@ -33,11 +39,16 @@
   --danger: #ef4444;
   --info: var(--blue-dark);
 
+  /* Floating-card elevation scale (soft, blue-tinted shadows). */
+  --shadow-card: 0 1px 2px rgba(12, 35, 80, 0.06);
+  --shadow-float: 0 10px 26px rgba(12, 35, 80, 0.10);
+  --shadow-hero: 0 14px 32px rgba(28, 102, 184, 0.28);
+
   /* App surfaces */
   --background: var(--cream);
   --foreground: var(--navy);
 
-  --radius: 0.75rem;
+  --radius: 0.875rem;
 }
 
 /* Map tokens to Tailwind utilities (bg-navy, text-ink, border-line, etc.) */
@@ -51,6 +62,7 @@
   --color-blue-light: var(--blue-light);
   --color-blue-dark: var(--blue-dark);
   --color-blue-deep: var(--blue-deep);
+  --color-blue-royal: var(--blue-royal);
   --color-ink: var(--ink);
   --color-whatsapp: var(--whatsapp);
   --color-line: var(--line);
@@ -90,7 +102,22 @@ h1, h2, h3, h4 {
   letter-spacing: -0.02em;
 }
 
-/* Thin, unobtrusive scrollbars inside dark chrome */
+/* Thin, unobtrusive scrollbars inside the blue chrome */
 .scroll-navy::-webkit-scrollbar { width: 8px; height: 8px; }
 .scroll-navy::-webkit-scrollbar-thumb { background: var(--navy-line); border-radius: 8px; }
 .scroll-navy::-webkit-scrollbar-track { background: transparent; }
+
+/* Blue-forward chrome: the deep-to-lead blue gradient used by the sidebars. */
+.chrome-nav {
+  background-image: linear-gradient(180deg, var(--chrome-from), var(--chrome-mid) 55%, var(--chrome-to));
+  background-color: var(--chrome-from);
+}
+/* A blue hero band (dashboards): headline copy sits on this. */
+.chrome-hero {
+  background-image: linear-gradient(120deg, var(--chrome-from), var(--blue-royal) 68%, var(--blue-dark));
+}
+
+/* Floating-card elevation helpers (Phase 1 primitives consume these). */
+.shadow-card { box-shadow: var(--shadow-card); }
+.shadow-float { box-shadow: var(--shadow-float); }
+.shadow-hero { box-shadow: var(--shadow-hero); }

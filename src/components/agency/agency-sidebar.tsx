@@ -46,7 +46,7 @@ export function AgencySidebar() {
   };
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-20 flex w-[248px] flex-col bg-navy text-on-navy">
+    <aside className="chrome-nav fixed inset-y-0 left-0 z-20 flex w-[248px] flex-col text-on-navy">
       {/* Wordmark lockup */}
       <div className="flex items-center gap-3 px-5 py-6">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-dark text-base font-extrabold text-white">
@@ -92,15 +92,12 @@ export function AgencySidebar() {
               href={item.href}
               onClick={markPending(item.href)}
               className={cn(
-                "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                "relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
                 active
-                  ? "bg-navy-soft text-on-navy"
-                  : "text-on-navy-muted hover:bg-navy-soft/60 hover:text-on-navy",
+                  ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                  : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
               )}
             >
-              {active ? (
-                <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-blue-light" />
-              ) : null}
               <Icon size={18} />
               {item.label}
             </Link>
