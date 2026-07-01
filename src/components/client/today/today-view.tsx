@@ -90,6 +90,7 @@ export async function TodayView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
+        hero
         title="Today"
         description={`A live snapshot of ${longDate(today)} across every site, straight from the Dentally diary.`}
       />

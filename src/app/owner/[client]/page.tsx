@@ -97,6 +97,7 @@ export default async function OwnerManagementPage({
   return (
     <>
       <PageHeader
+        hero
         title="Management"
         description="Your owner command view. Switch between practice operations and the AI systems running them."
       />
