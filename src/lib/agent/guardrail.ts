@@ -101,8 +101,19 @@ function firstMatch(text: string, patterns: RegExp[]): string | null {
 /**
  * Scan an agent reply for a guardrail violation. Returns { ok: true } when the
  * reply is safe to send, otherwise the tripped category and matched phrase.
+ *
+ * `includePrice` (default true) also blocks a firm invented price. The
+ * conversational agent must never quote an unverifiable price, so it keeps the
+ * default. Module drafts (coordinator, recall) legitimately relay a real
+ * treatment-plan figure from Dentally, so the shared-drain backstop calls this
+ * with includePrice=false and only enforces the two hard, universal rules:
+ * never funding/NHS/private jargon and never clinical advice to a patient.
  */
-export function checkAgentReply(reply: string): GuardrailResult {
+export function checkAgentReply(
+  reply: string,
+  opts: { includePrice?: boolean } = {},
+): GuardrailResult {
+  const includePrice = opts.includePrice ?? true;
   const text = reply ?? "";
   if (!text.trim()) return { ok: true };
 
@@ -113,7 +124,7 @@ export function checkAgentReply(reply: string): GuardrailResult {
   if (clinical) return { ok: false, category: "clinical", matched: clinical };
 
   // Price: only block a firm/exact figure. A hedged "from" price is allowed.
-  if (PRICE_FIGURE.test(text)) {
+  if (includePrice && PRICE_FIGURE.test(text)) {
     const hedged = PRICE_SAFE_HEDGES.some((re) => re.test(text));
     const firm = firstMatch(text, PRICE_FIRM);
     if (firm && !hedged) return { ok: false, category: "price", matched: firm };

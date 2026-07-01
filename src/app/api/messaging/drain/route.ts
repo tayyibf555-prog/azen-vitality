@@ -2,6 +2,7 @@ import { DentallyClient, DentallyError } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
+import { checkAgentReply } from "@/lib/agent/guardrail";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import type { MessageChannel } from "@/lib/messaging/types";
 import {
@@ -140,6 +141,23 @@ async function drainSource(
       (await isSuppressed(row.siteId, channel, row.toRef)) ||
       (await isSuppressed(row.siteId, channel, to))
     ) {
+      await source.markBlocked(row.id);
+      blocked += 1;
+      continue;
+    }
+
+    // Output backstop for EVERY module send, whatever composed the body
+    // (templated or LLM-drafted): never let funding/NHS-private jargon or
+    // clinical advice reach a patient. Price is excluded on purpose, since
+    // modules legitimately relay a real treatment-plan figure from Dentally.
+    // A hit blocks the row (terminal) and logs loudly for review rather than
+    // sending forbidden wording.
+    const guard = checkAgentReply(row.body, { includePrice: false });
+    if (!guard.ok) {
+      console.error(
+        `[drain] ${source.name}: outbox ${row.id} blocked by output guardrail ` +
+          `(${guard.category}: ${JSON.stringify(guard.matched)}); not sent`,
+      );
       await source.markBlocked(row.id);
       blocked += 1;
       continue;

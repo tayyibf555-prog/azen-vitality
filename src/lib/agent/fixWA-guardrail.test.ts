@@ -74,3 +74,34 @@ describe("output guardrail: pass-through", () => {
     expect(checkAgentReply("You need root canal on that tooth.").ok).toBe(false);
   });
 });
+
+// The shared-drain backstop scans EVERY module send with includePrice=false: the
+// two hard universal rules (no funding jargon, no clinical advice) apply to all
+// patient copy, but a real relayed treatment figure must still be allowed.
+describe("output guardrail: drain backstop mode (includePrice: false)", () => {
+  it("still blocks funding jargon and clinical advice", () => {
+    expect(checkAgentReply("On the NHS this is free.", { includePrice: false }).ok).toBe(false);
+    expect(checkAgentReply("As a private patient you pay more.", { includePrice: false }).ok).toBe(false);
+    expect(checkAgentReply("You definitely need a filling.", { includePrice: false }).ok).toBe(false);
+  });
+  it("allows a real relayed treatment price (modules quote genuine figures)", () => {
+    expect(checkAgentReply("Your treatment plan total is £2,400.", { includePrice: false }).ok).toBe(true);
+    expect(checkAgentReply("The balance on your plan is £180 exactly.", { includePrice: false }).ok).toBe(true);
+  });
+  it("default mode (agent) still blocks a firm price", () => {
+    expect(checkAgentReply("Your treatment plan total is £2,400.").ok).toBe(false);
+  });
+  it("does not trip on representative module templated copy", () => {
+    const templated = [
+      "Hi Sarah, you are due for your dental check-up. Reply YES to book, or call us on 0161 123 4567.",
+      "Reminder: your appointment is on Tuesday at 10:00. Reply YES to confirm or NO to rearrange.",
+      "We have a slot free this Thursday at 2pm. Reply YES if you would like it.",
+      "Thanks for visiting us today. We would love a quick review: https://example.com/review",
+      "It has been a while since your last visit. We would love to see you back, reply YES to book.",
+      "Following up on your treatment plan. A coordinator can talk you through the options, reply YES.",
+    ];
+    for (const body of templated) {
+      expect(checkAgentReply(body, { includePrice: false }).ok).toBe(true);
+    }
+  });
+});

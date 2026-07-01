@@ -139,6 +139,16 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
     return Response.json({ error: "Opportunity not found" }, { status: 404 });
   }
 
+  // Consent gate, matching handleDraft and the unattended sweep: never enqueue a
+  // patient touch on a channel the patient has not consented to, even on a manual
+  // approve. Suppression (STOP) is enforced again later at the drain.
+  if (!isChannelConsented(opportunity, channel)) {
+    return Response.json(
+      { ok: false, consentBlocked: true, error: "Patient has not consented to this channel" },
+      { status: 409 },
+    );
+  }
+
   const touch = await approveTouch(touchId, "coordinator");
   await enqueueOutbox({
     touchId: touch.id,
