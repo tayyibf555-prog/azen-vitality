@@ -2,6 +2,7 @@ import "server-only";
 import { findOrCreateConversation, appendMessage } from "@/lib/agent/repository";
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
+import { checkAgentReply } from "@/lib/agent/guardrail";
 import { getClient, getSite } from "@/lib/mock/clients";
 import { draftFirstContact, type CampaignContext } from "./draft";
 import {
@@ -104,6 +105,29 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     fundingType: null,
   });
   await appendMessage({ conversationId: conversation.id, role: "agent", body });
+
+  // Output backstop for this direct-send path, which deliberately bypasses the
+  // messaging drain (speed matters). The drain applies this same guardrail to
+  // EVERY module send; without it here an LLM draft carrying NHS/private/funding
+  // jargon or clinical advice would reach a brand-new lead unfiltered. A hit is
+  // terminal: log loudly, record a failed attempt, and retire the lead to 'lost'
+  // so the SLA sweep does not re-draft-and-block it every tick.
+  const guard = checkAgentReply(body, { includePrice: false });
+  if (!guard.ok) {
+    console.error(
+      `[speed-to-lead] lead ${lead.id}: first-contact draft blocked by output guardrail ` +
+        `(${guard.category}: ${JSON.stringify(guard.matched)}); not sent`,
+    );
+    await insertAttempt({
+      leadId: lead.id,
+      channel: lead.channel,
+      toAddress: to,
+      body,
+      status: "failed",
+    });
+    await setLeadStage(lead.id, "lost");
+    return;
+  }
 
   try {
     const result = await sendMessage({ channel: lead.channel, to, body });
