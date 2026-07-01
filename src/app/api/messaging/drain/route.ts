@@ -217,14 +217,31 @@ export async function POST(request: Request): Promise<Response> {
 
     const siteIds = vitalitySiteIds();
     let drained = 0, sent = 0, failed = 0, blocked = 0;
-    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number }> = {};
+    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string }> = {};
+    const sourceErrors: string[] = [];
     for (const source of SOURCES) {
-      const r = await drainSource(source, client, siteIds, statusCallbackUrl);
-      perSource[source.name] = r;
-      drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
+      // Isolate each module's drain. list() throwing (DB briefly down) or any
+      // unexpected throw inside drainSource must NOT abort the remaining modules'
+      // drains for this tick: reactivation being unreachable should not stop
+      // recall/noshow/coordinator/reviews from delivering their queued rows.
+      // The rows of the failing module stay 'queued' for the next tick.
+      try {
+        const r = await drainSource(source, client, siteIds, statusCallbackUrl);
+        perSource[source.name] = r;
+        drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        perSource[source.name] = { drained: 0, sent: 0, failed: 0, blocked: 0, error: message };
+        sourceErrors.push(`${source.name}: ${message}`);
+        console.error(`[drain] ${source.name}: source drain threw; skipping to next module`, err);
+      }
     }
 
-    return Response.json({ ok: true, drained, sent, failed, blocked, perSource });
+    return Response.json({
+      ok: sourceErrors.length === 0,
+      drained, sent, failed, blocked, perSource,
+      ...(sourceErrors.length ? { errors: sourceErrors } : {}),
+    });
   } finally {
     await releaseCronLock("drain");
   }

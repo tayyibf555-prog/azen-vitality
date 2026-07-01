@@ -230,16 +230,25 @@ export async function POST(request: Request): Promise<Response> {
 
   // STOP keyword: suppress the right ref and do not reply.
   if (isStopKeyword(body)) {
-    if (target) {
-      await addSuppression(target.siteId, channel, `patient:${target.targetId.split(":")[1]}`, "stop");
-    } else if (recallTarget) {
-      await addSuppression(recallTarget.siteId, channel, `patient:${recallTarget.targetId.split(":")[1]}`, "stop");
-    } else if (identity) {
-      await addSuppression(siteId, channel, `patient:${identity.patientId}`, "stop");
-    } else {
-      // Unrecognised number (e.g. a speed-to-lead lead): suppress by address so
-      // the opt-out is honoured on the channel they actually used.
-      await addSuppression(siteId, channel, from, "stop");
+    // A failed suppression WRITE must not surface a 500: Twilio would retry the
+    // STOP webhook, and the retry would hit the same DB error and loop. The
+    // inbound is already recorded above as an inbound touch, so staff can see
+    // the opt-out even if this write failed; the next STOP (or the status
+    // webhook) will re-attempt it. Swallow and still return a clean 2xx TwiML.
+    try {
+      if (target) {
+        await addSuppression(target.siteId, channel, `patient:${target.targetId.split(":")[1]}`, "stop");
+      } else if (recallTarget) {
+        await addSuppression(recallTarget.siteId, channel, `patient:${recallTarget.targetId.split(":")[1]}`, "stop");
+      } else if (identity) {
+        await addSuppression(siteId, channel, `patient:${identity.patientId}`, "stop");
+      } else {
+        // Unrecognised number (e.g. a speed-to-lead lead): suppress by address so
+        // the opt-out is honoured on the channel they actually used.
+        await addSuppression(siteId, channel, from, "stop");
+      }
+    } catch (err) {
+      console.error(`[inbound] STOP suppression write failed for ${from}; opt-out logged as an inbound touch, will retry`, err);
     }
     return twiml();
   }
