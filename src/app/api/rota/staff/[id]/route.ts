@@ -77,7 +77,8 @@ export async function PATCH(
   }
   if (body.availability !== undefined) fields.availability = availability(body.availability);
 
-  await updateStaff(id, client.id, fields);
+  const updated = await updateStaff(id, client.id, fields);
+  if (!updated) return bad("Staff member not found", 404);
   return Response.json({ ok: true });
 }
 
@@ -108,6 +109,7 @@ export async function DELETE(
   const roleDenied = requireOwnerRole(auth);
   if (roleDenied) return roleDenied;
 
-  await deleteStaff(id, client.id);
+  const removed = await deleteStaff(id, client.id);
+  if (!removed) return bad("Staff member not found", 404);
   return Response.json({ ok: true });
 }

@@ -110,7 +110,10 @@ export interface UpdateStaffInput {
   availability?: Availability;
 }
 
-export async function updateStaff(id: string, clientId: string, fields: UpdateStaffInput): Promise<void> {
+/** Returns true if a matching staff row was updated; false if none matched (unknown
+ *  id, or an id owned by another client). Lets the API answer 404 instead of a
+ *  misleading {ok:true} for a cross-tenant or stale id. */
+export async function updateStaff(id: string, clientId: string, fields: UpdateStaffInput): Promise<boolean> {
   const patch: Record<string, unknown> = {};
   if (fields.siteId !== undefined) patch.site_id = fields.siteId;
   if (fields.name !== undefined) patch.name = fields.name;
@@ -119,22 +122,31 @@ export async function updateStaff(id: string, clientId: string, fields: UpdateSt
   if (fields.email !== undefined) patch.email = fields.email;
   if (fields.active !== undefined) patch.active = fields.active;
   if (fields.availability !== undefined) patch.availability = fields.availability;
-  if (Object.keys(patch).length === 0) return;
+  if (Object.keys(patch).length === 0) return true; // nothing to change -> no-op success
 
   const db = serviceClient();
-  const { error } = await db
+  const { data, error } = await db
     .from("rota_staff")
     .update(patch)
     .eq("id", id)
-    .eq("client_id", clientId); // scope the write to the caller's client
+    .eq("client_id", clientId) // scope the write to the caller's client
+    .select("id"); // so we can tell a real update from a 0-row (cross-tenant / unknown id) match
   if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
-export async function deleteStaff(id: string, clientId: string): Promise<void> {
+/** Returns true if a matching staff row was deleted; false if none matched. */
+export async function deleteStaff(id: string, clientId: string): Promise<boolean> {
   const db = serviceClient();
   // rota_shift.staff_id has ON DELETE CASCADE, so their shifts are removed too.
-  const { error } = await db.from("rota_staff").delete().eq("id", id).eq("client_id", clientId);
+  const { data, error } = await db
+    .from("rota_staff")
+    .delete()
+    .eq("id", id)
+    .eq("client_id", clientId)
+    .select("id");
   if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +247,7 @@ export async function insertShifts(shifts: RotaShift[]): Promise<number> {
   }));
   const { data, error } = await db
     .from("rota_shift")
-    .upsert(rows, { onConflict: "staff_id,shift_date,start_time", ignoreDuplicates: true })
+    .upsert(rows, { onConflict: "client_id,staff_id,shift_date,start_time", ignoreDuplicates: true })
     .select("id");
   if (error) throw error;
   return (data as unknown[] | null)?.length ?? 0;

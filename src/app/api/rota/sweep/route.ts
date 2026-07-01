@@ -78,6 +78,7 @@ export async function POST(request: Request): Promise<Response> {
     let generated = 0;
     let notifiedStaff = 0;
     let notifiedShifts = 0;
+    let simulatedStaff = 0;
     let skippedNoPhone = 0;
     let sendFailures = 0;
     const providers = new Set<string>();
@@ -121,11 +122,21 @@ export async function POST(request: Request): Promise<Response> {
         // One staff member's send failing (bad number, provider error) must never
         // abort the whole sweep or block the rest of the team. On failure we leave
         // the shifts unnotified so a later run retries, and carry on.
+        let result;
         try {
-          const result = await sendMessage({ channel: "sms", to: person.phone, body });
+          result = await sendMessage({ channel: "sms", to: person.phone, body });
           providers.add(result.provider);
         } catch {
           sendFailures += 1;
+          continue;
+        }
+
+        // In dry-run, sendMessage simulates the text without actually sending it, so
+        // we must NOT consume the shifts' unnotified state: marking them notified here
+        // would permanently skip them once real sends are switched on, and no staff
+        // member would ever get their first real text. Count the simulation and move on.
+        if (result.provider === "dry-run") {
+          simulatedStaff += 1;
           continue;
         }
 
@@ -142,6 +153,7 @@ export async function POST(request: Request): Promise<Response> {
       generated,
       notifiedStaff,
       notifiedShifts,
+      simulatedStaff,
       skippedNoPhone,
       sendFailures,
       providers: [...providers],

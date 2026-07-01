@@ -503,7 +503,7 @@ export function RotaStaffPanel({
                         ) : (
                           <>
                             <span aria-hidden>&middot;</span>
-                            <span className="text-warning">No phone &mdash; not texted</span>
+                            <span className="text-warning">No phone number, not texted</span>
                           </>
                         )}
                       </p>

@@ -32,7 +32,9 @@ export function normaliseConfig(raw: unknown): RotaConfig {
   if (rawRoles && typeof rawRoles === "object") {
     for (const [role, count] of Object.entries(rawRoles as Record<string, unknown>)) {
       const n = typeof count === "number" ? count : Number(count);
-      if (Number.isFinite(n) && n > 0) rolesNeeded[role] = Math.trunc(n);
+      // Guard the truncated value too: a fractional 0 < n < 1 (e.g. 0.5) trunc's to 0,
+      // which would store a meaningless "0 needed" for the role. Skip those.
+      if (Number.isFinite(n) && Math.trunc(n) > 0) rolesNeeded[role] = Math.trunc(n);
     }
   }
 
@@ -46,8 +48,11 @@ export function normaliseConfig(raw: unknown): RotaConfig {
   };
 }
 
-/** A positive integer coercion with a fallback (0 and negatives fall back too). */
+/** A positive integer coercion with a fallback (0, negatives, and fractions that
+ *  truncate to 0 like 0.5 all fall back, so a config value can never silently
+ *  become 0 and leave the rota unpopulated). */
 function posInt(v: unknown, fallback: number): number {
   const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : fallback;
+  const truncated = Math.trunc(n);
+  return Number.isFinite(n) && truncated > 0 ? truncated : fallback;
 }
