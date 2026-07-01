@@ -92,3 +92,52 @@ export function dayLabel(shiftDate: string): string {
 export function timeLabel(t: string): string {
   return t.length >= 5 ? t.slice(0, 5) : t;
 }
+
+/** Zero-based Monday..Sunday index for a weekday, so we can find a week's Monday. */
+const WEEKDAY_INDEX: Record<Weekday, number> = {
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+  saturday: 5,
+  sunday: 6,
+};
+
+/** Add (or subtract) whole days to a `YYYY-MM-DD` key. Uses noon UTC so a ±1h DST
+ *  shift can never roll the date across a boundary. */
+export function addDaysKey(dayKey: string, days: number): string {
+  const ms = Date.parse(`${dayKey}T12:00:00Z`);
+  if (Number.isNaN(ms)) return dayKey;
+  return new Date(ms + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** The Monday (week start) of the week a `YYYY-MM-DD` day falls in. */
+export function mondayOf(dayKey: string): string {
+  const wd = weekdayOf(dayKey);
+  if (!wd) return dayKey;
+  return addDaysKey(dayKey, -WEEKDAY_INDEX[wd]);
+}
+
+/** The day-of-month number for a `YYYY-MM-DD` key, e.g. "6". */
+export function dayOfMonth(dayKey: string): string {
+  const ms = Date.parse(`${dayKey}T12:00:00Z`);
+  if (Number.isNaN(ms)) return "";
+  return new Date(ms).toLocaleDateString("en-GB", { timeZone: "Europe/London", day: "numeric" });
+}
+
+/** A week's span label, e.g. "30 Jun to 5 Jul" (Monday to Saturday, no dash in copy). */
+export function weekRangeLabel(mondayKey: string): string {
+  const fmt = (k: string) =>
+    new Date(Date.parse(`${k}T12:00:00Z`)).toLocaleDateString("en-GB", {
+      timeZone: "Europe/London",
+      day: "numeric",
+      month: "short",
+    });
+  return `${fmt(mondayKey)} to ${fmt(addDaysKey(mondayKey, 5))}`;
+}
+
+/** Today's `YYYY-MM-DD` in Europe/London, for highlighting the current day. */
+export function londonTodayKey(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+}
