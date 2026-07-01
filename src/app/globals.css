@@ -8,21 +8,21 @@
 
 :root {
   /* Brand. --navy is the deep-blue ink used for headings + the chrome's darkest stop. */
-  --navy: #0c2350;
+  --navy: #0b2049;
   --cream: #eef2f8; /* cool blue-grey page background (token name kept for compatibility) */
-  --card: #ffffff;
-  --card-muted: #e5edf7; /* muted surface, a touch deeper than the page bg */
+  --card: #f9fbfe; /* soft off-white card, gentler than pure white on the cool bg */
+  --card-muted: #e6edf7; /* muted surface, a touch deeper than the page bg */
   --blue-light: #5bc4f7;
-  --blue-dark: #2b8ac0;
-  --blue-deep: #1c6f9e; /* AA-contrast blue for small text on white (>=4.5:1) */
-  --blue-royal: #1c66b8; /* the lead blue: hero bands, emphasis surfaces, chrome mid-stop */
+  --blue-dark: #2379ab;
+  --blue-deep: #1a648f; /* AA-contrast blue for small text on white (>=4.5:1) */
+  --blue-royal: #16559a; /* the lead blue: hero bands, emphasis surfaces, chrome mid-stop */
   --ink: #33405c;
   --whatsapp: #25d366;
 
   /* Chrome gradient stops (deep to lead blue), used by .chrome-nav. */
-  --chrome-from: #0a2a5e;
-  --chrome-mid: #123f86;
-  --chrome-to: #1c66b8;
+  --chrome-from: #082249;
+  --chrome-mid: #0f3670;
+  --chrome-to: #16559a;
 
   /* Derived neutrals (cool) */
   --line: #dde5f0; /* hairline borders on the cool bg */
@@ -39,10 +39,10 @@
   --danger: #ef4444;
   --info: var(--blue-dark);
 
-  /* Floating-card elevation scale (soft, blue-tinted shadows). */
-  --shadow-card: 0 1px 2px rgba(12, 35, 80, 0.06);
-  --shadow-float: 0 10px 26px rgba(12, 35, 80, 0.10);
-  --shadow-hero: 0 14px 32px rgba(28, 102, 184, 0.28);
+  /* Floating-card elevation scale (soft, diffuse, blue-tinted shadows). */
+  --shadow-card: 0 1px 3px rgba(20, 45, 95, 0.05);
+  --shadow-float: 0 6px 20px rgba(20, 45, 95, 0.07);
+  --shadow-hero: 0 12px 30px rgba(22, 85, 154, 0.24);
 
   /* App surfaces */
   --background: var(--cream);
