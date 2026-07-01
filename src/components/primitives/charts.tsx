@@ -61,8 +61,8 @@ export function BarChart({
               {format(d.value)}
             </span>
             <div
-              className="w-full rounded-t-md bg-blue-dark/85 transition-colors group-hover:bg-blue-dark"
-              style={{ height: h }}
+              className="w-full rounded-t-[6px] transition-opacity group-hover:opacity-90"
+              style={{ height: h, backgroundImage: "linear-gradient(180deg, #5bb0e6, #1c66b8)" }}
             />
             <span className="text-[10px] text-muted">{d.label}</span>
           </div>

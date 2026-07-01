@@ -254,6 +254,7 @@ export function OverviewDashboard() {
   return (
     <>
       <PageHeader
+        hero
         title="Overview"
         description="Your live, cross-site view of the full funnel. Every enquiry, recall and treatment plan across all three practices, and the revenue and hours recovered from them."
       />
@@ -273,6 +274,7 @@ export function OverviewDashboard() {
           delta={{ value: 9, goodWhenUp: true }}
         />
         <StatCard
+          emphasis
           label="Revenue recovered"
           value={gbp(metrics?.recoveredRevenue ?? 0)}
           icon={PoundSterling}

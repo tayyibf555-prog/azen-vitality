@@ -8,6 +8,7 @@ export function StatCard({
   icon: Icon,
   delta,
   hint,
+  emphasis,
   className,
 }: {
   label: string;
@@ -16,28 +17,52 @@ export function StatCard({
   /** Positive or negative percentage change. `goodWhenUp` flips colour logic. */
   delta?: { value: number; goodWhenUp?: boolean };
   hint?: string;
+  /** Render as the solid-blue headline KPI (one per row). */
+  emphasis?: boolean;
   className?: string;
 }) {
   const up = delta ? delta.value >= 0 : false;
   const good = delta ? (delta.goodWhenUp ?? true) === up : false;
 
   return (
-    <div className={cn("rounded-xl border border-line bg-card p-4 shadow-[0_1px_2px_rgba(10,14,26,0.04)]", className)}>
+    <div
+      className={cn(
+        "rounded-[15px] p-4",
+        emphasis
+          ? "chrome-hero text-white shadow-hero"
+          : "bg-card text-navy shadow-float ring-1 ring-line/60",
+        className,
+      )}
+    >
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">{label}</span>
+        <span
+          className={cn(
+            "text-xs font-semibold uppercase tracking-wide",
+            emphasis ? "text-white/80" : "text-muted",
+          )}
+        >
+          {label}
+        </span>
         {Icon ? (
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+          <span
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-[9px]",
+              emphasis ? "bg-white/20 text-white" : "bg-blue-royal/10 text-blue-royal",
+            )}
+          >
             <Icon size={15} />
           </span>
         ) : null}
       </div>
       <div className="mt-2 flex items-end justify-between gap-2">
-        <span className="text-2xl font-extrabold tracking-tight text-navy">{value}</span>
+        <span className={cn("text-2xl font-extrabold tracking-tight", emphasis ? "text-white" : "text-navy")}>
+          {value}
+        </span>
         {delta ? (
           <span
             className={cn(
               "flex items-center gap-0.5 text-xs font-semibold",
-              good ? "text-success" : "text-danger",
+              emphasis ? (good ? "text-[#c7f0d6]" : "text-[#f7c1c1]") : good ? "text-success" : "text-danger",
             )}
           >
             {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
@@ -45,7 +70,7 @@ export function StatCard({
           </span>
         ) : null}
       </div>
-      {hint ? <p className="mt-1 text-xs text-muted">{hint}</p> : null}
+      {hint ? <p className={cn("mt-1 text-xs", emphasis ? "text-white/70" : "text-muted")}>{hint}</p> : null}
     </div>
   );
 }
