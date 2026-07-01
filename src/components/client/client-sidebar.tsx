@@ -102,7 +102,7 @@ export function ClientSidebar() {
               type="button"
               onClick={() => toggleGroup(group.label)}
               aria-expanded={open}
-              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted transition-colors hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-on-navy transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
             >
               <span>{group.label}</span>
               <ChevronDown
@@ -116,7 +116,7 @@ export function ClientSidebar() {
                 open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
               )}
             >
-              <ul className="space-y-0.5 overflow-hidden pt-0.5">
+              <ul className="ml-4 space-y-0.5 overflow-hidden border-l border-white/15 pl-3 pt-1">
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const href = item.slug === "" ? base : `${base}/${item.slug}`;
@@ -132,7 +132,7 @@ export function ClientSidebar() {
                         }
                       }}
                       className={cn(
-                        "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
+                        "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors before:pointer-events-none before:absolute before:top-1/2 before:-left-3 before:h-px before:w-3 before:-translate-y-1/2 before:bg-white/20 before:content-['']",
                         active
                           ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
                           : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
