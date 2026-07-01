@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   CalendarCheck,
   CalendarDays,
+  CalendarRange,
   Users,
   Wallet,
   Sparkles,
@@ -266,6 +267,14 @@ export const CLIENT_NAV: NavGroup[] = [
         status: "live",
         roles: OWNER_ROLES,
         note: "CQC and GDC compliance, organised: a readiness dashboard across the five key lines of enquiry, the recurring audit and check calendar (HTM 01-05, IPC, radiography, fire, Legionella), the required policy library, and the staff training matrix, with an AI readiness check. Decision-support and an organiser, not legal advice or a substitute for the practice's compliance lead or CQC sign-off. Mock data for now.",
+      },
+      {
+        slug: "rota",
+        label: "Staff rota",
+        icon: CalendarRange,
+        status: "live",
+        roles: OWNER_ROLES,
+        note: "Owners and managers set staffing rules; the rota is generated automatically from opening hours and staff availability, and each staff member is texted their shifts.",
       },
       {
         slug: "daily-brief",

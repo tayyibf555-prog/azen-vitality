@@ -9,6 +9,7 @@ import { MetaAdsView } from "@/components/client/meta-ads/meta-ads-view";
 import { RoiView } from "@/components/client/roi/roi-view";
 import { ReportsView } from "@/components/client/reports/reports-view";
 import { ComplianceView } from "@/components/client/compliance/compliance-view";
+import { RotaView } from "@/components/client/rota/rota-view";
 import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
@@ -81,6 +82,10 @@ export default async function OwnerModulePage({
 
   if (module === "compliance") {
     return <ComplianceView clientSlug={client} />;
+  }
+
+  if (module === "rota") {
+    return <RotaView clientSlug={client} />;
   }
 
   if (module === "reviews") {
