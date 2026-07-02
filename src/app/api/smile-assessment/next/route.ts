@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { HAIKU } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock/clients";
 import { questionById, type QuizQuestion } from "@/lib/smile-assessment/quiz";
 import { candidateQuestions, deterministicNext, shouldFinish, answeredCount } from "@/lib/smile-assessment/funnel";
@@ -112,7 +112,7 @@ async function pickNext(
     const msg = await anthropic.messages.create(
       // Small output budget: the reply is just an id + a one-line transition, so a
       // low cap keeps generation (and the patient's wait) fast.
-      { model: HAIKU, max_tokens: 120, system, messages: [{ role: "user", content: user }] },
+      { model: SONNET, thinking: NO_THINKING, max_tokens: 160, system, messages: [{ role: "user", content: user }] },
       { timeout: 9000 },
     );
     const text = msg.content

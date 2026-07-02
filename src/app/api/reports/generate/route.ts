@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { HAIKU } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildReportPrompt, cleanLine } from "@/lib/reports/ai";
@@ -50,7 +50,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const anthropic = new Anthropic({ maxRetries: 1 });
     const msg = await anthropic.messages.create(
-      { model: HAIKU, max_tokens: 1500, system, messages: [{ role: "user", content: user }] },
+      { model: SONNET, thinking: NO_THINKING, max_tokens: 2000, system, messages: [{ role: "user", content: user }] },
       { timeout: 20000 },
     );
     const text = msg.content
