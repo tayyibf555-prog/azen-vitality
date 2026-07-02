@@ -81,6 +81,26 @@ describe("scoreAssessment", () => {
     expect(band).toBe("low");
   });
 
+  it("caps an under-covered submission at medium so a single crafted answer can't score 'high' (finding #22)", () => {
+    // One favourable answer normalises to 100, but without the core trio (treatment,
+    // timeline, budget) it must not reach "high" and trigger the auto-SMS bridge.
+    const one = scoreAssessment({ [Q_TIMELINE]: "asap" });
+    expect(one.rawScore).toBe(100);
+    expect(one.band).toBe("medium"); // capped: core trio incomplete
+
+    // Two of the three core questions is still incomplete.
+    const two = scoreAssessment({ [Q_TIMELINE]: "asap", [Q_BUDGET]: "ready" });
+    expect(two.band).not.toBe("high");
+
+    // The full core trio unlocks "high" as before.
+    const full = scoreAssessment({
+      [Q_TREATMENT]: "invisalign",
+      [Q_TIMELINE]: "asap",
+      [Q_BUDGET]: "ready",
+    });
+    expect(full.band).toBe("high");
+  });
+
   it("treats a clear timeline + funding readiness without a strong treatment as high", () => {
     const { band } = scoreAssessment({
       [Q_TREATMENT]: "whitening", // 12

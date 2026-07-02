@@ -82,17 +82,29 @@ export async function classifyKnowledge(
     const msg = await client.messages.create({
       model: SONNET,
       thinking: NO_THINKING,
-      max_tokens: 700,
+      // The model echoes the full cleaned body, so a long note needs real headroom;
+      // 700 guaranteed truncated JSON (and the old fallback then stored the mangled
+      // output as the note). Sonnet 5's tokenizer also runs ~30% larger.
+      max_tokens: 4000,
       system,
       messages: [{ role: "user", content: user }],
     });
-    return parseClassification(extractText(msg));
+    // A truncated response is unusable JSON: fail closed to the ORIGINAL note rather
+    // than parsing a half-written object.
+    if (msg.stop_reason === "max_tokens") return failClosed(rawInput);
+    return parseClassification(extractText(msg), rawInput);
   } catch {
     return failClosed(rawInput);
   }
 }
 
-export function parseClassification(text: string): ClassificationResult {
+/**
+ * Parse the classifier's JSON. `rawInput` is the ORIGINAL note: on a parse failure
+ * we fall closed to it, NEVER to the model's (possibly truncated/mangled) `text`,
+ * so a broken classification can never overwrite the user's note body with garbage.
+ * Defaults to `text` only for backward-compatible single-arg callers (tests).
+ */
+export function parseClassification(text: string, rawInput: string = text): ClassificationResult {
   let raw: Record<string, unknown>;
   try {
     const start = text.indexOf("{");
@@ -100,7 +112,7 @@ export function parseClassification(text: string): ClassificationResult {
     if (start === -1 || end === -1) throw new Error("no json object");
     raw = JSON.parse(text.slice(start, end + 1));
   } catch {
-    return failClosed(text);
+    return failClosed(rawInput);
   }
 
   const branch = typeof raw.branch === "string" ? raw.branch.trim() : "";

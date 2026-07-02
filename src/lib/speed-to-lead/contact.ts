@@ -129,8 +129,26 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     return;
   }
 
+  // Narrow the retryable window to the SEND itself. Only a send failure may leave
+  // the lead retryable; a failure in the post-send bookkeeping must NOT, or the
+  // sweep would re-text a lead that was already successfully messaged.
+  let result: Awaited<ReturnType<typeof sendMessage>>;
   try {
-    const result = await sendMessage({ channel: lead.channel, to, body });
+    result = await sendMessage({ channel: lead.channel, to, body });
+  } catch {
+    // Delivery failed (transient provider error or unreachable on this channel).
+    // The drafted message is already logged on the conversation; record the failed
+    // attempt and leave the lead retryable (the caller's claim release / the sweep
+    // re-picks it up). This is the ONLY path that keeps the lead retryable.
+    await insertAttempt({ leadId: lead.id, channel: lead.channel, toAddress: to, body, status: "failed" });
+    return;
+  }
+
+  // Sent. From here the patient has been texted, so a bookkeeping failure must never
+  // reset the lead to retryable. Advance it out of the first-contact window; if a
+  // write fails, log loudly and retry the stage advance, but never fall back to a
+  // retryable state (a duplicate text is worse than a stuck 'contacting').
+  try {
     await insertAttempt({
       leadId: lead.id,
       channel: lead.channel,
@@ -149,16 +167,17 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
       });
     }
     await setLeadStage(lead.id, "contacted");
-  } catch {
-    // Delivery failed (transient provider error or unreachable on this channel).
-    // The drafted message is already logged on the conversation; record the
-    // failed attempt and leave the lead at 'new' so the sweep retries it.
-    await insertAttempt({
-      leadId: lead.id,
-      channel: lead.channel,
-      toAddress: to,
-      body,
-      status: "failed",
-    });
+  } catch (err) {
+    console.error(
+      `[speed-to-lead] lead ${lead.id}: SENT but post-send bookkeeping failed; advancing stage anyway to avoid a double-text`,
+      err,
+    );
+    // Best-effort: get the lead out of the retryable window so the caller's claim
+    // release / the sweep does not re-send it.
+    try {
+      await setLeadStage(lead.id, "contacted");
+    } catch {
+      /* leave as-is; a stuck 'contacting' is preferable to re-texting the patient */
+    }
   }
 }

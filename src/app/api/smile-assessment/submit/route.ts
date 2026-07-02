@@ -112,8 +112,15 @@ export async function POST(request: Request): Promise<Response> {
     const firstName = str(body.firstName);
     // Canonicalise so the rate-limit is per-handset, only valid addresses reach
     // Twilio/Resend, and the lead:<phone> key matches the inbound webhook.
-    const email = normaliseEmail(str(body.email));
-    const phone = toE164(str(body.phone));
+    const rawEmail = str(body.email);
+    const rawPhone = str(body.phone);
+    const email = normaliseEmail(rawEmail);
+    const phone = toE164(rawPhone);
+    // If a contact detail was TYPED but is not deliverable, ask the patient to fix
+    // it rather than silently recording an unreachable lead and then promising a
+    // callback we can never make. Mirrors the client-side canSubmit requirement.
+    if (rawPhone && !phone) return bad("Please check your mobile number and try again.");
+    if (rawEmail && !email) return bad("Please check your email address and try again.");
     const channelRaw = str(body.channel);
     const channel =
       channelRaw && VALID_CHANNELS.includes(channelRaw as AssessmentChannel)

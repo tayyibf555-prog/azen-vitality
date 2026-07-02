@@ -204,7 +204,17 @@ async function syncSite(
       continue;
     }
 
-    const patientRes = await client.getPatient(appt.patientId).catch(() => ({ patient: {} }));
+    // A failed getPatient must NOT fabricate consent: an empty patient record would
+    // default use_sms to true and the name to "there", auto-enrolling an unverified
+    // patient into the SMS confirmation cadence. Skip this appointment on failure
+    // (retry next run) exactly like the history fetch below, so we never message
+    // without a real consent read.
+    let patientRes: { patient?: unknown };
+    try {
+      patientRes = await client.getPatient(appt.patientId);
+    } catch {
+      continue;
+    }
     const consent = mapPatientConsent(asRecord(patientRes.patient));
     // One bad record must not kill the run: on a failed secondary call, skip this
     // appointment and move on to the next.

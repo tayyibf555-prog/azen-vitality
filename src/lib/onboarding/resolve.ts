@@ -95,10 +95,22 @@ const DEFAULT_REQUIRED_KEYS = new Set<string>([
   "reason",
 ]);
 
+export interface ResolveOptions {
+  /**
+   * The client's real sites, as select options. When provided, they REPLACE the
+   * `site` library question's hardcoded (Vitality-mock) options so the form offers
+   * this practice's actual sites — and the submit-route validator (which resolves
+   * the same steps) rejects a site value that is not one of them, instead of the
+   * mock ids passing for the wrong tenant.
+   */
+  siteOptions?: { value: string; label: string }[];
+}
+
 /** Build a renderable field from a library question, applying the required override. */
 function fieldFromLibrary(
   q: LibraryQuestion,
   required: Record<string, boolean>,
+  opts?: ResolveOptions,
 ): OnboardingField {
   // A question that can't be required is never required, whatever the config says.
   // Otherwise an explicit override wins; with no override we fall back to today's default.
@@ -107,12 +119,18 @@ function fieldFromLibrary(
     : q.key in required
       ? Boolean(required[q.key])
       : DEFAULT_REQUIRED_KEYS.has(q.key);
+  // The `site` question's options are per-client: use the caller's real sites when
+  // given, keeping the "any" fallback so a patient can still defer the choice.
+  const options =
+    q.key === "site" && opts?.siteOptions && opts.siteOptions.length > 0
+      ? [...opts.siteOptions, { value: "any", label: "Any, happy with whichever is nearest" }]
+      : q.options;
   return {
     key: q.key,
     label: q.label,
     type: q.type,
     required: isRequired,
-    options: q.options,
+    options,
     placeholder: PLACEHOLDER_BY_KEY[q.key],
     help: q.help,
   };
@@ -169,7 +187,7 @@ function groupIntoSteps(items: ResolvedField[]): OnboardingStep[] {
  * Resolve a config into the form's steps. Pure.
  * @param config the saved per-practice config, or null for the default flow.
  */
-export function resolveSteps(config: OnboardingConfig | null): OnboardingStep[] {
+export function resolveSteps(config: OnboardingConfig | null, opts?: ResolveOptions): OnboardingStep[] {
   const required = config?.required ?? {};
 
   // Decide which library questions are in play: the enabled set if a config exists,
@@ -183,7 +201,7 @@ export function resolveSteps(config: OnboardingConfig | null): OnboardingStep[] 
   // Library questions in stable library order (which is already grouped by category).
   const libraryItems: ResolvedField[] = ONBOARDING_LIBRARY.filter((q) =>
     enabledSet.has(q.key),
-  ).map((q) => ({ field: fieldFromLibrary(q, required), category: q.category }));
+  ).map((q) => ({ field: fieldFromLibrary(q, required, opts), category: q.category }));
 
   // Custom questions, in the order the owner added them, after the library questions
   // of the same category so they read together.

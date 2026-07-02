@@ -3,7 +3,7 @@ import "server-only";
 import { MOCK_AUDITS, MOCK_POLICIES, MOCK_TRAINING_RECORDS, MOCK_STAFF } from "@/lib/compliance/mock";
 import { TRAINING_REQUIREMENTS } from "@/lib/compliance/knowledge";
 import { listTargets as listNoshowTargets } from "@/lib/noshow/repository";
-import { listSubmissions } from "@/lib/onboarding/repository";
+import { countNewSubmissions } from "@/lib/onboarding/repository";
 import { listResponses } from "@/lib/smile-assessment/repository";
 import { londonDateTimeLabel } from "@/lib/time/london";
 
@@ -153,19 +153,18 @@ async function noshowNotifications(ctx: BuildNotificationsContext): Promise<Noti
  * batch. Reads the DB -> safe().
  */
 async function onboardingNotifications(ctx: BuildNotificationsContext): Promise<NotificationItem[]> {
-  const submissions = await listSubmissions(ctx.clientId);
-  const newOnes = submissions.filter((s) => s.status === "new");
-  if (newOnes.length === 0) return [];
-  // Newest submission anchors recency.
-  const newest = newOnes.reduce((a, b) => (a.createdAt >= b.createdAt ? a : b));
+  // Head-count roll-up: never pull full submission rows (each carries the answers
+  // jsonb) just to count and date the badge.
+  const { count, newestAt } = await countNewSubmissions(ctx.clientId);
+  if (count === 0 || !newestAt) return [];
   return [
     {
       id: "onboarding:new",
       type: "onboarding",
       urgency: "medium",
-      title: `${newOnes.length} new patient onboarding submission${newOnes.length === 1 ? "" : "s"} to review`,
+      title: `${count} new patient onboarding submission${count === 1 ? "" : "s"} to review`,
       detail: "New patients have completed the onboarding form. Review the details and register them.",
-      at: newest.createdAt,
+      at: newestAt,
       href: `/c/${ctx.clientSlug}/onboarding`,
     },
   ];

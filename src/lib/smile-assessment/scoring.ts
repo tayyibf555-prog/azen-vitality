@@ -5,8 +5,11 @@
 // and how good a fit the enquiry is, so the team knows who to contact first. It
 // is NOT a judgement on whether a treatment is clinically right for the patient.
 
-import { QUIZ_QUESTIONS, questionById, Q_TREATMENT, Q_BUDGET } from "./quiz";
+import { QUIZ_QUESTIONS, questionById, Q_TREATMENT, Q_TIMELINE, Q_BUDGET } from "./quiz";
 import { goalTreatment, budgetMatches } from "./campaign";
+
+/** The core questions the adaptive funnel always resolves before it finishes. */
+const CORE_QUESTION_IDS = [Q_TREATMENT, Q_TIMELINE, Q_BUDGET];
 
 export type AssessmentBand = "high" | "medium" | "low";
 
@@ -86,5 +89,20 @@ export function scoreAssessment(
     rawScore = Math.min(100, rawScore + bonus);
   }
 
-  return { rawScore, band: bandFor(rawScore) };
+  // Finish invariant: per-answered normalisation means a single favourable answer
+  // scores 100. The adaptive funnel always resolves the core trio (treatment,
+  // timeline, budget) before finishing, so an under-covered submission — e.g. one
+  // crafted answer POSTed straight at the endpoint — must NOT reach "high" and
+  // trigger the auto-SMS bridge. Cap it at "medium" so it is still surfaced for
+  // staff to review but never auto-contacted.
+  const coreAnswered = CORE_QUESTION_IDS.every((id) => {
+    const value = responses[id];
+    if (typeof value !== "string") return false;
+    const q = questionById(id);
+    return !!q && q.options.some((o) => o.value === value);
+  });
+  let band = bandFor(rawScore);
+  if (!coreAnswered && band === "high") band = "medium";
+
+  return { rawScore, band };
 }

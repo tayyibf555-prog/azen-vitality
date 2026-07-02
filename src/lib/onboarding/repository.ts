@@ -149,6 +149,27 @@ export async function listSubmissions(
   return (data as SubmissionRow[]).map(rowToSubmission);
 }
 
+/**
+ * A lightweight roll-up of NEW submissions for the notifications badge: an exact
+ * count plus the newest timestamp, WITHOUT pulling every full row (each carries the
+ * answers jsonb, re-served on every notifications build). Selects `created_at` only.
+ */
+export async function countNewSubmissions(
+  clientId: string,
+): Promise<{ count: number; newestAt: string | null }> {
+  const db = serviceClient();
+  const { data, count, error } = await db
+    .from("onboarding_submission")
+    .select("created_at", { count: "exact" })
+    .eq("client_id", clientId)
+    .eq("status", "new")
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const rows = (data as { created_at: string }[] | null) ?? [];
+  return { count: count ?? rows.length, newestAt: rows[0]?.created_at ?? null };
+}
+
 export async function getSubmission(
   id: string,
 ): Promise<OnboardingSubmission | null> {

@@ -1,5 +1,5 @@
 import { OnboardingForm } from "@/components/onboarding/onboarding-form";
-import { getClient } from "@/lib/mock/clients";
+import { getClient, getSites } from "@/lib/mock/clients";
 import { getConfig } from "@/lib/onboarding/config-repository";
 import { resolveSteps } from "@/lib/onboarding/resolve";
 import { practiceName } from "@/lib/onboarding/config";
@@ -34,7 +34,8 @@ export default async function OnboardingPage({
   }
 
   const config = await getConfig(client.id);
-  const steps = resolveSteps(config);
+  const siteOptions = getSites(client.id).map((s) => ({ value: s.id, label: s.name }));
+  const steps = resolveSteps(config, { siteOptions });
 
   return (
     <OnboardingForm

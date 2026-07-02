@@ -715,6 +715,28 @@ export async function setOfferStatus(
   if (error) throw error;
 }
 
+/**
+ * Expire an offer ONLY if it is still 'offered' (TTL sweep). Returns true if this
+ * call transitioned it. Guards the race where a patient's YES claimed the offer
+ * ('offered' -> 'accepted') between the sweep listing it as expired and acting on
+ * it: an unguarded setOfferStatus(id, 'expired') would overwrite the acceptance and
+ * re-offer an already-booked slot (double-book). When this returns false the sweep
+ * must skip the re-offer and the waitlist reset.
+ */
+export async function expireOffer(id: string, respondedAt?: string): Promise<boolean> {
+  const db = serviceClient();
+  const row: Record<string, unknown> = { status: "expired" };
+  if (respondedAt) row.responded_at = respondedAt;
+  const { data, error } = await db
+    .from("noshow_slot_offer")
+    .update(row)
+    .eq("id", id)
+    .eq("status", "offered")
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
 export async function getOffer(id: string): Promise<SlotOffer | null> {
   const db = serviceClient();
   const { data, error } = await db.from("noshow_slot_offer").select("*").eq("id", id).maybeSingle();

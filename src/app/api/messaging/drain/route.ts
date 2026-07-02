@@ -178,25 +178,51 @@ async function drainSource(
     // A claim that does not land (already claimed) is skipped without sending.
     if (!(await source.claim(row.id))) continue;
 
+    // Separate the SEND from the post-send bookkeeping. Only a send failure may mark
+    // the row 'failed'; a recordSent failure must NOT (recordSent is two writes —
+    // outbox + touch — and flipping a genuinely DELIVERED message to 'failed' would
+    // strand the cadence and, once a status webhook lands, misreport delivery).
+    let result: Awaited<ReturnType<typeof sendMessage>>;
     try {
-      const result = await sendMessage({
+      result = await sendMessage({
         channel,
         to,
         body: row.body,
         statusCallbackUrl: channel === "email" ? undefined : statusCallbackUrl,
       });
-      await source.recordSent(row.id, row.touchId, {
-        provider: result.provider,
-        providerMessageId: result.providerMessageId,
-        toAddress: to,
-      });
-      sent += 1;
     } catch {
       // Delivery threw. Mark failed; the Twilio status webhook tracks terminal
       // delivery state separately for any retryable handling.
       await source.markFailed(row.id);
       failed += 1;
+      continue;
     }
+
+    // Sent. Record it; on a bookkeeping failure retry once, then leave the row as-is
+    // (still 'sending') for reconciliation rather than lying about delivery. Never
+    // markFailed after a successful provider send.
+    try {
+      await source.recordSent(row.id, row.touchId, {
+        provider: result.provider,
+        providerMessageId: result.providerMessageId,
+        toAddress: to,
+      });
+    } catch {
+      try {
+        await source.recordSent(row.id, row.touchId, {
+          provider: result.provider,
+          providerMessageId: result.providerMessageId,
+          toAddress: to,
+        });
+      } catch (err2) {
+        console.error(
+          `[drain] ${source.name}: outbox ${row.id} was SENT (provider ${result.provider} ${result.providerMessageId}) ` +
+            `but recordSent failed twice; leaving the row 'sending' for reconciliation, NOT marking it failed`,
+          err2,
+        );
+      }
+    }
+    sent += 1;
   }
   // 'drained' counts rows this run actually examined; rows deferred past a cap
   // break stay queued for the next tick and are not counted.

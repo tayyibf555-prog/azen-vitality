@@ -349,10 +349,24 @@ export async function updateAttemptStatusByMessageId(
 
   if (status === "failed") {
     const leadId = (data as { lead_id: string }).lead_id;
+    // Only reset a lead that is STILL in the first-contact window, and only if no
+    // later attempt actually delivered. A late 'failed' callback for a superseded
+    // attempt must never resurrect a 'booked'/'lost'/'qualifying' lead (re-texting a
+    // patient who already booked) or override a contact a subsequent attempt landed.
+    const { data: sentAttempts, error: sentErr } = await db
+      .from("speed_to_lead_attempt")
+      .select("id")
+      .eq("lead_id", leadId)
+      .eq("status", "sent")
+      .limit(1);
+    if (sentErr) throw sentErr;
+    if (sentAttempts && sentAttempts.length > 0) return; // a later attempt delivered: leave the lead alone
+
     const { error: leadErr } = await db
       .from("speed_to_lead_lead")
       .update({ stage: "new", first_response_at: null, updated_at: new Date().toISOString() })
-      .eq("id", leadId);
+      .eq("id", leadId)
+      .eq("stage", "contacted"); // conditional: never touch booked/lost/qualifying
     if (leadErr) throw leadErr;
   }
 }

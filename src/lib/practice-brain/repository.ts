@@ -79,13 +79,24 @@ export async function ensureBranch(clientId: string, name: string, tier: Tier): 
   const trimmed = name.trim();
   const { data: existing } = await serviceClient()
     .from(TABLE)
-    .select("id")
+    .select("id, tier")
     .eq("client_id", clientId)
     .eq("kind", "branch")
     .is("parent_id", null)
     .ilike("title", trimmed)
     .limit(1);
-  if (existing && existing.length > 0) return (existing[0] as { id: string }).id;
+  if (existing && existing.length > 0) {
+    const row = existing[0] as { id: string; tier: number };
+    // A branch is structure: its tier must be the MINIMUM of its children so that
+    // anyone who can see any child can see the branch. If this item is more
+    // accessible (lower tier) than the branch was first created at, lower the
+    // branch's tier; otherwise a cleared item would stay hidden behind an
+    // over-restrictive parent in the tree UI.
+    if (Number(row.tier) > tier) {
+      await serviceClient().from(TABLE).update({ tier }).eq("id", row.id);
+    }
+    return row.id;
+  }
 
   const { data, error } = await serviceClient()
     .from(TABLE)

@@ -74,16 +74,25 @@ describe("run: malformed tool args", () => {
 });
 
 describe("run: dispatch throwing", () => {
-  it("propagates cleanly (caller hands over) rather than an unhandled rejection", async () => {
+  it("does not abort the turn: hands the error back to the model AND escalates to a human", async () => {
+    // A thrown tool must not discard a mutation an earlier tool in the SAME round may
+    // already have committed (booked in Dentally). Instead the model receives an error
+    // tool_result and can recover, and the turn is flagged escalated so the failed
+    // action still reaches a human — not a silent unhandled rejection.
     const create = vi
       .fn()
-      .mockResolvedValueOnce(toolMessage([{ id: "t1", name: "book", input: { slotStart: "x" } }]));
+      .mockResolvedValueOnce(toolMessage([{ id: "t1", name: "book", input: { slotStart: "x" } }]))
+      .mockResolvedValueOnce(textMessage("Sorry, I hit a snag there. Let me get a colleague to help."));
     const dispatch = vi.fn(async (..._a: unknown[]): Promise<string> => {
       throw new Error("dentally write failed");
     });
-    await expect(
-      runAgentTurn([{ role: "user", content: "book" }], deps(create, dispatch)),
-    ).rejects.toThrow("dentally write failed");
+    const r = await runAgentTurn([{ role: "user", content: "book" }], deps(create, dispatch));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(2); // the loop continued rather than aborting
+    expect(r.escalated).toBe(true);
+    // The model got an explicit error result (not the raw thrown message).
+    const secondCallArgs = create.mock.calls[1][0] as { messages: Array<{ role: string; content: unknown }> };
+    expect(JSON.stringify(secondCallArgs.messages)).toContain("could not be completed");
   });
 });
 

@@ -38,6 +38,21 @@ function trimStr(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+// Per-type length caps. This is a public, unauthenticated write into jsonb that is
+// re-served in full by the worklist and every notifications build, so an unbounded
+// answer is a cheap DoS (multi-megabyte strings). Reject over-long values with a
+// clear message rather than storing them.
+const MAX_LEN: Record<string, number> = {
+  text: 200,
+  email: 200,
+  tel: 40,
+  date: 40,
+  select: 200,
+  yesno: 10,
+  consent: 10,
+  textarea: 2000,
+};
+
 /**
  * Validate + normalise `raw` against `steps`. Pure.
  * @param raw the answers map posted by the form (untrusted).
@@ -62,6 +77,12 @@ export function parseSubmission(raw: unknown, steps: OnboardingStep[]): ParseRes
         return { ok: false, error: `${field.label} is required` };
       }
       continue; // optional + empty: drop it.
+    }
+
+    // Bound the length before anything else so a giant paste is rejected cheaply.
+    const cap = MAX_LEN[field.type] ?? 200;
+    if (value.length > cap) {
+      return { ok: false, error: `${field.label} is too long (maximum ${cap} characters)` };
     }
 
     switch (field.type) {

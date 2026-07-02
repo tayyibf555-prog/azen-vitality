@@ -211,11 +211,19 @@ describe("failure handling: runAgentTurn degrades safely", () => {
     expect(r.escalated).toBe(false);
   });
 
-  it("a dispatch that throws mid-loop rejects rather than silently sending wrong data", async () => {
-    const create = vi.fn().mockResolvedValueOnce(toolUseMessage("tu", "book", { slotStart: "x", treatment: "y" }));
+  it("a dispatch that throws mid-loop escalates to a human instead of silently proceeding", async () => {
+    // A thrown tool must not silently send wrong data, but it also must not abort the
+    // turn and discard a mutation an earlier tool already committed. The model gets an
+    // error tool_result and the turn is flagged escalated so a human still takes over.
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(toolUseMessage("tu", "book", { slotStart: "x", treatment: "y" }))
+      .mockResolvedValueOnce(textMessage("Sorry, I couldn't finish that. A colleague will be in touch shortly."));
     const dispatch = vi.fn().mockRejectedValue(new Error("Dentally 500"));
     const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "s", tools: [] };
-    await expect(runAgentTurn([{ role: "user", content: "book it" }], deps)).rejects.toThrow("Dentally 500");
+    const r = await runAgentTurn([{ role: "user", content: "book it" }], deps);
+    expect(r.escalated).toBe(true);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("escalate_to_human sets the escalated flag so the webhook hands over", async () => {

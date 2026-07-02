@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { NOW } from "@/lib/mock/clients";
 import { getSite } from "@/lib/mock";
+import { londonDayKey } from "@/lib/time/london";
 import {
   listPatients,
   listAppointments,
@@ -14,10 +14,15 @@ import { getAgentAnalytics } from "@/lib/agent/repository";
 import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
+import { checkAgentReply } from "@/lib/agent/guardrail";
 import type { MessageChannel } from "@/lib/messaging/types";
 import { logCopilotAction } from "./actions";
 
-const todayIso = () => NOW.toISOString().slice(0, 10);
+// The co-pilot's "today" must be the REAL current day in the practice's timezone,
+// not the frozen mock clock: once live against real Dentally, a hardcoded date
+// would query the wrong day's diary. (Mock fixtures anchored to NOW are a demo
+// convenience; production correctness wins.)
+const todayIso = () => londonDayKey(new Date());
 const siteName = (id: string) => getSite(id)?.name ?? id;
 
 export const COPILOT_TOOLS: Anthropic.Tool[] = [
@@ -295,6 +300,22 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           ) {
             await logCopilotAction({ ...audit, status: "blocked:suppressed" });
             return JSON.stringify({ sent: false, reason: "opted_out", message: `${p.name} has opted out of ${channel}, so nothing was sent.` });
+          }
+
+          // Deterministic output guardrail, identical to the drain and every other
+          // patient-facing path: never let funding/NHS-private jargon or clinical
+          // advice reach a patient, even from an owner-directed co-pilot send. Price
+          // is allowed (the owner may legitimately quote a figure). A hit blocks the
+          // send at preview AND confirm, and tells the owner why so they can reword.
+          const guard = checkAgentReply(message, { includePrice: false });
+          if (!guard.ok) {
+            await logCopilotAction({ ...audit, status: "blocked:guardrail" });
+            return JSON.stringify({
+              sent: false,
+              reason: "guardrail",
+              matched: guard.matched,
+              message: `That message can't go out as written: it contains ${guard.category} wording we never send to patients. Please reword it.`,
+            });
           }
 
           // Two-step gate: without an explicit confirm this is a PREVIEW only. It

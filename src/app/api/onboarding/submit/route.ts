@@ -161,15 +161,18 @@ export async function POST(request: Request): Promise<Response> {
     // Validate + normalise the answers against the resolved form. Loading the config and
     // resolving it here (the same resolveSteps the public page uses) means enabled/custom
     // questions are accepted and disabled ones rejected, so the allow-list always matches
-    // what the patient was actually shown.
-    const steps = resolveSteps(config);
+    // what the patient was actually shown. Feed the client's REAL sites so the `site`
+    // select is validated against them: an unmatched site value is rejected (400) here
+    // rather than silently substituted, closing the mock->real seam.
+    const clientSites = getSites(client.id);
+    const siteOptions = clientSites.map((s) => ({ value: s.id, label: s.name }));
+    const steps = resolveSteps(config, { siteOptions });
     const parsedAnswers = parseSubmission(body.answers, steps);
     if (!parsedAnswers.ok) return bad(parsedAnswers.error);
     const a = parsedAnswers.answers;
 
-    // Resolve the site: honour an explicit valid choice; else the form's own site (named
-    // form) or null (legacy flow). Never trust a site that is not one of this client's.
-    const clientSites = getSites(client.id);
+    // Resolve the site: `a.site` has already been validated as one of this client's
+    // sites (or "any"); "any" means defer, so fall back to the form's own site.
     const chosenSite = a.site;
     const siteId =
       chosenSite && clientSites.some((s) => s.id === chosenSite) ? chosenSite : formSiteId;

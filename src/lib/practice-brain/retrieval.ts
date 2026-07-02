@@ -94,13 +94,20 @@ export async function searchKnowledge(
     return rankNodes(query, visible, limit);
   }
 
-  // Compute cosine similarity for every item node that has a stored embedding vector.
+  // Compute cosine similarity for every item node that has a stored embedding vector,
+  // but drop anything below an absolute floor. Without this, EVERY item has some
+  // positive cosine similarity, so the blend always returns candidates — meaning
+  // `ranked` is never empty and the knowledge-gap log (which fires on an empty
+  // result) goes permanently silent once VOYAGE_API_KEY is set. A real match for
+  // voyage-3.5 clears ~0.55; below that it is noise, not a match.
+  const SEMANTIC_FLOOR = 0.55;
   const semanticScores: SemanticScore[] = visible
     .filter((n) => n.kind === "item" && Array.isArray(n.embedding) && (n.embedding as number[]).length > 0)
     .map((n) => ({
       id: n.id,
       score: cosineSim(qvec, n.embedding as number[]),
-    }));
+    }))
+    .filter((s) => s.score >= SEMANTIC_FLOOR);
 
   // Blend: keyword ranked with 2× limit headroom so blend has enough candidates.
   return blendRankings(rankNodes(query, visible, limit * 2), semanticScores, visible, limit);

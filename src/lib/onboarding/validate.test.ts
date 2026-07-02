@@ -62,6 +62,27 @@ describe("parseSubmission", () => {
     expect(r.answers.concerns).toBe("none really");
   });
 
+  it("rejects an over-long answer before it reaches jsonb (finding #28)", () => {
+    // A multi-megabyte textarea paste is a cheap DoS (stored + re-served in full).
+    const huge = "x".repeat(2001);
+    const r = parseSubmission(
+      { first_name: "Alex", phone: "07700 900123", email: "a@b.com", site: "site-cc", concerns: huge },
+      TEST_STEPS,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/too long/i);
+  });
+
+  it("accepts an answer at the type cap boundary", () => {
+    const atCap = "x".repeat(2000); // textarea cap
+    const r = parseSubmission(
+      { first_name: "Alex", phone: "07700 900123", email: "a@b.com", site: "site-cc", concerns: atCap },
+      TEST_STEPS,
+    );
+    expect(r.ok).toBe(true);
+  });
+
   it("drops unknown / injected keys", () => {
     const r = parseSubmission(
       {

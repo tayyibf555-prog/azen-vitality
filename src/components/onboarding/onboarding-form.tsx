@@ -265,7 +265,10 @@ export function OnboardingForm({ clientSlug, practiceName, steps, formSlug, head
         | null;
       if (!res.ok || !data?.ok) {
         if (res.status === 429) {
-          setError("We've already received your details. Our team will be in touch shortly.");
+          // A 429 means the submission was rate-limited and NOTHING was saved. Do not
+          // claim we received their details; ask them to retry. Their answers are
+          // still on screen (we do not advance to the thank-you phase), so a retry works.
+          setError("The form is busy right now. Please wait a moment and tap submit again, your answers are saved on this screen.");
         } else {
           setError(data?.error || "Sorry, something went wrong. Please try again in a moment.");
         }

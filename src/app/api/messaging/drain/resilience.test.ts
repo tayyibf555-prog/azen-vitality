@@ -166,14 +166,13 @@ describe("drain: a module's list() throwing (DB down)", () => {
   });
 });
 
-describe("drain: recordSent throwing mid-loop", () => {
-  it("does not double-send the already-sent row and still processes the next row", async () => {
-    // Distinct recipients per row so we can attribute each send unambiguously.
+describe("drain: recordSent throwing mid-loop (finding #15)", () => {
+  it("retries the record on a transient failure, never re-sends, never marks a SENT row failed", async () => {
     vi.mocked(resolveRecipient)
       .mockResolvedValueOnce("+447700900aaa")
       .mockResolvedValueOnce("+447700900bbb");
     vi.mocked(noshow.listQueuedOutbox).mockResolvedValueOnce([row("a"), row("b")] as never);
-    // recordSent for row a throws AFTER the send already went out.
+    // recordSent for row a throws ONCE (transient) then the retry succeeds.
     vi.mocked(noshow.recordOutboxSent).mockRejectedValueOnce(new Error("record write failed"));
 
     const res = await drainPOST(req());
@@ -182,16 +181,33 @@ describe("drain: recordSent throwing mid-loop", () => {
     const sendsToA = vi.mocked(sendMessage).mock.calls.filter(
       (c) => (c[0] as { to?: string })?.to === "+447700900aaa",
     );
+    // Sent exactly once (the record failure must NOT re-send it).
+    expect(sendsToA.length).toBe(1);
+    // The message WAS delivered, so the row must never be flipped to 'failed'; the
+    // record is retried instead (recordOutboxSent called twice for row a).
+    expect(noshow.markOutboxFailed).not.toHaveBeenCalledWith("a");
+    // Row b still processes (the loop does not abort on one row's record error).
     const sendsToB = vi.mocked(sendMessage).mock.calls.filter(
       (c) => (c[0] as { to?: string })?.to === "+447700900bbb",
     );
-    // Row a sent exactly once (the record failure must NOT re-send it).
-    expect(sendsToA.length).toBe(1);
-    // Row a's record failure is caught -> row a marked failed, and row b still
-    // processes (the loop does not abort on one row's post-send record error).
-    expect(noshow.markOutboxFailed).toHaveBeenCalledWith("a");
     expect(sendsToB.length).toBe(1);
     expect(releaseCronLock).toHaveBeenCalledWith("drain");
+  });
+
+  it("leaves a SENT row alone (never failed) when recordSent fails BOTH times", async () => {
+    vi.mocked(resolveRecipient).mockResolvedValue("+447700900ccc");
+    vi.mocked(noshow.listQueuedOutbox).mockResolvedValueOnce([row("c")] as never);
+    vi.mocked(noshow.recordOutboxSent).mockRejectedValue(new Error("record write failed"));
+
+    const res = await drainPOST(req());
+    expect(res.status).toBe(200);
+    const sendsToC = vi.mocked(sendMessage).mock.calls.filter(
+      (c) => (c[0] as { to?: string })?.to === "+447700900ccc",
+    );
+    expect(sendsToC.length).toBe(1); // sent once, not re-sent
+    // A genuinely delivered message must never be reported failed, even if bookkeeping
+    // never lands: leave the row for reconciliation rather than lying about delivery.
+    expect(noshow.markOutboxFailed).not.toHaveBeenCalledWith("c");
   });
 });
 

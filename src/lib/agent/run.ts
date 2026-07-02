@@ -87,7 +87,19 @@ export async function runAgentTurn(
         });
         continue;
       }
-      const result = await deps.dispatch(tu.name, input);
+      // A tool throwing must NOT abort the whole turn: an earlier tool in this same
+      // round may have already mutated Dentally (e.g. booked), and aborting here
+      // would discard the model's chance to confirm it to the patient. Hand the model
+      // an error tool_result so it can recover, AND flag the turn escalated so the
+      // conversation still reaches a human — a failed action must never pass silently.
+      let result: string;
+      try {
+        result = await deps.dispatch(tu.name, input);
+      } catch (err) {
+        console.error(`[agent] tool ${tu.name} threw; returning an error result and escalating`, err);
+        result = JSON.stringify({ error: "That action could not be completed just now. Try again, or let me pass you to a colleague." });
+        escalated = true;
+      }
       results.push({ type: "tool_result", tool_use_id: tu.id, content: result });
     }
     messages.push({ role: "user", content: results });

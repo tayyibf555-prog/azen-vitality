@@ -18,6 +18,18 @@ function publicUrl(path: string): string {
   return `${process.env.PUBLIC_BASE_URL ?? "http://localhost:3000"}${path}`;
 }
 
+/**
+ * Bound a slow promise so it never holds up the TwiML response past Twilio's ~15s
+ * voice-webhook timeout. Resolves with `fallback` if `p` has not settled within
+ * `ms`; the underlying work keeps running but no longer blocks the call leg.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 /** TwiML response: speak a line, then hang up. No voicemail recording. */
 function twiml(say: string): Response {
   const body =
@@ -68,7 +80,10 @@ export async function POST(request: Request): Promise<Response> {
   let patientId: string | null = null;
   let patientName = `Unknown ${from.slice(-4)}`;
   try {
-    const identity = await identifyByPhone(from, { dentally });
+    // Cap the Dentally lookup: it must never push the response past Twilio's voice
+    // timeout during a Dentally slowdown (the caller would hear an application error).
+    // The name is only a worklist nicety, so a timeout falls back to the masked label.
+    const identity = await withTimeout(identifyByPhone(from, { dentally }), 3000, null);
     if (identity) {
       patientId = identity.patientId;
       patientName = identity.patientName;
@@ -124,13 +139,23 @@ export async function POST(request: Request): Promise<Response> {
       if (suppressed) {
         // Suppressed: skip the SMS. The capture row remains for a manual callback.
       } else {
-        await sendMessage({
-          channel: "sms",
-          to: from,
-          body:
-            "Hi, sorry we missed you at Vitality Dental. We're currently closed but I can help you book by text, just reply here with what you need.",
-        });
-        if (captureId) await markFollowUpSent(captureId);
+        // Bound the SMS send too: an untimed provider call could otherwise stack on
+        // top of the identify time and push the response past Twilio's timeout. Only
+        // record the follow-up on a confirmed send; a timeout falls through (the call
+        // is still logged for a manual callback).
+        const sendResult = await withTimeout(
+          sendMessage({
+            channel: "sms",
+            to: from,
+            body:
+              "Hi, sorry we missed you at Vitality Dental. We're currently closed but I can help you book by text, just reply here with what you need.",
+          })
+            .then(() => "sent" as const)
+            .catch(() => "failed" as const),
+          6000,
+          "timeout" as const,
+        );
+        if (sendResult === "sent" && captureId) await markFollowUpSent(captureId);
       }
     } catch {
       // Delivery failed (no key, dry-run off, unreachable): the call is still

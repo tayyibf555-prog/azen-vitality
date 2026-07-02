@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { OnboardingForm } from "@/components/onboarding/onboarding-form";
-import { getClient } from "@/lib/mock/clients";
+import { getClient, getSites } from "@/lib/mock/clients";
 import { getActiveFormBySlug } from "@/lib/onboarding/form-repository";
 import { resolveSteps } from "@/lib/onboarding/resolve";
 import { practiceName } from "@/lib/onboarding/config";
@@ -61,7 +61,8 @@ export default async function NamedOnboardingPage({
   }
   if (!form) notFound();
 
-  const steps = resolveSteps(form.config);
+  const siteOptions = getSites(client.id).map((s) => ({ value: s.id, label: s.name }));
+  const steps = resolveSteps(form.config, { siteOptions });
 
   return (
     <OnboardingForm
