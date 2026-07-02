@@ -184,14 +184,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       if (!text) return fail("Nothing to save.");
       const branches = await listBranchNames(CLIENT_ID);
       const result = await classifyKnowledge(text, branches);
+      // Same publish gate as `create`: the classifier output is not authoritative
+      // for clearance. Only callers at or above the review gate (maxTier >= 3) may
+      // publish an active node or choose its tier; everyone else fails closed to
+      // needs_review at tier 4, so a low-tier capture lands in the review queue
+      // rather than going live in the shared brain (and the co-pilot's grounding).
+      const canPublish = maxTier >= 3;
+      const tierNum = Math.round(Number(result.tier));
+      const claimedTier: Tier = [1, 2, 3, 4].includes(tierNum) ? (tierNum as Tier) : 4;
+      const tier: Tier = canPublish ? claimedTier : 4;
+      const needsReview = canPublish ? Boolean(result.needsReview) : true;
       const classification = { reasoning: result.reasoning, confidence: result.confidence, branchIsNew: result.branchIsNew };
-      const parentId = result.needsReview || !result.branch ? null : await ensureBranch(CLIENT_ID, result.branch, result.tier);
+      const parentId = needsReview || !result.branch ? null : await ensureBranch(CLIENT_ID, result.branch, tier);
       const node = await createItem({
         clientId: CLIENT_ID, parentId, title: result.title, body: result.body, rawInput: text,
-        tier: result.tier, tags: result.tags, status: result.needsReview ? "needs_review" : "active",
+        tier, tags: result.tags, status: needsReview ? "needs_review" : "active",
         classification, createdBy: session.credentialId, source: "copilot_capture",
       });
-      return ok({ node, needsReview: result.needsReview, tier: result.tier, branch: result.branch });
+      return ok({ node, needsReview, tier, branch: result.branch });
     }
 
     if (action === "gaps") {
