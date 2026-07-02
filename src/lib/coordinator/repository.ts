@@ -406,6 +406,21 @@ async function failLinkedTouch(outboxId: string): Promise<void> {
   if (touchId) await db.from("coordinator_touch").update({ status: "failed" }).eq("id", touchId);
 }
 
+/** Atomically claim a queued row for sending (queued -> sending); true only if THIS
+ *  call transitioned it. See the drain: prevents a mid-run kill after dispatch from
+ *  re-sending the row on the next tick. At-most-once. */
+export async function claimOutbox(outboxId: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("outbox")
+    .update({ status: "sending" })
+    .eq("id", outboxId)
+    .eq("status", "queued")
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
 export async function markOutboxFailed(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("outbox").update({ status: "failed" }).eq("id", outboxId);

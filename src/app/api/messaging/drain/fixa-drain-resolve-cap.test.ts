@@ -23,6 +23,12 @@ const fakes = vi.hoisted(() => {
           .filter((r) => r.status === "queued" && siteIds.includes(r.siteId))
           .map(({ id, touchId, siteId, channel, toRef, body }) => ({ id, touchId, siteId, channel, toRef, body })),
       ),
+      claim: vi.fn(async (id: string) => {
+        const r = rows.find((x) => x.id === id);
+        if (!r || r.status !== "queued") return false;
+        r.status = "sending";
+        return true;
+      }),
       recordSent: vi.fn(async (id: string) => { rows.find((x) => x.id === id)!.status = "sent"; }),
       markFailed: vi.fn(async (id: string) => { rows.find((x) => x.id === id)!.status = "failed"; }),
       markBlocked: vi.fn(async (id: string) => { rows.find((x) => x.id === id)!.status = "blocked"; }),
@@ -43,6 +49,7 @@ const fakes = vi.hoisted(() => {
 function repoMock(name: keyof typeof fakes.modules) {
   return {
     listQueuedOutbox: (siteIds: string[]) => fakes.modules[name].list(siteIds),
+    claimOutbox: (id: string) => fakes.modules[name].claim(id),
     recordOutboxSent: (id: string) => fakes.modules[name].recordSent(id),
     markOutboxFailed: (id: string) => fakes.modules[name].markFailed(id),
     markOutboxBlocked: (id: string) => fakes.modules[name].markBlocked(id),

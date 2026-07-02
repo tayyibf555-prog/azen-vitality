@@ -47,6 +47,20 @@ function addDays(dayKey: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Whole days from the Unix epoch for a `YYYY-MM-DD` key (UTC). This is stable per
+ * calendar date regardless of the generation window: it does NOT depend on how many
+ * weeks precede this date in `weekStartDates`. We seed the round-robin offset from
+ * this so a given (site, role, date) slot assigns the SAME person on every run —
+ * which is what lets the idempotent upsert on (client, staff, date, start_time)
+ * actually dedupe. A window-relative cursor would pick a different person each run
+ * (the same slot, a new staff_id), and the upsert would stack a second shift onto
+ * the slot instead of skipping it: duplicate coverage every regeneration.
+ */
+function daysSinceEpoch(dayKey: string): number {
+  return Math.floor(Date.parse(`${dayKey}T00:00:00Z`) / 86_400_000);
+}
+
 function isAvailable(staff: RotaStaff, weekday: Weekday): boolean {
   return staff.availability[weekday] === true;
 }
@@ -110,17 +124,17 @@ export function generateShifts(input: GenerateInput): RotaShift[] {
     byRole.set(role, pool);
   }
 
-  // A rotating cursor per role so the starting point advances across days: this is
-  // what produces the fair, even spread instead of overloading the first person.
-  const cursor = new Map<string, number>();
-  for (const role of byRole.keys()) cursor.set(role, 0);
-
   const shifts: RotaShift[] = [];
 
   for (const weekStart of weekStartDates) {
     for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
       const weekday = WEEKDAYS[dayIndex];
       const shiftDate = addDays(weekStart, dayIndex);
+      // Absolute day number -> a per-day round-robin offset that is identical no
+      // matter where this date falls in the input window. Advancing by one calendar
+      // day still rotates the starting person (fair spread), but re-running with a
+      // shifted week window reproduces the same assignment (idempotent).
+      const dayNumber = daysSinceEpoch(shiftDate);
 
       // Track who is already booked on THIS date, so a person is never double-booked
       // across sites/roles on the same day.
@@ -137,8 +151,10 @@ export function generateShifts(input: GenerateInput): RotaShift[] {
           if (pool.length === 0) continue;
 
           let filled = 0;
-          const cur = cursor.get(role) ?? 0;
-          // Walk the pool once starting from the rotating cursor; take eligible,
+          // Seed the offset from the absolute calendar day, not a carried cursor, so
+          // the assignment for this (role, date) is reproducible across runs.
+          const cur = dayNumber % pool.length;
+          // Walk the pool once starting from that offset; take eligible,
           // not-yet-booked-today people until the role's need is met or we run out.
           for (let step = 0; step < pool.length && filled < need; step += 1) {
             const person = pool[(cur + step) % pool.length];
@@ -158,11 +174,6 @@ export function generateShifts(input: GenerateInput): RotaShift[] {
             bookedToday.add(person.id);
             filled += 1;
           }
-
-          // Advance the cursor by however many we placed so the next open day starts
-          // from a different person, spreading the load. If we placed nobody, still
-          // nudge by one so a persistently unavailable head-of-list does not wedge it.
-          cursor.set(role, (cur + Math.max(filled, 1)) % pool.length);
         }
       }
     }

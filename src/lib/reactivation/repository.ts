@@ -489,6 +489,26 @@ export async function recordOutboxSent(
   if (tErr) throw tErr;
 }
 
+/**
+ * Atomically claim a queued row for sending (queued -> sending). Returns true only
+ * if THIS call transitioned the row. The drain claims immediately before dispatch
+ * so a mid-run kill AFTER the send but BEFORE recordSent cannot leave the row
+ * 'queued' for the next tick to re-list and re-send (double-text). At-most-once:
+ * a row stranded in 'sending' (killed between claim and record) is left for ops,
+ * never silently re-sent.
+ */
+export async function claimOutbox(outboxId: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("reactivation_outbox")
+    .update({ status: "sending" })
+    .eq("id", outboxId)
+    .eq("status", "queued")
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
 export async function markOutboxFailed(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("reactivation_outbox").update({ status: "failed" }).eq("id", outboxId);

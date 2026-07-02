@@ -96,8 +96,15 @@ export async function POST(request: Request): Promise<Response> {
   const isWhatsapp = rawFrom.startsWith("whatsapp:");
   const channel: MessageChannel = isWhatsapp ? "whatsapp" : "sms";
   const from = rawFrom.replace(/^whatsapp:/, "");
-  const body = params["Body"] ?? "";
+  // A WhatsApp/MMS message can carry only media (a photo of a tooth, an X-ray)
+  // with an EMPTY Body. Handing the agent an empty user turn makes Anthropic
+  // reject the request and poisons the thread, so give media-only messages a
+  // placeholder the agent can respond to. A truly empty inbound (no text, no
+  // media) is acked and dropped below.
+  const hasMedia = Number(params["NumMedia"] ?? "0") > 0;
+  const body = (params["Body"] ?? "").trim() || (hasMedia ? "[Patient sent a photo or attachment]" : "");
   if (!from) return twiml();
+  if (!body) return twiml();
 
   // Idempotency: Twilio retries an inbound webhook on a timeout, which would
   // otherwise re-run the whole agent turn (double book / double reply). Claim the

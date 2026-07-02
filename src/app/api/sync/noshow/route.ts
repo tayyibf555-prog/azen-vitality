@@ -12,10 +12,13 @@ import {
   listTargets,
   getCadenceByTarget,
   createCadence,
+  updateCadence,
   setTargetStatus,
   getSyncState,
   setSyncState,
 } from "@/lib/noshow/repository";
+import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
+import type { NoshowStatus } from "@/lib/noshow/types";
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
@@ -148,7 +151,7 @@ async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: NoshowConfig,
-): Promise<{ siteId: string; pulled: number; upserted: number; enrolled: number; processed: number; remaining: number }> {
+): Promise<{ siteId: string; pulled: number; upserted: number; enrolled: number; reanchored: number; reconciled: number; processed: number; remaining: number }> {
   const now = new Date();
   const toDate = new Date(now.getTime() + cfg.leadDays * DAY);
 
@@ -156,6 +159,12 @@ async function syncSite(
   let pulled = 0;
   let processed = 0;
   let remaining = 0;
+  // Reconciliation bookkeeping (findings #4/#5): every appointment id we actually
+  // saw in the window this run, and the ones that came back in a TERMINAL state.
+  // toNoshowTarget skips terminal appointments, so without tracking them here an
+  // existing target would keep status 'scheduled' with a live confirmation cadence.
+  const seenTargetIds = new Set<string>();
+  const terminalByTargetId = new Map<string, string>();
 
   // Page the appointment window rather than pulling it in one unpaged call: the
   // real Dentally API caps a page, so a single call would silently drop a busy
@@ -173,9 +182,25 @@ async function syncSite(
     const appt = mapAppointment(rawAppt);
     if (!appt) continue;
 
+    const targetId = `${siteId}:${appt.patientId}:${appt.id}`;
+    // Mark BEFORE any transient skip so a momentary getPatient failure (below) or a
+    // cap-skip can never be mistaken for the appointment having vanished from Dentally.
+    seenTargetIds.add(targetId);
+
     // Cap reached: count the rest as remaining for the next tick and stop processing.
     if (processed >= MAX_APPOINTMENTS_PER_RUN) {
       remaining += 1;
+      continue;
+    }
+
+    // Terminal in Dentally (cancelled at reception, completed, or a no-show): do not
+    // build a defence target (toNoshowTarget would drop it anyway) and skip the extra
+    // patient/history calls. Record it so the reconciliation pass below can end the
+    // existing target's cadence and, for a cancellation, free the slot to the waitlist.
+    const stLower = appt.state.toLowerCase();
+    if (stLower === "cancelled" || stLower === "did_not_attend" || stLower === "no_show" || stLower === "completed") {
+      terminalByTargetId.set(targetId, stLower);
+      processed += 1;
       continue;
     }
 
@@ -230,10 +255,23 @@ async function syncSite(
   // confirmed/cancelled appointment is not reset to "scheduled".
   const existing = await listTargets({ siteIds: [siteId] });
   const prevById = new Map(existing.map((t) => [t.id, t]));
+  // Targets whose appointment MOVED (same Dentally id, new start_time). A reschedule
+  // must be defended afresh at the NEW time, so we reset status to scheduled and
+  // re-anchor the cadence below rather than carrying over a stale confirmation.
+  const reanchorIds = new Set<string>();
   for (const t of targets) {
     const prev = prevById.get(t.id);
     if (prev) {
-      if (prev.status !== "scheduled") t.status = prev.status;
+      const terminal = prev.status === "cancelled" || prev.status === "attended" || prev.status === "no_show";
+      const rescheduled = !terminal && prev.appointmentStartAt !== t.appointmentStartAt;
+      if (rescheduled) {
+        // Do NOT carry prev.status (e.g. 'confirmed' for the OLD time): the moved
+        // appointment is unconfirmed again and must be re-defended.
+        t.status = "scheduled";
+        reanchorIds.add(t.id);
+      } else if (prev.status !== "scheduled") {
+        t.status = prev.status;
+      }
       t.priorAttempts = prev.priorAttempts;
     }
   }
@@ -243,20 +281,83 @@ async function syncSite(
 
   // Auto-enrol a confirmation cadence for each newly-scheduled, SMS-consented
   // target that does not already have one. No consent -> stays on the worklist
-  // for a manual call, but we never message without it.
+  // for a manual call, but we never message without it. A RESCHEDULED target keeps
+  // its cadence row but has it re-anchored to the new appointment time.
   let enrolled = 0;
+  let reanchored = 0;
   for (const t of ranked) {
     if (t.status !== "scheduled" || !t.consent.sms) continue;
-    if (await getCadenceByTarget(t.id)) continue;
     const e = enrolment(new Date(t.appointmentStartAt), now);
     if (!e) continue;
+    const cadence = await getCadenceByTarget(t.id);
+    if (cadence) {
+      if (!reanchorIds.has(t.id)) continue; // unchanged appointment: leave the cadence as-is
+      // Rescheduled: re-point the existing cadence at the new start (recompute the
+      // current step + next due time), re-activating it if the old time had confirmed.
+      await updateCadence(cadence.id, {
+        status: "active",
+        currentStep: e.currentStep,
+        nextDueAt: e.nextDueAt,
+        endedAt: null,
+      });
+      reanchored += 1;
+      continue;
+    }
     await createCadence({ targetId: t.id, siteId, nextDueAt: e.nextDueAt, currentStep: e.currentStep });
     await setTargetStatus(t.id, "scheduled");
     enrolled += 1;
   }
 
+  // Reconcile appointments that ended terminally in Dentally, or (only when the whole
+  // window was covered this run) vanished from it — the dominant reception-cancel path.
+  // Without this the target keeps status 'scheduled' with a live cadence, the sweep
+  // keeps sending "please confirm" for a dead appointment, and a cancelled slot never
+  // reaches the waitlist.
+  let reconciled = 0;
+  const fullWindow = remaining === 0; // no cap hit -> absence from the pull means gone
+  for (const prev of existing) {
+    if (prev.status === "attended" || prev.status === "no_show") continue; // already final
+    const startMs = new Date(prev.appointmentStartAt).getTime();
+    const inWindow = startMs >= now.getTime() && startMs <= toDate.getTime();
+    const terminalState = terminalByTargetId.get(prev.id);
+    const vanished = fullWindow && inWindow && !seenTargetIds.has(prev.id);
+    if (!terminalState && !vanished) continue;
+
+    const newStatus: NoshowStatus =
+      terminalState === "completed" ? "attended"
+        : terminalState === "did_not_attend" || terminalState === "no_show" ? "no_show"
+          : "cancelled"; // explicit 'cancelled', or vanished from a fully-covered window
+    if (prev.status === newStatus) continue; // already reconciled on an earlier run
+
+    await setTargetStatus(prev.id, newStatus);
+    const cadence = await getCadenceByTarget(prev.id);
+    if (cadence && (cadence.status === "active" || cadence.status === "paused")) {
+      await updateCadence(cadence.id, {
+        status: newStatus === "cancelled" ? "cancelled" : "exhausted",
+        endedAt: now.toISOString(),
+      });
+    }
+    // A cancellation frees a still-future slot: offer it to the best-matched waitlist
+    // entry, exactly as the in-app / inbound-SMS cancel paths do. Guarded on a future
+    // start so we never offer a slot that has already passed. Idempotent: the
+    // status-equality check above stops us re-offering on subsequent runs.
+    if (newStatus === "cancelled" && startMs > now.getTime()) {
+      await offerSlotToNextCandidate(
+        {
+          appointmentId: prev.appointmentId,
+          siteId: prev.siteId,
+          startAt: prev.appointmentStartAt,
+          durationMin: prev.durationMin || 30,
+          practitioner: prev.practitioner,
+        },
+        now,
+      );
+    }
+    reconciled += 1;
+  }
+
   await setSyncState(siteId, RESOURCE, now.toISOString());
-  return { siteId, pulled, upserted: ranked.length, enrolled, processed, remaining };
+  return { siteId, pulled, upserted: ranked.length, enrolled, reanchored, reconciled, processed, remaining };
 }
 
 export async function POST(request: Request) {

@@ -8,6 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const insertLead = vi.fn();
 const countRecentByContact = vi.fn();
 const findOpenLeadByAddress = vi.fn();
+const claimLeadForContact = vi.fn();
+const releaseLeadClaim = vi.fn();
 const contactLead = vi.fn();
 
 // Two tenants, each with a site, so we can prove a body siteId cannot attribute a
@@ -31,6 +33,8 @@ vi.mock("@/lib/speed-to-lead/repository", () => ({
   insertLead: (...a: unknown[]) => insertLead(...a),
   countRecentByContact: (...a: unknown[]) => countRecentByContact(...a),
   findOpenLeadByAddress: (...a: unknown[]) => findOpenLeadByAddress(...a),
+  claimLeadForContact: (...a: unknown[]) => claimLeadForContact(...a),
+  releaseLeadClaim: (...a: unknown[]) => releaseLeadClaim(...a),
 }));
 
 import { POST } from "@/app/api/speed-to-lead/intake/route";
@@ -58,6 +62,8 @@ beforeEach(() => {
     createdAt: "2026-07-01T09:00:00Z",
     updatedAt: "2026-07-01T09:00:00Z",
   }));
+  claimLeadForContact.mockResolvedValue(true);
+  releaseLeadClaim.mockResolvedValue(undefined);
   contactLead.mockResolvedValue(undefined);
 });
 
@@ -84,6 +90,25 @@ describe("intake consent on first outbound", () => {
       req({ name: "Sam", channel: "sms", phone: "07700900123", clientSlug: "vitality", consentMarketing: true }),
     );
     expect(insertLead.mock.calls[0][0].consent.marketing).toBe(true);
+  });
+});
+
+describe("intake first-contact claim (double-send guard, finding #9)", () => {
+  it("claims the lead BEFORE contacting it and releases the claim afterwards", async () => {
+    const res = await POST(req({ name: "Sam", channel: "sms", phone: "07700900123", clientSlug: "vitality" }));
+    expect(res.status).toBe(202);
+    expect(claimLeadForContact).toHaveBeenCalledWith("lead-new");
+    expect(contactLead).toHaveBeenCalledTimes(1);
+    // finally-release (no-op once contactLead advanced the stage, but always called).
+    expect(releaseLeadClaim).toHaveBeenCalledWith("lead-new");
+  });
+
+  it("does NOT first-contact when the claim is lost (a concurrent sweep already owns it)", async () => {
+    claimLeadForContact.mockResolvedValue(false);
+    const res = await POST(req({ name: "Sam", channel: "sms", phone: "07700900123", clientSlug: "vitality" }));
+    expect(res.status).toBe(202); // still records the lead + 202s
+    expect(contactLead).not.toHaveBeenCalled();
+    expect(releaseLeadClaim).not.toHaveBeenCalled();
   });
 });
 

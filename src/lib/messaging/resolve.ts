@@ -1,4 +1,5 @@
 import type { DentallyClient } from "@/lib/dentally/client";
+import { normaliseEmail, toE164 } from "./phone";
 import type { MessageChannel } from "./types";
 
 export interface PatientContact {
@@ -11,9 +12,20 @@ export function parsePatientRef(toRef: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * The channel address for a patient, normalised to its canonical form:
+ *   - sms/whatsapp -> E.164 (`+447700900123`),
+ *   - email        -> trimmed + lowercased.
+ * Dentally returns numbers in national format (`07700 900123`) and mixed-case
+ * emails. Without this, Twilio rejects the national number AND a suppression
+ * entry (always stored E.164, from the inbound STOP path) would never match, so
+ * a patient who texted STOP could still be messaged. Returns null for an
+ * implausible number/email so the drain records it undeliverable rather than
+ * handing garbage to the provider.
+ */
 export function recipientFromPatient(p: PatientContact, channel: MessageChannel): string | null {
-  if (channel === "email") return p.email_address ?? null;
-  return p.mobile_phone ?? null; // sms + whatsapp
+  if (channel === "email") return normaliseEmail(p.email_address);
+  return toE164(p.mobile_phone); // sms + whatsapp
 }
 
 function asRecord(v: unknown): Record<string, unknown> {

@@ -175,6 +175,36 @@ describe("generateShifts", () => {
     expect(shifts.some((s) => s.shiftDate === "2026-07-13")).toBe(true);
   });
 
+  it("assigns the same staff to a date no matter where the week sits in the window (idempotent re-gen)", () => {
+    // Regression (blocker #2): the assignment for a calendar date must NOT depend
+    // on how many weeks precede it in weekStartDates. A window-relative cursor gave
+    // week 13 Jul a DIFFERENT staff member when it was the 2nd week of the window
+    // than when it was the 1st. Since the shift unique key includes staff_id, that
+    // second assignment inserts a NEW row -> duplicate shifts on every regeneration.
+    const pool = [
+      staff({ id: "d1", role: "dentist" }),
+      staff({ id: "d2", role: "dentist" }),
+      staff({ id: "d3", role: "dentist" }),
+    ];
+    const config: RotaConfig = { rolesNeeded: { dentist: 1 }, notifyLeadDays: 7, generateWeeksAhead: 1 };
+    const target = "2026-07-13"; // the Monday of the week we compare across runs
+
+    const asMap = (shifts: ReturnType<typeof generateShifts>) => {
+      const m: Record<string, string> = {};
+      for (const s of shifts) if (s.shiftDate >= target) m[s.shiftDate] = s.staffId;
+      return m;
+    };
+
+    // Run A: target week is the FIRST (and only) week of the window.
+    const runA = generateShifts({ staff: pool, sites: ONE_SITE, config, weekStartDates: [target] });
+    // Run B: the SAME target week, but now the SECOND week (6 Jul precedes it).
+    const runB = generateShifts({ staff: pool, sites: ONE_SITE, config, weekStartDates: ["2026-07-06", target] });
+
+    expect(asMap(runB)).toEqual(asMap(runA));
+    // And the target week actually produced shifts (guard against a vacuous pass).
+    expect(Object.keys(asMap(runA)).length).toBeGreaterThan(0);
+  });
+
   it("returns nothing for a role with no configured need", () => {
     const shifts = generateShifts({
       staff: [staff({ id: "h1", role: "hygienist" })],

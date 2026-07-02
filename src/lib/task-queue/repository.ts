@@ -23,16 +23,29 @@ function rowToOverlay(r: OverlayRow): TaskOverlayState {
   };
 }
 
-/** All overlay rows for a client, keyed by task_key (for applyOverlay). */
+/**
+ * All overlay rows for a client, keyed by task_key (for applyOverlay). Paged: a
+ * single unranged select is capped at PostgREST's 1000-row limit, so a practice
+ * that has accumulated >1000 done/snoozed overlay rows would silently lose the
+ * rows past 1000 — and every task those rows suppressed would reappear as open.
+ * We page to exhaustion so the overlay is always complete.
+ */
 export async function getOverlayMap(clientId: string): Promise<Map<string, TaskOverlayState>> {
   const db = serviceClient();
-  const { data, error } = await db
-    .from("task_overlay")
-    .select("task_key, status, assignee, snoozed_until, note")
-    .eq("client_id", clientId);
-  if (error) throw error;
   const m = new Map<string, TaskOverlayState>();
-  for (const row of (data as OverlayRow[]) ?? []) m.set(row.task_key, rowToOverlay(row));
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from("task_overlay")
+      .select("task_key, status, assignee, snoozed_until, note")
+      .eq("client_id", clientId)
+      .order("task_key", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data as OverlayRow[]) ?? [];
+    for (const row of rows) m.set(row.task_key, rowToOverlay(row));
+    if (rows.length < PAGE) break; // last (short) page reached
+  }
   return m;
 }
 

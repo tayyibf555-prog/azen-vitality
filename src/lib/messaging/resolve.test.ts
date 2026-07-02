@@ -22,6 +22,22 @@ describe("recipientFromPatient", () => {
   it("returns null when the field is missing", () => {
     expect(recipientFromPatient({}, "sms")).toBeNull();
   });
+  // Regression (blocker #3): Dentally returns numbers in UK NATIONAL format, not
+  // E.164. Without normalisation Twilio rejects them AND a suppression entry
+  // (stored E.164 from the inbound STOP path) never matches, so a patient who
+  // texted STOP could still be messaged.
+  it("normalises a UK national-format mobile to E.164 for sms/whatsapp", () => {
+    expect(recipientFromPatient({ mobile_phone: "07700 900123" }, "sms")).toBe("+447700900123");
+    expect(recipientFromPatient({ mobile_phone: "(07700) 900123" }, "whatsapp")).toBe("+447700900123");
+    expect(recipientFromPatient({ mobile_phone: "+44 7700 900123" }, "sms")).toBe("+447700900123");
+  });
+  it("lowercases/trims the email address", () => {
+    expect(recipientFromPatient({ email_address: "  Patient@Example.COM " }, "email")).toBe("patient@example.com");
+  });
+  it("returns null for an implausible number or email (undeliverable, not garbage to the provider)", () => {
+    expect(recipientFromPatient({ mobile_phone: "123" }, "sms")).toBeNull();
+    expect(recipientFromPatient({ email_address: "not-an-email" }, "email")).toBeNull();
+  });
 });
 
 describe("resolveRecipient", () => {
@@ -36,5 +52,10 @@ describe("resolveRecipient", () => {
     const r = await resolveRecipient("nope", "sms", client as never);
     expect(r).toBeNull();
     expect(called).toBe(false);
+  });
+  it("normalises a national-format number returned by Dentally to E.164", async () => {
+    const client = { getPatient: async (id: string) => ({ patient: { id, mobile_phone: "07700 900123" } }) };
+    const r = await resolveRecipient("patient:pat-010", "sms", client as never);
+    expect(r).toBe("+447700900123");
   });
 });

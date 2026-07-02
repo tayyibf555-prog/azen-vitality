@@ -25,30 +25,35 @@ function row(id: string): Row {
 // module's own export names.
 vi.mock("@/lib/reactivation/repository", () => ({
   listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
+  claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
   recordOutboxSent: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
 }));
 vi.mock("@/lib/recall/repository", () => ({
   listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
+  claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
   recordOutboxSent: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
 }));
 vi.mock("@/lib/noshow/repository", () => ({
   listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
+  claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
   recordOutboxSent: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
 }));
 vi.mock("@/lib/coordinator/repository", () => ({
   listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
+  claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
   recordOutboxSent: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
 }));
 vi.mock("@/lib/reviews/repository", () => ({
   listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
+  claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
   recordOutboxSent: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
@@ -127,6 +132,7 @@ beforeEach(() => {
   vi.mocked(sendMessage).mockResolvedValue({ provider: "twilio", providerMessageId: "SM1" } as never);
   for (const r of allRepos) {
     vi.mocked(r.listQueuedOutbox).mockResolvedValue([]);
+    vi.mocked(r.claimOutbox).mockResolvedValue(true);
     vi.mocked(r.recordOutboxSent).mockResolvedValue(undefined);
     vi.mocked(r.markOutboxFailed).mockResolvedValue(undefined);
     vi.mocked(r.markOutboxBlocked).mockResolvedValue(undefined);
@@ -205,6 +211,37 @@ describe("drain: a single sendMessage throwing", () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(json.failed).toBe(1);
     expect(json.sent).toBe(1);
+  });
+});
+
+describe("drain: per-row claim before send (double-send guard, finding #7)", () => {
+  it("claims each row (queued -> sending) BEFORE dispatching it", async () => {
+    vi.mocked(reviews.listQueuedOutbox).mockResolvedValueOnce([row("c1")] as never);
+    let claimedBeforeSend = false;
+    vi.mocked(reviews.claimOutbox).mockImplementation(async () => {
+      // At claim time, no send has happened yet for this row.
+      claimedBeforeSend = vi.mocked(sendMessage).mock.calls.length === 0;
+      return true;
+    });
+
+    await drainPOST(req());
+    expect(reviews.claimOutbox).toHaveBeenCalledWith("c1");
+    expect(claimedBeforeSend).toBe(true);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(reviews.recordOutboxSent).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a row whose claim does not land (already claimed by a prior run): no send, no record", async () => {
+    vi.mocked(noshow.listQueuedOutbox).mockResolvedValueOnce([row("lost")] as never);
+    vi.mocked(noshow.claimOutbox).mockResolvedValueOnce(false); // someone else already claimed it
+
+    const res = await drainPOST(req());
+    const json = (await res.json()) as { sent?: number };
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(noshow.recordOutboxSent).not.toHaveBeenCalled();
+    expect(noshow.markOutboxFailed).not.toHaveBeenCalled();
+    expect(json.sent).toBe(0);
+    expect(res.status).toBe(200);
   });
 });
 

@@ -26,8 +26,16 @@ import { offerSlotToNextCandidate } from "./fill";
 function isYes(body: string): boolean {
   return /^\s*(yes|y|confirm|confirmed|ok|okay|yep|yeah|👍)\b/i.test(body);
 }
+// Only an EXPLICIT cancel/decline intent. A bare "no" (optionally punctuated) or
+// "no thanks" counts; conversational phrases that merely begin with "no" ("no
+// problem, see you then", "no worries, will be there") must NOT read as a cancel,
+// or we would cancel the appointment of a patient who just confirmed. Anything
+// ambiguous falls through to the agent, which is far safer than a destructive
+// cancel + waitlist re-offer on a false positive.
 function isCancel(body: string): boolean {
-  return /^\s*(cancel|no\b|can'?t|cannot|unable)/i.test(body);
+  return /^\s*(cancel\b|can'?t\b|cannot\b|unable\b|no\s*[.,!]?\s*$|no\s+(thanks|thank you|thankyou)\b)/i.test(
+    body,
+  );
 }
 
 export interface NoshowInboundResult {
@@ -60,6 +68,18 @@ export async function handleNoshowInbound(input: {
   if (offer) {
     const taken = "Sorry, that slot has just been taken. We will keep you on the list for the next opening.";
     if (isYes(input.body)) {
+      // If the freed slot has already started (the patient replied YES after the
+      // appointment time passed, e.g. an offer sent late in the day and answered
+      // the next morning), it can no longer be booked. Expire this offer and keep
+      // them on the waitlist rather than creating a past-dated Dentally booking.
+      if (new Date(offer.freedStartAt).getTime() <= now.getTime()) {
+        await setOfferStatus(offer.id, "expired", now.toISOString());
+        await setWaitlistStatus(offer.waitlistId, "waiting");
+        return {
+          handled: true,
+          reply: "Sorry, that slot has now passed. We will keep you on the list and let you know the moment another opening comes up.",
+        };
+      }
       // Atomically claim this offer; if another reply won, or the slot is already
       // filled, stop here so two patients can never both book the same time.
       const claimed = await claimOffer(offer.id);

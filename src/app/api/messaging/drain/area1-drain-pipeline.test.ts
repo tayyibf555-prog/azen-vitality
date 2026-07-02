@@ -33,6 +33,13 @@ const fakes = vi.hoisted(() => {
           .filter((r) => r.status === "queued" && siteIds.includes(r.siteId))
           .map(({ id, touchId, siteId, channel, toRef, body }) => ({ id, touchId, siteId, channel, toRef, body })),
       ),
+      // Real conditional claim: queued -> sending, true only if it transitioned.
+      claim: vi.fn(async (id: string) => {
+        const r = rows.find((x) => x.id === id);
+        if (!r || r.status !== "queued") return false;
+        r.status = "sending";
+        return true;
+      }),
       recordSent: vi.fn(async (id: string, touchId: string, fields: { provider: string; providerMessageId: string; toAddress: string }) => {
         const r = rows.find((x) => x.id === id)!;
         r.status = "sent"; r.provider = fields.provider; r.toAddress = fields.toAddress;
@@ -61,6 +68,7 @@ const fakes = vi.hoisted(() => {
 function repoMock(name: keyof typeof fakes.modules) {
   return {
     listQueuedOutbox: (siteIds: string[]) => fakes.modules[name].list(siteIds),
+    claimOutbox: (id: string) => fakes.modules[name].claim(id),
     recordOutboxSent: (id: string, touchId: string, fields: { provider: string; providerMessageId: string; toAddress: string }) =>
       fakes.modules[name].recordSent(id, touchId, fields),
     markOutboxFailed: (id: string) => fakes.modules[name].markFailed(id),

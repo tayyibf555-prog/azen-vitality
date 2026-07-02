@@ -13,6 +13,7 @@ const isSuppressed = vi.fn();
 const resolveRecipient = vi.fn();
 
 const recallList = vi.fn();
+const recallClaim = vi.fn();
 const recallSent = vi.fn();
 const recallFailed = vi.fn();
 const recallBlocked = vi.fn();
@@ -21,6 +22,7 @@ const recallBlocked = vi.fn();
 function emptyOutbox() {
   return {
     listQueuedOutbox: vi.fn(async () => []),
+    claimOutbox: vi.fn(async () => true),
     recordOutboxSent: vi.fn(),
     markOutboxFailed: vi.fn(),
     markOutboxBlocked: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock("@/lib/mock/clients", () => ({
 }));
 vi.mock("@/lib/recall/repository", () => ({
   listQueuedOutbox: (...a: unknown[]) => recallList(...a),
+  claimOutbox: (...a: unknown[]) => recallClaim(...a),
   recordOutboxSent: (...a: unknown[]) => recallSent(...a),
   markOutboxFailed: (...a: unknown[]) => recallFailed(...a),
   markOutboxBlocked: (...a: unknown[]) => recallBlocked(...a),
@@ -69,6 +72,7 @@ beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "test-key");
   vi.stubEnv("CRON_SECRET", "");
   recallList.mockResolvedValue([ROW]);
+  recallClaim.mockResolvedValue(true);
   resolveRecipient.mockResolvedValue("+447700900123");
   isSuppressed.mockResolvedValue(false);
   sendMessage.mockResolvedValue({ provider: "dry-run", providerMessageId: "m-1", status: "queued" });

@@ -24,6 +24,11 @@ export async function POST(request: Request): Promise<Response> {
   const messages = (body.messages ?? [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.length > 0)
     .slice(-20);
+  // Anthropic requires the first message to be a `user` turn. After slicing to the
+  // last 20, a long conversation can leave the window starting on an `assistant`
+  // turn, which the API rejects with a 400 (the co-pilot would break on exactly the
+  // 11th+ exchange). Drop any leading assistant turns so history starts with the user.
+  while (messages.length && messages[0].role === "assistant") messages.shift();
   if (messages.length === 0) return Response.json({ ok: false, error: "no messages" }, { status: 400 });
 
   // Resolve the practice's sites so the co-pilot's tools query the right data.

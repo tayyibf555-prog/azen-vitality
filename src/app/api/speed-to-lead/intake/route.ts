@@ -1,6 +1,6 @@
 import { getClient, getSites, getSite } from "@/lib/mock/clients";
 import { contactLead } from "@/lib/speed-to-lead/contact";
-import { countRecentByContact, findOpenLeadByAddress, insertLead } from "@/lib/speed-to-lead/repository";
+import { countRecentByContact, findOpenLeadByAddress, insertLead, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 
@@ -126,11 +126,23 @@ export async function POST(request: Request): Promise<Response> {
     });
 
     // Fire first contact inside the request so the patient hears back instantly.
-    // contactLead swallows its own send errors; guard anyway so we always 202.
-    try {
-      await contactLead(lead);
-    } catch {
-      // First contact will be retried by the SLA sweep; the lead is recorded.
+    // Claim the lead ('new' -> 'contacting') first, exactly as the SLA sweep does,
+    // to close the double-send race: if the sweep picks this lead the instant it
+    // crosses the SLA while this in-request contact is still in flight, ITS claim
+    // fails and it skips, so the patient is never first-contacted twice. Our claim
+    // always wins here (we just created the row), so a lost claim means a concurrent
+    // path already owns the contact and we simply return the recorded lead.
+    if (await claimLeadForContact(lead.id)) {
+      try {
+        await contactLead(lead);
+      } catch {
+        // First contact will be retried by the SLA sweep; the lead is recorded.
+      } finally {
+        // Release a stranded claim ('contacting' -> 'new') so the sweep can retry.
+        // contactLead advances to 'contacted'/'lost' on success, so this is a no-op
+        // then; it only matters on a throw or a silent early-return (no address).
+        try { await releaseLeadClaim(lead.id); } catch { /* best effort */ }
+      }
     }
 
     return Response.json({ ok: true, leadId: lead.id }, { status: 202 });

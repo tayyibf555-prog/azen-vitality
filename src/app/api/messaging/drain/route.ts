@@ -7,30 +7,35 @@ import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import type { MessageChannel } from "@/lib/messaging/types";
 import {
   listQueuedOutbox as listReactivationQueued,
+  claimOutbox as claimReactivation,
   recordOutboxSent as recordReactivationSent,
   markOutboxFailed as markReactivationFailed,
   markOutboxBlocked as markReactivationBlocked,
 } from "@/lib/reactivation/repository";
 import {
   listQueuedOutbox as listRecallQueued,
+  claimOutbox as claimRecall,
   recordOutboxSent as recordRecallSent,
   markOutboxFailed as markRecallFailed,
   markOutboxBlocked as markRecallBlocked,
 } from "@/lib/recall/repository";
 import {
   listQueuedOutbox as listNoshowQueued,
+  claimOutbox as claimNoshow,
   recordOutboxSent as recordNoshowSent,
   markOutboxFailed as markNoshowFailed,
   markOutboxBlocked as markNoshowBlocked,
 } from "@/lib/noshow/repository";
 import {
   listQueuedOutbox as listCoordinatorQueued,
+  claimOutbox as claimCoordinator,
   recordOutboxSent as recordCoordinatorSent,
   markOutboxFailed as markCoordinatorFailed,
   markOutboxBlocked as markCoordinatorBlocked,
 } from "@/lib/coordinator/repository";
 import {
   listQueuedOutbox as listReviewsQueued,
+  claimOutbox as claimReviews,
   recordOutboxSent as recordReviewsSent,
   markOutboxFailed as markReviewsFailed,
   markOutboxBlocked as markReviewsBlocked,
@@ -69,17 +74,18 @@ interface QueuedRow {
 interface OutboxSource {
   name: string;
   list: (siteIds: string[]) => Promise<QueuedRow[]>;
+  claim: (id: string) => Promise<boolean>;
   recordSent: (id: string, touchId: string, fields: { provider: string; providerMessageId: string; toAddress: string }) => Promise<void>;
   markFailed: (id: string) => Promise<void>;
   markBlocked: (id: string) => Promise<void>;
 }
 
 const SOURCES: OutboxSource[] = [
-  { name: "reactivation", list: listReactivationQueued, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
-  { name: "recall", list: listRecallQueued, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
-  { name: "noshow", list: listNoshowQueued, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked },
-  { name: "coordinator", list: listCoordinatorQueued, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },
-  { name: "reviews", list: listReviewsQueued, recordSent: recordReviewsSent, markFailed: markReviewsFailed, markBlocked: markReviewsBlocked },
+  { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
+  { name: "recall", list: listRecallQueued, claim: claimRecall, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
+  { name: "noshow", list: listNoshowQueued, claim: claimNoshow, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked },
+  { name: "coordinator", list: listCoordinatorQueued, claim: claimCoordinator, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },
+  { name: "reviews", list: listReviewsQueued, claim: claimReviews, recordSent: recordReviewsSent, markFailed: markReviewsFailed, markBlocked: markReviewsBlocked },
 ];
 
 async function drainSource(
@@ -162,6 +168,15 @@ async function drainSource(
       blocked += 1;
       continue;
     }
+
+    // Atomically claim the row (queued -> sending) IMMEDIATELY before dispatch.
+    // The cron lock stops concurrent drains, but a run killed at maxDuration (or a
+    // crash) between sendMessage returning and recordSent committing would leave
+    // the row 'queued'; the next tick would re-list and re-send it (double-text).
+    // Claiming first moves the row out of 'queued' before the send, so a kill in
+    // that window strands it in 'sending' (visible to ops) rather than re-sending.
+    // A claim that does not land (already claimed) is skipped without sending.
+    if (!(await source.claim(row.id))) continue;
 
     try {
       const result = await sendMessage({
