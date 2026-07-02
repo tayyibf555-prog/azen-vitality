@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { TouchChannel, TreatmentOpportunity } from "./types";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
@@ -48,7 +49,8 @@ export async function draftOutreach(
     `£${o.amountOutstanding} outstanding on ${o.treatment}, ` +
     `${o.financePresented ? "finance presented" : "finance not yet presented"}.`;
   const msg = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    model: SONNET,
+    thinking: NO_THINKING,
     max_tokens: 400,
     system,
     messages: [{ role: "user", content: user }],

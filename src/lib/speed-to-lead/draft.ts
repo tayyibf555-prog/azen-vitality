@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { SONNET } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { Client } from "@/lib/types";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
@@ -82,6 +82,7 @@ export async function draftFirstContact(
   const { system, user } = buildFirstContactPrompt(lead, channel, client, campaign, usps);
   const msg = await anthropic.messages.create({
     model: SONNET,
+    thinking: NO_THINKING,
     max_tokens: 300,
     system,
     messages: [{ role: "user", content: user }],

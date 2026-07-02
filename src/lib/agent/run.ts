@@ -8,6 +8,7 @@ import type {
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { AgentTurnResult } from "./types";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 
 export interface AgentRunDeps {
   anthropic: Anthropic;
@@ -22,7 +23,7 @@ export interface AgentRunDeps {
 
 const DEFAULT_MAX_ROUNDS = 4;
 const DEFAULT_MAX_TOKENS = 700;
-const MODEL = "claude-sonnet-4-6";
+const MODEL = SONNET;
 
 export async function runAgentTurn(
   history: MessageParam[],
@@ -36,6 +37,7 @@ export async function runAgentTurn(
   for (let round = 0; round < maxRounds; round++) {
     const msg = await deps.anthropic.messages.create({
       model: MODEL,
+      thinking: NO_THINKING,
       max_tokens: deps.maxTokens ?? DEFAULT_MAX_TOKENS,
       system: deps.systemPrompt,
       tools: deps.tools,

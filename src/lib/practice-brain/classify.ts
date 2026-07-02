@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { SONNET } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { ClassificationResult, Tier } from "./types";
 
 const CONFIDENCE_THRESHOLD = 0.6;
@@ -81,6 +81,7 @@ export async function classifyKnowledge(
   try {
     const msg = await client.messages.create({
       model: SONNET,
+      thinking: NO_THINKING,
       max_tokens: 700,
       system,
       messages: [{ role: "user", content: user }],

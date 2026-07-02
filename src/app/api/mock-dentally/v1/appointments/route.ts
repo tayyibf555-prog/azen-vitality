@@ -60,6 +60,17 @@ export async function GET(request: Request): Promise<Response> {
   if (finishDate) rows = rows.filter((a) => a.start_time.slice(0, 10) <= finishDate);
 
   rows = [...rows].sort((a, b) => (a.start_time < b.start_time ? -1 : 1));
+
+  // Paginate the site-appointment listing the way the real Dentally API does, so
+  // callers that page a large window are exercised honestly against the mock and
+  // never receive an unbounded array. Patient-scoped lookups stay unpaged (small).
+  if (siteId && !patientId) {
+    const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
+    const perPage = Math.max(1, Number(url.searchParams.get("per_page") ?? "100") || 100);
+    const start = (page - 1) * perPage;
+    rows = rows.slice(start, start + perPage);
+  }
+
   return Response.json({ appointments: rows.map(serialise) });
 }
 

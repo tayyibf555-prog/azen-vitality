@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { NoshowStep } from "./cadence";
 import type { NoshowTarget } from "./types";
 import type { TouchChannel } from "@/lib/reactivation/types";
-import { SONNET } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 
 const PURPOSE_TONE: Record<NoshowStep["purpose"], string> = {
   confirm: "This is the first confirmation request, a couple of days before. Ask warmly if they can still make it.",
@@ -65,6 +65,7 @@ export async function draftNoshow(
   const rationale = `Confirmation step ${step.step} for ${whenLabel(t.appointmentStartAt)}.`;
   const msg = await client.messages.create({
     model: SONNET,
+    thinking: NO_THINKING,
     max_tokens: 300,
     system,
     messages: [{ role: "user", content: user }],

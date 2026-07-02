@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { CadenceStep } from "./cadence";
 import type { RecallTarget, RecallType } from "./types";
 import type { TouchChannel } from "@/lib/reactivation/types";
-import { SONNET } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
@@ -83,6 +83,7 @@ export async function draftRecall(
   const rationale = RECALL_RATIONALE[t.recallType](t);
   const msg = await client.messages.create({
     model: SONNET,
+    thinking: NO_THINKING,
     max_tokens: 400,
     system,
     messages: [{ role: "user", content: user }],

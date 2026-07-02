@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { SONNET } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { RankedNode } from "./retrieval";
 
 export interface Citation {
@@ -108,7 +108,8 @@ export async function askCopilot(
   try {
     const msg = await client.messages.create({
       model: SONNET,
-      max_tokens: 800,
+      thinking: NO_THINKING,
+      max_tokens: 1000,
       system,
       messages: [{ role: "user", content: user }],
     });

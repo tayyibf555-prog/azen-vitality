@@ -58,7 +58,9 @@ export async function POST(request: Request): Promise<Response> {
       systemPrompt: buildCopilotSystemPrompt(),
       tools: COPILOT_TOOLS,
       maxRounds: 6,
-      maxTokens: 1400,
+      // Sonnet 5's tokenizer runs ~30% larger than 4.6, so give the co-pilot's
+      // "answer anything" replies headroom to avoid truncation.
+      maxTokens: 1800,
     });
     return Response.json({ ok: true, reply: result.replyText || "Sorry, I could not respond just now." });
   } catch {

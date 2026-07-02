@@ -108,9 +108,14 @@ export class DentallyClient {
   getPatientAppointments(patientId: string) {
     return this.get<{ appointments: unknown[] }>("/v1/appointments", { patient_id: patientId });
   }
-  listAppointments(a: { siteId: string; fromDate?: string; toDate?: string }) {
+  listAppointments(a: { siteId: string; fromDate?: string; toDate?: string; page?: number; perPage?: number }) {
+    // Paginate: the real Dentally API caps a page at ~50-100 rows, so a single
+    // unpaged call silently drops every appointment past the first page (a large
+    // practice's busiest days would go undefended). Callers loop pages until a
+    // short page. Default per_page matches the other list endpoints (100).
     return this.get<{ appointments: unknown[] }>("/v1/appointments", {
       site_id: a.siteId, start_date: a.fromDate, finish_date: a.toDate,
+      page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
   getPatientInvoices(patientId: string) {

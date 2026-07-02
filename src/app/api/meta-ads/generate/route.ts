@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { SONNET } from "@/lib/ai/models";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildCopyPrompt, cleanCopy } from "@/lib/meta-ads/ai";
@@ -38,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const anthropic = new Anthropic({ maxRetries: 1 });
     const msg = await anthropic.messages.create(
-      { model: SONNET, max_tokens: 600, system, messages: [{ role: "user", content: user }] },
+      { model: SONNET, thinking: NO_THINKING, max_tokens: 600, system, messages: [{ role: "user", content: user }] },
       { timeout: 25000 },
     );
     const text = msg.content

@@ -25,6 +25,7 @@ export const maxDuration = 300;
 
 const RESOURCE = "noshow";
 const DAY = 86_400_000;
+const PER_PAGE = 100;
 // Hard per-run cap on appointments processed, so a large day's book can't blow the
 // 300s function limit. Anything over the cap is reported as remaining and picked up
 // on the next cron tick (the appointment window is re-queried each run).
@@ -151,13 +152,24 @@ async function syncSite(
   const now = new Date();
   const toDate = new Date(now.getTime() + cfg.leadDays * DAY);
 
-  const res = await client.listAppointments({ siteId, fromDate: ymd(now), toDate: ymd(toDate) });
-  const rawAppts = Array.isArray(res.appointments) ? res.appointments : [];
-
   const targets = [];
+  let pulled = 0;
   let processed = 0;
   let remaining = 0;
-  for (const rawAppt of rawAppts) {
+
+  // Page the appointment window rather than pulling it in one unpaged call: the
+  // real Dentally API caps a page, so a single call would silently drop a busy
+  // practice's later appointments (they would never be defended). Stop paging
+  // once the per-run cap is hit; the rest is reported as `remaining` and picked
+  // up on the next tick (the window is re-queried each run).
+  appt_loop: for (let page = 1; ; page++) {
+    const res = await client.listAppointments({
+      siteId, fromDate: ymd(now), toDate: ymd(toDate), page, perPage: PER_PAGE,
+    });
+    const rawAppts = Array.isArray(res.appointments) ? res.appointments : [];
+    pulled += rawAppts.length;
+
+    for (const rawAppt of rawAppts) {
     const appt = mapAppointment(rawAppt);
     if (!appt) continue;
 
@@ -201,6 +213,17 @@ async function syncSite(
     const target = toNoshowTarget(input, cfg);
     if (target) targets.push(target);
     processed += 1;
+    }
+
+    // Stop paging once the cap is hit (any rows in this page past the cap were
+    // counted as remaining above) or the API returns a short/empty final page.
+    if (processed >= MAX_APPOINTMENTS_PER_RUN) break appt_loop;
+    if (rawAppts.length < PER_PAGE) break appt_loop;
+    // Belt-and-braces termination guard: if a misbehaving API kept returning full
+    // pages of unmappable rows, `processed` would never reach the cap and the loop
+    // would page forever. Cap the page count so a run is always bounded regardless
+    // of upstream behaviour. Enough pages to fill the per-run cap plus a margin.
+    if (page >= Math.ceil(MAX_APPOINTMENTS_PER_RUN / PER_PAGE) + 2) break appt_loop;
   }
 
   // Preserve a target's lifecycle status + attempt count across re-syncs, so a
@@ -233,7 +256,7 @@ async function syncSite(
   }
 
   await setSyncState(siteId, RESOURCE, now.toISOString());
-  return { siteId, pulled: rawAppts.length, upserted: ranked.length, enrolled, processed, remaining };
+  return { siteId, pulled, upserted: ranked.length, enrolled, processed, remaining };
 }
 
 export async function POST(request: Request) {

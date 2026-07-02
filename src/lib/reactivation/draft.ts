@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { CadenceStep } from "./cadence";
 import type { ReactivationReason, TouchChannel, ReactivationTarget } from "./types";
 import { gbp } from "@/lib/utils";
@@ -77,7 +78,8 @@ export async function draftReactivation(
   const { system, user } = buildDraftPrompt(t, channel, step, usps);
   const rationale = REASON_RATIONALE[t.reason](t);
   const msg = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    model: SONNET,
+    thinking: NO_THINKING,
     max_tokens: 400,
     system,
     messages: [{ role: "user", content: user }],
