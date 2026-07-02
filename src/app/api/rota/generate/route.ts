@@ -2,6 +2,7 @@ import { getClient, getSites } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { generateShifts, upcomingWeekStarts } from "@/lib/rota/generate";
+import { londonDayKey } from "@/lib/time/london";
 import { listStaff, getConfig, insertShifts } from "@/lib/rota/repository";
 import type { OpeningHours } from "@/lib/types";
 import type { RotaSite } from "@/lib/rota/types";
@@ -63,9 +64,10 @@ export async function POST(request: Request): Promise<Response> {
 
   const staff = await listStaff(client.id, { activeOnly: true });
   const sites = rotaSites(client.id);
-  const weekStartDates = upcomingWeekStarts(new Date(), weeks);
+  const now = new Date();
+  const weekStartDates = upcomingWeekStarts(now, weeks);
 
-  const shifts = generateShifts({ staff, sites, config, weekStartDates });
+  const shifts = generateShifts({ staff, sites, config, weekStartDates, today: londonDayKey(now) });
   const inserted = await insertShifts(shifts);
 
   return Response.json({ ok: true, weeks, generated: shifts.length, inserted, shifts });

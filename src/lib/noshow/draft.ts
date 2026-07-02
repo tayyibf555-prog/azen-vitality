@@ -29,7 +29,10 @@ export function buildNoshowPrompt(t: NoshowTarget, channel: TouchChannel, step: 
     "Rules:",
     "- Lead with the patient by first name.",
     "- State the appointment day and time clearly.",
-    "- Ask them to reply YES to confirm, or to reply if they need to change or cancel it.",
+    // Guide them to YES / NO, not the bare word CANCEL: CANCEL is a carrier opt-out
+    // keyword (it unsubscribes them from ALL texts and does NOT cancel the booking),
+    // whereas a reply of NO is handled as a genuine appointment cancellation.
+    "- Ask them to reply YES to confirm, or NO if they need to cancel or rearrange it. Do not tell them to reply the word 'cancel'.",
     "- Under 60 words. Friendly, not pushy.",
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",

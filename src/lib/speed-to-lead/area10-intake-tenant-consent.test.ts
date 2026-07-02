@@ -8,6 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const insertLead = vi.fn();
 const countRecentByContact = vi.fn();
 const findOpenLeadByAddress = vi.fn();
+const findEarlierOpenLead = vi.fn();
+const setLeadStage = vi.fn();
 const claimLeadForContact = vi.fn();
 const releaseLeadClaim = vi.fn();
 const contactLead = vi.fn();
@@ -33,6 +35,8 @@ vi.mock("@/lib/speed-to-lead/repository", () => ({
   insertLead: (...a: unknown[]) => insertLead(...a),
   countRecentByContact: (...a: unknown[]) => countRecentByContact(...a),
   findOpenLeadByAddress: (...a: unknown[]) => findOpenLeadByAddress(...a),
+  findEarlierOpenLead: (...a: unknown[]) => findEarlierOpenLead(...a),
+  setLeadStage: (...a: unknown[]) => setLeadStage(...a),
   claimLeadForContact: (...a: unknown[]) => claimLeadForContact(...a),
   releaseLeadClaim: (...a: unknown[]) => releaseLeadClaim(...a),
 }));
@@ -62,6 +66,8 @@ beforeEach(() => {
     createdAt: "2026-07-01T09:00:00Z",
     updatedAt: "2026-07-01T09:00:00Z",
   }));
+  findEarlierOpenLead.mockResolvedValue(null); // no double-submit race by default
+  setLeadStage.mockResolvedValue(undefined);
   claimLeadForContact.mockResolvedValue(true);
   releaseLeadClaim.mockResolvedValue(undefined);
   contactLead.mockResolvedValue(undefined);
@@ -109,6 +115,19 @@ describe("intake first-contact claim (double-send guard, finding #9)", () => {
     expect(res.status).toBe(202); // still records the lead + 202s
     expect(contactLead).not.toHaveBeenCalled();
     expect(releaseLeadClaim).not.toHaveBeenCalled();
+  });
+});
+
+describe("intake double-submit race (finding #32)", () => {
+  it("retires the loser and defers to a strictly-earlier open lead instead of a second text", async () => {
+    findEarlierOpenLead.mockResolvedValue({ id: "lead-winner" }); // an earlier lead won the race
+    const res = await POST(req({ name: "Sam", channel: "sms", phone: "07700900123", clientSlug: "vitality" }));
+    const json = await res.json();
+    expect(json).toMatchObject({ ok: true, leadId: "lead-winner", deduped: true });
+    expect(setLeadStage).toHaveBeenCalledWith("lead-new", "lost"); // ours retired
+    // Never first-contact the loser: no claim, no send.
+    expect(claimLeadForContact).not.toHaveBeenCalled();
+    expect(contactLead).not.toHaveBeenCalled();
   });
 });
 

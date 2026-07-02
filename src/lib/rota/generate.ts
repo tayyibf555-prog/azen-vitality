@@ -30,6 +30,12 @@ export interface GenerateInput {
   config: RotaConfig;
   /** Monday `YYYY-MM-DD` for each week to generate. Order defines the output order. */
   weekStartDates: string[];
+  /**
+   * London `YYYY-MM-DD` for "today". When set, days BEFORE it are skipped so a
+   * mid-week roster/config change never inserts retroactive 'scheduled' shifts for
+   * days already elapsed this week. Today itself is kept (same-day generation works).
+   */
+  today?: string;
 }
 
 /** Parse an "HH:MM-HH:MM" opening window; null/blank/malformed = closed that day. */
@@ -130,6 +136,9 @@ export function generateShifts(input: GenerateInput): RotaShift[] {
     for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
       const weekday = WEEKDAYS[dayIndex];
       const shiftDate = addDays(weekStart, dayIndex);
+      // Skip days already elapsed this week so a mid-week change never back-fills
+      // retroactive 'scheduled' shifts. Today itself is kept.
+      if (input.today && shiftDate < input.today) continue;
       // Absolute day number -> a per-day round-robin offset that is identical no
       // matter where this date falls in the input window. Advancing by one calendar
       // day still rotates the starting person (fair spread), but re-running with a

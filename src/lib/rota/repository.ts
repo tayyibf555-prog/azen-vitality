@@ -132,7 +132,23 @@ export async function updateStaff(id: string, clientId: string, fields: UpdateSt
     .eq("client_id", clientId) // scope the write to the caller's client
     .select("id"); // so we can tell a real update from a 0-row (cross-tenant / unknown id) match
   if (error) throw error;
-  return (data?.length ?? 0) > 0;
+  const matched = (data?.length ?? 0) > 0;
+
+  // Deactivating a staff member must not strand their future shifts as 'scheduled':
+  // they would still read as staffed on the rota, and the next generation would add a
+  // REPLACEMENT on top (double coverage). Cancel their future, not-yet-elapsed shifts
+  // in the same operation so the slot is genuinely freed for someone else.
+  if (matched && fields.active === false) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { error: shiftErr } = await db
+      .from("rota_shift")
+      .update({ status: "cancelled" })
+      .eq("staff_id", id)
+      .gte("shift_date", today)
+      .in("status", ["scheduled", "notified"]);
+    if (shiftErr) throw shiftErr;
+  }
+  return matched;
 }
 
 /** Returns true if a matching staff row was deleted; false if none matched. */

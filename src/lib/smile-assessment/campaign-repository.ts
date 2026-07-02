@@ -136,13 +136,18 @@ export async function countResponsesByCampaign(campaignIds: string[]): Promise<R
   const out: Record<string, number> = {};
   if (campaignIds.length === 0) return out;
   const db = serviceClient();
-  const { data, error } = await db
-    .from("smile_assessment_response")
-    .select("campaign_id")
-    .in("campaign_id", campaignIds);
-  if (error) throw error;
-  for (const row of (data as { campaign_id: string | null }[]) ?? []) {
-    if (row.campaign_id) out[row.campaign_id] = (out[row.campaign_id] ?? 0) + 1;
-  }
+  // One exact head-count per campaign rather than fetching one row per response:
+  // the row-fetch was capped at PostgREST's 1000-row default, so a popular campaign's
+  // count silently stopped at 1000. Campaign counts are few, so N small count queries.
+  await Promise.all(
+    campaignIds.map(async (id) => {
+      const { count, error } = await db
+        .from("smile_assessment_response")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", id);
+      if (error) throw error;
+      out[id] = count ?? 0;
+    }),
+  );
   return out;
 }

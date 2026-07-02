@@ -3,6 +3,7 @@ import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { sendMessage } from "@/lib/messaging/send";
 import { CLIENTS, getSites, getSite } from "@/lib/mock/clients";
 import { generateShifts, upcomingWeekStarts } from "@/lib/rota/generate";
+import { londonDayKey } from "@/lib/time/london";
 import { practiceName } from "@/lib/rota/config";
 import { draftShiftMessage, type ShiftLine } from "@/lib/rota/draft";
 import {
@@ -93,7 +94,7 @@ export async function POST(request: Request): Promise<Response> {
       const staff = await listStaff(client.id, { activeOnly: true });
       const sites = rotaSites(client.id);
       const weekStartDates = upcomingWeekStarts(now, config.generateWeeksAhead);
-      const shifts = generateShifts({ staff, sites, config, weekStartDates });
+      const shifts = generateShifts({ staff, sites, config, weekStartDates, today: londonDayKey(now) });
       generated += await insertShifts(shifts);
 
       // 2) Text staff their unnotified shifts within the notify lead window.

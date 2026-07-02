@@ -1,6 +1,6 @@
 import { getClient, getSites, getSite } from "@/lib/mock/clients";
 import { contactLead } from "@/lib/speed-to-lead/contact";
-import { countRecentByContact, findOpenLeadByAddress, insertLead, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
+import { countRecentByContact, findOpenLeadByAddress, findEarlierOpenLead, insertLead, setLeadStage, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 
@@ -124,6 +124,17 @@ export async function POST(request: Request): Promise<Response> {
       source,
       consent,
     });
+
+    // Double-submit race guard: there is no DB unique constraint on (site, contact),
+    // so two near-simultaneous submits can both pass the pre-insert dedup above. Re-
+    // check for a STRICTLY-earlier open lead for this contact; if one exists, ours
+    // lost the race, so retire it and defer to the winner rather than sending a
+    // second first-contact text.
+    const earlier = await findEarlierOpenLead(siteId, phone, email, sinceIso, lead.id, lead.createdAt);
+    if (earlier) {
+      await setLeadStage(lead.id, "lost");
+      return Response.json({ ok: true, leadId: earlier.id, deduped: true }, { status: 202 });
+    }
 
     // Fire first contact inside the request so the patient hears back instantly.
     // Claim the lead ('new' -> 'contacting') first, exactly as the SLA sweep does,

@@ -265,16 +265,29 @@ export async function POST(request: Request): Promise<Response> {
   const knownPatient = !!identity;
   const patientId = identity?.patientId ?? `lead:${from}`;
   const displayName = identity?.patientName ?? `Unknown ${from.slice(-4)}`;
-  const conversation = await findOrCreateConversation({
-    siteId,
-    dentallyPatientId: patientId,
-    patientName: displayName,
-    channel,
-    treatment: identity?.treatment ?? null,
-    fundingType: identity?.fundingType ?? null,
-  });
-  await appendMessage({ conversationId: conversation.id, role: "patient", body });
-  await stampInbound(conversation.id);
+  // The MessageSid is already claimed above, so a 500 here would make Twilio's retry
+  // no-op on the claim and the patient's message would be lost forever. Guard the
+  // durable-record ops: on a transient failure, log the FULL inbound (recoverable by
+  // staff) and return a clean TwiML rather than dropping it silently.
+  let conversation: Awaited<ReturnType<typeof findOrCreateConversation>>;
+  try {
+    conversation = await findOrCreateConversation({
+      siteId,
+      dentallyPatientId: patientId,
+      patientName: displayName,
+      channel,
+      treatment: identity?.treatment ?? null,
+      fundingType: identity?.fundingType ?? null,
+    });
+    await appendMessage({ conversationId: conversation.id, role: "patient", body });
+    await stampInbound(conversation.id);
+  } catch (err) {
+    console.error(
+      `[inbound] failed to record message SID=${messageSid} from=${from} body=${JSON.stringify(body)}; not retrying`,
+      err,
+    );
+    return twiml();
+  }
 
   // Keep a reused conversation's name in step with the current directory, so a
   // renamed contact is reflected straight away rather than staying stale.

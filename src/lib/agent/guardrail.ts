@@ -69,7 +69,15 @@ const CLINICAL_PATTERNS: RegExp[] = [
   /\bclinically\b/i,
   /\byou (?:have|are suffering from|are experiencing) (?:an? )?(?:infection|abscess|decay|cavity|gum disease)\b/i,
   /\b(?:take|use|try) (?:some |a |an )?(?:ibuprofen|paracetamol|antibiotics|amoxicillin|painkillers)\b/i,
-  /\bi (?:would |'d )?recommend (?:you )?(?:get|have|a|an)\b/i,
+  // Scope "recommend" to CLINICAL objects, like the "you need ..." rules above, so a
+  // clinical recommendation ("I'd recommend a filling / antibiotics") is blocked but
+  // the prompt-encouraged logistics phrasing ("I'd recommend a consultation / a time
+  // that suits") passes and does not strand a healthy conversation at needs_human.
+  new RegExp(
+    String.raw`\bi(?: would|'d)? recommend (?:you )?(?:get |have |book |arrange |go for |try |use )?(?:a |an |some |your |the )?` +
+      CLINICAL_OBJECT + String.raw`\b`,
+    "i",
+  ),
   /\b(?:diagnos|prescrib)/i,
 ];
 

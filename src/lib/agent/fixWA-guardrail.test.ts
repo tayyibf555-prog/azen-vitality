@@ -35,6 +35,14 @@ describe("output guardrail: clinical advice", () => {
     expect(checkAgentReply("I can offer you Tuesday at 10am, does that work?").ok).toBe(true);
     expect(checkAgentReply("We are open until 5pm and parking is out front.").ok).toBe(true);
   });
+  it("allows recommending a consultation but still blocks a clinical recommendation (finding #36)", () => {
+    // "recommend a consultation/time" is the prompt-encouraged logistics phrasing.
+    expect(checkAgentReply("I'd recommend a consultation so the dentist can take a look.").ok).toBe(true);
+    expect(checkAgentReply("I would recommend booking a time that suits you.").ok).toBe(true);
+    // A genuine clinical recommendation must still be blocked.
+    expect(checkAgentReply("I'd recommend a filling for that tooth.").ok).toBe(false);
+    expect(checkAgentReply("I recommend antibiotics for the infection.").ok).toBe(false);
+  });
 });
 
 describe("output guardrail: unverified / invented price", () => {

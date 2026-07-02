@@ -163,11 +163,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       if (!question) return fail("Question is empty.");
       const ranked = await searchKnowledge(CLIENT_ID, question, maxTier, 6);
       const result = await askCopilot(question, ranked);
-      if (ranked.length === 0) await logKnowledgeGap(CLIENT_ID, question, maxTier);
-      const qaId = await logQa({
-        clientId: CLIENT_ID, question, answer: result.answer, groundedIn: result.groundedIn,
-        askerTier: maxTier, citedIds: result.citations.map((c) => c.id),
-      });
+      // The gap + QA writes are best-effort audit logging: a transient DB error must
+      // NOT discard a successfully generated answer. Log-and-continue, returning
+      // qaId: null so the UI hides the feedback buttons (they need a qaId).
+      let qaId: string | null = null;
+      try {
+        if (ranked.length === 0) await logKnowledgeGap(CLIENT_ID, question, maxTier);
+        qaId = await logQa({
+          clientId: CLIENT_ID, question, answer: result.answer, groundedIn: result.groundedIn,
+          askerTier: maxTier, citedIds: result.citations.map((c) => c.id),
+        });
+      } catch (err) {
+        console.error("[practice-brain] ask: audit logging failed; returning the answer anyway", err);
+      }
       return ok({ ...result, usedNodeIds: ranked.map((r) => r.node.id), qaId });
     }
 

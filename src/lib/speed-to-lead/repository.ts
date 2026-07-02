@@ -288,6 +288,44 @@ export async function findOpenLeadByAddress(
   return null;
 }
 
+/**
+ * An OPEN lead for this contact created STRICTLY BEFORE `beforeIso`, excluding
+ * `excludeId`. There is no DB unique constraint on (site, contact), so two
+ * near-simultaneous submits can both pass the pre-insert dedup and create two leads.
+ * After inserting, the caller re-checks: if a strictly-earlier open lead exists, this
+ * one lost the race and is retired, so the patient is first-contacted once. Strict
+ * `<` (not `<=`) means two rows with the exact same timestamp never retire EACH OTHER
+ * (which would leave the patient uncontacted); that rare tie falls through unchanged.
+ */
+export async function findEarlierOpenLead(
+  siteId: string,
+  phone: string | null,
+  email: string | null,
+  sinceIso: string,
+  excludeId: string,
+  beforeIso: string,
+): Promise<SpeedToLeadLead | null> {
+  const db = serviceClient();
+  for (const [col, val] of [["phone", phone], ["email", email]] as const) {
+    if (!val) continue;
+    const { data, error } = await db
+      .from("speed_to_lead_lead")
+      .select("*")
+      .eq("site_id", siteId)
+      .eq(col, val)
+      .in("stage", ["new", "contacting", "contacted", "qualifying"])
+      .gte("created_at", sinceIso)
+      .lt("created_at", beforeIso)
+      .neq("id", excludeId)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return rowToLead(data as LeadRow);
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Attempts.
 // ---------------------------------------------------------------------------
