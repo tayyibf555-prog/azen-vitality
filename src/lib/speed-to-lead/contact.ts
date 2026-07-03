@@ -132,9 +132,20 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
   // Narrow the retryable window to the SEND itself. Only a send failure may leave
   // the lead retryable; a failure in the post-send bookkeeping must NOT, or the
   // sweep would re-text a lead that was already successfully messaged.
+  // Attach the Twilio StatusCallback (sms/whatsapp only) so a delivery FAILURE for this
+  // direct send is reported back to /api/webhooks/twilio/status, which resets the lead
+  // to retryable. Without it, the undelivered-retry path is dead: a lead whose first SMS
+  // silently fails downstream is never re-contacted. Mirrors the drain; only attached
+  // when PUBLIC_BASE_URL is a real https endpoint (deployed app / tunnel).
+  const base = process.env.PUBLIC_BASE_URL ?? "";
+  const statusCallbackUrl =
+    lead.channel === "email" || !base.startsWith("https://")
+      ? undefined
+      : `${base}/api/webhooks/twilio/status`;
+
   let result: Awaited<ReturnType<typeof sendMessage>>;
   try {
-    result = await sendMessage({ channel: lead.channel, to, body });
+    result = await sendMessage({ channel: lead.channel, to, body, statusCallbackUrl });
   } catch {
     // Delivery failed (transient provider error or unreachable on this channel).
     // The drafted message is already logged on the conversation; record the failed

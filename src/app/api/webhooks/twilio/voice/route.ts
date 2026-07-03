@@ -1,5 +1,6 @@
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
 import { sendMessage } from "@/lib/messaging/send";
+import { toE164 } from "@/lib/messaging/phone";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { identifyByPhone } from "@/lib/agent/identify";
 import { DentallyClient } from "@/lib/dentally/client";
@@ -71,6 +72,30 @@ export async function POST(request: Request): Promise<Response> {
   const siteId = DEFAULT_SITE_ID;
   const now = new Date();
   const outside = isOutsideHours(getSiteById(siteId), now);
+
+  // Withheld / anonymous / non-dialable caller ID ("anonymous", "unknown", a short
+  // code, etc.): we can neither identify the caller nor text them back. Do NOT waste a
+  // Dentally lookup or claim "we've sent you a text" (there is nowhere to send it).
+  // Record a flagged capture for a manual callback and speak a neutral message.
+  if (!toE164(from)) {
+    try {
+      await insertCapture({
+        siteId,
+        fromNumber: from || "withheld",
+        dentallyPatientId: null,
+        patientName: "Caller ID withheld",
+        channel: "call",
+        body: null,
+      });
+    } catch {
+      // still answer the call leg cleanly
+    }
+    return twiml(
+      outside
+        ? "Thanks for calling Vitality Dental. We're currently closed. Please call back during our opening hours and we will be happy to help."
+        : "Thanks for calling Vitality Dental, please hold.",
+    );
+  }
 
   // Best-effort patient resolution so the worklist shows a name where we know one.
   const dentally = new DentallyClient({

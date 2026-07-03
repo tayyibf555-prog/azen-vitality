@@ -12,6 +12,26 @@ function firstName(name: string): string {
 }
 
 /**
+ * Strip output-guardrail trigger words (NHS, private, band N, funding) from the
+ * CALLER-TYPED treatment interest before it is injected into the draft prompt. A
+ * patient who types "NHS check-up" as their interest would otherwise be echoed by the
+ * model, the deterministic guardrail would block the reply, and contactLead retires
+ * the lead to terminal 'lost' — losing a real enquiry over the patient's own wording.
+ * The remaining text ("check-up") is safe; if nothing is left, treat it as unspecified.
+ */
+export function sanitiseInterest(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw
+    .replace(/\bnhs\b/gi, "")
+    .replace(/\bprivate(?:ly)?\b/gi, "")
+    .replace(/\bband\s*[123]\b/gi, "")
+    .replace(/\bfunding\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/**
  * Optional campaign tailoring. When a lead came through a targeted Smile Assessment
  * campaign, the goal orients the message and the ideal-customer note tunes the TONE
  * only. The ideal-customer text is INTERNAL targeting copy and must never be quoted
@@ -30,6 +50,7 @@ export function buildFirstContactPrompt(
   usps?: string[],
 ) {
   const practice = client?.name ?? "our dental practice";
+  const interest = sanitiseInterest(lead.treatmentInterest);
   const system = [
     "You are a warm, professional patient coordinator for a UK dental practice.",
     `You work for ${practice}.`,
@@ -38,8 +59,8 @@ export function buildFirstContactPrompt(
     "Rules:",
     "- Lead with the person by first name.",
     "- Give one clear next step: offer to find them a time that suits.",
-    lead.treatmentInterest
-      ? `- Mention what they enquired about (${lead.treatmentInterest}) naturally, without overpromising.`
+    interest
+      ? `- Mention what they enquired about (${interest}) naturally, without overpromising.`
       : "- Keep it general, since they did not say what they are interested in.",
     campaign
       ? `- This enquiry came through a campaign about ${campaign.goal}. Orient the message gently around that area.`
@@ -60,7 +81,7 @@ export function buildFirstContactPrompt(
   const user = [
     `Channel: ${channel}`,
     `Name: ${firstName(lead.name)}`,
-    `Treatment interest: ${lead.treatmentInterest ?? "not specified"}`,
+    `Treatment interest: ${interest ?? "not specified"}`,
     `Enquiry source: ${lead.source}`,
   ].join("\n");
 

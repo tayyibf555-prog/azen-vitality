@@ -1,7 +1,7 @@
 import { getClient, getSites } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
-import { listAppointments, listPatients } from "@/lib/dentally/read";
+import { listAppointments, getPatientById } from "@/lib/dentally/read";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { reviewSendAt, reviewScheduleFromEnv } from "@/lib/reviews/schedule";
@@ -89,10 +89,10 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 
-  // Patient + consent. Without a deliverable, consented channel we record a
-  // 'skipped' marker (still one row per appointment) rather than scheduling a send.
-  const patients = await listPatients([appt.siteId]);
-  const patient = patients.find((p) => p.id === appt.patientId) ?? null;
+  // Patient + consent via a DIRECT by-id read (not a full-list scan, which truncates
+  // at page 1 on a real practice and 404s almost every patient). Without a deliverable,
+  // consented channel we record a 'skipped' marker rather than scheduling a send.
+  const patient = await getPatientById(appt.patientId);
   if (!patient) return Response.json({ ok: false, error: "Patient not found" }, { status: 404 });
 
   const channel = pickChannel(patient.smsConsent, patient.emailConsent);

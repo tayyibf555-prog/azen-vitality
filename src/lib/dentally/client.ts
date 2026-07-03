@@ -171,7 +171,13 @@ export class DentallyClient {
       throw e;
     }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
-    return (await res.json()) as { appointment: { id: string; start_time?: string; state?: string } };
+    // A successful PUT may come back as 204 No Content or with an empty body; parsing
+    // that as JSON would throw and misreport a completed reschedule as a failure.
+    if (res.status === 204) return { appointment: { id } };
+    const text = await res.text();
+    return text
+      ? (JSON.parse(text) as { appointment: { id: string; start_time?: string; state?: string } })
+      : { appointment: { id } };
   }
 
   /** Cancel an existing appointment (sets its state to cancelled). */
@@ -189,6 +195,12 @@ export class DentallyClient {
       throw e;
     }
     if (!res.ok) throw new DentallyError(res.status, await res.text());
-    return (await res.json()) as { appointment: { id: string; state?: string } };
+    // DELETE typically returns 204 No Content (or an empty body) on success; parsing
+    // that as JSON would throw and misreport a completed cancellation as a failure.
+    if (res.status === 204) return { appointment: { id, state: "cancelled" } };
+    const text = await res.text();
+    return text
+      ? (JSON.parse(text) as { appointment: { id: string; state?: string } })
+      : { appointment: { id, state: "cancelled" } };
   }
 }

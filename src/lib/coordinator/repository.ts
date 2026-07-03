@@ -158,7 +158,40 @@ export async function upsertOpportunities(
 ): Promise<void> {
   if (opps.length === 0) return;
   const db = serviceClient();
-  const rows = opps.map(opportunityToRow);
+
+  // The sync builds every opportunity with lastTouchAt:null, status:'accepted' and
+  // financePresented:false — Dentally does not own the cadence/engagement state. A
+  // blind full-row upsert would therefore WIPE that state on every re-sync, collapsing
+  // the cadence (steps fire early and bunched, because a null last_touch_at reads as
+  // "due now") and silently reverting a coordinator's manually set 'stalled'/'completed'
+  // status. Preserve the workflow-owned columns for opportunities that already exist;
+  // only the Dentally-owned columns (values, consent, plan) are refreshed.
+  const ids = opps.map((o) => o.id);
+  const existing = new Map<string, { status: string; finance_presented: boolean; last_touch_at: string | null }>();
+  const CHUNK = 200; // bound the id list per request
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const { data, error } = await db
+      .from("treatment_opportunity")
+      .select("id, status, finance_presented, last_touch_at")
+      .in("id", slice);
+    if (error) throw error;
+    for (const r of (data as Array<{ id: string; status: string; finance_presented: boolean; last_touch_at: string | null }>) ?? []) {
+      existing.set(r.id, { status: r.status, finance_presented: r.finance_presented, last_touch_at: r.last_touch_at });
+    }
+  }
+
+  const rows = opps.map((opp) => {
+    const row = opportunityToRow(opp);
+    const prev = existing.get(opp.id);
+    if (prev) {
+      row.status = prev.status;
+      row.finance_presented = prev.finance_presented;
+      row.last_touch_at = prev.last_touch_at;
+    }
+    return row;
+  });
+
   const { error } = await db
     .from("treatment_opportunity")
     .upsert(rows, { onConflict: "id" });
@@ -278,19 +311,26 @@ export async function listTouches(
   return (data as TouchRow[]).map(rowToTouch);
 }
 
+/**
+ * Approve a touch, transitioning it draft -> approved. Conditional on the row still
+ * being 'draft' so a double-clicked / retried approve does NOT re-transition and let
+ * the caller enqueue a SECOND outbox row (double send). Returns null when zero rows
+ * transition (already approved/queued/sent); the caller must then skip enqueue.
+ */
 export async function approveTouch(
   touchId: string,
   approvedBy: string,
-): Promise<CoordinatorTouch> {
+): Promise<CoordinatorTouch | null> {
   const db = serviceClient();
   const { data, error } = await db
     .from("coordinator_touch")
     .update({ status: "approved", approved_by: approvedBy })
     .eq("id", touchId)
+    .eq("status", "draft")
     .select("*")
-    .single();
+    .maybeSingle();
   if (error) throw error;
-  return rowToTouch(data as TouchRow);
+  return data ? rowToTouch(data as TouchRow) : null;
 }
 
 export async function markTouchSent(touchId: string): Promise<void> {

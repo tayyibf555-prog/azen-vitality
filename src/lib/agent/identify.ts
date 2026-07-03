@@ -1,4 +1,5 @@
 import type { DentallyClient } from "@/lib/dentally/client";
+import { toE164 } from "@/lib/messaging/phone";
 import { lookupPhoneIdentity, upsertPhoneIdentity } from "./repository";
 import type { PhoneIdentity } from "./types";
 
@@ -7,6 +8,7 @@ interface DentallyPatient {
   first_name?: string;
   last_name?: string;
   site_id?: string;
+  mobile_phone?: string;
   dentist_recall_date?: string | null;
   recall_due_at?: string | null;
   last_visit_at?: string | null;
@@ -42,7 +44,16 @@ export async function identifyByPhone(
   try {
     const res = await deps.dentally.findPatientsByPhone(phone);
     const list = Array.isArray(res.patients) ? (res.patients as DentallyPatient[]) : [];
-    const p = list[0];
+    // Defensive match: the server-side phone filter is not yet calibrated against the
+    // live Dentally sandbox, so NEVER trust list[0]. Accept a candidate ONLY when its
+    // own mobile number normalises to the SAME E.164 as the inbound number. If the
+    // endpoint returned an unfiltered list (bad param), list[0] would be a random
+    // patient and we would thread this reply into the WRONG patient's record. No
+    // exact match -> treat as unrecognised.
+    const target = toE164(phone);
+    const p = target
+      ? list.find((c) => c.mobile_phone && toE164(c.mobile_phone) === target)
+      : undefined;
     if (p && p.id !== undefined && p.id !== null && String(p.id).length > 0) {
       const identity: PhoneIdentity = {
         patientId: String(p.id),

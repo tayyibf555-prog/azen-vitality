@@ -5,6 +5,7 @@ import {
   enqueueOutbox,
   getOpportunity,
   insertTouch,
+  listTouches,
   setLastTouchAt,
 } from "@/lib/coordinator/repository";
 import type {
@@ -95,16 +96,20 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
 
   let autoQueued = false;
   if (underThreshold && consented) {
-    touch = await approveTouch(touch.id, "auto");
-    await enqueueOutbox({
-      touchId: touch.id,
-      siteId: opportunity.siteId,
-      channel,
-      toRef: patientToRef(opportunity),
-      body: draftBody,
-    });
-    touch = { ...touch, status: "queued" };
-    autoQueued = true;
+    // The touch was just inserted as 'draft', so this conditional approve transitions
+    // it (returns non-null); guard defensively so a null never enqueues.
+    const approved = await approveTouch(touch.id, "auto");
+    if (approved) {
+      await enqueueOutbox({
+        touchId: approved.id,
+        siteId: opportunity.siteId,
+        channel,
+        toRef: patientToRef(opportunity),
+        body: draftBody,
+      });
+      touch = { ...approved, status: "queued" };
+      autoQueued = true;
+    }
   }
 
   return Response.json({
@@ -149,7 +154,20 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
     );
   }
 
+  // Verify the touch belongs to THIS opportunity BEFORE approving, so a stray/foreign
+  // touchId can never be approved and enqueued under this opportunity's recipient.
+  const touches = await listTouches(opportunityId);
+  const target = touches.find((t) => t.id === touchId);
+  if (!target) {
+    return Response.json({ ok: false, error: "touch not found for this opportunity" }, { status: 404 });
+  }
+
+  // Conditional approve (draft -> approved). A double-clicked / retried approve returns
+  // null (already transitioned): idempotent no-op, do NOT enqueue a second outbox row.
   const touch = await approveTouch(touchId, "coordinator");
+  if (!touch) {
+    return Response.json({ ok: true, alreadyApproved: true });
+  }
   await enqueueOutbox({
     touchId: touch.id,
     siteId: opportunity.siteId,

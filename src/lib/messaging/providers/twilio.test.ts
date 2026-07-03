@@ -68,7 +68,18 @@ describe("sendViaTwilio", () => {
     expect((init.headers as Record<string, string>)["Authorization"]).toBe(expected);
   });
 
-  it("dry-runs when no auth credentials are present", async () => {
+  it("THROWS (never silently dry-runs) when live but config is incomplete (finding #6)", async () => {
+    // Not in dry-run mode + missing auth: must fail loudly so the drain marks the row
+    // failed, NOT return a synthetic 'sent' that black-holes the message on go-live.
+    const fetchImpl = vi.fn();
+    await expect(
+      sendViaTwilio({ channel: "sms", to: "+1", body: "x" }, { accountSid: "ACtest", smsFrom: "+441234567890", fetchImpl }),
+    ).rejects.toThrow(/missing live Twilio config/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("still dry-runs when MESSAGING_DRY_RUN is on, whatever the config", async () => {
+    process.env.MESSAGING_DRY_RUN = "true";
     const fetchImpl = vi.fn();
     const r = await sendViaTwilio(
       { channel: "sms", to: "+1", body: "x" },

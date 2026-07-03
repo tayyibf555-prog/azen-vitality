@@ -56,6 +56,15 @@ vi.mock("@/lib/reviews/repository", () => ({
     if (r) r.status = status;
     return Promise.resolve();
   },
+  // Conditional claim (scheduled -> sent) before enqueue, mirroring the real repo.
+  claimForSend: (id: string) => {
+    const r = fakes.requests.find((x) => x.id === id);
+    if (r && r.status === "scheduled") {
+      r.status = "sent";
+      return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
+  },
   insertTouch: (input: { requestId: string | null; siteId: string; body: string }) => {
     fakes.touchSeq += 1;
     const t = { id: `t-${fakes.touchSeq}`, requestId: input.requestId, status: "draft", approvedBy: null, body: input.body };

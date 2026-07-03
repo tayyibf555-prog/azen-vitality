@@ -143,6 +143,26 @@ export async function markStatus(id: string, status: ReviewStatus): Promise<void
   if (error) throw error;
 }
 
+/**
+ * Atomically claim a due request for sending (scheduled -> sent), conditional so a
+ * crashed or overlapping sweep cannot re-enqueue an already-processed request. Returns
+ * true only if THIS call transitioned it. Called BEFORE enqueue, so a request claimed
+ * then killed before its outbox row is written is a skipped ask — better than a
+ * DUPLICATE review request to a patient (which annoys them and can breach review-
+ * platform policy).
+ */
+export async function claimForSend(id: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("review_request")
+    .update({ status: "sent", sent_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("status", "scheduled")
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Touches + outbox (review_touch / review_outbox). Shapes mirror no-show.
 // ---------------------------------------------------------------------------

@@ -185,6 +185,44 @@ export async function claimLeadForContact(id: string): Promise<boolean> {
 }
 
 /**
+ * Atomically claim a lead for (re)contact from a SPECIFIC current stage -> 'contacting'.
+ * Returns true only if THIS call transitioned it. Used by the staff "resend" action,
+ * which can fire on a lead in any non-terminal stage: two concurrent resends (or a
+ * resend racing the SLA sweep) can't both proceed because only one wins the flip.
+ */
+export async function claimLeadFromStage(id: string, from: LeadStage): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .update({ stage: "contacting", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("stage", from)
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Reset any lead stranded at 'contacting' longer than `staleMinutes` back to 'new' so
+ * the SLA sweep re-picks it up. A crash / function timeout between claim and the
+ * contactLead stage-advance would otherwise leave a lead 'contacting' forever (never
+ * re-contacted, never surfaced). claimLeadForContact/FromStage bump updated_at, so an
+ * in-flight contact within the window is safe from this reset. Returns the count reset.
+ */
+export async function resetStaleContacting(staleMinutes = 10): Promise<number> {
+  const db = serviceClient();
+  const cutoff = new Date(Date.now() - staleMinutes * 60_000).toISOString();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .update({ stage: "new", updated_at: new Date().toISOString() })
+    .eq("stage", "contacting")
+    .lt("updated_at", cutoff)
+    .select("id");
+  if (error) throw error;
+  return data?.length ?? 0;
+}
+
+/**
  * Release a claim made by {@link claimLeadForContact} IFF the lead is still
  * 'contacting' — a conditional UPDATE 'contacting' → 'new'. Idempotent and safe to
  * call after every contact attempt: if the contact succeeded (lead now

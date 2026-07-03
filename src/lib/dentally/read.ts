@@ -79,19 +79,59 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
   };
 }
 
+// Dentally caps a list page at ~100 rows. A single unpaged call therefore silently
+// truncates every list endpoint at the first 100 rows on a real-size practice — the
+// reviews module 404s on almost every patient/appointment, and the co-pilot's diary
+// omits most of the day, all while passing dry-run (the mock returns every fixture in
+// one page). Loop pages until a short (< PER_PAGE) one, bounded by MAX_PAGES.
+const PER_PAGE = 100;
+const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad upstream can't loop forever
+
+async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const rows = await fetchPage(page);
+    out.push(...rows);
+    if (rows.length < PER_PAGE) break; // short page => last page
+  }
+  return out;
+}
+
 /** All patients across the given sites. */
 export async function listPatients(siteIds: string[]): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
   const out: PatientRecord[] = [];
   for (const siteId of siteIds) {
     try {
-      const res = await client.listPatients({ siteId });
-      for (const p of res.patients ?? []) out.push(toPatient(p as Record<string, unknown>));
-    } catch {
-      // a site that errors is skipped, not fatal
+      const rows = await pageAll((page) =>
+        client.listPatients({ siteId, page, perPage: PER_PAGE }).then((res) => res.patients ?? []),
+      );
+      for (const p of rows) out.push(toPatient(p as Record<string, unknown>));
+    } catch (err) {
+      // Skip a site that errors, but LOG it: on live Dentally a 500/timeout/rate-limit
+      // here is otherwise indistinguishable from a genuinely empty site and silently
+      // drops the whole site's data.
+      console.error(`[dentally] listPatients failed for site ${siteId}; skipping this site`, err);
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** One patient by id via the direct Dentally read (`GET /v1/patients/:id`), NOT a
+ *  full-list scan. Returns null if the patient is not found or the read errors — so a
+ *  caller resolving a single patient (e.g. reviews attend) never has to page the whole
+ *  patient list and never 404s a patient just because they sit past page 1. */
+export async function getPatientById(patientId: string): Promise<PatientRecord | null> {
+  const client = dentallyFromEnv();
+  try {
+    const res = await client.getPatient(patientId);
+    const p = res.patient;
+    if (!p || typeof p !== "object") return null;
+    return toPatient(p as Record<string, unknown>);
+  } catch (err) {
+    console.error(`[dentally] getPatient(${patientId}) failed`, err);
+    return null;
+  }
 }
 
 function toAppointment(r: Record<string, unknown>, fallbackSiteId: string): AppointmentRecord {
@@ -118,10 +158,14 @@ export async function listAppointments(
   const out: AppointmentRecord[] = [];
   for (const siteId of siteIds) {
     try {
-      const res = await client.listAppointments({ siteId, fromDate: range?.from, toDate: range?.to });
-      for (const a of res.appointments ?? []) out.push(toAppointment(a as Record<string, unknown>, siteId));
-    } catch {
-      // skip
+      const rows = await pageAll((page) =>
+        client
+          .listAppointments({ siteId, fromDate: range?.from, toDate: range?.to, page, perPage: PER_PAGE })
+          .then((res) => res.appointments ?? []),
+      );
+      for (const a of rows) out.push(toAppointment(a as Record<string, unknown>, siteId));
+    } catch (err) {
+      console.error(`[dentally] listAppointments failed for site ${siteId}; skipping this site`, err);
     }
   }
   return out.sort((a, b) => (a.start < b.start ? -1 : 1));
@@ -157,10 +201,11 @@ export async function getPatientDetail(patientId: string, siteId: string): Promi
     .then((res) => (res.appointments ?? []).map((a) => toAppointment(a as Record<string, unknown>, siteId)))
     .catch(() => [] as AppointmentRecord[]);
 
-  const plansP = client
-    .listTreatmentPlans({ siteId })
-    .then((res) =>
-      (res.treatment_plans ?? [])
+  const plansP = pageAll((page) =>
+    client.listTreatmentPlans({ siteId, page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
+  )
+    .then((plans) =>
+      plans
         .map((pl) => pl as Record<string, unknown>)
         .filter((r) => String(r.patient_id ?? "") === patientId)
         .map<PlanRecord>((r) => ({
@@ -207,8 +252,10 @@ export async function listOutstanding(siteIds: string[]): Promise<OutstandingRec
   const out: OutstandingRecord[] = [];
   for (const siteId of siteIds) {
     try {
-      const res = await client.listTreatmentPlans({ siteId });
-      for (const pl of res.treatment_plans ?? []) {
+      const plans = await pageAll((page) =>
+        client.listTreatmentPlans({ siteId, page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
+      );
+      for (const pl of plans) {
         const r = pl as Record<string, unknown>;
         const outstanding = num(r.amount_outstanding);
         if (outstanding <= 0) continue;
@@ -223,8 +270,8 @@ export async function listOutstanding(siteIds: string[]): Promise<OutstandingRec
           acceptedAt: str(r.accepted_at),
         });
       }
-    } catch {
-      // skip
+    } catch (err) {
+      console.error(`[dentally] listTreatmentPlans failed for site ${siteId}; skipping this site`, err);
     }
   }
   return out.sort((a, b) => b.outstanding - a.outstanding);

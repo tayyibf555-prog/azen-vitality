@@ -1,6 +1,6 @@
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
-import { getLead, setLeadStage } from "@/lib/speed-to-lead/repository";
+import { getLead, setLeadStage, claimLeadFromStage } from "@/lib/speed-to-lead/repository";
 import { contactLead } from "@/lib/speed-to-lead/contact";
 
 export const dynamic = "force-dynamic";
@@ -47,11 +47,30 @@ export async function POST(
     case "mark-lost":
       await setLeadStage(lead.id, "lost");
       return Response.json({ ok: true });
-    case "resend":
-      // Re-fire first contact. contactLead records the attempt and, on success,
-      // stamps first_response_at and advances the stage to 'contacted'.
-      await contactLead(lead);
+    case "resend": {
+      // Re-fire first contact, but gate on the atomic claim so two concurrent resends
+      // (or a resend racing the SLA sweep) can't both text the same lead. A terminal
+      // lead is never resent. Claim from the CURRENT stage -> 'contacting'; a lost claim
+      // means another contact is already in flight.
+      if (lead.stage === "booked" || lead.stage === "lost") {
+        return bad(`Cannot resend a ${lead.stage} lead`, 409);
+      }
+      const from = lead.stage;
+      if (!(await claimLeadFromStage(lead.id, from))) {
+        return Response.json({ ok: true, skipped: "a contact is already in progress" });
+      }
+      try {
+        await contactLead(lead);
+      } finally {
+        // If contactLead did not move the lead off 'contacting' (silent early-return
+        // for no address, or a throw), restore its ORIGINAL stage so it is not stranded.
+        const after = await getLead(lead.id).catch(() => null);
+        if (after && after.stage === "contacting") {
+          await setLeadStage(lead.id, from).catch(() => {});
+        }
+      }
       return Response.json({ ok: true });
+    }
     default:
       return bad(`Unknown action: ${action}`);
   }

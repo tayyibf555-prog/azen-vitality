@@ -4,6 +4,7 @@ import {
   listUncontacted,
   claimLeadForContact,
   releaseLeadClaim,
+  resetStaleContacting,
 } from "@/lib/speed-to-lead/repository";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
@@ -33,6 +34,11 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
   const now = Date.now();
+  // Recover leads stranded at 'contacting' by a crash/timeout between claim and the
+  // contactLead stage-advance: reset any older than 10 min back to 'new' so they are
+  // re-picked below. The 10-min window is safe against an in-flight contact (the claim
+  // bumps updated_at).
+  const recovered = await resetStaleContacting(10);
   const stale = await listUncontacted(new Date(now - SLA_MS).toISOString());
 
   let contacted = 0;
@@ -65,7 +71,7 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ ok: true, checked: stale.length, claimed: claimedBy, contacted });
+  return Response.json({ ok: true, recovered, checked: stale.length, claimed: claimedBy, contacted });
   } finally {
     await releaseCronLock("sweep-speed-to-lead");
   }

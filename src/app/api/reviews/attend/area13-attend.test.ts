@@ -36,7 +36,9 @@ vi.mock("@/lib/mock/clients", () => ({
 }));
 vi.mock("@/lib/dentally/read", () => ({
   listAppointments: (_siteIds: string[], _range: unknown) => Promise.resolve(fakes.appts),
-  listPatients: (_siteIds: string[]) => Promise.resolve(fakes.patients),
+  // The route now resolves the patient via a direct by-id read (not a full-list scan).
+  getPatientById: (patientId: string) =>
+    Promise.resolve(fakes.patients.find((p) => p.id === patientId) ?? null),
 }));
 vi.mock("@/lib/messaging/suppression", () => ({
   isSuppressed: (siteId: string, channel: string, ref: string) => fakes.isSuppressed(siteId, channel, ref),

@@ -7,6 +7,7 @@ import { practiceName, reviewLink } from "@/lib/reviews/config";
 import {
   listDue,
   markStatus,
+  claimForSend,
   insertTouch,
   approveTouch,
   enqueueOutbox,
@@ -66,6 +67,12 @@ export async function POST(request: Request): Promise<Response> {
         continue;
       }
 
+      // Claim the request (scheduled -> sent) BEFORE drafting/enqueuing. If this run is
+      // killed after the claim but before the outbox row is written, the next sweep will
+      // NOT re-select it (listDue is scheduled-only) and the patient gets a skipped ask
+      // rather than a DUPLICATE review request. A lost claim (a racing run won) skips.
+      if (!(await claimForSend(req.id))) continue;
+
       const body = draftReviewRequest(req.patientName, practiceName(clientNameForSite(req.siteId)), link);
       const touch = await insertTouch({
         requestId: req.id,
@@ -85,7 +92,6 @@ export async function POST(request: Request): Promise<Response> {
         toRef: patientRef(req),
         body,
       });
-      await markStatus(req.id, "sent");
       sent += 1;
     }
 
