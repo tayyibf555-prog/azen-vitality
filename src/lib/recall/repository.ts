@@ -116,9 +116,41 @@ function rowToCadence(r: CadenceRow): RecallCadence {
 export async function upsertTargets(targets: RecallTarget[]): Promise<void> {
   if (targets.length === 0) return;
   const db = serviceClient();
+
+  // Cadence progress (status, prior_attempts) is owned by the recall ENGINE, not by
+  // Dentally. A periodic re-sync re-classifies every re-pulled patient and hands us a
+  // FRESH target that always carries status='due', prior_attempts=0 (classifyRecall).
+  // A blind full-row upsert would reset an already-enrolled, mid-cadence target to
+  // due/0 on every Dentally-side edit — restarting the cadence, erasing the attempt
+  // audit, and (worse) flipping an 'exhausted' target back to 'due' so the sync then
+  // graduates a fully-messaged patient across to reactivation. So preserve the
+  // engine-owned columns on conflict; refresh only the Dentally-owned facts. This
+  // mirrors reactivation.upsertTargets, which already fixed this exact bug.
+  const ids = targets.map((t) => t.id);
+  const { data: existingData, error: selErr } = await db
+    .from("recall_target")
+    .select("id, status, prior_attempts")
+    .in("id", ids);
+  if (selErr) throw selErr;
+  const existing = new Map(
+    (existingData as Array<{ id: string; status: string; prior_attempts: number | string }> | null ?? []).map(
+      (r) => [r.id, r] as const,
+    ),
+  );
+
+  const rows = targets.map((t) => {
+    const row = targetToRow(t);
+    const prior = existing.get(t.id);
+    if (prior) {
+      row.status = prior.status as TargetRow["status"];
+      row.prior_attempts = Number(prior.prior_attempts);
+    }
+    return row;
+  });
+
   const { error } = await db
     .from("recall_target")
-    .upsert(targets.map(targetToRow), { onConflict: "id" });
+    .upsert(rows, { onConflict: "id" });
   if (error) throw error;
 }
 
@@ -174,15 +206,24 @@ export async function incrementPriorAttempts(id: string): Promise<void> {
  */
 export async function listOpenRecallPatientKeys(siteIds: string[]): Promise<Set<string>> {
   const db = serviceClient();
-  const { data, error } = await db
-    .from("recall_target")
-    .select("site_id, dentally_patient_id")
-    .in("site_id", siteIds)
-    .in("status", ["due", "in_cadence"]);
-  if (error) throw error;
   const keys = new Set<string>();
-  for (const r of (data as { site_id: string; dentally_patient_id: string }[]) ?? []) {
-    keys.add(`${r.site_id}:${r.dentally_patient_id}`);
+  // Page to exhaustion: this is the double-messaging guard between recall and
+  // reactivation. A single unranged select is capped at PostgREST's 1000-row default,
+  // so a practice with >1000 open recalls would silently lose the rows past 1000 and
+  // reactivation would double-chase those patients. Range past the cap in a loop.
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from("recall_target")
+      .select("site_id, dentally_patient_id")
+      .in("site_id", siteIds)
+      .in("status", ["due", "in_cadence"])
+      .order("dentally_patient_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data as { site_id: string; dentally_patient_id: string }[]) ?? [];
+    for (const r of rows) keys.add(`${r.site_id}:${r.dentally_patient_id}`);
+    if (rows.length < PAGE) break;
   }
   return keys;
 }
@@ -499,16 +540,33 @@ export async function claimOutbox(outboxId: string): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
+// A failed/blocked outbox row must ALSO fail its recall_touch. Otherwise the touch is
+// stranded at 'approved', and the sweep's hasPending predicate (which treats anything
+// other than 'sent'/'failed' as pending) skips that target on EVERY future run — the
+// patient is frozen mid-cadence, never retried, never settled, and (because the target
+// stays 'in_cadence') never adopted by reactivation either. Failing the touch clears
+// hasPending so the sweep can retry the step or settle it via the normal path.
+async function failLinkedTouch(db: ReturnType<typeof serviceClient>, outboxId: string): Promise<void> {
+  const { data } = await db.from("recall_outbox").select("touch_id").eq("id", outboxId).maybeSingle();
+  const touchId = (data as { touch_id?: string } | null)?.touch_id;
+  if (touchId) {
+    const { error } = await db.from("recall_touch").update({ status: "failed" }).eq("id", touchId);
+    if (error) throw error;
+  }
+}
+
 export async function markOutboxFailed(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("recall_outbox").update({ status: "failed" }).eq("id", outboxId);
   if (error) throw error;
+  await failLinkedTouch(db, outboxId);
 }
 
 export async function markOutboxBlocked(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("recall_outbox").update({ status: "failed", provider: "suppressed" }).eq("id", outboxId);
   if (error) throw error;
+  await failLinkedTouch(db, outboxId);
 }
 
 export async function updateOutboxStatusByMessageId(providerMessageId: string, status: string): Promise<void> {

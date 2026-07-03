@@ -83,10 +83,24 @@ export async function POST(request: Request) {
       continue;
     }
 
-    // Respect consent; pause if the step's channel is not consented.
+    // Respect consent, but do NOT pause forever on an un-consented step: a patient
+    // consented on a different channel (e.g. SMS-only) would otherwise stall permanently
+    // at an email step. SKIP the step and advance the cadence; if that exhausts it (no
+    // remaining step has a consented channel), settle it.
     if (!channelConsented(target, step.channel)) {
-      await updateCadence(cadence.id, { status: "paused" });
-      paused += 1;
+      const adv = advanceAfter(step.step, now);
+      await updateCadence(cadence.id, {
+        currentStep: adv.currentStep,
+        status: adv.status,
+        nextDueAt: adv.nextDueAt,
+        endedAt: adv.endedAt,
+      });
+      if (adv.status === "exhausted") {
+        await setTargetStatus(target.id, "exhausted");
+        exhausted += 1;
+      } else {
+        paused += 1; // counted as a skip for this tick; the next step is tried next run
+      }
       continue;
     }
 
@@ -109,13 +123,8 @@ export async function POST(request: Request) {
       // (the only thing inbound reply correlation matches on). Stubbing it here
       // would orphan replies and skip the real send. Mirrors the coordinator sweep.
       await approveTouch(touch.id, "auto");
-      await enqueueOutbox({
-        touchId: touch.id,
-        siteId: target.siteId,
-        channel: step.channel,
-        toRef: patientToRef(target),
-        body,
-      });
+      // Advance the cadence BEFORE enqueuing, so a kill between here and the enqueue
+      // skips a message rather than re-sending this step next tick.
       await incrementPriorAttempts(target.id);
       const adv = advanceAfter(step.step, now);
       await updateCadence(cadence.id, {
@@ -123,6 +132,15 @@ export async function POST(request: Request) {
         status: adv.status,
         nextDueAt: adv.nextDueAt,
         endedAt: adv.endedAt,
+      });
+      // Leave the outbox row 'queued' so the shared drain delivers it and writes
+      // to_address (inbound reply correlation matches on it).
+      await enqueueOutbox({
+        touchId: touch.id,
+        siteId: target.siteId,
+        channel: step.channel,
+        toRef: patientToRef(target),
+        body,
       });
       if (adv.status === "exhausted") await setTargetStatus(target.id, "exhausted");
       queued += 1;

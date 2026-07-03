@@ -1,6 +1,7 @@
 import { draftRecall } from "@/lib/recall/draft";
 import { stepDef, advanceAfter, RECALL_CADENCE } from "@/lib/recall/cadence";
 import { shouldGraduate } from "@/lib/recall/normalise";
+import { londonOverdueDays } from "@/lib/time/london";
 import {
   listDueCadences,
   getTarget,
@@ -41,7 +42,9 @@ function patientToRef(t: RecallTarget): string {
 }
 
 async function settleExhausted(target: RecallTarget, now: Date): Promise<void> {
-  const overdueNow = (now.getTime() - new Date(target.dueAt).getTime()) / DAY;
+  // Whole London days, matching classification (normalise.londonOverdueDays), so the
+  // grace boundary is decided by ONE day definition everywhere (not fractional UTC).
+  const overdueNow = londonOverdueDays(target.dueAt, now);
   if (shouldGraduate(overdueNow, graceDays())) {
     await markGraduated(target.id);
   } else {
@@ -95,7 +98,7 @@ export async function POST(request: Request) {
       await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
       await settleExhausted(target, now);
       // Count using the freshly computed overdue, matching what settleExhausted decided.
-      const overdueNow = (now.getTime() - new Date(target.dueAt).getTime()) / DAY;
+      const overdueNow = londonOverdueDays(target.dueAt, now);
       if (overdueNow > graceDays()) graduated += 1;
       else exhausted += 1;
       continue;
@@ -126,25 +129,29 @@ export async function POST(request: Request) {
     drafted += 1;
 
     await approveTouch(touch.id, "auto");
-    await enqueueOutbox({
-      touchId: touch.id,
-      siteId: target.siteId,
-      channel: step.channel,
-      toRef: patientToRef(target),
-      body,
-    });
-    // Do NOT markTouchSent here. Leaving the outbox row 'queued' lets the shared
-    // drain deliver it via Twilio and write to_address (the only thing inbound
-    // reply correlation matches on). Marking it sent here would stub the send and
-    // orphan replies. Mirrors the coordinator auto-send path.
-    await incrementPriorAttempts(target.id);
 
+    // Advance the cadence BEFORE enqueuing. If the run is killed between here and the
+    // enqueue, the cadence has already moved past this step, so the next sweep sends the
+    // NEXT step rather than re-drafting and re-sending this one (a skipped message beats
+    // a double-send). incrementPriorAttempts + advanceAfter are the step's bookkeeping.
+    await incrementPriorAttempts(target.id);
     const adv = advanceAfter(step.step, now, RECALL_CADENCE);
     await updateCadence(cadence.id, {
       currentStep: adv.currentStep,
       status: adv.status,
       nextDueAt: adv.nextDueAt,
       endedAt: adv.endedAt,
+    });
+
+    // Leave the outbox row 'queued' so the shared drain delivers it via Twilio and
+    // writes to_address (the only thing inbound reply correlation matches on). Marking
+    // it sent here would stub the send and orphan replies.
+    await enqueueOutbox({
+      touchId: touch.id,
+      siteId: target.siteId,
+      channel: step.channel,
+      toRef: patientToRef(target),
+      body,
     });
     if (adv.status === "exhausted") await settleExhausted(target, now);
     queued += 1;

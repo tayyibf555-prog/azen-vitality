@@ -6,7 +6,15 @@ import {
   type ReactivationInput,
 } from "@/lib/reactivation/normalise";
 import { rankTargets } from "@/lib/reactivation/scoring";
-import { upsertTargets, getSyncState, setSyncState } from "@/lib/reactivation/repository";
+import {
+  upsertTargets,
+  getSyncState,
+  setSyncState,
+  listTargets,
+  getCadenceByTarget,
+  updateCadence,
+  setTargetStatus,
+} from "@/lib/reactivation/repository";
 import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
@@ -167,7 +175,7 @@ async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: ReactivationConfig,
-): Promise<{ siteId: string; pulled: number; upserted: number; processed: number; remaining: number }> {
+): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; processed: number; remaining: number }> {
   const state = await getSyncState(siteId, RESOURCE);
   const updatedAfter = state?.highWaterMark ?? undefined;
   const now = new Date();
@@ -175,6 +183,13 @@ async function syncSite(
   // Patients with an open recall target (due or in cadence), so an overdue recall
   // is not chased by both modules at once (recall owns it until it hands off).
   const openRecall = await listOpenRecallPatientKeys([siteId]);
+
+  // Currently-enrolled targets, so that a patient who has since rebooked (or otherwise
+  // stopped qualifying) can have their active cadence STOPPED rather than chased forever.
+  const inCadenceIds = new Set(
+    (await listTargets({ siteIds: [siteId], statuses: ["in_cadence"] })).map((t) => t.id),
+  );
+  let converted = 0;
 
   // 1. Index the site's open treatment plans by patient (carries outstanding + accepted_at).
   const openByPatient = new Map<string, OpenPlan>();
@@ -218,7 +233,18 @@ async function syncSite(
       // patient (treat as empty) and move on to the next.
       let apptsRes: { appointments: unknown[] };
       try {
-        apptsRes = await client.getPatientAppointments(patient.id);
+        // Page the patient's appointments: an unpaged call caps at ~100 rows, so a
+        // long-standing patient's FUTURE booking could sit past page 1 and be missed,
+        // making futureBookingExists a false negative — we'd reactivate a patient who
+        // already has an appointment. Loop until a short page (bounded).
+        const all: unknown[] = [];
+        for (let ap = 1; ap <= 20; ap += 1) {
+          const r = await client.getPatientAppointments(patient.id, ap, PER_PAGE);
+          const rows = Array.isArray(r.appointments) ? r.appointments : [];
+          all.push(...rows);
+          if (rows.length < PER_PAGE) break;
+        }
+        apptsRes = { appointments: all };
       } catch {
         continue;
       }
@@ -244,6 +270,23 @@ async function syncSite(
       };
 
       const target = toReactivationTarget(input, now, cfg);
+
+      // Stop chasing a patient who has self-served: if they now have a future booking
+      // (rebooked directly with the practice) or no longer qualify at all, and they are
+      // mid-cadence, END the cadence and mark the target 'converted'. Without this the
+      // active cadence keeps firing reactivation messages at a patient who already
+      // booked — the exact "why are you still texting me, I've got an appointment" case.
+      const stoppedQualifying = input.futureBookingExists || !target;
+      const targetId = `${siteId}:${patient.id}`;
+      if (stoppedQualifying && inCadenceIds.has(targetId)) {
+        const cad = await getCadenceByTarget(targetId);
+        if (cad && (cad.status === "active" || cad.status === "paused")) {
+          await updateCadence(cad.id, { status: "converted", endedAt: now.toISOString() });
+        }
+        await setTargetStatus(targetId, "converted");
+        converted += 1;
+      }
+
       // Recall owns a patient from due-soon through the grace boundary. While an
       // open recall row exists (due / in_cadence) reactivation must not chase the
       // SAME patient for ANY reason, not just overdue_recall: a long-interval
@@ -251,8 +294,9 @@ async function syncSite(
       // (last real visit > 18 months) and, without this, the patient would be
       // contacted by both modules at once. Recall hands off (graduated) past the
       // grace boundary, at which point the key leaves openRecall and reactivation
-      // legitimately adopts the patient.
-      if (target && !openRecall.has(target.id)) {
+      // legitimately adopts the patient. Also never (re-)enrol a patient with a
+      // future booking.
+      if (target && !input.futureBookingExists && !openRecall.has(target.id)) {
         targets.push(target);
       }
 
@@ -272,7 +316,7 @@ async function syncSite(
   // Leave the prior mark UNCHANGED when no record contributed one, so the next run
   // re-fetches rather than skipping. Only persist when we actually advanced it.
   if (highWaterMark) await setSyncState(siteId, RESOURCE, highWaterMark);
-  return { siteId, pulled, upserted: ranked.length, processed, remaining };
+  return { siteId, pulled, upserted: ranked.length, converted, processed, remaining };
 }
 
 export async function POST(request: Request) {

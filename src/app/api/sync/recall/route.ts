@@ -7,6 +7,7 @@ import {
   type RecallInput,
 } from "@/lib/recall/normalise";
 import { upsertTargets, listTargets, markGraduated, getSyncState, setSyncState } from "@/lib/recall/repository";
+import { londonOverdueDays } from "@/lib/time/london";
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
@@ -148,7 +149,18 @@ async function syncSite(
       // patient (treat as empty) and move on to the next.
       let apptsRes: { appointments: unknown[] };
       try {
-        apptsRes = await client.getPatientAppointments(patient.id);
+        // Page the patient's appointments: a single unpaged call caps at ~100 rows, so
+        // a long-standing patient's FUTURE booking could sit on page 2 and be missed —
+        // futureBookingExists would be a false negative and we'd send a recall to
+        // someone who already has an appointment. Loop until a short page (bounded).
+        const all: unknown[] = [];
+        for (let ap = 1; ap <= 20; ap += 1) {
+          const r = await client.getPatientAppointments(patient.id, ap, PER_PAGE);
+          const rows = Array.isArray(r.appointments) ? r.appointments : [];
+          all.push(...rows);
+          if (rows.length < PER_PAGE) break;
+        }
+        apptsRes = { appointments: all };
       } catch {
         continue;
       }
@@ -181,7 +193,8 @@ async function syncSite(
   // reactivation can adopt them (closes the seam double-coverage gap).
   const openDue = await listTargets({ siteIds: [siteId], statuses: ["due"] });
   for (const t of openDue) {
-    if ((now.getTime() - new Date(t.dueAt).getTime()) / DAY > cfg.graceDays) {
+    // Whole London days, matching classification + the sweep's settle logic.
+    if (londonOverdueDays(t.dueAt, now) > cfg.graceDays) {
       await markGraduated(t.id);
     }
   }

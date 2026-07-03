@@ -79,9 +79,11 @@ async function handleEnrol(body: Record<string, unknown>): Promise<Response> {
 
   let cadence = await getCadenceByTarget(targetId);
   if (!cadence) {
-    // Anchor step 1 to the recall window: fire on/just-before the due date, not
-    // immediately, so a still-due-soon patient is reached at the right moment.
-    const anchor = new Date(target.dueAt).getTime() - leadWindowDays() * DAY;
+    // Anchor step 1 to the due date itself: a still-due-soon patient is reached ON the
+    // due date, an already-overdue one immediately. (The old `- leadWindowDays*DAY`
+    // pushed the anchor into the past for every in-window target, so it ALWAYS fired
+    // immediately — dead code that contradicted the documented on/near-due intent.)
+    const anchor = new Date(target.dueAt).getTime();
     const nextDueAt = new Date(Math.max(Date.now(), anchor)).toISOString();
     cadence = await createCadence({ targetId, siteId: target.siteId, nextDueAt });
   }
@@ -159,6 +161,15 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
+  // Verify the touch belongs to THIS target before approving, so a stray/foreign
+  // touchId (stale UI, mismatched ids, cross-site access) can never approve and enqueue
+  // another target's message body to this target's patient.
+  const touches = await listTouches(target.id);
+  const targetTouch = touches.find((t) => t.id === touchId);
+  if (!targetTouch) {
+    return Response.json({ error: "touch not found for this target" }, { status: 404 });
+  }
+
   // Idempotency guard: recall_outbox has no unique constraint on touch_id, so a
   // double-click / retry / concurrent approve would enqueue a second patient
   // message for the same touch. Skip if this touch already has a non-failed
@@ -171,7 +182,9 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
   await enqueueOutbox({
     touchId: touch.id,
     siteId: target.siteId,
-    channel,
+    // Take the channel + body from the stored touch, never the client body, so a
+    // mismatched body.channel can't dispatch (e.g.) an email-length body as an SMS.
+    channel: targetTouch.channel,
     toRef: toRef ?? patientToRef(target),
     body: touch.body,
   });
@@ -191,10 +204,15 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
   // delivers it and writes to_address. Do NOT stub-send it here (that would orphan
   // replies). We only advance the cadence and attempt bookkeeping.
   void touchId;
-  await incrementPriorAttempts(targetId);
 
   const cadence = await getCadenceByTarget(targetId);
   if (cadence) {
+    // Guard against a stale / replayed client-supplied step rewinding the cadence and
+    // re-sending a later step: only advance when this is genuinely the NEXT step.
+    if (step !== cadence.currentStep + 1) {
+      return Response.json({ ok: true, skipped: true, reason: "stale_step" });
+    }
+    await incrementPriorAttempts(targetId);
     const adv = advanceAfter(step, now, RECALL_CADENCE);
     await updateCadence(cadence.id, {
       currentStep: adv.currentStep,
@@ -206,6 +224,9 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
       const target = await getTarget(targetId);
       if (target) await settleExhausted(target, now);
     }
+  } else {
+    // No cadence (a manual one-off send): keep the attempt bookkeeping.
+    await incrementPriorAttempts(targetId);
   }
 
   return Response.json({ ok: true });

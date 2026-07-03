@@ -105,8 +105,10 @@ export class DentallyClient {
       site_id: a.siteId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
-  getPatientAppointments(patientId: string) {
-    return this.get<{ appointments: unknown[] }>("/v1/appointments", { patient_id: patientId });
+  getPatientAppointments(patientId: string, page = 1, perPage = 100) {
+    return this.get<{ appointments: unknown[] }>("/v1/appointments", {
+      patient_id: patientId, page, per_page: perPage,
+    });
   }
   listAppointments(a: { siteId: string; fromDate?: string; toDate?: string; page?: number; perPage?: number }) {
     // Paginate: the real Dentally API caps a page at ~50-100 rows, so a single

@@ -459,16 +459,29 @@ export async function claimOutbox(outboxId: string): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
+// A failed/blocked outbox row must ALSO fail its noshow_touch, or the touch is stranded
+// at 'approved' and the sweep's pending guard freezes the target forever.
+async function failLinkedTouch(db: ReturnType<typeof serviceClient>, outboxId: string): Promise<void> {
+  const { data } = await db.from("noshow_outbox").select("touch_id").eq("id", outboxId).maybeSingle();
+  const touchId = (data as { touch_id?: string } | null)?.touch_id;
+  if (touchId) {
+    const { error } = await db.from("noshow_touch").update({ status: "failed" }).eq("id", touchId);
+    if (error) throw error;
+  }
+}
+
 export async function markOutboxFailed(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("noshow_outbox").update({ status: "failed" }).eq("id", outboxId);
   if (error) throw error;
+  await failLinkedTouch(db, outboxId);
 }
 
 export async function markOutboxBlocked(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("noshow_outbox").update({ status: "failed", provider: "suppressed" }).eq("id", outboxId);
   if (error) throw error;
+  await failLinkedTouch(db, outboxId);
 }
 
 export async function updateOutboxStatusByMessageId(providerMessageId: string, status: string): Promise<void> {

@@ -84,6 +84,13 @@ export function toReactivationTarget(
   now: Date,
   cfg: ReactivationConfig = DEFAULT_CONFIG,
 ): ReactivationTarget | null {
+  // An archived patient (deceased, moved away, duplicate record) must NEVER be
+  // auto-contacted. The ONE exception is a patient explicitly archived as 'lapsed' —
+  // that is precisely the cohort reactivation exists to win back. Any other archived
+  // reason (or archived with no reason) is excluded outright, so a deceased patient
+  // can never be texted "we miss you, come back for a check-up".
+  if (i.patient.archived && i.patient.archived_reason !== "lapsed") return null;
+
   const reason = deriveReason(i, now, cfg);
   if (!reason) return null;
 

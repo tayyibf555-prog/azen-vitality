@@ -7,6 +7,7 @@ import {
   createCadence,
   updateCadence,
   insertTouch,
+  listTouches,
   approveTouch,
   enqueueOutbox,
   incrementPriorAttempts,
@@ -85,16 +86,33 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
   const underThreshold = target.recoverableValue < autoSendThreshold();
   let autoQueued = false;
   if (underThreshold && consented) {
-    touch = await approveTouch(touch.id, "auto");
-    await enqueueOutbox({
-      touchId: touch.id,
-      siteId: target.siteId,
-      channel,
-      toRef: patientToRef(target),
-      body: draftBody,
-    });
-    touch = { ...touch, status: "queued" };
-    autoQueued = true;
+    // Fresh draft -> conditional approve transitions it (non-null); guard for the type.
+    const approved = await approveTouch(touch.id, "auto");
+    if (approved) {
+      // Advance the cadence BEFORE enqueue when this target is enrolled, mirroring the
+      // sweep. Without this the cadence stays on the same step and the next sweep
+      // re-drafts and re-sends it (#17); advancing first also means a kill before
+      // enqueue skips a step rather than double-sending.
+      if (cadence) {
+        await incrementPriorAttempts(target.id);
+        const adv = advanceAfter(step.step, new Date());
+        await updateCadence(cadence.id, {
+          currentStep: adv.currentStep,
+          status: adv.status,
+          nextDueAt: adv.nextDueAt,
+          endedAt: adv.endedAt,
+        });
+      }
+      await enqueueOutbox({
+        touchId: approved.id,
+        siteId: target.siteId,
+        channel,
+        toRef: patientToRef(target),
+        body: draftBody,
+      });
+      touch = { ...approved, status: "queued" };
+      autoQueued = true;
+    }
   }
 
   return Response.json({
@@ -119,7 +137,17 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
+  // Verify the touch belongs to THIS target before approving, so a stray/foreign
+  // touchId can never be approved and enqueued to this target's patient.
+  const touches = await listTouches(target.id);
+  if (!touches.some((t) => t.id === touchId)) {
+    return Response.json({ error: "touch not found for this target" }, { status: 404 });
+  }
+
+  // Conditional approve (draft -> approved). A double-clicked / retried approve returns
+  // null (already transitioned): idempotent no-op, do NOT enqueue a second outbox row.
   const touch = await approveTouch(touchId, "coordinator");
+  if (!touch) return Response.json({ ok: true, alreadyApproved: true });
   await enqueueOutbox({
     touchId: touch.id,
     siteId: target.siteId,

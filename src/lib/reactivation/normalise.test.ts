@@ -37,6 +37,21 @@ describe("toReactivationTarget", () => {
     expect(t.recoverableValue).toBe(600);
   });
 
+  it("NEVER targets an archived (deceased/moved-away) patient, except explicitly 'lapsed' (finding #16)", () => {
+    // A deceased patient who is also long-gone would otherwise classify as 'lapsed'
+    // and be auto-texted "we miss you". Archived + non-lapsed reason must be excluded.
+    expect(
+      toReactivationTarget(base({ patient: { ...base().patient, archived: true, archived_reason: "deceased" } }), NOW),
+    ).toBeNull();
+    expect(
+      toReactivationTarget(base({ patient: { ...base().patient, archived: true, archived_reason: null } }), NOW),
+    ).toBeNull();
+    // The one archived cohort reactivation IS for: explicitly 'lapsed'.
+    expect(
+      toReactivationTarget(base({ patient: { ...base().patient, archived: true, archived_reason: "lapsed" } }), NOW),
+    ).not.toBeNull();
+  });
+
   it("uses the baseline value when there is no plan and no historic spend", () => {
     const t = toReactivationTarget(base({ historicSpend: 0 }), NOW)!;
     expect(t.recoverableValue).toBe(80);

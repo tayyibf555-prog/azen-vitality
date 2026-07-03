@@ -382,16 +382,23 @@ export async function listTouches(targetId: string): Promise<ReactivationTouch[]
   return (data as TouchRow[]).map(rowToTouch);
 }
 
-export async function approveTouch(touchId: string, approvedBy: string): Promise<ReactivationTouch> {
+/**
+ * Approve a touch (draft -> approved), CONDITIONAL on it still being 'draft' so a
+ * double-clicked / retried approve does not re-transition and let the caller enqueue a
+ * SECOND outbox row (double-text). Returns null when zero rows transition; the caller
+ * must then skip enqueue.
+ */
+export async function approveTouch(touchId: string, approvedBy: string): Promise<ReactivationTouch | null> {
   const db = serviceClient();
   const { data, error } = await db
     .from("reactivation_touch")
     .update({ status: "approved", approved_by: approvedBy })
     .eq("id", touchId)
+    .eq("status", "draft")
     .select("*")
-    .single();
+    .maybeSingle();
   if (error) throw error;
-  return rowToTouch(data as TouchRow);
+  return data ? rowToTouch(data as TouchRow) : null;
 }
 
 export async function enqueueOutbox(input: {
@@ -509,16 +516,29 @@ export async function claimOutbox(outboxId: string): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
+// A failed/blocked outbox row must ALSO fail its reactivation_touch, or the touch is
+// stranded at 'approved' and the sweep's hasPending guard freezes the target forever.
+async function failLinkedTouch(db: ReturnType<typeof serviceClient>, outboxId: string): Promise<void> {
+  const { data } = await db.from("reactivation_outbox").select("touch_id").eq("id", outboxId).maybeSingle();
+  const touchId = (data as { touch_id?: string } | null)?.touch_id;
+  if (touchId) {
+    const { error } = await db.from("reactivation_touch").update({ status: "failed" }).eq("id", touchId);
+    if (error) throw error;
+  }
+}
+
 export async function markOutboxFailed(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("reactivation_outbox").update({ status: "failed" }).eq("id", outboxId);
   if (error) throw error;
+  await failLinkedTouch(db, outboxId);
 }
 
 export async function markOutboxBlocked(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db.from("reactivation_outbox").update({ status: "failed", provider: "suppressed" }).eq("id", outboxId);
   if (error) throw error;
+  await failLinkedTouch(db, outboxId);
 }
 
 export async function updateOutboxStatusByMessageId(providerMessageId: string, status: string): Promise<void> {
