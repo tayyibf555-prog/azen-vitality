@@ -134,7 +134,9 @@ export function ClientSidebar() {
           })}
         </div>
 
-        {/* Panel: only the selected category's modules */}
+        {/* Panel column: the selected category's modules, with the shortcuts card
+            pinned at the bottom so the rail divider runs cleanly past it. */}
+        <div className="flex min-w-0 flex-1 flex-col">
         <nav className="min-w-0 flex-1 overflow-y-auto px-2.5 py-3" aria-label="Modules">
           {/* Visible search entry point: hidden-by-category modules stay one search
               away, without the user having to know the ⌘K shortcut exists. */}
@@ -191,10 +193,9 @@ export function ClientSidebar() {
             </div>
           ) : null}
         </nav>
+        <SidebarShortcuts />
+        </div>
       </div>
-
-      {/* Global keyboard shortcuts, taught in place */}
-      <SidebarShortcuts />
 
       {/* User chip + logout */}
       <div className="border-t border-navy-line px-3 py-3">

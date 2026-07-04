@@ -42,7 +42,7 @@ export function SidebarShortcuts() {
     },
   ];
   return (
-    <div className="mx-3 mb-2 rounded-xl border border-white/15 px-3 py-2">
+    <div className="mx-2.5 mb-2.5 shrink-0 rounded-xl border border-white/15 px-3 py-2">
       <p className="pb-1 text-[10px] font-bold uppercase tracking-wide text-on-navy-muted">Shortcuts</p>
       {rows.map((r) => {
         const Icon = r.icon;
