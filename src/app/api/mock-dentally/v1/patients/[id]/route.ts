@@ -36,6 +36,10 @@ export async function GET(
       last_name: patient.last_name,
       email_address: patient.email_address,
       mobile_phone: patient.mobile_phone,
+      // site_id anchors the patient to a practice site, mirroring the real Dentally
+      // patient object. The patient-detail route relies on it to verify the requested
+      // patient actually belongs to the caller's authorised site (site-scope guard).
+      site_id: patient.site_id,
       use_sms: patient.use_sms,
       use_email: patient.use_email,
       marketing: patient.marketing,
