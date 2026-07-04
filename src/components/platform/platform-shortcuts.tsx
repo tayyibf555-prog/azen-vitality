@@ -35,17 +35,24 @@ export function PlatformShortcuts() {
         setCopilot((v) => !v);
       }
     }
-    // The sidebars' visible "Search" row opens the palette via this event, so a
-    // non-technical user never has to discover the ⌘K shortcut.
+    // The sidebars' visible "Search" row and Shortcuts card open these surfaces
+    // via window events, so a non-technical user never has to discover the
+    // keyboard shortcuts to use them.
     function onOpenPalette() {
       setCopilot(false);
       setPalette(true);
     }
+    function onOpenCopilot() {
+      setPalette(false);
+      setCopilot(true);
+    }
     window.addEventListener("keydown", onKey);
     window.addEventListener("azen:open-palette", onOpenPalette);
+    window.addEventListener("azen:open-copilot", onOpenCopilot);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("azen:open-palette", onOpenPalette);
+      window.removeEventListener("azen:open-copilot", onOpenCopilot);
     };
   }, []);
 

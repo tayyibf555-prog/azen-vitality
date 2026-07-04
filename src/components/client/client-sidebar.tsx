@@ -7,6 +7,7 @@ import { LogOut, Search } from "lucide-react";
 import { categoriesForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
+import { SidebarShortcuts, useModKey } from "@/components/platform/sidebar-shortcuts";
 import { cn } from "@/lib/utils";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -30,6 +31,7 @@ export function ClientSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
+  const modKey = useModKey();
 
   const clientSlug = params.client;
   const client = getClient(clientSlug);
@@ -143,7 +145,7 @@ export function ClientSidebar() {
           >
             <Search size={15} className="shrink-0" />
             <span>Search</span>
-            <kbd className="ml-auto rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted">⌘K</kbd>
+            <kbd className="ml-auto rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted">{modKey}K</kbd>
           </button>
           {current ? (
             <div role="tabpanel" aria-labelledby={`rail-${current.key}`}>
@@ -190,6 +192,9 @@ export function ClientSidebar() {
           ) : null}
         </nav>
       </div>
+
+      {/* Global keyboard shortcuts, taught in place */}
+      <SidebarShortcuts />
 
       {/* User chip + logout */}
       <div className="border-t border-navy-line px-3 py-3">
