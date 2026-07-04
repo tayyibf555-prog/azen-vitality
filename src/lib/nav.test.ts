@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { navForRole, canRoleAccessModule, CLIENT_NAV, NAV_CATEGORIES, categoriesForRole } from "./nav";
+import { navForRole, canRoleAccessModule, CLIENT_NAV, NAV_CATEGORIES, NAV_HIDDEN_SLUGS, categoriesForRole } from "./nav";
 
 const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings"];
-const ALL_ROLE = ["", "today", "reviews", "onboarding", "calendar", "patients", "recall"];
+const ALL_ROLE = ["", "reviews", "onboarding", "calendar", "patients", "recall"];
 
 function slugsFor(role: Parameters<typeof navForRole>[0]): string[] {
   return navForRole(role).flatMap((g) => g.items.map((i) => i.slug));
@@ -39,14 +39,30 @@ describe("navForRole", () => {
 });
 
 describe("sidebar categories (rail + panel nav)", () => {
-  it("every CLIENT_NAV module appears in exactly ONE category (nothing dropped, nothing duplicated)", () => {
+  it("every CLIENT_NAV module appears in exactly ONE category, except the documented hidden set", () => {
     const navSlugs = CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug));
     const categorySlugs = NAV_CATEGORIES.flatMap((c) => c.slugs);
     // No duplicates across categories.
     expect(categorySlugs.length).toBe(new Set(categorySlugs).size);
-    // Exact coverage both ways: a module missing from every category would be
-    // unreachable from the sidebar; a category slug not in the nav is a typo.
-    expect(new Set(categorySlugs)).toEqual(new Set(navSlugs));
+    // Exact coverage both ways, minus the Home-embedded modules (daily-brief,
+    // task-queue): a module missing from every category AND from the hidden set
+    // would be unreachable from the sidebar; a category slug not in the nav is a typo.
+    const expected = new Set(navSlugs.filter((s) => !NAV_HIDDEN_SLUGS.has(s)));
+    expect(new Set(categorySlugs)).toEqual(expected);
+  });
+
+  it("hidden modules stay routable (deep links + palette) even without a category", () => {
+    const navSlugs = new Set(CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug)));
+    for (const slug of NAV_HIDDEN_SLUGS) {
+      expect(navSlugs.has(slug)).toBe(true); // still in CLIENT_NAV (palette finds it)
+      expect(canRoleAccessModule("client_coordinator", slug)).toBe(true);
+    }
+  });
+
+  it("the old 'today' module is gone from the nav entirely (folded into Home)", () => {
+    const navSlugs = CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug));
+    expect(navSlugs).not.toContain("today");
+    expect(NAV_CATEGORIES.flatMap((c) => c.slugs)).not.toContain("today");
   });
 
   it("resolves every category for the owner, in rail order", () => {
@@ -72,9 +88,12 @@ describe("sidebar categories (rail + panel nav)", () => {
     expect(slugs).toContain("smile-assessment");
   });
 
-  it("role null (dev / enforcement off) shows everything", () => {
+  it("role null (dev / enforcement off) shows everything except the hidden set", () => {
     const all = categoriesForRole(null).flatMap((c) => c.items.map((i) => i.slug));
-    expect(new Set(all)).toEqual(new Set(CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug))));
+    const expected = CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug)).filter(
+      (s) => !NAV_HIDDEN_SLUGS.has(s),
+    );
+    expect(new Set(all)).toEqual(new Set(expected));
   });
 });
 

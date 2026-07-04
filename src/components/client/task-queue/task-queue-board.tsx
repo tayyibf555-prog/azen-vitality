@@ -32,7 +32,18 @@ const SNOOZE_OPTIONS: { label: string; minutes: number }[] = [
 
 type ActiveAction = "complete" | "claim" | "unclaim" | "snooze";
 
-export function TaskQueueBoard({ clientSlug }: { clientSlug: string }) {
+export function TaskQueueBoard({
+  clientSlug,
+  maxRows,
+  title = "Worklist",
+  description = "The next thing to do, ranked. Working from the top keeps the practice ahead of every lead, recall and plan.",
+}: {
+  clientSlug: string;
+  /** Cap the visible rows (Home embed). A "View all" link appears when truncated. */
+  maxRows?: number;
+  title?: string;
+  description?: string;
+}) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -153,11 +164,15 @@ export function TaskQueueBoard({ clientSlug }: { clientSlug: string }) {
   }
 
   const total = tasks.length;
+  // Home embed: show the top rows only; the queue is priority-sorted by the API,
+  // so the cap keeps the highest-priority work visible and links to the rest.
+  const shown = maxRows !== undefined ? visible.slice(0, maxRows) : visible;
+  const truncated = visible.length - shown.length;
 
   return (
     <SectionCard
-      title="Worklist"
-      description="The next thing to do, ranked. Working from the top keeps the practice ahead of every lead, recall and plan."
+      title={title}
+      description={description}
       actions={
         <button
           type="button"
@@ -231,7 +246,7 @@ export function TaskQueueBoard({ clientSlug }: { clientSlug: string }) {
           />
         ) : (
           <ul className="space-y-2.5">
-            {visible.map((task) => {
+            {shown.map((task) => {
               const busy = busyKey?.key === task.key;
               return (
                 <li
@@ -346,6 +361,16 @@ export function TaskQueueBoard({ clientSlug }: { clientSlug: string }) {
                 </li>
               );
             })}
+            {truncated > 0 ? (
+              <li>
+                <a
+                  href={`/c/${clientSlug}/task-queue`}
+                  className="flex min-h-[40px] items-center justify-center rounded-xl border border-dashed border-line-strong px-4 text-xs font-semibold text-blue-dark transition-colors hover:bg-card-muted"
+                >
+                  View all {visible.length} tasks
+                </a>
+              </li>
+            ) : null}
           </ul>
         )}
       </div>

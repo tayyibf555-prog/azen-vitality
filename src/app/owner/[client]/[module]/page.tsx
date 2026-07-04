@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
@@ -21,7 +21,6 @@ import { InboxView } from "@/components/client/inbox/inbox-view";
 import { CopilotView } from "@/components/client/copilot/copilot-view";
 import { PatientsView } from "@/components/client/patients/patients-view";
 import { CalendarView } from "@/components/client/calendar/calendar-view";
-import { TodayView } from "@/components/client/today/today-view";
 import { PaymentsView } from "@/components/client/payments/payments-view";
 import { TaskQueueView } from "@/components/client/task-queue/task-queue-view";
 import { NotificationsView } from "@/components/client/notifications/notifications-view";
@@ -137,7 +136,8 @@ export default async function OwnerModulePage({
   }
 
   if (module === "today") {
-    return <TodayView clientSlug={client} />;
+    // Today folded into the front door ("One Front Door" layout).
+    redirect(`/owner/${client}/overview`);
   }
 
   if (module === "payments") {

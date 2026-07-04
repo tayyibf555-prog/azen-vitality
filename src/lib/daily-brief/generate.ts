@@ -73,7 +73,9 @@ async function buildDiarySection(ctx: BriefContext, state: BuildState): Promise<
           : `${booked} booked in across your sites.`,
       priority: gaps > 0 ? "medium" : "low",
       count: appts.length,
-      href: "today",
+      // The old /today module folded into Home; the Calendar is now the full
+      // diary destination, so deep-link there (never at the /today redirect).
+      href: "calendar",
     });
   }
   return { key: "diary", title: "Today's diary", items };

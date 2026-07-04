@@ -6,10 +6,10 @@ import {
   TrendingUp,
   CalendarCheck,
   PoundSterling,
-  Clock,
   Target,
   Flame,
   ListChecks,
+  ShieldAlert,
 } from "lucide-react";
 import {
   PageHeader,
@@ -23,30 +23,16 @@ import {
   type Column,
   type Tone,
 } from "@/components/primitives";
-import {
-  getClient,
-  getClientMetrics,
-  getSite,
-  getSiteMetrics,
-  BRIEF_ITEMS,
-  LEADS,
-  NOW,
-} from "@/lib/mock";
-import type { BriefItem, Lead, SiteMetrics } from "@/lib/types";
-import { gbp, compact, relativeTime, cn } from "@/lib/utils";
+import { getClient, getClientMetrics, getSite, getSiteMetrics, LEADS, NOW } from "@/lib/mock";
+import type { Lead, SiteMetrics } from "@/lib/types";
+import { gbp, compact, relativeTime } from "@/lib/utils";
 
-const PRIORITY_RANK: Record<BriefItem["priority"], number> = { high: 0, medium: 1, low: 2 };
-const PRIORITY_TONE: Record<BriefItem["priority"], Tone> = {
-  high: "danger",
-  medium: "warning",
-  low: "neutral",
-};
-const METRIC_LABEL: Record<BriefItem["metric"], string> = {
-  bookings: "Bookings",
-  revenue: "Revenue",
-  time: "Time saved",
-  risk: "Risk",
-};
+// The owner's proof-of-value view: is the platform paying off, and is any site
+// off target. Rendered standalone at /owner/[client]/overview and embedded as the
+// owner-only band on the client Home page. Every figure is computed or mock-
+// labelled — NEVER a hardcoded delta (an invented +12% an owner can falsify
+// against Dentally poisons trust in every real number).
+
 const STAGE_TONE: Record<Lead["stage"], Tone> = {
   new: "info",
   contacting: "info", // transient in-flight claim; display like 'new'
@@ -154,33 +140,22 @@ const SITE_COLUMNS: Column<SiteMetrics>[] = [
   },
 ];
 
-export function OverviewDashboard({ hideHero = false }: { hideHero?: boolean }) {
+// Exception thresholds for the by-site strip: only sites breaching these speak.
+// Pilot values — tune with the practice once real Dentally data flows.
+const NOSHOW_MAX = 0.13;
+const RECALL_MIN = 0.45;
+
+export function OverviewDashboard({
+  hideHero = false,
+  variant = "standalone",
+}: {
+  hideHero?: boolean;
+  /** "embedded" = the owner band on Home: revenue lives in the Home header card,
+   *  so the emphasised stat is dropped to avoid saying the same number twice. */
+  variant?: "standalone" | "embedded";
+}) {
   const params = useParams<{ client: string }>();
   const client = getClient(params.client);
-
-  // Live daily-brief headline. Computed on read by /api/daily-brief from the
-  // real module repositories; falls back to the mock so the section never blanks.
-  const [liveBrief, setLiveBrief] = useState<BriefItem[] | null>(null);
-  useEffect(() => {
-    let active = true;
-    // Reset on client change so a switch never renders the previous client's
-    // brief while the new fetch is in flight or if it errors (falls back to mock).
-    setLiveBrief(null);
-    if (!params.client) return;
-    fetch(`/api/daily-brief?client=${encodeURIComponent(params.client)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("brief fetch failed"))))
-      .then((j: { ok?: boolean; brief?: { headline?: BriefItem[] } }) => {
-        if (active && j.ok && Array.isArray(j.brief?.headline)) {
-          setLiveBrief(j.brief.headline);
-        }
-      })
-      .catch(() => {
-        // Network or server error: keep the mock fallback (liveBrief stays null).
-      });
-    return () => {
-      active = false;
-    };
-  }, [params.client]);
 
   // Live leads from Speed-to-lead (real enquiries arriving via intake / the quiz),
   // so the "Recent enquiries" panel reflects what is actually coming in. Falls
@@ -205,9 +180,7 @@ export function OverviewDashboard({ hideHero = false }: { hideHero?: boolean }) 
     };
   }, [params.client]);
 
-  // Live open-task count from the Task queue (computed across every module). A
-  // small "needs attention" line links straight into the worklist. Resets on
-  // client change and falls back to nothing (null) on error so it never misleads.
+  // Live open-task count from the Task queue, linking into the worklist.
   const [openTasks, setOpenTasks] = useState<number | null>(null);
   useEffect(() => {
     let active = true;
@@ -241,16 +214,24 @@ export function OverviewDashboard({ hideHero = false }: { hideHero?: boolean }) 
     ? Math.round(siteMetrics.reduce((a, s) => a + s.costPerBooking, 0) / siteMetrics.length)
     : 0;
 
-  const briefSource = liveBrief ?? BRIEF_ITEMS;
-  const briefs = [...briefSource]
-    .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority])
-    .slice(0, 5);
-
   const leads = [...(liveLeads ?? LEADS)].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
-
   const hotCount = leads.filter((l) => l.assessmentScore !== null && l.assessmentScore >= 75).length;
+
+  // Exceptions only: silence means on target.
+  const exceptions = siteMetrics
+    .map((m) => {
+      const breaches: string[] = [];
+      if (m.noShowRate > NOSHOW_MAX)
+        breaches.push(`No-shows ${Math.round(m.noShowRate * 100)}% (target under ${Math.round(NOSHOW_MAX * 100)}%)`);
+      if (m.recallRecoveryRate < RECALL_MIN)
+        breaches.push(
+          `Recall recovery ${Math.round(m.recallRecoveryRate * 100)}% (target over ${Math.round(RECALL_MIN * 100)}%)`,
+        );
+      return { site: getSite(m.siteId)?.name ?? m.siteId, breaches };
+    })
+    .filter((e) => e.breaches.length > 0);
 
   return (
     <>
@@ -258,42 +239,34 @@ export function OverviewDashboard({ hideHero = false }: { hideHero?: boolean }) 
         <PageHeader
           hero
           title="Overview"
-          description="Your live, cross-site view of the full funnel across all three practices, with the revenue and hours recovered."
+          description="Your cross-site view of the funnel: what came in, what was booked, and the revenue recovered."
         />
       )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className={variant === "embedded" ? "grid grid-cols-3 gap-4" : "grid grid-cols-2 gap-4 lg:grid-cols-4"}>
         <StatCard
           label="Leads in"
           value={compact(metrics?.leadsIn ?? totalLeads)}
           icon={TrendingUp}
-          delta={{ value: 12, goodWhenUp: true }}
           hint="Across all sites, last 30 days"
         />
         <StatCard
           label="Consultations booked"
           value={compact(metrics?.consultationsBooked ?? totalBooked)}
           icon={CalendarCheck}
-          delta={{ value: 9, goodWhenUp: true }}
         />
-        <StatCard
-          emphasis
-          label="Revenue recovered"
-          value={gbp(metrics?.recoveredRevenue ?? 0)}
-          icon={PoundSterling}
-          delta={{ value: 18, goodWhenUp: true }}
-        />
-        <StatCard
-          label="Hours saved"
-          value={`${metrics?.hoursSaved ?? 0}h`}
-          icon={Clock}
-          delta={{ value: 14, goodWhenUp: true }}
-        />
+        {variant === "standalone" ? (
+          <StatCard
+            emphasis
+            label="Revenue recovered"
+            value={gbp(metrics?.recoveredRevenue ?? 0)}
+            icon={PoundSterling}
+          />
+        ) : null}
         <StatCard
           label="Cost per booking"
           value={gbp(avgCostPerBooking)}
           icon={Target}
-          delta={{ value: 6, goodWhenUp: false }}
           hint="Blended average"
         />
       </div>
@@ -312,32 +285,27 @@ export function OverviewDashboard({ hideHero = false }: { hideHero?: boolean }) 
         </SectionCard>
 
         <SectionCard
-          title="Today"
-          description="Highest-priority actions right now"
+          title="By site"
+          description="Exceptions only. Silence means on target."
         >
-          <ul className="space-y-3">
-            {briefs.map((b) => (
-              <li key={b.id} className="flex items-start gap-3">
-                <span
-                  className={cn(
-                    "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-                    b.priority === "high"
-                      ? "bg-danger"
-                      : b.priority === "medium"
-                        ? "bg-warning"
-                        : "bg-line-strong",
-                  )}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold leading-snug text-navy">{b.title}</p>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-muted">{b.detail}</p>
-                </div>
-                <StatusPill tone={PRIORITY_TONE[b.priority]} className="shrink-0">
-                  {METRIC_LABEL[b.metric]}
-                </StatusPill>
-              </li>
-            ))}
-          </ul>
+          {exceptions.length === 0 ? (
+            <p className="text-sm text-muted">All sites on target this month.</p>
+          ) : (
+            <ul className="space-y-2.5">
+              {exceptions.map((e) => (
+                <li key={e.site} className="rounded-xl bg-warning/10 px-3.5 py-2.5">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-warning">
+                    <ShieldAlert size={14} className="shrink-0" />
+                    {e.site}
+                  </p>
+                  <p className="mt-0.5 text-xs text-warning/90">{e.breaches.join(" · ")}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 border-t border-line pt-2.5 text-xs text-muted">
+            Full breakdown in the By site tab below.
+          </p>
         </SectionCard>
       </div>
 

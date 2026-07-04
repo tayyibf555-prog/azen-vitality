@@ -240,7 +240,7 @@ describe("composition from module shapes", () => {
     // These are the slugs the overflow deep link (/c/<client>/<slug>) is built
     // from; they must all exist as routes under src/app/c/[client]/.
     const validSlugs = new Set([
-      "today",
+      "calendar", // the diary line deep-links to the Calendar (Today folded into Home)
       "no-show-defence",
       "treatment-coordinator",
       "recall",

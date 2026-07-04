@@ -2,7 +2,6 @@ import type { LucideIcon } from "lucide-react";
 import type { Role } from "@/lib/types";
 import {
   LayoutDashboard,
-  CalendarCheck,
   CalendarDays,
   CalendarRange,
   Users,
@@ -95,13 +94,9 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Clinic",
     items: [
-      {
-        slug: "today",
-        label: "Today",
-        icon: CalendarCheck,
-        status: "live",
-        note: "A live snapshot of today's diary across every site: appointments, who has been seen, who is still to come, and no-shows.",
-      },
+      // NOTE: the old "today" module folded into the Home overview ("One Front
+      // Door"): its diary snapshot renders there as the diary rail, and /today
+      // redirects Home. The Calendar remains the full diary destination.
       {
         slug: "calendar",
         label: "Calendar",
@@ -349,11 +344,16 @@ export interface NavCategory {
 }
 
 export const NAV_CATEGORIES: NavCategory[] = [
+  // "One Front Door": the Home overview absorbs Today (deleted from the nav; its
+  // route redirects Home) and hosts the live task queue, so the rail's Home
+  // category is just three destinations. Daily brief and Task queue keep their
+  // routes (linked from Home as "Morning brief" / "View all tasks", and findable
+  // via the command palette) but no longer earn nav entries — see NAV_HIDDEN_SLUGS.
   {
     key: "home",
     label: "Home",
     icon: Home,
-    slugs: ["", "today", "calendar", "daily-brief", "task-queue", "notifications"],
+    slugs: ["", "calendar", "notifications"],
   },
   {
     key: "patients",
@@ -382,6 +382,13 @@ export const NAV_CATEGORIES: NavCategory[] = [
     slugs: ["rota", "compliance", "reports", "co-pilot", "settings"],
   },
 ];
+
+/**
+ * CLIENT_NAV modules that deliberately have NO sidebar category: their content
+ * is embedded in (or linked from) the Home overview, but the routes stay alive
+ * as deep-link targets and the command palette still finds them by name.
+ */
+export const NAV_HIDDEN_SLUGS = new Set<string>(["daily-brief", "task-queue"]);
 
 export interface ResolvedNavCategory {
   key: string;
