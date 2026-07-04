@@ -11,6 +11,8 @@ import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
+import { dentallyReadKey } from "@/lib/dentally/read";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
@@ -247,7 +249,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, skipped: "system off" });
   }
 
-  const apiKey = process.env.DENTALLY_API_KEY;
+  const apiKey = dentallyReadKey();
   if (!apiKey) {
     return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
   }

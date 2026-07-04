@@ -39,7 +39,7 @@ vi.mock("./client", () => ({
   },
 }));
 
-import { listPatients, listAppointments } from "./read";
+import { listPatients, listAppointments, dentallyReadKey } from "./read";
 
 beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "k");
@@ -68,5 +68,25 @@ describe("read.ts pagination (finding #7)", () => {
     const out = await listPatients(["site-1"]);
     expect(out).toHaveLength(20);
     expect(pager.pagesSeen).toEqual([1]); // no needless second page
+  });
+});
+
+describe("dentallyReadKey (read-only key selection)", () => {
+  it("prefers the dedicated read-only key when set", () => {
+    vi.stubEnv("DENTALLY_API_KEY", "write-key");
+    vi.stubEnv("DENTALLY_PROD_READONLY_API_KEY", "readonly-key");
+    expect(dentallyReadKey()).toBe("readonly-key");
+  });
+
+  it("falls back to DENTALLY_API_KEY when the read-only key is unset", () => {
+    vi.stubEnv("DENTALLY_API_KEY", "write-key");
+    vi.stubEnv("DENTALLY_PROD_READONLY_API_KEY", "");
+    expect(dentallyReadKey()).toBe("write-key");
+  });
+
+  it("returns empty string when neither is set (callers 503)", () => {
+    vi.stubEnv("DENTALLY_API_KEY", "");
+    vi.stubEnv("DENTALLY_PROD_READONLY_API_KEY", "");
+    expect(dentallyReadKey()).toBe("");
   });
 });

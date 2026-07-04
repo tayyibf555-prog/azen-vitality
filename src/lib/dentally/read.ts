@@ -1,13 +1,28 @@
 import { DentallyClient } from "./client";
 
 /**
- * A DentallyClient configured from the environment. Points at the local mock by
- * default in the pilot (DENTALLY_BASE_URL), and at real Dentally once a key and
- * base URL are set, with no change to callers.
+ * The Dentally API key for READ / sync operations (listing patients, appointments,
+ * plans, invoices; resolving a message recipient). Prefers the dedicated read-only
+ * key when set, falling back to DENTALLY_API_KEY so nothing breaks before it is
+ * configured.
+ *
+ * WRITE paths (the agent booking appointments or creating patients, in
+ * src/lib/agent/tools.ts via the inbound/voice routes' own client) deliberately do
+ * NOT use this: they read DENTALLY_API_KEY directly, so a read-only key can never
+ * be used to attempt a write against real Dentally.
+ */
+export function dentallyReadKey(): string {
+  return process.env.DENTALLY_PROD_READONLY_API_KEY || process.env.DENTALLY_API_KEY || "";
+}
+
+/**
+ * A DentallyClient configured from the environment for READS. Points at the local
+ * mock by default in the pilot (DENTALLY_BASE_URL), and at real Dentally once a key
+ * and base URL are set, with no change to callers.
  */
 export function dentallyFromEnv(): DentallyClient {
   return new DentallyClient({
-    apiKey: process.env.DENTALLY_API_KEY ?? "",
+    apiKey: dentallyReadKey(),
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
   });
 }

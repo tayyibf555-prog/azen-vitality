@@ -44,6 +44,8 @@ import { SITES } from "@/lib/mock/clients";
 import { getDisabledSlugs } from "@/lib/systems/repository";
 import { DRAIN_SOURCE_TO_SLUG } from "@/lib/systems/catalog";
 
+import { dentallyReadKey } from "@/lib/dentally/read";
+
 export const dynamic = "force-dynamic";
 
 function authorized(request: Request): boolean {
@@ -234,7 +236,7 @@ async function drainSource(
 export async function POST(request: Request): Promise<Response> {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
 
-  const apiKey = process.env.DENTALLY_API_KEY;
+  const apiKey = dentallyReadKey();
   if (!apiKey) return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
 
   // Never overlap with another drain run: two drains would list the same 'queued'
