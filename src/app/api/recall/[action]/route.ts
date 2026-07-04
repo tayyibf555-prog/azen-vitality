@@ -19,6 +19,8 @@ import {
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -305,8 +307,26 @@ export async function POST(
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
   if (auth && typeof body.targetId === "string") {
-    const denied = requireSiteAccess(auth, body.targetId.split(":")[0]);
+    const siteId = body.targetId.split(":")[0];
+    const denied = requireSiteAccess(auth, siteId);
     if (denied) return denied;
+
+    // Owner kill switch: gate the state-changing recall actions so the owner can
+    // switch recall off without a deploy.
+    if (
+      action === "draft" ||
+      action === "approve" ||
+      action === "send" ||
+      action === "enrol" ||
+      action === "book" ||
+      action === "pause" ||
+      action === "resume"
+    ) {
+      const _clientId = getSite(siteId)?.clientId;
+      if (_clientId && !(await isSystemEnabled(_clientId, "recall"))) {
+        return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
+      }
+    }
   }
 
   switch (action) {

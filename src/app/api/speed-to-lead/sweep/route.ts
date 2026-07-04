@@ -7,6 +7,7 @@ import {
   resetStaleContacting,
 } from "@/lib/speed-to-lead/repository";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -22,6 +23,10 @@ const SLA_MS = 30_000;
 export async function POST(request: Request): Promise<Response> {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
+
+  if (!(await isSystemEnabled("vitality", "speed-to-lead"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // Never overlap with another SLA sweep: two runs would both list the same
   // uncontacted leads and double first-contact. The lease must OUTLIVE

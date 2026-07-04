@@ -1,6 +1,7 @@
 import { getClient, getSites } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import { generateBrief } from "@/lib/daily-brief/generate";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import type { BriefContext } from "@/lib/daily-brief/types";
 import type { Role } from "@/lib/types";
 
@@ -21,6 +22,10 @@ export async function GET(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+
+  if (!(await isSystemEnabled(client.id, "daily-brief"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // Role comes from the authed user when enforced; default to client_owner so
   // the dashboard headline still renders all priorities in the pilot.

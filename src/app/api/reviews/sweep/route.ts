@@ -1,5 +1,6 @@
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { getClient, getSite } from "@/lib/mock/clients";
 import { draftReviewRequest } from "@/lib/reviews/draft";
@@ -36,6 +37,11 @@ function clientNameForSite(siteId: string): string | null {
 export async function POST(request: Request): Promise<Response> {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
+
+  // Owner kill switch: if the reviews system is toggled off, skip this sweep.
+  if (!(await isSystemEnabled("vitality", "reviews"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // The copy needs a review link; without one we have nothing useful to send.
   const link = reviewLink();

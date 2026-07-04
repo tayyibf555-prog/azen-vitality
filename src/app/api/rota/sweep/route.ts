@@ -15,6 +15,7 @@ import {
 } from "@/lib/rota/repository";
 import type { OpeningHours } from "@/lib/types";
 import type { RotaShift, RotaStaff, RotaSite } from "@/lib/rota/types";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,9 @@ export async function POST(request: Request): Promise<Response> {
     const providers = new Set<string>();
 
     for (const client of CLIENTS) {
+      // Owner kill switch: skip this client's rota entirely when disabled.
+      if (!(await isSystemEnabled(client.id, "rota"))) continue;
+
       const config = await getConfig(client.id);
 
       // 1) Ensure the configured weeks of shifts exist.

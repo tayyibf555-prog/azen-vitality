@@ -17,6 +17,7 @@ import {
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,10 @@ async function settleExhausted(target: RecallTarget, now: Date): Promise<void> {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  if (!(await isSystemEnabled("vitality", "recall"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // Never overlap with another recall sweep: two runs would both see the same
   // due cadences and draft+queue duplicates. The lease must OUTLIVE maxDuration

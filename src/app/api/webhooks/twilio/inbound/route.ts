@@ -43,6 +43,7 @@ import {
   isAgentEnabled,
 } from "@/lib/agent/repository";
 import type { AgentContext, PhoneIdentity } from "@/lib/agent/types";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -297,6 +298,16 @@ export async function POST(request: Request): Promise<Response> {
 
   if (!(await isAgentEnabled(siteId))) {
     // Agent paused for this site from the dashboard: route to a human, no reply.
+    await setConversationStatus(conversation.id, "needs_human");
+    return twiml();
+  }
+  // Owner kill switch: the SMS agent ("booking-agent") and the WhatsApp agent are
+  // switched independently. When the relevant one is off, hand to a human with no
+  // auto-reply. The inbound is already recorded above, and STOP/opt-out was
+  // handled earlier, so turning the agent off never blocks opt-out.
+  const agentClientId = getSite(siteId)?.clientId;
+  const agentSystem = channel === "whatsapp" ? "whatsapp" : "booking-agent";
+  if (agentClientId && !(await isSystemEnabled(agentClientId, agentSystem))) {
     await setConversationStatus(conversation.id, "needs_human");
     return twiml();
   }

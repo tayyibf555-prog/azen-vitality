@@ -12,6 +12,7 @@ import type { TouchChannel, TreatmentOpportunity } from "@/lib/coordinator/types
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -43,6 +44,10 @@ function patientToRef(o: TreatmentOpportunity): string {
 export async function POST(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
+
+  if (!(await isSystemEnabled("vitality", "treatment-coordinator"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // Never overlap with another coordinator sweep: two runs would both see the
   // same open opportunities and draft+queue duplicates. The lease must OUTLIVE

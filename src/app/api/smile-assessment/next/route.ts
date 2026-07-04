@@ -6,6 +6,7 @@ import { candidateQuestions, deterministicNext, shouldFinish, answeredCount } fr
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
 import { consumeBudget } from "@/lib/rate-budget";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
@@ -165,6 +166,13 @@ export async function POST(request: Request): Promise<Response> {
   const clientSlug = typeof body.clientSlug === "string" ? body.clientSlug.trim() : "";
   const campaignSlug = typeof body.campaignSlug === "string" ? body.campaignSlug.trim() : "";
   const client = clientSlug ? getClient(clientSlug) : undefined;
+
+  // Owner kill-switch: if the smile-assessment system is off for this client, do
+  // not run the AI pick or emit any question. Default-on and fail-open.
+  if (client && !(await isSystemEnabled(client.id, "smile-assessment"))) {
+    return Response.json({ ok: false, error: "unavailable" }, { status: 503 });
+  }
+
   let campaignGoal: string | null = null;
   try {
     if (client && campaignSlug) {

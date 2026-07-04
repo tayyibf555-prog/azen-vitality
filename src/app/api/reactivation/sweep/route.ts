@@ -13,6 +13,7 @@ import {
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,10 @@ function patientToRef(t: ReactivationTarget): string {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  if (!(await isSystemEnabled("vitality", "reactivation"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // Never overlap with another reactivation sweep: two runs would both see the
   // same due cadences and draft+queue duplicates. The lease must OUTLIVE

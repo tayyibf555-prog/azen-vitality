@@ -10,6 +10,8 @@ import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
 import type { FreedSlot } from "@/lib/noshow/types";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,14 @@ function dentallyClient(): DentallyClient | null {
 function siteDenied(auth: AuthedUser | null, siteId: string): Response | null {
   return auth ? requireSiteAccess(auth, siteId) : null;
 }
+/** Owner kill switch for the no-show defence system, scoped to the resource's site. */
+async function systemOff(siteId: string): Promise<Response | null> {
+  const _clientId = getSite(siteId)?.clientId;
+  if (_clientId && !(await isSystemEnabled(_clientId, "no-show-defence"))) {
+    return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
+  }
+  return null;
+}
 
 async function handleConfirm(body: Record<string, unknown>, auth: AuthedUser | null): Promise<Response> {
   const targetId = body.targetId;
@@ -36,6 +46,8 @@ async function handleConfirm(body: Record<string, unknown>, auth: AuthedUser | n
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
   const denied = siteDenied(auth, target.siteId);
   if (denied) return denied;
+  const off = await systemOff(target.siteId);
+  if (off) return off;
 
   await setTargetStatus(targetId, "confirmed");
   const cadence = await getCadenceByTarget(targetId);
@@ -50,6 +62,8 @@ async function handleCancel(body: Record<string, unknown>, auth: AuthedUser | nu
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
   const denied = siteDenied(auth, target.siteId);
   if (denied) return denied;
+  const off = await systemOff(target.siteId);
+  if (off) return off;
 
   // Free the slot in Dentally where we can, then mark our side and offer the waitlist.
   const client = dentallyClient();
@@ -86,6 +100,8 @@ async function handleBook(body: Record<string, unknown>, auth: AuthedUser | null
   if (!siteId) return badRequest("site_id is required");
   const denied = siteDenied(auth, siteId);
   if (denied) return denied;
+  const off = await systemOff(siteId);
+  if (off) return off;
 
   const patientId = body.patient_id;
   const start = (typeof body.start_time === "string" && body.start_time) || (typeof body.start === "string" && body.start) || "";
@@ -158,6 +174,8 @@ async function handlePauseResume(
   if (!cadence) return Response.json({ error: "No cadence for target" }, { status: 404 });
   const denied = siteDenied(auth, cadence.siteId);
   if (denied) return denied;
+  const off = await systemOff(cadence.siteId);
+  if (off) return off;
   await updateCadence(cadence.id, { status: resume ? "active" : "paused" });
   return Response.json({ ok: true });
 }

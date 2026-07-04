@@ -2,6 +2,8 @@ import { OwnerSidebar } from "@/components/owner/owner-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
 import { guardPage } from "@/lib/auth/page-guard";
+import { getClient } from "@/lib/mock/clients";
+import { getDisabledSlugs } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +16,13 @@ export default async function OwnerLayout({
 }) {
   const { client } = await params;
   await guardPage({ roles: ["agency_admin", "client_owner"], clientSlug: client });
+  // Switched-off systems drop out of the owner sidebar too (System controls is
+  // never a controllable system, so it stays visible to switch them back on).
+  const clientRecord = getClient(client);
+  const disabledSlugs = clientRecord ? [...(await getDisabledSlugs(clientRecord.id))] : [];
   return (
     <div className="flex min-h-screen bg-cream">
-      <OwnerSidebar />
+      <OwnerSidebar disabledSlugs={disabledSlugs} />
       <div className="flex min-h-screen flex-1 flex-col">
         <ClientTopbar />
         <main className="flex-1">

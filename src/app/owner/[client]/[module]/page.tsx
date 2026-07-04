@@ -26,6 +26,7 @@ import { TaskQueueView } from "@/components/client/task-queue/task-queue-view";
 import { NotificationsView } from "@/components/client/notifications/notifications-view";
 import { PracticeBrainView } from "@/components/client/practice-brain";
 import { SettingsView } from "@/components/client/settings/settings-view";
+import { SystemsView } from "@/components/client/systems/systems-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 import { requireModuleAccess } from "@/lib/auth/page-guard";
@@ -158,6 +159,10 @@ export default async function OwnerModulePage({
 
   if (module === "settings") {
     return <SettingsView clientSlug={client} />;
+  }
+
+  if (module === "controls") {
+    return <SystemsView clientSlug={client} />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {

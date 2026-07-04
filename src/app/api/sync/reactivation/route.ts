@@ -19,6 +19,7 @@ import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -322,6 +323,10 @@ async function syncSite(
 export async function POST(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
+
+  if (!(await isSystemEnabled("vitality", "reactivation"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   const apiKey = process.env.DENTALLY_API_KEY;
   if (!apiKey) {

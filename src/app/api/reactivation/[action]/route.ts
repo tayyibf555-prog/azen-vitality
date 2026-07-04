@@ -15,6 +15,8 @@ import {
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -262,8 +264,13 @@ export async function POST(
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
   if (auth && typeof body.targetId === "string") {
-    const denied = requireSiteAccess(auth, body.targetId.split(":")[0]);
+    const siteId = body.targetId.split(":")[0];
+    const denied = requireSiteAccess(auth, siteId);
     if (denied) return denied;
+    const _clientId = getSite(siteId)?.clientId;
+    if (_clientId && !(await isSystemEnabled(_clientId, "reactivation"))) {
+      return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
+    }
   }
 
   switch (action) {

@@ -30,6 +30,7 @@ import {
   Bell,
   Home,
   Briefcase,
+  Power,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -295,6 +296,14 @@ export const CLIENT_NAV: NavGroup[] = [
         roles: OWNER_ROLES,
         note: "Practice co-pilot. Ask the knowledge base anything; answers are grounded in stored knowledge and filtered to your access level.",
       },
+      {
+        slug: "controls",
+        label: "System controls",
+        icon: Power,
+        status: "live",
+        roles: OWNER_ROLES,
+        note: "The owner's master on/off panel for every automated system (recall, reactivation, no-show defence, the agents, and more). Switching one off is a full kill switch: it hides the module and halts its server-side work, so nothing sends until it is switched back on.",
+      },
     ],
   },
   {
@@ -379,7 +388,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "operations",
     label: "Operations",
     icon: Briefcase,
-    slugs: ["rota", "compliance", "reports", "co-pilot", "settings"],
+    slugs: ["rota", "compliance", "reports", "co-pilot", "controls", "settings"],
   },
 ];
 
@@ -404,7 +413,10 @@ export interface ResolvedNavCategory {
  * since every module in it is owner-only). `role: null` (dev / enforcement off)
  * shows everything, matching the sidebars' existing fallback behaviour.
  */
-export function categoriesForRole(role: Role | null): ResolvedNavCategory[] {
+export function categoriesForRole(
+  role: Role | null,
+  disabledSlugs?: ReadonlySet<string>,
+): ResolvedNavCategory[] {
   const bySlug = new Map(CLIENT_NAV.flatMap((g) => g.items).map((i) => [i.slug, i]));
   return NAV_CATEGORIES.map((c) => ({
     key: c.key,
@@ -412,7 +424,13 @@ export function categoriesForRole(role: Role | null): ResolvedNavCategory[] {
     icon: c.icon,
     items: c.slugs
       .map((s) => bySlug.get(s))
-      .filter((i): i is NavItem => Boolean(i) && (!role || roleCanSeeItem(role, i!))),
+      // Drop items this role may not see, and any system the owner has switched
+      // OFF (the kill switch hides the module; System controls is never a
+      // controllable system, so it is never hidden and stays reachable).
+      .filter(
+        (i): i is NavItem =>
+          Boolean(i) && (!role || roleCanSeeItem(role, i!)) && !disabledSlugs?.has(i!.slug),
+      ),
   })).filter((c) => c.items.length > 0);
 }
 

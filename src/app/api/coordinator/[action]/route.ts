@@ -14,6 +14,8 @@ import type {
   TreatmentOpportunity,
 } from "@/lib/coordinator/types";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -282,6 +284,15 @@ export async function POST(
     if (!opp) return Response.json({ error: "Opportunity not found" }, { status: 404 });
     const denied = requireSiteAccess(auth, opp.siteId);
     if (denied) return denied;
+
+    // Owner kill switch: gate the state-changing coordinator actions so the owner
+    // can switch the treatment coordinator off without a deploy.
+    if (action === "draft" || action === "approve" || action === "send" || action === "book") {
+      const _clientId = getSite(opp.siteId)?.clientId;
+      if (_clientId && !(await isSystemEnabled(_clientId, "treatment-coordinator"))) {
+        return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
+      }
+    }
   }
 
   switch (action) {

@@ -2,6 +2,8 @@ import { getCapture, setCaptureStatus } from "@/lib/after-hours/repository";
 import type { CaptureStatus } from "@/lib/after-hours/types";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +52,11 @@ export async function POST(
   if (!capture) return Response.json({ error: "Capture not found" }, { status: 404 });
   const denied = siteDenied(auth, capture.siteId);
   if (denied) return denied;
+
+  const _clientId = getSite(capture.siteId)?.clientId;
+  if (_clientId && !(await isSystemEnabled(_clientId, "after-hours"))) {
+    return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
+  }
 
   await setCaptureStatus(captureId, next);
   return Response.json({ ok: true });

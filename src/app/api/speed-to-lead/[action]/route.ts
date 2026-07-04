@@ -2,6 +2,8 @@ import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getLead, setLeadStage, claimLeadFromStage } from "@/lib/speed-to-lead/repository";
 import { contactLead } from "@/lib/speed-to-lead/contact";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +41,11 @@ export async function POST(
   if (!lead) return Response.json({ error: "Lead not found" }, { status: 404 });
   const denied = siteDenied(auth, lead.siteId);
   if (denied) return denied;
+
+  const _clientId = getSite(lead.siteId)?.clientId;
+  if (_clientId && !(await isSystemEnabled(_clientId, "speed-to-lead"))) {
+    return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
+  }
 
   switch (action) {
     case "mark-booked":

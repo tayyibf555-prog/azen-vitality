@@ -17,6 +17,7 @@ import type { NoshowTarget } from "@/lib/noshow/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,10 @@ function patientToRef(t: NoshowTarget): string {
 export async function POST(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
+
+  if (!(await isSystemEnabled("vitality", "no-show-defence"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
 
   // Never overlap with another no-show sweep: two runs would both see the same
   // due cadences (and expired offers) and double-send / double-reoffer. The lease

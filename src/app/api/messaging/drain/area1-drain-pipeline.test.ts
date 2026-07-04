@@ -62,6 +62,9 @@ const fakes = vi.hoisted(() => {
     isSuppressed: vi.fn(),
     acquireCronLock: vi.fn(),
     releaseCronLock: vi.fn(async (_name: string) => {}),
+    // Owner kill switch: disabled SYSTEM SLUGS (not drain-source names). The drain
+    // remaps source names to slugs, so "noshow" -> "no-show-defence" etc.
+    disabledSlugs: new Set<string>(),
   };
 });
 
@@ -101,6 +104,10 @@ vi.mock("@/lib/cron-lock", () => ({
 }));
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-1", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
+}));
+// Owner kill switch: the drain reads the disabled set once per run.
+vi.mock("@/lib/systems/repository", () => ({
+  getDisabledSlugs: async () => new Set(fakes.disabledSlugs),
 }));
 
 // NOTE: "@/lib/messaging/send" is deliberately NOT mocked — the real provider
@@ -145,6 +152,7 @@ beforeEach(() => {
   fakes.acquireCronLock.mockReset();
   fakes.acquireCronLock.mockResolvedValue(true);
   fakes.releaseCronLock.mockClear();
+  fakes.disabledSlugs.clear();
   fetchSpy.mockClear();
   vi.stubGlobal("fetch", fetchSpy);
   vi.stubEnv("CRON_SECRET", "area1-test-secret");
@@ -159,6 +167,31 @@ afterEach(() => {
 });
 
 describe("shared messaging drain", () => {
+  it("owner kill switch: a disabled system's outbox is skipped, its rows stay queued, and enabled systems still send", async () => {
+    const react = seed("reactivation");
+    const rec = seed("recall");
+    const ns = seed("noshow");
+    // Disable recall (slug === source name) and no-show defence (drain source
+    // "noshow" REMAPS to slug "no-show-defence"), leaving reactivation on.
+    fakes.disabledSlugs.add("recall");
+    fakes.disabledSlugs.add("no-show-defence");
+
+    const res = await POST(drainRequest());
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    // Disabled sources are skipped (reported, nothing sent) and never even listed.
+    expect(json.perSource.recall).toMatchObject({ skipped: "system off", sent: 0 });
+    expect(json.perSource.noshow).toMatchObject({ skipped: "system off", sent: 0 });
+    expect(fakes.modules.recall.list).not.toHaveBeenCalled();
+    expect(fakes.modules.noshow.list).not.toHaveBeenCalled();
+    expect(rec.status).toBe("queued"); // untouched, drains when switched back on
+    expect(ns.status).toBe("queued");
+    // The enabled system still delivers.
+    expect(react.status).toBe("sent");
+    expect(json.perSource.reactivation).toMatchObject({ sent: 1 });
+  });
+
   it("drains EVERY module outbox and records sends with provider 'dry-run' (no network)", async () => {
     for (const m of ALL_SOURCES) seed(m);
     seed("recall", { channel: "email" });

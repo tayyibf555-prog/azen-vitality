@@ -5,6 +5,7 @@ import { getActiveFormBySlug } from "@/lib/onboarding/form-repository";
 import { resolveSteps } from "@/lib/onboarding/resolve";
 import { createSubmission } from "@/lib/onboarding/repository";
 import { consumeBudget } from "@/lib/rate-budget";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import type {
   OnboardingConsent,
   OnboardingFile,
@@ -129,6 +130,11 @@ export async function POST(request: Request): Promise<Response> {
     const clientSlug = str(body.clientSlug);
     const client = clientSlug ? getClient(clientSlug) : undefined;
     if (!client) return bad("Unknown practice");
+
+    // Owner kill-switch: if onboarding is turned off for this client, accept nothing.
+    if (!(await isSystemEnabled(client.id, "onboarding"))) {
+      return Response.json({ ok: false, error: "unavailable" }, { status: 503 });
+    }
 
     // Per-IP cap first (cheap, in-process) so a flood is blunted before any DB hit.
     if (tooManyForIp(clientIp(request), Date.now())) {

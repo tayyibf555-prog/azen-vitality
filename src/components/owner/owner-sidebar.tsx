@@ -36,7 +36,7 @@ interface Entry {
   soon?: boolean;
 }
 
-export function OwnerSidebar() {
+export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] }) {
   const params = useParams<{ client: string }>();
   const pathname = usePathname();
   const router = useRouter();
@@ -47,10 +47,15 @@ export function OwnerSidebar() {
   const client = getClient(clientSlug);
   const base = `/owner/${clientSlug}`;
 
+  // Systems the owner has switched OFF drop out of the sidebar (resolved
+  // server-side in the layout). "System controls" is never a controllable
+  // system, so it is never hidden and stays reachable to switch things back on.
+  const disabled = new Set(disabledSlugs);
+
   // The owner shell only renders for owner/agency roles (the /owner layout guard
   // bounces coordinators), so this normally yields the full nav. We still filter
   // by role for defence in depth; no verified role (dev) shows everything.
-  const categories = categoriesForRole(user?.role ?? null);
+  const categories = categoriesForRole(user?.role ?? null, disabled);
 
   // The owner Overview lives at /owner/[client]/overview, so the base path is
   // reserved for the Management view rather than the funnel Overview.

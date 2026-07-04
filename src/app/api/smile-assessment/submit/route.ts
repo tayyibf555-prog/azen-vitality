@@ -9,6 +9,7 @@ import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
+import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -208,13 +209,18 @@ export async function POST(request: Request): Promise<Response> {
       campaignId: campaign?.id ?? null,
     });
 
+    // Owner kill-switch: if the smile-assessment system is off, still record the
+    // response above but skip the outbound Speed-to-lead bridge, returning the same
+    // benign shape a skipped-bridge submission produces (never reveal it is off).
+    const smileEnabled = await isSystemEnabled(client?.id ?? "", "smile-assessment");
+
     // BRIDGE: a high score with a reachable contact becomes a Speed-to-lead lead
     // and is contacted instantly. Consent is implied by submitting the quiz; the
     // chosen channel must have a deliverable address. If neither phone nor email
     // is present we simply record the response and skip the bridge.
     let leadCreated = false;
     const hasContact = Boolean(phone || email);
-    if (band === "high" && hasContact && trusted) {
+    if (band === "high" && hasContact && trusted && smileEnabled) {
       const leadChannel: LeadChannel =
         channel ?? (phone ? "sms" : "email");
       // Guard: the chosen/derived channel must have its address, else fall back.

@@ -41,6 +41,8 @@ import {
   markOutboxBlocked as markReviewsBlocked,
 } from "@/lib/reviews/repository";
 import { SITES } from "@/lib/mock/clients";
+import { getDisabledSlugs } from "@/lib/systems/repository";
+import { DRAIN_SOURCE_TO_SLUG } from "@/lib/systems/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -257,10 +259,22 @@ export async function POST(request: Request): Promise<Response> {
       : undefined;
 
     const siteIds = vitalitySiteIds();
+    // Owner kill switch: a disabled system's outbox must not send. Fetch the
+    // disabled set once (fail-open: an error here returns an empty set, so a
+    // toggle-table blip never halts delivery — see systems/repository). Single
+    // client in the pilot, matching vitalitySiteIds().
+    const disabledSlugs = await getDisabledSlugs("vitality");
     let drained = 0, sent = 0, failed = 0, blocked = 0;
-    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string }> = {};
+    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};
     const sourceErrors: string[] = [];
     for (const source of SOURCES) {
+      // Kill switch: skip this system entirely when the owner has turned it off.
+      // Its rows stay 'queued' and drain the moment it is switched back on.
+      const slug = DRAIN_SOURCE_TO_SLUG[source.name];
+      if (slug && disabledSlugs.has(slug)) {
+        perSource[source.name] = { drained: 0, sent: 0, failed: 0, blocked: 0, skipped: "system off" };
+        continue;
+      }
       // Isolate each module's drain. list() throwing (DB briefly down) or any
       // unexpected throw inside drainSource must NOT abort the remaining modules'
       // drains for this tick: reactivation being unreachable should not stop

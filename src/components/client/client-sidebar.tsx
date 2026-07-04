@@ -26,7 +26,7 @@ function initialsOf(name: string) {
     .toUpperCase();
 }
 
-export function ClientSidebar() {
+export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] }) {
   const params = useParams<{ client: string }>();
   const pathname = usePathname();
   const router = useRouter();
@@ -37,12 +37,17 @@ export function ClientSidebar() {
   const client = getClient(clientSlug);
   const base = `/c/${clientSlug}`;
 
+  // Systems the owner has switched OFF are hidden from the sidebar (resolved
+  // server-side in the layout and passed down, so a coordinator without the
+  // owner-only /api/systems read still gets the filtered nav).
+  const disabled = new Set(disabledSlugs);
+
   // Two-level nav: a slim category rail (Home / Patients / Messages / Growth /
   // Operations) and a panel listing ONLY the selected category's modules — far
   // less to scan than the old all-29-modules list. Categories are filtered to
   // what this role may reach; with no verified role (dev / un-enforced) we show
   // everything. The server-side guard remains the real boundary.
-  const categories = categoriesForRole(user?.role ?? null);
+  const categories = categoriesForRole(user?.role ?? null, disabled);
 
   // Optimistic active state: highlight the clicked tab instantly instead of waiting
   // for usePathname to commit after the server render. Cleared once the route lands.

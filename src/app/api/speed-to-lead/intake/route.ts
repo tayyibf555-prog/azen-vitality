@@ -2,6 +2,7 @@ import { getClient, getSites, getSite } from "@/lib/mock/clients";
 import { contactLead } from "@/lib/speed-to-lead/contact";
 import { countRecentByContact, findOpenLeadByAddress, findEarlierOpenLead, insertLead, setLeadStage, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 
 export const dynamic = "force-dynamic";
@@ -89,6 +90,12 @@ export async function POST(request: Request): Promise<Response> {
       siteId = explicitSite;
     }
     if (!siteId) return bad("could not resolve a site from clientSlug or siteId");
+
+    // Owner kill switch: if the practice has turned Speed to Lead off, record
+    // nothing and fire no contact. Only reachable once a client is resolved.
+    if (client && !(await isSystemEnabled(client.id, "speed-to-lead"))) {
+      return Response.json({ ok: false, error: "unavailable" }, { status: 503 });
+    }
 
     // Rate limit per contact (the normalised address on the chosen channel).
     const contactKey = channel === "email" ? email! : phone!;
