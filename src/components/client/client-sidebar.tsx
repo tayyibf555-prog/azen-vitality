@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { LogOut, ChevronDown } from "lucide-react";
-import { CLIENT_NAV, navForRole } from "@/lib/nav";
+import { LogOut, Search } from "lucide-react";
+import { categoriesForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
@@ -35,11 +35,12 @@ export function ClientSidebar() {
   const client = getClient(clientSlug);
   const base = `/c/${clientSlug}`;
 
-  // Filter the nav to what this role may reach. With no verified role (dev /
-  // un-enforced, where getSessionUser returns null) we show everything — the
-  // owner view — so local behaviour is unchanged. The server-side guard is the
-  // real boundary; this just hides what a coordinator cannot reach.
-  const nav = user?.role ? navForRole(user.role) : CLIENT_NAV;
+  // Two-level nav: a slim category rail (Home / Patients / Messages / Growth /
+  // Operations) and a panel listing ONLY the selected category's modules — far
+  // less to scan than the old all-29-modules list. Categories are filtered to
+  // what this role may reach; with no verified role (dev / un-enforced) we show
+  // everything. The server-side guard remains the real boundary.
+  const categories = categoriesForRole(user?.role ?? null);
 
   // Optimistic active state: highlight the clicked tab instantly instead of waiting
   // for usePathname to commit after the server render. Cleared once the route lands.
@@ -55,32 +56,36 @@ export function ClientSidebar() {
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  // Collapsible nav groups (each section's items branch down under its header).
-  // Track which groups are COLLAPSED (default: all open). The sidebar lives in the
-  // layout, so this state persists across page navigation.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const toggleGroup = (label: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
+  // The rail selection: browsing a category only switches the panel (no page
+  // navigation); navigating to a page snaps the rail back to that page's own
+  // category so a deep link or a palette jump always highlights correctly.
+  const routeCategoryKey =
+    categories.find((c) => c.items.some((i) => isActive(i.slug)))?.key ?? categories[0]?.key ?? null;
+  const [browseKey, setBrowseKey] = useState<string | null>(null);
+  useEffect(() => setBrowseKey(null), [pathname]);
+  const activeKey = browseKey ?? routeCategoryKey;
+  const current = categories.find((c) => c.key === activeKey) ?? categories[0];
 
-  // Whichever group holds the active item is always kept open when you navigate in.
-  const activeGroupLabel = nav.find((g) => g.items.some((i) => isActive(i.slug)))?.label ?? null;
-  useEffect(() => {
-    if (!activeGroupLabel) return;
-    setCollapsed((prev) => {
-      if (!prev.has(activeGroupLabel)) return prev;
-      const next = new Set(prev);
-      next.delete(activeGroupLabel);
-      return next;
-    });
-  }, [activeGroupLabel]);
+  // Vertical tabs keyboard pattern: arrows/Home/End move the rail selection and
+  // focus together (roving tabindex), so the rail is fully keyboard-operable.
+  const onRailKeyDown = (e: React.KeyboardEvent) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const idx = Math.max(0, categories.findIndex((c) => c.key === activeKey));
+    const next =
+      e.key === "Home" ? 0
+        : e.key === "End" ? categories.length - 1
+          : e.key === "ArrowDown" ? Math.min(idx + 1, categories.length - 1)
+            : Math.max(idx - 1, 0);
+    const key = categories[next]?.key;
+    if (key) {
+      setBrowseKey(key);
+      document.getElementById(`rail-${key}`)?.focus();
+    }
+  };
 
   return (
-    <aside className="chrome-nav flex h-screen w-64 shrink-0 flex-col border-r border-navy-line">
+    <aside className="chrome-nav sticky top-0 flex h-screen w-[296px] shrink-0 flex-col self-start border-r border-navy-line">
       {/* Client context */}
       <div className="flex items-center gap-4 px-5 py-5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -92,69 +97,99 @@ export function ClientSidebar() {
         <p className="truncate text-sm font-bold text-on-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 
-      {/* Nav groups (collapsible: each section's items branch down under its header) */}
-      <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {nav.map((group) => {
-          const open = !collapsed.has(group.label);
-          return (
-          <div key={group.label} className="mb-1.5">
-            <button
-              type="button"
-              onClick={() => toggleGroup(group.label)}
-              aria-expanded={open}
-              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-on-navy transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
-            >
-              <span>{group.label}</span>
-              <ChevronDown
-                size={13}
-                className={cn("shrink-0 transition-transform duration-200", open ? "" : "-rotate-90")}
-              />
-            </button>
-            <div
-              className={cn(
-                "grid transition-[grid-template-rows] duration-200 ease-out",
-                open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-              )}
-            >
-              <ul className="ml-4 space-y-0.5 overflow-hidden border-l border-white/15 pl-3 pt-1">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const href = item.slug === "" ? base : `${base}/${item.slug}`;
-                const active = isActive(item.slug);
-                return (
-                  <li key={item.slug || "overview"}>
-                    <Link
-                      href={href}
-                      onClick={(e) => {
-                        // Plain left-click only (not cmd/ctrl/shift = open in new tab).
-                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                          setPendingHref(href);
-                        }
-                      }}
-                      className={cn(
-                        "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors before:pointer-events-none before:absolute before:top-1/2 before:-left-3 before:h-px before:w-3 before:-translate-y-1/2 before:bg-white/20 before:content-['']",
-                        active
-                          ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
-                          : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
-                      )}
-                    >
-                      <Icon size={16} className={cn("shrink-0", active && "text-blue-royal")} />
-                      <span className="truncate">{item.label}</span>
-                      {item.status === "placeholder" ? (
-                        <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
-                          soon
-                        </span>
-                      ) : null}
-                    </Link>
-                  </li>
-                );
-              })}
+      <div className="flex min-h-0 flex-1">
+        {/* Category rail */}
+        <div
+          role="tablist"
+          aria-label="Areas"
+          aria-orientation="vertical"
+          onKeyDown={onRailKeyDown}
+          className="flex w-[76px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-white/10 px-1.5 py-2"
+        >
+          {categories.map((c) => {
+            const CIcon = c.icon;
+            const selected = c.key === activeKey;
+            return (
+              <button
+                key={c.key}
+                id={`rail-${c.key}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setBrowseKey(c.key)}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+                  selected
+                    ? "bg-white/15 text-white"
+                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
+                )}
+              >
+                <CIcon size={18} className="shrink-0" />
+                <span className="text-[11px] font-semibold leading-none">{c.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Panel: only the selected category's modules */}
+        <nav className="min-w-0 flex-1 overflow-y-auto px-2.5 py-3" aria-label="Modules">
+          {/* Visible search entry point: hidden-by-category modules stay one search
+              away, without the user having to know the ⌘K shortcut exists. */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
+            className="mb-2.5 flex w-full items-center gap-2.5 rounded-xl border border-white/15 px-2.5 py-2 text-sm text-on-navy-muted transition-colors hover:bg-white/10 hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          >
+            <Search size={15} className="shrink-0" />
+            <span>Search</span>
+            <kbd className="ml-auto rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted">⌘K</kbd>
+          </button>
+          {current ? (
+            <div role="tabpanel" aria-labelledby={`rail-${current.key}`}>
+              <p className="px-2 pb-2 text-[11px] font-bold uppercase tracking-wide text-on-navy">
+                {current.label}
+              </p>
+              <ul className="space-y-0.5">
+                {current.items.map((item) => {
+                  const Icon = item.icon;
+                  const href = hrefFor(item.slug);
+                  const active = isActive(item.slug);
+                  return (
+                    <li key={item.slug || "overview"}>
+                      <Link
+                        href={href}
+                        title={item.label}
+                        aria-current={active ? "page" : undefined}
+                        onClick={(e) => {
+                          // Plain left-click only (not cmd/ctrl/shift = open in new tab).
+                          if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                            setPendingHref(href);
+                          }
+                        }}
+                        className={cn(
+                          "group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
+                          active
+                            ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                            : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
+                        )}
+                      >
+                        <Icon size={16} className={cn("shrink-0", active && "text-blue-royal")} />
+                        <span className="truncate">{item.label}</span>
+                        {item.status === "placeholder" ? (
+                          <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
+                            soon
+                          </span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
-          </div>
-          );
-        })}
-      </nav>
+          ) : null}
+        </nav>
+      </div>
 
       {/* User chip + logout */}
       <div className="border-t border-navy-line px-3 py-3">

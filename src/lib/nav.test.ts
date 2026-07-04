@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { navForRole, canRoleAccessModule, CLIENT_NAV } from "./nav";
+import { navForRole, canRoleAccessModule, CLIENT_NAV, NAV_CATEGORIES, categoriesForRole } from "./nav";
 
 const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings"];
 const ALL_ROLE = ["", "today", "reviews", "onboarding", "calendar", "patients", "recall"];
@@ -35,6 +35,46 @@ describe("navForRole", () => {
     for (const group of navForRole("client_coordinator")) {
       expect(group.items.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("sidebar categories (rail + panel nav)", () => {
+  it("every CLIENT_NAV module appears in exactly ONE category (nothing dropped, nothing duplicated)", () => {
+    const navSlugs = CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug));
+    const categorySlugs = NAV_CATEGORIES.flatMap((c) => c.slugs);
+    // No duplicates across categories.
+    expect(categorySlugs.length).toBe(new Set(categorySlugs).size);
+    // Exact coverage both ways: a module missing from every category would be
+    // unreachable from the sidebar; a category slug not in the nav is a typo.
+    expect(new Set(categorySlugs)).toEqual(new Set(navSlugs));
+  });
+
+  it("resolves every category for the owner, in rail order", () => {
+    const cats = categoriesForRole("client_owner");
+    expect(cats.map((c) => c.key)).toEqual(["home", "patients", "messages", "growth", "operations"]);
+    // Items resolve to real nav items (with icons/labels), not undefined holes.
+    for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
+  });
+
+  it("drops the whole Operations category for a coordinator (every module in it is owner-only)", () => {
+    const keys = categoriesForRole("client_coordinator").map((c) => c.key);
+    expect(keys).not.toContain("operations");
+    // The everyday categories survive.
+    expect(keys).toEqual(expect.arrayContaining(["home", "patients", "messages", "growth"]));
+  });
+
+  it("hides owner-only items inside surviving categories for a coordinator", () => {
+    const growth = categoriesForRole("client_coordinator").find((c) => c.key === "growth");
+    const slugs = growth?.items.map((i) => i.slug) ?? [];
+    expect(slugs).not.toContain("meta-ads");
+    expect(slugs).not.toContain("usps");
+    expect(slugs).not.toContain("roi");
+    expect(slugs).toContain("smile-assessment");
+  });
+
+  it("role null (dev / enforcement off) shows everything", () => {
+    const all = categoriesForRole(null).flatMap((c) => c.items.map((i) => i.slug));
+    expect(new Set(all)).toEqual(new Set(CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug))));
   });
 });
 

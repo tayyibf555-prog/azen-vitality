@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Gauge, Wand2, BrainCircuit, LogOut, ChevronDown } from "lucide-react";
-import { CLIENT_NAV, navForRole } from "@/lib/nav";
+import type { LucideIcon } from "lucide-react";
+import { Gauge, Wand2, BrainCircuit, LogOut, Search } from "lucide-react";
+import { categoriesForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,15 @@ function initialsOf(name: string) {
     .toUpperCase();
 }
 
+/** One row in the panel, whatever category it came from. */
+interface Entry {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  href: string;
+  soon?: boolean;
+}
+
 export function OwnerSidebar() {
   const params = useParams<{ client: string }>();
   const pathname = usePathname();
@@ -38,7 +48,7 @@ export function OwnerSidebar() {
   // The owner shell only renders for owner/agency roles (the /owner layout guard
   // bounces coordinators), so this normally yields the full nav. We still filter
   // by role for defence in depth; no verified role (dev) shows everything.
-  const nav = user?.role ? navForRole(user.role) : CLIENT_NAV;
+  const categories = categoriesForRole(user?.role ?? null);
 
   // The owner Overview lives at /owner/[client]/overview, so the base path is
   // reserved for the Management view rather than the funnel Overview.
@@ -53,39 +63,71 @@ export function OwnerSidebar() {
     if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) setPendingHref(href);
   };
 
-  const isManagementActive =
-    pendingHref !== null ? pendingHref === base : pathname === base || pathname === `${base}/`;
-
-  const isActive = (slug: string) => {
-    const href = hrefFor(slug);
+  const isHrefActive = (href: string, exact = false) => {
     if (pendingHref !== null) return pendingHref === href; // clicked tab wins while in flight
+    if (exact) return pathname === href || pathname === `${href}/`;
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  // Collapsible nav groups (items branch down under each section header). Track the
-  // COLLAPSED set (default: all open). The sidebar lives in the layout, so this
-  // persists across navigation. The active item's group is always kept open.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const toggleGroup = (label: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
-  const activeGroupLabel = nav.find((g) => g.items.some((i) => isActive(i.slug)))?.label ?? null;
-  useEffect(() => {
-    if (!activeGroupLabel) return;
-    setCollapsed((prev) => {
-      if (!prev.has(activeGroupLabel)) return prev;
-      const next = new Set(prev);
-      next.delete(activeGroupLabel);
-      return next;
-    });
-  }, [activeGroupLabel]);
+  // Same two-level rail + panel as the client shell, with an extra owner-only
+  // "Manage" category first: the Management command view, the co-pilot chat and
+  // the Practice brain. Co-pilot lives here, so it is deduped out of Operations.
+  const manageEntries: Entry[] = [
+    { key: "management", label: "Management", icon: Gauge, href: base },
+    { key: "co-pilot", label: "Co-pilot", icon: Wand2, href: hrefFor("co-pilot") },
+    { key: "practice-brain", label: "Practice brain", icon: BrainCircuit, href: hrefFor("practice-brain") },
+  ];
+  const railCategories: { key: string; label: string; icon: LucideIcon; entries: Entry[] }[] = [
+    { key: "manage", label: "Manage", icon: Gauge, entries: manageEntries },
+    ...categories.map((c) => ({
+      key: c.key,
+      label: c.label,
+      icon: c.icon,
+      entries: c.items
+        .filter((i) => i.slug !== "co-pilot")
+        .map<Entry>((i) => ({
+          key: i.slug || "overview",
+          label: i.label,
+          icon: i.icon,
+          href: hrefFor(i.slug),
+          soon: i.status === "placeholder",
+        })),
+    })),
+  ].filter((c) => c.entries.length > 0);
+
+  // Management is the base path, so it must be matched EXACTLY (every module href
+  // starts with the base) — otherwise Manage would swallow every route.
+  const entryActive = (categoryKey: string, e: Entry) =>
+    isHrefActive(e.href, categoryKey === "manage" && e.key === "management");
+
+  const routeCategoryKey =
+    railCategories.find((c) => c.entries.some((e) => entryActive(c.key, e)))?.key ??
+    railCategories[0]?.key ?? null;
+  const [browseKey, setBrowseKey] = useState<string | null>(null);
+  useEffect(() => setBrowseKey(null), [pathname]);
+  const activeKey = browseKey ?? routeCategoryKey;
+  const current = railCategories.find((c) => c.key === activeKey) ?? railCategories[0];
+
+  // Vertical tabs keyboard pattern: arrows/Home/End move the rail selection and
+  // focus together (roving tabindex), so the rail is fully keyboard-operable.
+  const onRailKeyDown = (e: React.KeyboardEvent) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const idx = Math.max(0, railCategories.findIndex((c) => c.key === activeKey));
+    const next =
+      e.key === "Home" ? 0
+        : e.key === "End" ? railCategories.length - 1
+          : e.key === "ArrowDown" ? Math.min(idx + 1, railCategories.length - 1)
+            : Math.max(idx - 1, 0);
+    const key = railCategories[next]?.key;
+    if (key) {
+      setBrowseKey(key);
+      document.getElementById(`orail-${key}`)?.focus();
+    }
+  };
 
   return (
-    <aside className="chrome-nav flex h-screen w-64 shrink-0 flex-col border-r border-navy-line">
+    <aside className="chrome-nav sticky top-0 flex h-screen w-[296px] shrink-0 flex-col self-start border-r border-navy-line">
       {/* Client context */}
       <div className="flex items-center gap-4 px-5 py-5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -97,127 +139,93 @@ export function OwnerSidebar() {
         <p className="truncate text-sm font-bold text-on-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 
-      {/* Nav groups */}
-      <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {/* Management: the owner's command view, peer of (but above) the funnel. */}
-        <div className="mb-4">
-          <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-navy-muted">
-            Practice
-          </p>
-          <ul className="space-y-0.5">
-            <li>
-              <Link
-                href={base}
-                onClick={markPending(base)}
+      <div className="flex min-h-0 flex-1">
+        {/* Category rail */}
+        <div
+          role="tablist"
+          aria-label="Areas"
+          aria-orientation="vertical"
+          onKeyDown={onRailKeyDown}
+          className="flex w-[76px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-white/10 px-1.5 py-2"
+        >
+          {railCategories.map((c) => {
+            const CIcon = c.icon;
+            const selected = c.key === activeKey;
+            return (
+              <button
+                key={c.key}
+                id={`orail-${c.key}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setBrowseKey(c.key)}
                 className={cn(
-                  "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
-                  isManagementActive
-                    ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                  "flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+                  selected
+                    ? "bg-white/15 text-white"
                     : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
                 )}
               >
-                {isManagementActive ? (
-                  <></>
-                ) : null}
-                <Gauge size={16} className="shrink-0" />
-                <span className="truncate">Management</span>
-              </Link>
-            </li>
-            <li>
-              <Link
-                href={hrefFor("co-pilot")}
-                onClick={markPending(hrefFor("co-pilot"))}
-                className={cn(
-                  "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
-                  isActive("co-pilot")
-                    ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
-                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
-                )}
-              >
-                {isActive("co-pilot") ? (
-                  <></>
-                ) : null}
-                <Wand2 size={16} className="shrink-0" />
-                <span className="truncate">Co-pilot</span>
-              </Link>
-            </li>
-            <li>
-              <Link
-                href={hrefFor("practice-brain")}
-                onClick={markPending(hrefFor("practice-brain"))}
-                className={cn(
-                  "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
-                  isActive("practice-brain")
-                    ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
-                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
-                )}
-              >
-                {isActive("practice-brain") ? (
-                  <></>
-                ) : null}
-                <BrainCircuit size={16} className="shrink-0" />
-                <span className="truncate">Practice brain</span>
-              </Link>
-            </li>
-          </ul>
+                <CIcon size={18} className="shrink-0" />
+                <span className="text-[11px] font-semibold leading-none">{c.label}</span>
+              </button>
+            );
+          })}
         </div>
 
-        {nav.map((group) => {
-          const open = !collapsed.has(group.label);
-          return (
-          <div key={group.label} className="mb-1.5">
-            <button
-              type="button"
-              onClick={() => toggleGroup(group.label)}
-              aria-expanded={open}
-              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-on-navy transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
-            >
-              <span>{group.label}</span>
-              <ChevronDown
-                size={13}
-                className={cn("shrink-0 transition-transform duration-200", open ? "" : "-rotate-90")}
-              />
-            </button>
-            <div
-              className={cn(
-                "grid transition-[grid-template-rows] duration-200 ease-out",
-                open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-              )}
-            >
-              <ul className="ml-4 space-y-0.5 overflow-hidden border-l border-white/15 pl-3 pt-1">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const href = hrefFor(item.slug);
-                const active = isActive(item.slug);
-                return (
-                  <li key={item.slug || "overview"}>
-                    <Link
-                      href={href}
-                      onClick={markPending(href)}
-                      className={cn(
-                        "group relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors before:pointer-events-none before:absolute before:top-1/2 before:-left-3 before:h-px before:w-3 before:-translate-y-1/2 before:bg-white/20 before:content-['']",
-                        active
-                          ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
-                          : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
-                      )}
-                    >
-                      <Icon size={16} className={cn("shrink-0", active && "text-blue-royal")} />
-                      <span className="truncate">{item.label}</span>
-                      {item.status === "placeholder" ? (
-                        <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
-                          soon
-                        </span>
-                      ) : null}
-                    </Link>
-                  </li>
-                );
-              })}
+        {/* Panel: only the selected category's modules */}
+        <nav className="min-w-0 flex-1 overflow-y-auto px-2.5 py-3" aria-label="Modules">
+          {/* Visible search entry point: hidden-by-category modules stay one search
+              away, without the user having to know the ⌘K shortcut exists. */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
+            className="mb-2.5 flex w-full items-center gap-2.5 rounded-xl border border-white/15 px-2.5 py-2 text-sm text-on-navy-muted transition-colors hover:bg-white/10 hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          >
+            <Search size={15} className="shrink-0" />
+            <span>Search</span>
+            <kbd className="ml-auto rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted">⌘K</kbd>
+          </button>
+          {current ? (
+            <div role="tabpanel" aria-labelledby={`orail-${current.key}`}>
+              <p className="px-2 pb-2 text-[11px] font-bold uppercase tracking-wide text-on-navy">
+                {current.label}
+              </p>
+              <ul className="space-y-0.5">
+                {current.entries.map((e) => {
+                  const Icon = e.icon;
+                  const active = entryActive(current.key, e);
+                  return (
+                    <li key={e.key}>
+                      <Link
+                        href={e.href}
+                        title={e.label}
+                        aria-current={active ? "page" : undefined}
+                        onClick={markPending(e.href)}
+                        className={cn(
+                          "group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
+                          active
+                            ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
+                            : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
+                        )}
+                      >
+                        <Icon size={16} className={cn("shrink-0", active && "text-blue-royal")} />
+                        <span className="truncate">{e.label}</span>
+                        {e.soon ? (
+                          <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
+                            soon
+                          </span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
-          </div>
-          );
-        })}
-      </nav>
+          ) : null}
+        </nav>
+      </div>
 
       {/* User chip + logout */}
       <div className="border-t border-navy-line px-3 py-3">

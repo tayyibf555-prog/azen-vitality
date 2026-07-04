@@ -35,8 +35,18 @@ export function PlatformShortcuts() {
         setCopilot((v) => !v);
       }
     }
+    // The sidebars' visible "Search" row opens the palette via this event, so a
+    // non-technical user never has to discover the ⌘K shortcut.
+    function onOpenPalette() {
+      setCopilot(false);
+      setPalette(true);
+    }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("azen:open-palette", onOpenPalette);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("azen:open-palette", onOpenPalette);
+    };
   }, []);
 
   if (!clientSlug) return null;

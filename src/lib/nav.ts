@@ -29,6 +29,8 @@ import {
   FileText,
   UserPlus,
   Bell,
+  Home,
+  Briefcase,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -325,6 +327,86 @@ export function navForRole(role: Role): NavGroup[] {
     ...group,
     items: group.items.filter((item) => roleCanSeeItem(role, item)),
   })).filter((group) => group.items.length > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar categories: the two-level "rail + panel" navigation.
+//
+// The flat 9-group sidebar showed all ~29 modules at once, which overwhelmed
+// non-technical staff. Instead the sidebar shows a slim category rail (five
+// plain-English buckets a receptionist thinks in) and the panel lists ONLY the
+// selected category's modules. Categories reference CLIENT_NAV items by slug so
+// CLIENT_NAV stays the single source of truth for labels/icons/roles/notes
+// (command palette, placeholder pages and the systems catalog keep reading it).
+// ---------------------------------------------------------------------------
+
+export interface NavCategory {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  /** CLIENT_NAV item slugs shown when this category is selected, in order. */
+  slugs: string[];
+}
+
+export const NAV_CATEGORIES: NavCategory[] = [
+  {
+    key: "home",
+    label: "Home",
+    icon: Home,
+    slugs: ["", "today", "calendar", "daily-brief", "task-queue", "notifications"],
+  },
+  {
+    key: "patients",
+    label: "Patients",
+    icon: Users,
+    // Onboarding lives here (not Growth): reviewing + registering new-patient form
+    // submissions is a reception task, and Patients is where a receptionist looks.
+    slugs: ["patients", "payments", "onboarding", "recall", "reactivation", "treatment-coordinator", "no-show-defence", "reviews"],
+  },
+  {
+    key: "messages",
+    label: "Messages",
+    icon: MessagesSquare,
+    slugs: ["conversations", "booking-agent", "whatsapp", "after-hours"],
+  },
+  {
+    key: "growth",
+    label: "Growth",
+    icon: TrendingUp,
+    slugs: ["meta-ads", "smile-assessment", "speed-to-lead", "power-dialler", "usps", "roi"],
+  },
+  {
+    key: "operations",
+    label: "Operations",
+    icon: Briefcase,
+    slugs: ["rota", "compliance", "reports", "co-pilot", "settings"],
+  },
+];
+
+export interface ResolvedNavCategory {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  items: NavItem[];
+}
+
+/**
+ * The sidebar categories visible to a role, with each category's slugs resolved
+ * to full CLIENT_NAV items. Items the role may not see are dropped and a category
+ * left empty disappears (e.g. a coordinator sees no Operations rail entry at all,
+ * since every module in it is owner-only). `role: null` (dev / enforcement off)
+ * shows everything, matching the sidebars' existing fallback behaviour.
+ */
+export function categoriesForRole(role: Role | null): ResolvedNavCategory[] {
+  const bySlug = new Map(CLIENT_NAV.flatMap((g) => g.items).map((i) => [i.slug, i]));
+  return NAV_CATEGORIES.map((c) => ({
+    key: c.key,
+    label: c.label,
+    icon: c.icon,
+    items: c.slugs
+      .map((s) => bySlug.get(s))
+      .filter((i): i is NavItem => Boolean(i) && (!role || roleCanSeeItem(role, i!))),
+  })).filter((c) => c.items.length > 0);
 }
 
 /**

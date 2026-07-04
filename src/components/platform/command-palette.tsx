@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { Search, CornerDownLeft, Bot, User } from "lucide-react";
-import { CLIENT_NAV } from "@/lib/nav";
+import { CLIENT_NAV, navForRole } from "@/lib/nav";
+import { useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
 
 interface Patient {
@@ -36,6 +37,7 @@ export function CommandPalette({
   onOpenCopilot: () => void;
 }) {
   const router = useRouter();
+  const { user } = useAuth();
   const isOwner = basePath.startsWith("/owner");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -81,7 +83,11 @@ export function CommandPalette({
       });
     }
 
-    for (const grp of CLIENT_NAV) {
+    // Only offer modules this role may reach — mirroring the sidebar. Otherwise a
+    // coordinator sees owner-only names ("Reports", "Meta Ads") and lands on a 404
+    // dead end when the server guard notFound()s the page.
+    const nav = user?.role ? navForRole(user.role) : CLIENT_NAV;
+    for (const grp of nav) {
       for (const it of grp.items) {
         if (q && !it.label.toLowerCase().includes(q)) continue;
         list.push({
@@ -112,7 +118,7 @@ export function CommandPalette({
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, patients, basePath, isOwner]);
+  }, [query, patients, basePath, isOwner, user?.role]);
 
   if (!open) return null;
 
