@@ -285,6 +285,35 @@ export async function POST(request: Request) {
       console.error("[sync-dentally] site discovery failed", e);
     }
 
+    // One-off SHAPE capture (calibration): store the real Dentally record field
+    // shapes so the field mapping + site scoping can be calibrated to the live API.
+    // The treatment plan is stored in full (fields/amounts, no patient name);
+    // patient + appointment store field NAMES only (no PII). Removed after calibration.
+    try {
+      const vitSite = "3286d822-68c5-48ff-b1a2-065780dfcd15";
+      const plansRes = await client.listTreatmentPlans({ siteId: vitSite, page: 1, perPage: 1 });
+      const rawPlan = Array.isArray(plansRes.treatment_plans) ? plansRes.treatment_plans[0] ?? null : null;
+      let patientKeys: string[] = [];
+      const pid = rawPlan ? pickString(asRecord(rawPlan), "patient_id", "patientId") : undefined;
+      if (pid) {
+        try {
+          patientKeys = Object.keys(asRecord((await client.getPatient(pid)).patient));
+        } catch {
+          /* best effort */
+        }
+      }
+      const apptRes = await client.listAppointments({ siteId: vitSite, page: 1, perPage: 1 });
+      const rawAppt = Array.isArray(apptRes.appointments) ? apptRes.appointments[0] ?? null : null;
+      const shapeRows: Array<{ kind: string; sample: unknown; captured_at: string }> = [
+        { kind: "treatment_plan", sample: rawPlan, captured_at: new Date().toISOString() },
+        { kind: "patient_keys", sample: patientKeys, captured_at: new Date().toISOString() },
+        { kind: "appointment_keys", sample: rawAppt ? Object.keys(asRecord(rawAppt)) : [], captured_at: new Date().toISOString() },
+      ];
+      await serviceClient().from("dentally_raw_sample").upsert(shapeRows, { onConflict: "kind" });
+    } catch (e) {
+      console.error("[sync-dentally] shape capture failed", e);
+    }
+
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
