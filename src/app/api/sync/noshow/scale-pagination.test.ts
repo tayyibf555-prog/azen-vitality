@@ -43,13 +43,28 @@ function makeApptPager(total: number) {
   return { listAppointments, pagesRequested };
 }
 
+// Serves pat-0..pat-(total-1) with consent across pages, so the sync's per-site
+// consent map (built once from paged listPatients, replacing getPatient-per-row)
+// covers every appointment's patient.
+function patientPagerImpl(total: number) {
+  return async (...args: unknown[]) => {
+    const a = (args[0] ?? {}) as { page?: number; perPage?: number };
+    const page = a.page ?? 1;
+    const start = (page - 1) * PER_PAGE;
+    const end = Math.min(start + PER_PAGE, total);
+    const patients: unknown[] = [];
+    for (let i = start; i < end; i++) {
+      patients.push({ id: `pat-${i}`, first_name: "A", last_name: "B", use_sms: true, use_email: true });
+    }
+    return { patients };
+  };
+}
+
 const fakes = vi.hoisted(() => ({
   acquireCronLock: vi.fn<(...a: unknown[]) => Promise<boolean>>(async () => true),
   releaseCronLock: vi.fn<(...a: unknown[]) => Promise<void>>(async () => {}),
   listAppointments: vi.fn<(...a: unknown[]) => Promise<{ appointments: unknown[] }>>(),
-  getPatient: vi.fn<(...a: unknown[]) => Promise<{ patient: unknown }>>(async () => ({
-    patient: { first_name: "A", last_name: "B", use_sms: true, use_email: true },
-  })),
+  listPatients: vi.fn<(...a: unknown[]) => Promise<{ patients: unknown[] }>>(async () => ({ patients: [] })),
   getPatientAppointments: vi.fn<(...a: unknown[]) => Promise<{ appointments: unknown[] }>>(async () => ({
     appointments: [],
   })),
@@ -65,8 +80,8 @@ vi.mock("@/lib/dentally/client", () => ({
     listAppointments(a: unknown) {
       return fakes.listAppointments(a);
     }
-    getPatient(id: unknown) {
-      return fakes.getPatient(id);
+    listPatients(a: unknown) {
+      return fakes.listPatients(a);
     }
     getPatientAppointments(id: unknown) {
       return fakes.getPatientAppointments(id);
@@ -100,7 +115,9 @@ beforeEach(() => {
   fakes.acquireCronLock.mockClear();
   fakes.releaseCronLock.mockClear();
   fakes.listAppointments.mockReset();
-  fakes.getPatient.mockClear();
+  // Consent map covers every appointment's patient (pat-0..pat-999 across the tests).
+  fakes.listPatients.mockReset();
+  fakes.listPatients.mockImplementation(patientPagerImpl(1000));
   fakes.getPatientAppointments.mockClear();
   vi.stubEnv("CRON_SECRET", "scale-test-secret");
   vi.stubEnv("DENTALLY_API_KEY", "scale-test-key");

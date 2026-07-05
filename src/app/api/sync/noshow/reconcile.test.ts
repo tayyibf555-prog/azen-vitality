@@ -26,7 +26,10 @@ const repo = vi.hoisted(() => ({
 
 const dent = vi.hoisted(() => ({
   appointments: [] as unknown[],
-  getPatient: vi.fn(async (..._a: unknown[]) => ({ patient: { first_name: "A", last_name: "B", use_sms: true, use_email: true } })),
+  // Consent map source (built once per site from paged listPatients). pat-1 carries
+  // consent so a LIVE appointment for it can be built into a target.
+  patients: [{ id: "pat-1", first_name: "A", last_name: "B", use_sms: true, use_email: true }] as unknown[],
+  listPatients: vi.fn(async (..._a: unknown[]) => ({ patients: dent.patients })),
   getPatientAppointments: vi.fn(async (..._a: unknown[]) => ({ appointments: [] as unknown[] })),
 }));
 
@@ -38,7 +41,7 @@ vi.mock("@/lib/dentally/client", () => ({
   DentallyClient: class {
     constructor(_o: unknown) {}
     listAppointments() { return Promise.resolve({ appointments: dent.appointments }); }
-    getPatient(id: unknown) { return dent.getPatient(id); }
+    listPatients(a: unknown) { return dent.listPatients(a); }
     getPatientAppointments(id: unknown) { return dent.getPatientAppointments(id); }
   },
 }));

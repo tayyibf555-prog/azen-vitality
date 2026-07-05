@@ -18,7 +18,7 @@ import {
   setSyncState,
 } from "@/lib/noshow/repository";
 import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
-import type { NoshowStatus } from "@/lib/noshow/types";
+import type { NoshowStatus, NoshowTarget } from "@/lib/noshow/types";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { normaliseAppointmentState } from "@/lib/dentally/appointment-state";
 import { cronUnauthorized } from "@/lib/cron";
@@ -36,6 +36,10 @@ const PER_PAGE = 100;
 // 300s function limit. Anything over the cap is reported as remaining and picked up
 // on the next cron tick (the appointment window is re-queried each run).
 const MAX_APPOINTMENTS_PER_RUN = 300;
+// Bound on the consent-map build (paged listPatients). Generous for a dental
+// practice's active list; a site larger than this leaves late-page patients out of
+// the map, and their appointments are safely skipped (never messaged) until covered.
+const MAX_PATIENT_PAGES = 200;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -152,6 +156,30 @@ function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Preserve a target's lifecycle status + attempt count across re-syncs, so an
+ * (incremental) upsert never resets a confirmed/cancelled appointment to
+ * "scheduled". A moved appointment (same id, new start) is re-defended afresh:
+ * status back to scheduled + flagged for cadence re-anchoring.
+ */
+function preserveStatus(
+  t: NoshowTarget,
+  prevById: Map<string, NoshowTarget>,
+  reanchorIds: Set<string>,
+): void {
+  const prev = prevById.get(t.id);
+  if (!prev) return;
+  const terminal = prev.status === "cancelled" || prev.status === "attended" || prev.status === "no_show";
+  const rescheduled = !terminal && prev.appointmentStartAt !== t.appointmentStartAt;
+  if (rescheduled) {
+    t.status = "scheduled";
+    reanchorIds.add(t.id);
+  } else if (prev.status !== "scheduled") {
+    t.status = prev.status;
+  }
+  t.priorAttempts = prev.priorAttempts;
+}
+
 async function syncSite(
   client: DentallyClient,
   siteId: string,
@@ -159,11 +187,49 @@ async function syncSite(
 ): Promise<{ siteId: string; pulled: number; upserted: number; enrolled: number; reanchored: number; reconciled: number; processed: number; remaining: number }> {
   const now = new Date();
   const toDate = new Date(now.getTime() + cfg.leadDays * DAY);
+  const dentallyId = dentallySiteId(siteId);
 
-  const targets = [];
+  // Consent + name lookup for the whole site, built ONCE from paged listPatients
+  // (server-filtered by site) instead of a getPatient call per appointment. On the
+  // biggest site that per-appointment call doubled the Dentally load and tripped the
+  // rate limit / function time limit mid-run, which — with a single end-of-loop
+  // upsert — discarded the entire site's work. A patient ABSENT from this map is
+  // treated exactly like the old failed-getPatient path: we skip their appointment
+  // and never fabricate consent (never auto-enrol an unverified patient into SMS).
+  const consentByPatient = new Map<string, ReturnType<typeof mapPatientConsent>>();
+  for (let pp = 1; pp <= MAX_PATIENT_PAGES; pp++) {
+    let rows: unknown[];
+    try {
+      const res = await client.listPatients({ siteId: dentallyId, page: pp, perPage: PER_PAGE });
+      rows = Array.isArray(res.patients) ? res.patients : [];
+    } catch {
+      break; // partial map: unknown patients are safely skipped; retried next run
+    }
+    for (const raw of rows) {
+      const p = asRecord(raw);
+      const id = pickString(p, "id");
+      if (id) consentByPatient.set(id, mapPatientConsent(p));
+    }
+    if (rows.length < PER_PAGE) break;
+  }
+
+  // Load existing targets up front: needed for per-page status preservation (so an
+  // incremental upsert never resets a confirmed/cancelled target) and for the
+  // reconciliation pass after the loop.
+  const existing = await listTargets({ siteIds: [siteId] });
+  const prevById = new Map(existing.map((t) => [t.id, t]));
+  // Targets whose appointment MOVED (same id, new start): re-anchor their cadence.
+  const reanchorIds = new Set<string>();
+  // Per-run history cache: the risk score needs each patient's past attendance,
+  // which is patient-level not appointment-level. Fetch getPatientAppointments at
+  // most once per unique patient and reuse it for their other slots in the window.
+  const historyCache = new Map<string, ReturnType<typeof summariseHistory>>();
+
+  const allTargets: NoshowTarget[] = [];
   let pulled = 0;
   let processed = 0;
   let remaining = 0;
+  let listingError = false;
   // Reconciliation bookkeeping (findings #4/#5): every appointment id we actually
   // saw in the window this run, and the ones that came back in a TERMINAL state.
   // toNoshowTarget skips terminal appointments, so without tracking them here an
@@ -177,84 +243,99 @@ async function syncSite(
   // once the per-run cap is hit; the rest is reported as `remaining` and picked
   // up on the next tick (the window is re-queried each run).
   appt_loop: for (let page = 1; ; page++) {
-    const res = await client.listAppointments({
-      siteId: dentallySiteId(siteId), fromDate: ymd(now), toDate: ymd(toDate), page, perPage: PER_PAGE,
-    });
-    const rawAppts = Array.isArray(res.appointments) ? res.appointments : [];
+    let rawAppts: unknown[];
+    try {
+      const res = await client.listAppointments({
+        siteId: dentallyId, fromDate: ymd(now), toDate: ymd(toDate), page, perPage: PER_PAGE,
+      });
+      rawAppts = Array.isArray(res.appointments) ? res.appointments : [];
+    } catch {
+      // A listing-page failure (rate limit / timeout) must NOT discard the pages we
+      // already upserted this run. Stop paging and keep partial progress; the window
+      // is re-queried next tick. Flag it so reconciliation does not treat unseen
+      // appointments as vanished (we did not cover the whole window).
+      listingError = true;
+      break appt_loop;
+    }
     pulled += rawAppts.length;
 
+    const pageTargets: NoshowTarget[] = [];
     for (const rawAppt of rawAppts) {
-    const appt = mapAppointment(rawAppt);
-    if (!appt) continue;
+      const appt = mapAppointment(rawAppt);
+      if (!appt) continue;
 
-    const targetId = `${siteId}:${appt.patientId}:${appt.id}`;
-    // Mark BEFORE any transient skip so a momentary getPatient failure (below) or a
-    // cap-skip can never be mistaken for the appointment having vanished from Dentally.
-    seenTargetIds.add(targetId);
+      const targetId = `${siteId}:${appt.patientId}:${appt.id}`;
+      // Mark BEFORE any transient skip so a momentary consent/history miss or a
+      // cap-skip can never be mistaken for the appointment having vanished.
+      seenTargetIds.add(targetId);
 
-    // Cap reached: count the rest as remaining for the next tick and stop processing.
-    if (processed >= MAX_APPOINTMENTS_PER_RUN) {
-      remaining += 1;
-      continue;
-    }
+      // Cap reached: count the rest as remaining for the next tick and stop processing.
+      if (processed >= MAX_APPOINTMENTS_PER_RUN) {
+        remaining += 1;
+        continue;
+      }
 
-    // Terminal in Dentally (cancelled at reception, completed, or a no-show): do not
-    // build a defence target (toNoshowTarget would drop it anyway) and skip the extra
-    // patient/history calls. Record it so the reconciliation pass below can end the
-    // existing target's cadence and, for a cancellation, free the slot to the waitlist.
-    const stLower = appt.state.toLowerCase();
-    if (stLower === "cancelled" || stLower === "did_not_attend" || stLower === "no_show" || stLower === "completed") {
-      terminalByTargetId.set(targetId, stLower);
+      // Terminal in Dentally (cancelled at reception, completed, or a no-show): do not
+      // build a defence target (toNoshowTarget would drop it anyway) and skip the extra
+      // history call. Record it so the reconciliation pass below can end the existing
+      // target's cadence and, for a cancellation, free the slot to the waitlist.
+      const stLower = appt.state.toLowerCase();
+      if (stLower === "cancelled" || stLower === "did_not_attend" || stLower === "no_show" || stLower === "completed") {
+        terminalByTargetId.set(targetId, stLower);
+        processed += 1;
+        continue;
+      }
+
+      // Consent from the site map. A MISS = we could not read this patient's consent,
+      // so we skip (never fabricate), exactly as the old getPatient-failure path did.
+      const consent = consentByPatient.get(appt.patientId);
+      if (!consent) continue;
+
+      // History once per unique patient (cached). A failed fetch skips this
+      // appointment (retry next run), never messaging on an unread record.
+      let history = historyCache.get(appt.patientId);
+      if (history === undefined) {
+        try {
+          // includeCancelled: real Dentally EXCLUDES Did-not-attend rows by default,
+          // which would zero priorNoShows and gut the risk score's history component.
+          const historyRes = await client.getPatientAppointments(appt.patientId, 1, 100, true);
+          history = summariseHistory(historyRes, now);
+        } catch {
+          continue;
+        }
+        historyCache.set(appt.patientId, history);
+      }
+
+      const input: NoshowInput = {
+        siteId,
+        dentallyPatientId: appt.patientId,
+        patientName: consent.name,
+        appointment: {
+          id: appt.id,
+          start: appt.start,
+          state: appt.state,
+          durationMin: appt.durationMin,
+          practitioner: appt.practitioner,
+        },
+        priorAppointments: history.priorAppointments,
+        priorNoShows: history.priorNoShows,
+        isNewPatient: history.isNewPatient,
+        bookedDaysAhead: appt.bookedDaysAhead,
+        consent: { sms: consent.sms, email: consent.email, marketing: consent.marketing },
+        now,
+      };
+
+      const target = toNoshowTarget(input, cfg);
+      if (target) pageTargets.push(target);
       processed += 1;
-      continue;
     }
 
-    // A failed getPatient must NOT fabricate consent: an empty patient record would
-    // default use_sms to true and the name to "there", auto-enrolling an unverified
-    // patient into the SMS confirmation cadence. Skip this appointment on failure
-    // (retry next run) exactly like the history fetch below, so we never message
-    // without a real consent read.
-    let patientRes: { patient?: unknown };
-    try {
-      patientRes = await client.getPatient(appt.patientId);
-    } catch {
-      continue;
-    }
-    const consent = mapPatientConsent(asRecord(patientRes.patient));
-    // One bad record must not kill the run: on a failed secondary call, skip this
-    // appointment and move on to the next.
-    let historyRes: { appointments: unknown[] };
-    try {
-      // includeCancelled: real Dentally EXCLUDES Did-not-attend rows by default,
-      // which would zero priorNoShows and gut the risk score's history component.
-      historyRes = await client.getPatientAppointments(appt.patientId, 1, 100, true);
-    } catch {
-      continue;
-    }
-    const history = summariseHistory(historyRes, now);
-
-    const input: NoshowInput = {
-      siteId,
-      dentallyPatientId: appt.patientId,
-      patientName: consent.name,
-      appointment: {
-        id: appt.id,
-        start: appt.start,
-        state: appt.state,
-        durationMin: appt.durationMin,
-        practitioner: appt.practitioner,
-      },
-      priorAppointments: history.priorAppointments,
-      priorNoShows: history.priorNoShows,
-      isNewPatient: history.isNewPatient,
-      bookedDaysAhead: appt.bookedDaysAhead,
-      consent: { sms: consent.sms, email: consent.email, marketing: consent.marketing },
-      now,
-    };
-
-    const target = toNoshowTarget(input, cfg);
-    if (target) targets.push(target);
-    processed += 1;
+    // Preserve lifecycle status + attempts for this page before upserting, then
+    // upsert THIS page so a later listing-page failure can never lose its work.
+    for (const t of pageTargets) preserveStatus(t, prevById, reanchorIds);
+    if (pageTargets.length > 0) {
+      await upsertTargets(rankByRisk(pageTargets));
+      allTargets.push(...pageTargets);
     }
 
     // Stop paging once the cap is hit (any rows in this page past the cap were
@@ -268,41 +349,13 @@ async function syncSite(
     if (page >= Math.ceil(MAX_APPOINTMENTS_PER_RUN / PER_PAGE) + 2) break appt_loop;
   }
 
-  // Preserve a target's lifecycle status + attempt count across re-syncs, so a
-  // confirmed/cancelled appointment is not reset to "scheduled".
-  const existing = await listTargets({ siteIds: [siteId] });
-  const prevById = new Map(existing.map((t) => [t.id, t]));
-  // Targets whose appointment MOVED (same Dentally id, new start_time). A reschedule
-  // must be defended afresh at the NEW time, so we reset status to scheduled and
-  // re-anchor the cadence below rather than carrying over a stale confirmation.
-  const reanchorIds = new Set<string>();
-  for (const t of targets) {
-    const prev = prevById.get(t.id);
-    if (prev) {
-      const terminal = prev.status === "cancelled" || prev.status === "attended" || prev.status === "no_show";
-      const rescheduled = !terminal && prev.appointmentStartAt !== t.appointmentStartAt;
-      if (rescheduled) {
-        // Do NOT carry prev.status (e.g. 'confirmed' for the OLD time): the moved
-        // appointment is unconfirmed again and must be re-defended.
-        t.status = "scheduled";
-        reanchorIds.add(t.id);
-      } else if (prev.status !== "scheduled") {
-        t.status = prev.status;
-      }
-      t.priorAttempts = prev.priorAttempts;
-    }
-  }
-
-  const ranked = rankByRisk(targets);
-  await upsertTargets(ranked);
-
   // Auto-enrol a confirmation cadence for each newly-scheduled, SMS-consented
   // target that does not already have one. No consent -> stays on the worklist
   // for a manual call, but we never message without it. A RESCHEDULED target keeps
   // its cadence row but has it re-anchored to the new appointment time.
   let enrolled = 0;
   let reanchored = 0;
-  for (const t of ranked) {
+  for (const t of allTargets) {
     if (t.status !== "scheduled" || !t.consent.sms) continue;
     const e = enrolment(new Date(t.appointmentStartAt), now);
     if (!e) continue;
@@ -331,7 +384,10 @@ async function syncSite(
   // keeps sending "please confirm" for a dead appointment, and a cancelled slot never
   // reaches the waitlist.
   let reconciled = 0;
-  const fullWindow = remaining === 0; // no cap hit -> absence from the pull means gone
+  // Only treat absence-from-the-pull as "vanished" when we actually covered the whole
+  // window: no cap hit AND no listing-page error cut us short. A partial pull must not
+  // mark unseen-but-still-booked appointments cancelled (which would free their slots).
+  const fullWindow = remaining === 0 && !listingError;
   for (const prev of existing) {
     if (prev.status === "attended" || prev.status === "no_show") continue; // already final
     const startMs = new Date(prev.appointmentStartAt).getTime();
@@ -374,7 +430,7 @@ async function syncSite(
   }
 
   await setSyncState(siteId, RESOURCE, now.toISOString());
-  return { siteId, pulled, upserted: ranked.length, enrolled, reanchored, reconciled, processed, remaining };
+  return { siteId, pulled, upserted: allTargets.length, enrolled, reanchored, reconciled, processed, remaining };
 }
 
 export async function POST(request: Request) {
