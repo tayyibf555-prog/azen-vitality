@@ -44,9 +44,15 @@ export type Weekday =
 export type OpeningHours = Record<Weekday, string | null>;
 
 export interface Site {
-  id: string; // maps to Dentally site_id
+  id: string; // stable INTERNAL id (overlay tables, UI, tests key on this)
   clientId: string;
-  name: string; // generic label, e.g. "City Centre" — no hardcoded city in fixtures
+  name: string; // display label
+  /**
+   * The REAL Dentally site_id (a UUID) this internal site maps to. Dentally reads
+   * use this; responses are mapped back to `id`. Absent in the mock/pilot, where
+   * the internal id is used directly.
+   */
+  dentallyId?: string;
   timezone: string;
   /** Local opening windows, used by the after-hours capture module. */
   openingHours?: OpeningHours;

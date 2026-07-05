@@ -57,6 +57,7 @@ vi.mock("@/lib/noshow/fill", () => ({
 }));
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-1", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
+  dentallySiteId: (id: string) => id,
 }));
 
 import { POST } from "./route";

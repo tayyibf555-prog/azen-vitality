@@ -20,11 +20,17 @@ const VITALITY_HOURS: OpeningHours = {
  */
 export const NOW = new Date("2026-06-18T09:00:00Z");
 
-/** Generic site names, no hardcoded city (pilot location stays configurable). */
+/**
+ * Vitality Dental's three sites. `id` is the stable INTERNAL id (overlay/UI/tests
+ * key on it); `dentallyId` is the REAL Dentally site_id (UUID) used only for
+ * Dentally reads. The other two sites the shared key can see (Urgent Dental Care
+ * N15, Romford Road "DO NOT USE") are deliberately NOT mapped, so their data is
+ * dropped and never enters Vitality's view.
+ */
 export const SITES: Site[] = [
-  { id: "site-cc", clientId: "vitality", name: "City Centre", timezone: "Europe/London", openingHours: VITALITY_HOURS },
-  { id: "site-rv", clientId: "vitality", name: "Riverside", timezone: "Europe/London", openingHours: VITALITY_HOURS },
-  { id: "site-ng", clientId: "vitality", name: "Northgate", timezone: "Europe/London", openingHours: VITALITY_HOURS },
+  { id: "site-cc", clientId: "vitality", name: "N15 Vitality Dental", dentallyId: "3286d822-68c5-48ff-b1a2-065780dfcd15", timezone: "Europe/London", openingHours: VITALITY_HOURS },
+  { id: "site-rv", clientId: "vitality", name: "N17 Dental", dentallyId: "c9b87b78-96e6-4f3d-aa8b-e1b953ae79cf", timezone: "Europe/London", openingHours: VITALITY_HOURS },
+  { id: "site-ng", clientId: "vitality", name: "Romford Road", dentallyId: "5855c8c1-2c3b-46c3-8c0f-36a9a774d2e6", timezone: "Europe/London", openingHours: VITALITY_HOURS },
 ];
 
 export const CLIENTS: Client[] = [
@@ -48,4 +54,26 @@ export function getSites(clientId: string): Site[] {
 
 export function getSite(siteId: string): Site | undefined {
   return SITES.find((s) => s.id === siteId);
+}
+
+/**
+ * The real Dentally site_id to send when calling Dentally for one of our internal
+ * sites. Falls back to the internal id itself (mock/pilot, where the mock server
+ * keys on the internal id).
+ */
+export function dentallySiteId(internalId: string): string {
+  return getSite(internalId)?.dentallyId ?? internalId;
+}
+
+/**
+ * Map a Dentally site_id (UUID) from a response back to our internal site id.
+ * Returns undefined when the Dentally site is NOT one of ours (another practice
+ * on the shared key), so such records can be dropped.
+ */
+export function siteIdFromDentally(dentallyId: string): string | undefined {
+  if (!dentallyId) return undefined;
+  const byDentally = SITES.find((s) => s.dentallyId === dentallyId);
+  if (byDentally) return byDentally.id;
+  // Mock/pilot: the "dentally id" is actually an internal id already.
+  return SITES.find((s) => s.id === dentallyId)?.id;
 }

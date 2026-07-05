@@ -13,7 +13,7 @@ import {
   getSyncState,
   setSyncState,
 } from "@/lib/coordinator/repository";
-import { SITES } from "@/lib/mock/clients";
+import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
@@ -150,7 +150,7 @@ async function syncSite(
   let page = 1;
 
   outer: for (;;) {
-    const res = await client.listPatients({ siteId, updatedAfter, page, perPage: PER_PAGE });
+    const res = await client.listPatients({ siteId: dentallySiteId(siteId), updatedAfter, page, perPage: PER_PAGE });
     const rawPatients = Array.isArray(res.patients) ? res.patients : [];
     pulled += rawPatients.length;
 

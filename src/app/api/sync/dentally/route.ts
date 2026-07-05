@@ -6,7 +6,7 @@ import {
   setSyncState,
   upsertOpportunities,
 } from "@/lib/coordinator/repository";
-import { SITES } from "@/lib/mock/clients";
+import { SITES, dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
@@ -100,17 +100,21 @@ function planUpdatedAt(plan: Raw): string | undefined {
 function mapPlan(plan: Raw): DentallyPlanInput["plan"] {
   return {
     id: pickString(plan, "id") ?? "",
-    name: pickString(plan, "name", "title", "description") ?? "Treatment plan",
+    // Real Dentally plans have no name; `nickname` is the (often null) label.
+    name: pickString(plan, "nickname", "name", "title", "description") ?? "Treatment plan",
+    // Real Dentally £ value is `private_treatment_value` (string). NHS plans carry
+    // UDA value (nhs_uda_value) instead, so their private value is 0.
     planned_private_treatment_value:
       pickNumber(
         plan,
+        "private_treatment_value",
         "planned_private_treatment_value",
         "total",
         "value",
         "fee",
       ) ?? 0,
     accepted_at:
-      pickString(plan, "accepted_at", "acceptedAt", "created_at") ??
+      pickString(plan, "start_date", "accepted_at", "acceptedAt", "created_at") ??
       new Date().toISOString(),
   };
 }
@@ -194,21 +198,32 @@ async function syncSite(
       // longer call the payment_plans endpoint for the amount.
       const amountOutstanding = planAmountOutstanding(plan);
 
-      let patient: DentallyPlanInput["patient"];
-      if (patientId) {
-        // One bad record must not kill the run: default to an empty patient and
-        // skip this plan on a failed lookup.
-        let patientRes: { patient: unknown };
-        try {
-          patientRes = await client.getPatient(patientId);
-        } catch {
-          continue;
-        }
-        patient = mapPatient(asRecord(patientRes.patient), patientId);
-      } else {
-        patient = mapPatient({}, "");
+      // Advance the mark + count as EXAMINED for EVERY plan. Dentally's
+      // /v1/treatment_plans IGNORES the site filter and returns every practice's
+      // plans on the shared key, so we must not re-examine them next run.
+      const planUpdated = planUpdatedAt(plan);
+      if (planUpdated && (!highWaterMark || planUpdated > highWaterMark)) {
+        highWaterMark = planUpdated;
       }
+      processed += 1;
 
+      // A plan with no patient can't be site-scoped: skip it.
+      if (!patientId) continue;
+      // One bad record must not kill the run: skip this plan on a failed lookup.
+      let patientRes: { patient: unknown };
+      try {
+        patientRes = await client.getPatient(patientId);
+      } catch {
+        continue;
+      }
+      const rawPatient = asRecord(patientRes.patient);
+
+      // SCOPE: keep the plan only when its patient belongs to THIS internal site.
+      // This drops the other practices on the shared key AND the cross-site
+      // duplication (each plan is kept once, under the patient's real site).
+      if (siteIdFromDentally(pickString(rawPatient, "site_id") ?? "") !== siteId) continue;
+
+      const patient = mapPatient(rawPatient, patientId);
       const input: DentallyPlanInput = {
         siteId,
         patient,
@@ -216,15 +231,7 @@ async function syncSite(
         amountOutstanding,
         lastTouchAt: null,
       };
-
       opportunities.push(toOpportunity(input, new Date()));
-
-      // Advance the mark only after this record is fully processed.
-      const planUpdated = planUpdatedAt(plan);
-      if (planUpdated && (!highWaterMark || planUpdated > highWaterMark)) {
-        highWaterMark = planUpdated;
-      }
-      processed += 1;
     }
 
     if (capped) break outer;
@@ -283,35 +290,6 @@ export async function POST(request: Request) {
       }
     } catch (e) {
       console.error("[sync-dentally] site discovery failed", e);
-    }
-
-    // One-off SHAPE capture (calibration): store the real Dentally record field
-    // shapes so the field mapping + site scoping can be calibrated to the live API.
-    // The treatment plan is stored in full (fields/amounts, no patient name);
-    // patient + appointment store field NAMES only (no PII). Removed after calibration.
-    try {
-      const vitSite = "3286d822-68c5-48ff-b1a2-065780dfcd15";
-      const plansRes = await client.listTreatmentPlans({ siteId: vitSite, page: 1, perPage: 1 });
-      const rawPlan = Array.isArray(plansRes.treatment_plans) ? plansRes.treatment_plans[0] ?? null : null;
-      let patientKeys: string[] = [];
-      const pid = rawPlan ? pickString(asRecord(rawPlan), "patient_id", "patientId") : undefined;
-      if (pid) {
-        try {
-          patientKeys = Object.keys(asRecord((await client.getPatient(pid)).patient));
-        } catch {
-          /* best effort */
-        }
-      }
-      const apptRes = await client.listAppointments({ siteId: vitSite, page: 1, perPage: 1 });
-      const rawAppt = Array.isArray(apptRes.appointments) ? apptRes.appointments[0] ?? null : null;
-      const shapeRows: Array<{ kind: string; sample: unknown; captured_at: string }> = [
-        { kind: "treatment_plan", sample: rawPlan, captured_at: new Date().toISOString() },
-        { kind: "patient_keys", sample: patientKeys, captured_at: new Date().toISOString() },
-        { kind: "appointment_keys", sample: rawAppt ? Object.keys(asRecord(rawAppt)) : [], captured_at: new Date().toISOString() },
-      ];
-      await serviceClient().from("dentally_raw_sample").upsert(shapeRows, { onConflict: "kind" });
-    } catch (e) {
-      console.error("[sync-dentally] shape capture failed", e);
     }
 
     // One site's failure must not abort the rest: record the error and move on so a

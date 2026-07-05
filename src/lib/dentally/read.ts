@@ -1,4 +1,5 @@
 import { DentallyClient } from "./client";
+import { dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 
 /**
  * The Dentally API key for READ / sync operations (listing patients, appointments,
@@ -98,6 +99,12 @@ function num(v: unknown): number {
 function bool(v: unknown): boolean {
   return v === true || v === 1 || v === "true";
 }
+/** Map a Dentally site_id from a response back to our internal site id (falls back
+ *  to the raw value, which is already internal in the mock/pilot). */
+function mapSite(rawSiteId: unknown): string {
+  const raw = str(rawSiteId) ?? "";
+  return siteIdFromDentally(raw) ?? raw;
+}
 
 function toPatient(r: Record<string, unknown>): PatientRecord {
   const first = str(r.first_name) ?? "";
@@ -107,7 +114,7 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
     name: `${first} ${last}`.trim() || "Unknown",
     email: str(r.email_address),
     phone: str(r.mobile_phone),
-    siteId: str(r.site_id) ?? "",
+    siteId: mapSite(r.site_id),
     active: r.active !== false,
     archivedReason: str(r.archived_reason),
     recallDueAt: str(r.dentist_recall_date) ?? str(r.hygienist_recall_date),
@@ -143,7 +150,7 @@ export async function listPatients(siteIds: string[]): Promise<PatientRecord[]> 
   for (const siteId of siteIds) {
     try {
       const rows = await pageAll((page) =>
-        client.listPatients({ siteId, page, perPage: PER_PAGE }).then((res) => res.patients ?? []),
+        client.listPatients({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.patients ?? []),
       );
       for (const p of rows) out.push(toPatient(p as Record<string, unknown>));
     } catch (err) {
@@ -199,7 +206,7 @@ export async function listAppointments(
     try {
       const rows = await pageAll((page) =>
         client
-          .listAppointments({ siteId, fromDate: range?.from, toDate: range?.to, page, perPage: PER_PAGE })
+          .listAppointments({ siteId: dentallySiteId(siteId), fromDate: range?.from, toDate: range?.to, page, perPage: PER_PAGE })
           .then((res) => res.appointments ?? []),
       );
       for (const a of rows) out.push(toAppointment(a as Record<string, unknown>, siteId));
@@ -241,17 +248,20 @@ export async function getPatientDetail(patientId: string, siteId: string): Promi
     .catch(() => [] as AppointmentRecord[]);
 
   const plansP = pageAll((page) =>
-    client.listTreatmentPlans({ siteId, page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
+    client.listTreatmentPlans({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
   )
     .then((plans) =>
       plans
         .map((pl) => pl as Record<string, unknown>)
         .filter((r) => String(r.patient_id ?? "") === patientId)
         .map<PlanRecord>((r) => ({
-          name: str(r.name) ?? "Treatment plan",
-          planned: num(r.planned_private_treatment_value),
+          // Real Dentally plan fields: nickname (often null) for the label, and
+          // private_treatment_value for the £ value (NHS plans carry UDAs, not £).
+          name: str(r.nickname) ?? str(r.name) ?? "Treatment plan",
+          planned: num(r.private_treatment_value ?? r.planned_private_treatment_value),
+          // amount_outstanding is not on the plan (it lives on invoices/accounts).
           outstanding: num(r.amount_outstanding),
-          acceptedAt: str(r.accepted_at),
+          acceptedAt: str(r.start_date) ?? str(r.accepted_at) ?? str(r.created_at),
         })),
     )
     .catch(() => [] as PlanRecord[]);
@@ -292,21 +302,24 @@ export async function listOutstanding(siteIds: string[]): Promise<OutstandingRec
   for (const siteId of siteIds) {
     try {
       const plans = await pageAll((page) =>
-        client.listTreatmentPlans({ siteId, page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
+        client.listTreatmentPlans({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
       );
       for (const pl of plans) {
         const r = pl as Record<string, unknown>;
+        // NOTE: real Dentally plans do NOT carry amount_outstanding (it lives on
+        // invoices/accounts). Until an invoice-based outstanding lookup is added,
+        // this yields no rows on live data — the Payments module needs that pass.
         const outstanding = num(r.amount_outstanding);
         if (outstanding <= 0) continue;
         const patientId = String(r.patient_id ?? "");
         out.push({
           patientId,
           patientName: nameById.get(patientId) ?? "Patient",
-          siteId: str(r.site_id) ?? siteId,
-          planName: str(r.name) ?? "Treatment plan",
-          planned: num(r.planned_private_treatment_value),
+          siteId: mapSite(r.site_id) || siteId,
+          planName: str(r.nickname) ?? str(r.name) ?? "Treatment plan",
+          planned: num(r.private_treatment_value ?? r.planned_private_treatment_value),
           outstanding,
-          acceptedAt: str(r.accepted_at),
+          acceptedAt: str(r.start_date) ?? str(r.accepted_at),
         });
       }
     } catch (err) {

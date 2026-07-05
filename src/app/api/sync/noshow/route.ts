@@ -19,7 +19,7 @@ import {
 } from "@/lib/noshow/repository";
 import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
 import type { NoshowStatus } from "@/lib/noshow/types";
-import { SITES } from "@/lib/mock/clients";
+import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
@@ -175,7 +175,7 @@ async function syncSite(
   // up on the next tick (the window is re-queried each run).
   appt_loop: for (let page = 1; ; page++) {
     const res = await client.listAppointments({
-      siteId, fromDate: ymd(now), toDate: ymd(toDate), page, perPage: PER_PAGE,
+      siteId: dentallySiteId(siteId), fromDate: ymd(now), toDate: ymd(toDate), page, perPage: PER_PAGE,
     });
     const rawAppts = Array.isArray(res.appointments) ? res.appointments : [];
     pulled += rawAppts.length;
