@@ -10,7 +10,8 @@ import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
-import { dentallyReadKey } from "@/lib/dentally/read";
+import { dentallyReadKey, listDentallySites } from "@/lib/dentally/read";
+import { serviceClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -262,6 +263,28 @@ export async function POST(request: Request) {
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
     });
 
+    // Read-only site discovery: learn the practice's REAL Dentally site IDs
+    // (GET /v1/sites) and mirror them into dentally_site, so the placeholder site
+    // IDs can be replaced. Isolated: a failure here never affects the plan sync.
+    let discoveredSites: Array<{ dentallyId: string; name: string }> = [];
+    try {
+      discoveredSites = await listDentallySites();
+      if (discoveredSites.length > 0) {
+        await serviceClient()
+          .from("dentally_site")
+          .upsert(
+            discoveredSites.map((s) => ({
+              dentally_id: s.dentallyId,
+              name: s.name,
+              seen_at: new Date().toISOString(),
+            })),
+            { onConflict: "dentally_id" },
+          );
+      }
+    } catch (e) {
+      console.error("[sync-dentally] site discovery failed", e);
+    }
+
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
@@ -273,7 +296,7 @@ export async function POST(request: Request) {
       }
     }
 
-    return Response.json({ ok: true, perSite });
+    return Response.json({ ok: true, discoveredSites, perSite });
   } finally {
     await releaseCronLock("sync-dentally");
   }

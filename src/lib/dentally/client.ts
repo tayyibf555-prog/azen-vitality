@@ -59,6 +59,11 @@ export class DentallyClient {
     return (await res.json()) as T;
   }
 
+  /** The practice's sites (read-only). Used to discover real Dentally site IDs. */
+  listSites() {
+    return this.get<{ sites: unknown[] }>("/v1/sites", { page: 1, per_page: 100 });
+  }
+
   listTreatmentPlans(a: ListPlansArgs) {
     return this.get<{ treatment_plans: unknown[] }>("/v1/treatment_plans", {
       site_id: a.siteId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,

@@ -27,6 +27,30 @@ export function dentallyFromEnv(): DentallyClient {
   });
 }
 
+export interface DentallySiteRecord {
+  /** The real Dentally site id (what the API expects as site_id). */
+  dentallyId: string;
+  name: string;
+}
+
+/** The practice's real Dentally sites (read-only GET /v1/sites). Best-effort: [] on error. */
+export async function listDentallySites(): Promise<DentallySiteRecord[]> {
+  const client = dentallyFromEnv();
+  try {
+    const res = await client.listSites();
+    const rows = Array.isArray(res.sites) ? res.sites : [];
+    return rows
+      .map((s) => {
+        const r = s as Record<string, unknown>;
+        return { dentallyId: String(r.id ?? ""), name: str(r.name) ?? "" };
+      })
+      .filter((s) => s.dentallyId !== "");
+  } catch (err) {
+    console.error("[dentally] listSites failed", err);
+    return [];
+  }
+}
+
 export interface PatientRecord {
   id: string;
   name: string;
