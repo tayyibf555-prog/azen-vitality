@@ -37,15 +37,25 @@ function serialise(a: MockAppointment) {
   };
 }
 
-// GET /api/mock-dentally/v1/appointments?patient_id= | ?site_id=&start_date=&finish_date=
+// GET /api/mock-dentally/v1/appointments?patient_id= | ?site_id=&on= / &after=&before=
+//
+// Mirrors the REAL Dentally list filters (calibrated 2026-07-05): date filtering
+// is `on` (exact day) or `after`/`before` (treated as EXCLUSIVE here — callers pad
+// each edge by a day, and the strict comparison verifies that padding). The old
+// start_date/finish_date params are gone because real Dentally silently ignores
+// them — the mock accepting invented params is exactly how the no-show
+// miscalibration slipped through. Cancelled / did-not-attend rows are EXCLUDED
+// unless cancelled=true, matching the real API's default.
 export async function GET(request: Request): Promise<Response> {
   const unauthorized = unauthorizedIfMissingBearer(request);
   if (unauthorized) return unauthorized;
   const url = new URL(request.url);
   const patientId = url.searchParams.get("patient_id");
   const siteId = url.searchParams.get("site_id");
-  const startDate = url.searchParams.get("start_date"); // inclusive YYYY-MM-DD
-  const finishDate = url.searchParams.get("finish_date"); // inclusive YYYY-MM-DD
+  const on = url.searchParams.get("on"); // exact YYYY-MM-DD
+  const after = url.searchParams.get("after"); // YYYY-MM-DD, exclusive
+  const before = url.searchParams.get("before"); // YYYY-MM-DD, exclusive
+  const includeCancelled = url.searchParams.get("cancelled") === "true";
 
   let rows: MockAppointment[];
   if (patientId) {
@@ -56,8 +66,15 @@ export async function GET(request: Request): Promise<Response> {
     rows = [];
   }
 
-  if (startDate) rows = rows.filter((a) => a.start_time.slice(0, 10) >= startDate);
-  if (finishDate) rows = rows.filter((a) => a.start_time.slice(0, 10) <= finishDate);
+  if (on) rows = rows.filter((a) => a.start_time.slice(0, 10) === on);
+  if (after) rows = rows.filter((a) => a.start_time.slice(0, 10) > after);
+  if (before) rows = rows.filter((a) => a.start_time.slice(0, 10) < before);
+  if (!includeCancelled) {
+    rows = rows.filter((a) => {
+      const s = (a.state ?? "").toLowerCase().replace(/[\s-]+/g, "_");
+      return s !== "cancelled" && s !== "did_not_attend";
+    });
+  }
 
   rows = [...rows].sort((a, b) => (a.start_time < b.start_time ? -1 : 1));
 

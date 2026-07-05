@@ -436,25 +436,25 @@ export interface MockInvoice {
 // existing booking (which disqualifies a patient from the dormant book).
 export const MOCK_APPOINTMENTS: MockAppointment[] = [
   // Active patients — recent past visit, no future booking → not dormant.
-  { id: "appt-002a", patient_id: "pat-002", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-003a", patient_id: "pat-003", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-004a", patient_id: "pat-004", site_id: "site-cc",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-005a", patient_id: "pat-005", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-006a", patient_id: "pat-006", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-007a", patient_id: "pat-007", site_id: "site-cc",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-008a", patient_id: "pat-008", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
-  { id: "appt-009a", patient_id: "pat-009", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "completed" },
+  { id: "appt-002a", patient_id: "pat-002", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-003a", patient_id: "pat-003", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-004a", patient_id: "pat-004", site_id: "site-cc",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-005a", patient_id: "pat-005", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-006a", patient_id: "pat-006", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-007a", patient_id: "pat-007", site_id: "site-cc",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-008a", patient_id: "pat-008", site_id: "site-rv",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
+  { id: "appt-009a", patient_id: "pat-009", site_id: "site-ng",  start_time: "2026-05-15T10:00:00Z", state: "Completed" },
   // Dormant patients.
-  { id: "appt-010a", patient_id: "pat-010", site_id: "site-cc", start_time: "2024-05-10T09:00:00Z", state: "completed" },
-  { id: "appt-011a", patient_id: "pat-011", site_id: "site-rv", start_time: "2025-07-02T11:30:00Z", state: "completed" },
-  { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "completed" },
+  { id: "appt-010a", patient_id: "pat-010", site_id: "site-cc", start_time: "2024-05-10T09:00:00Z", state: "Completed" },
+  { id: "appt-011a", patient_id: "pat-011", site_id: "site-rv", start_time: "2025-07-02T11:30:00Z", state: "Completed" },
+  { id: "appt-012a", patient_id: "pat-012", site_id: "site-ng", start_time: "2025-12-01T10:00:00Z", state: "Completed" },
   // Recall concierge cohort — a past visit each, no future booking, recall now due/overdue.
-  { id: "appt-013a", patient_id: "pat-013", site_id: "site-cc", start_time: "2026-01-10T10:00:00Z", state: "completed" },
-  { id: "appt-014a", patient_id: "pat-014", site_id: "site-rv", start_time: "2025-11-20T10:00:00Z", state: "completed" },
-  { id: "appt-015a", patient_id: "pat-015", site_id: "site-ng", start_time: "2025-12-15T10:00:00Z", state: "completed" },
-  { id: "appt-016a", patient_id: "pat-016", site_id: "site-cc", start_time: "2025-10-15T10:00:00Z", state: "completed" },
-  { id: "appt-017a", patient_id: "pat-017", site_id: "site-rv", start_time: "2026-01-05T10:00:00Z", state: "completed" },
-  { id: "appt-018a", patient_id: "pat-018", site_id: "site-cc", start_time: "2025-12-20T10:00:00Z", state: "completed" },
+  { id: "appt-013a", patient_id: "pat-013", site_id: "site-cc", start_time: "2026-01-10T10:00:00Z", state: "Completed" },
+  { id: "appt-014a", patient_id: "pat-014", site_id: "site-rv", start_time: "2025-11-20T10:00:00Z", state: "Completed" },
+  { id: "appt-015a", patient_id: "pat-015", site_id: "site-ng", start_time: "2025-12-15T10:00:00Z", state: "Completed" },
+  { id: "appt-016a", patient_id: "pat-016", site_id: "site-cc", start_time: "2025-10-15T10:00:00Z", state: "Completed" },
+  { id: "appt-017a", patient_id: "pat-017", site_id: "site-rv", start_time: "2026-01-05T10:00:00Z", state: "Completed" },
+  { id: "appt-018a", patient_id: "pat-018", site_id: "site-cc", start_time: "2025-12-20T10:00:00Z", state: "Completed" },
   // An active patient WITH a future booking (must NOT appear in the dormant book).
   { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked" },
 
@@ -462,34 +462,34 @@ export const MOCK_APPOINTMENTS: MockAppointment[] = [
   // A populated week so the Calendar and Today views are meaningful. These
   // carry the optional diary fields. Walk-in / new patients use synthetic ids.
   // Today (Thu 2026-06-18)
-  { id: "appt-d01", patient_id: "pat-004", patient_name: "Callum Fraser",    site_id: "site-cc", start_time: "2026-06-18T08:00:00Z", duration: 30, state: "completed",     reason: "Checkup",          practitioner: "Dr James Shah" },
+  { id: "appt-d01", patient_id: "pat-004", patient_name: "Callum Fraser",    site_id: "site-cc", start_time: "2026-06-18T08:00:00Z", duration: 30, state: "Completed",     reason: "Checkup",          practitioner: "Dr James Shah" },
   { id: "appt-d02", patient_id: "pat-007", patient_name: "Megan Lloyd",      site_id: "site-cc", start_time: "2026-06-18T09:30:00Z", duration: 60, state: "booked",        reason: "Implant consult",  practitioner: "Dr James Shah" },
   { id: "appt-d03", patient_id: "new-101", patient_name: "Daniel Okonkwo",   site_id: "site-cc", start_time: "2026-06-18T13:00:00Z", duration: 30, state: "booked",        reason: "New patient exam", practitioner: "Dr James Shah" },
   { id: "appt-d04", patient_id: "pat-001", patient_name: "Eleanor Whitfield",site_id: "site-cc", start_time: "2026-06-18T15:00:00Z", duration: 30, state: "booked",        reason: "Invisalign review",practitioner: "Dr Priya Adeyemi" },
-  { id: "appt-d05", patient_id: "pat-002", patient_name: "Rajesh Patel",     site_id: "site-rv", start_time: "2026-06-18T08:30:00Z", duration: 30, state: "completed",     reason: "Hygiene",          practitioner: "Sarah Okoro (Hygienist)" },
+  { id: "appt-d05", patient_id: "pat-002", patient_name: "Rajesh Patel",     site_id: "site-rv", start_time: "2026-06-18T08:30:00Z", duration: 30, state: "Completed",     reason: "Hygiene",          practitioner: "Sarah Okoro (Hygienist)" },
   { id: "appt-d06", patient_id: "pat-005", patient_name: "Aisha Begum",      site_id: "site-rv", start_time: "2026-06-18T10:00:00Z", duration: 60, state: "booked",        reason: "Root canal review",practitioner: "Dr Priya Adeyemi" },
-  { id: "appt-d07", patient_id: "pat-008", patient_name: "Bartosz Kowalski", site_id: "site-rv", start_time: "2026-06-18T12:00:00Z", duration: 30, state: "did_not_attend",reason: "Filling",         practitioner: "Dr James Shah" },
+  { id: "appt-d07", patient_id: "pat-008", patient_name: "Bartosz Kowalski", site_id: "site-rv", start_time: "2026-06-18T12:00:00Z", duration: 30, state: "Did not attend",reason: "Filling",         practitioner: "Dr James Shah" },
   { id: "appt-d08", patient_id: "new-102", patient_name: "Grace Bello",      site_id: "site-rv", start_time: "2026-06-18T14:00:00Z", duration: 15, state: "booked",        reason: "Emergency",        practitioner: "Dr Priya Adeyemi" },
   { id: "appt-d09", patient_id: "pat-003", patient_name: "Sophie Armstrong", site_id: "site-ng", start_time: "2026-06-18T09:00:00Z", duration: 60, state: "booked",        reason: "Veneers review",   practitioner: "Dr Priya Adeyemi" },
   { id: "appt-d10", patient_id: "pat-009", patient_name: "Grace Okafor",     site_id: "site-ng", start_time: "2026-06-18T11:00:00Z", duration: 30, state: "booked",        reason: "Checkup",          practitioner: "Dr James Shah" },
   { id: "appt-d11", patient_id: "pat-006", patient_name: "Thomas Hargreaves",site_id: "site-ng", start_time: "2026-06-18T15:30:00Z", duration: 30, state: "booked",        reason: "Whitening",        practitioner: "Sarah Okoro (Hygienist)" },
   // Earlier this week (completed)
-  { id: "appt-d12", patient_id: "pat-004", patient_name: "Callum Fraser",    site_id: "site-cc", start_time: "2026-06-16T10:00:00Z", duration: 30, state: "completed",     reason: "Filling",          practitioner: "Dr James Shah" },
-  { id: "appt-d13", patient_id: "pat-002", patient_name: "Rajesh Patel",     site_id: "site-rv", start_time: "2026-06-17T14:00:00Z", duration: 60, state: "completed",     reason: "Implant fit",      practitioner: "Dr Priya Adeyemi" },
+  { id: "appt-d12", patient_id: "pat-004", patient_name: "Callum Fraser",    site_id: "site-cc", start_time: "2026-06-16T10:00:00Z", duration: 30, state: "Completed",     reason: "Filling",          practitioner: "Dr James Shah" },
+  { id: "appt-d13", patient_id: "pat-002", patient_name: "Rajesh Patel",     site_id: "site-rv", start_time: "2026-06-17T14:00:00Z", duration: 60, state: "Completed",     reason: "Implant fit",      practitioner: "Dr Priya Adeyemi" },
   // Coming up (Fri 2026-06-19 and next week)
   { id: "appt-d14", patient_id: "pat-007", patient_name: "Megan Lloyd",      site_id: "site-cc", start_time: "2026-06-19T09:00:00Z", duration: 30, state: "booked",        reason: "Implant fit",      practitioner: "Dr James Shah" },
   { id: "appt-d15", patient_id: "new-103", patient_name: "Olivia Hughes",    site_id: "site-ng", start_time: "2026-06-19T11:30:00Z", duration: 30, state: "booked",        reason: "New patient exam", practitioner: "Dr Priya Adeyemi" },
   { id: "appt-d16", patient_id: "pat-005", patient_name: "Aisha Begum",      site_id: "site-rv", start_time: "2026-06-22T11:00:00Z", duration: 30, state: "booked",        reason: "Hygiene",          practitioner: "Sarah Okoro (Hygienist)" },
 
   // --- No-show defence: attendance history that sets each patient's risk band ---
-  { id: "appt-019h1", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-02-10T09:00:00Z", state: "did_not_attend" },
-  { id: "appt-019h2", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-03-15T09:00:00Z", state: "did_not_attend" },
-  { id: "appt-019h3", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-04-20T09:00:00Z", state: "did_not_attend" },
-  { id: "appt-020h1", patient_id: "pat-020", site_id: "site-rv", start_time: "2026-03-01T10:00:00Z", state: "completed" },
-  { id: "appt-020h2", patient_id: "pat-020", site_id: "site-rv", start_time: "2026-04-10T10:00:00Z", state: "did_not_attend" },
-  { id: "appt-021h1", patient_id: "pat-021", site_id: "site-ng", start_time: "2026-02-01T11:00:00Z", state: "completed" },
-  { id: "appt-021h2", patient_id: "pat-021", site_id: "site-ng", start_time: "2026-04-01T11:00:00Z", state: "completed" },
-  { id: "appt-023h1", patient_id: "pat-023", site_id: "site-cc", start_time: "2026-03-20T14:00:00Z", state: "completed" },
+  { id: "appt-019h1", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-02-10T09:00:00Z", state: "Did not attend" },
+  { id: "appt-019h2", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-03-15T09:00:00Z", state: "Did not attend" },
+  { id: "appt-019h3", patient_id: "pat-019", site_id: "site-cc", start_time: "2026-04-20T09:00:00Z", state: "Did not attend" },
+  { id: "appt-020h1", patient_id: "pat-020", site_id: "site-rv", start_time: "2026-03-01T10:00:00Z", state: "Completed" },
+  { id: "appt-020h2", patient_id: "pat-020", site_id: "site-rv", start_time: "2026-04-10T10:00:00Z", state: "Did not attend" },
+  { id: "appt-021h1", patient_id: "pat-021", site_id: "site-ng", start_time: "2026-02-01T11:00:00Z", state: "Completed" },
+  { id: "appt-021h2", patient_id: "pat-021", site_id: "site-ng", start_time: "2026-04-01T11:00:00Z", state: "Completed" },
+  { id: "appt-023h1", patient_id: "pat-023", site_id: "site-cc", start_time: "2026-03-20T14:00:00Z", state: "Completed" },
 ];
 
 // No-show defence demo: upcoming appointments anchored to the present so the

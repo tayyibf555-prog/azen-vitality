@@ -20,6 +20,7 @@ import {
 import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
 import type { NoshowStatus } from "@/lib/noshow/types";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
+import { normaliseAppointmentState } from "@/lib/dentally/appointment-state";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 
@@ -88,7 +89,9 @@ function mapAppointment(raw: unknown): ApptFields | null {
   const patientId = pickString(a, "patient_id", "patientId");
   const start = pickString(a, "start_time", "start", "date");
   if (!id || !patientId || !start) return null;
-  const state = pickString(a, "state", "status") ?? "booked";
+  // Canonicalised: real Dentally sends "Did not attend" / "In surgery" etc.; the
+  // terminal checks below and toNoshowTarget compare did_not_attend-style.
+  const state = normaliseAppointmentState(pickString(a, "state", "status"));
   const durationMin = pickNumber(a, "duration", "duration_minutes", "durationMin") ?? 30;
   const practitioner = pickString(a, "practitioner", "practitioner_name") ?? null;
   // Lead time if a booking timestamp is present, else a neutral 14 days.
@@ -115,7 +118,7 @@ function summariseHistory(payload: { appointments: unknown[] }, now: Date): {
     if (!start) continue;
     if (new Date(start).getTime() >= now.getTime()) continue; // only past appointments
     priorAppointments += 1;
-    const state = (pickString(a, "state", "status") ?? "").toLowerCase();
+    const state = normaliseAppointmentState(pickString(a, "state", "status"), "");
     if (state === "did_not_attend" || state === "no_show") priorNoShows += 1;
     if (state === "completed") anyCompleted = true;
   }
@@ -222,7 +225,9 @@ async function syncSite(
     // appointment and move on to the next.
     let historyRes: { appointments: unknown[] };
     try {
-      historyRes = await client.getPatientAppointments(appt.patientId);
+      // includeCancelled: real Dentally EXCLUDES Did-not-attend rows by default,
+      // which would zero priorNoShows and gut the risk score's history component.
+      historyRes = await client.getPatientAppointments(appt.patientId, 1, 100, true);
     } catch {
       continue;
     }

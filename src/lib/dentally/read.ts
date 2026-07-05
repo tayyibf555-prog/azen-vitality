@@ -1,4 +1,5 @@
 import { DentallyClient } from "./client";
+import { normaliseAppointmentState } from "./appointment-state";
 import { dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 
 /**
@@ -189,7 +190,9 @@ function toAppointment(r: Record<string, unknown>, fallbackSiteId: string): Appo
     start: str(r.start_time) ?? "",
     finish: str(r.finish_time),
     durationMin: num(r.duration) || 30,
-    state: str(r.state) ?? "booked",
+    // Canonicalised: real Dentally sends "Did not attend" / "In surgery" etc.;
+    // downstream sets (diary gaps, brief gap count) compare did_not_attend-style.
+    state: normaliseAppointmentState(r.state),
     reason: str(r.reason),
     practitioner: str(r.practitioner),
   };

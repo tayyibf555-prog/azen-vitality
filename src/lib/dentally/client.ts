@@ -20,6 +20,14 @@ function isAbortError(e: unknown): boolean {
   return e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
 }
 
+/** YYYY-MM-DD shifted by whole days (UTC-safe); undefined/unparseable pass through. */
+function shiftDay(ymd: string | undefined, days: number): string | undefined {
+  if (!ymd) return undefined;
+  const t = Date.parse(`${ymd}T00:00:00Z`);
+  if (Number.isNaN(t)) return ymd;
+  return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 export interface ListPlansArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface ListPatientsArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface AvailabilityArgs { siteId: string; fromDate?: string; toDate?: string; duration?: number; }
@@ -110,9 +118,14 @@ export class DentallyClient {
       site_id: a.siteId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
-  getPatientAppointments(patientId: string, page = 1, perPage = 100) {
+  getPatientAppointments(patientId: string, page = 1, perPage = 100, includeCancelled = false) {
+    // Dentally excludes Cancelled / Did-not-attend rows unless cancelled=true.
+    // The no-show risk history opts IN (it needs past DNAs to score risk); recall
+    // keeps the default OUT, so a cancelled future booking never masquerades as
+    // futureBookingExists and silently suppress a due recall.
     return this.get<{ appointments: unknown[] }>("/v1/appointments", {
       patient_id: patientId, page, per_page: perPage,
+      cancelled: includeCancelled ? "true" : undefined,
     });
   }
   listAppointments(a: { siteId: string; fromDate?: string; toDate?: string; page?: number; perPage?: number }) {
@@ -120,8 +133,23 @@ export class DentallyClient {
     // unpaged call silently drops every appointment past the first page (a large
     // practice's busiest days would go undefended). Callers loop pages until a
     // short page. Default per_page matches the other list endpoints (100).
+    //
+    // Date filtering (calibrated 2026-07-05 against the live API docs): real
+    // Dentally filters with `on` / `after` / `before` — NOT start_date /
+    // finish_date, which it silently IGNORES. An ignored filter meant paging the
+    // practice's entire appointment book (the no-show sync burned its whole
+    // per-run cap on ancient history and produced zero targets). `on` is exact
+    // for a single day; for a range the docs leave after/before edge semantics
+    // unstated, so pad each edge by a day and let callers' precise windows trim.
+    // cancelled=true includes Cancelled / Did-not-attend rows (excluded by
+    // default), which no-show reconciliation and the daily-brief gap count need.
+    const single = a.fromDate !== undefined && a.fromDate === a.toDate;
     return this.get<{ appointments: unknown[] }>("/v1/appointments", {
-      site_id: a.siteId, start_date: a.fromDate, finish_date: a.toDate,
+      site_id: a.siteId,
+      on: single ? a.fromDate : undefined,
+      after: single ? undefined : shiftDay(a.fromDate, -1),
+      before: single ? undefined : shiftDay(a.toDate, 1),
+      cancelled: "true",
       page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
