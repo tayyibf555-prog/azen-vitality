@@ -16,7 +16,6 @@ import {
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
-import { isSystemEnabled } from "@/lib/systems/repository";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
 
@@ -221,10 +220,6 @@ async function syncSite(
 export async function POST(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
-
-  if (!(await isSystemEnabled("vitality", "treatment-coordinator"))) {
-    return Response.json({ ok: true, skipped: "system off" });
-  }
 
   const apiKey = dentallyReadKey();
   if (!apiKey) {

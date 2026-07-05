@@ -3,6 +3,11 @@
 // control panel UI and for mapping the messaging drain's outbox sources back to
 // a module slug.
 //
+// Switching a system OFF stops everything it DOES to patients (its sweeps, sends,
+// agent replies and public intake). It does NOT stop the read-only Dentally data
+// sync, so the dashboard stays current and the practice can preview a system
+// before turning it on.
+//
 // A system here is something that DOES work server-side (a sweep, an agent, a
 // public intake, an outbound send). Passive Dentally-mirror views (calendar,
 // patients, payments), pure surfaces (overview, notifications, task queue,
@@ -41,7 +46,7 @@ export const SYSTEMS: SystemDef[] = [
     slug: "treatment-coordinator",
     label: "Treatment Coordinator",
     group: "Patient lifecycle",
-    halts: "Treatment follow-up messaging and the plan sync stop.",
+    halts: "Treatment follow-up messaging stops.",
   },
   {
     slug: "no-show-defence",
