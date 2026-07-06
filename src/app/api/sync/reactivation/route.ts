@@ -19,6 +19,7 @@ import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { mapWithConcurrency } from "@/lib/async/pool";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
 
@@ -31,6 +32,10 @@ const PER_PAGE = 100;
 // function limit. The high-water mark only advances past fully-processed records,
 // so the next cron tick resumes where this one stopped.
 const MAX_PATIENTS_PER_RUN = 300;
+// Concurrency for the per-patient secondary reads (appointments + invoices). Bounded
+// so a site finishes fast — serial ~2 calls/patient made a big site burn the whole
+// 300s function and starve the sites after it — without spiking Dentally load.
+const PATIENT_CONCURRENCY = 8;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -202,11 +207,10 @@ async function syncSite(
     if (rawPlans.length < PER_PAGE) break;
   }
 
-  // 2. Page patients and classify each into a cohort.
-  const targets = [];
-  // Only advance the mark once at least one record actually contributed a parsed
-  // updatedAt; never fall back to `now` (that would skip records on an early exit).
-  let highWaterMark = updatedAfter ?? null;
+  // 2. Page patients up to the per-run cap, collecting the raw records with NO
+  //    per-patient I/O yet (that is batched in step 3). The cap bounds attempted
+  //    patients so a large backlog can't blow the 300s function limit.
+  const pending: Array<{ p: Raw; patient: ReactivationInput["patient"] }> = [];
   let pulled = 0;
   let processed = 0;
   let remaining = 0;
@@ -222,95 +226,103 @@ async function syncSite(
       const p = asRecord(rawPatient);
       const patient = mapPatient(p, "");
       if (!patient.id) continue;
-
-      // Cap reached: stop before processing this patient and leave the mark at the
-      // last fully-processed record so the next tick resumes from here.
       if (processed >= MAX_PATIENTS_PER_RUN) {
         remaining += 1;
         capped = true;
         continue;
       }
-
-      // One bad record must not kill the run: on a failed secondary call, skip this
-      // patient (treat as empty) and move on to the next.
-      let apptsRes: { appointments: unknown[] };
-      try {
-        // Page the patient's appointments: an unpaged call caps at ~100 rows, so a
-        // long-standing patient's FUTURE booking could sit past page 1 and be missed,
-        // making futureBookingExists a false negative — we'd reactivate a patient who
-        // already has an appointment. Loop until a short page (bounded).
-        const all: unknown[] = [];
-        for (let ap = 1; ap <= 20; ap += 1) {
-          const r = await client.getPatientAppointments(patient.id, ap, PER_PAGE);
-          const rows = Array.isArray(r.appointments) ? r.appointments : [];
-          all.push(...rows);
-          if (rows.length < PER_PAGE) break;
-        }
-        apptsRes = { appointments: all };
-      } catch {
-        continue;
-      }
-      let invoicesRes: { invoices: unknown[] };
-      try {
-        invoicesRes = await client.getPatientInvoices(patient.id);
-      } catch {
-        continue;
-      }
-      const appts = summariseAppointments(apptsRes, now);
-      const historicSpend = deriveHistoricSpend(invoicesRes);
-      const open = openByPatient.get(patient.id) ?? { plan: null, amountOutstanding: 0 };
-
-      const input: ReactivationInput = {
-        siteId,
-        patient,
-        lastVisitAt: appts.lastVisitAt,
-        futureBookingExists: appts.futureBookingExists,
-        plan: open.plan,
-        amountOutstanding: open.amountOutstanding,
-        historicSpend,
-        lastTouchAt: null,
-      };
-
-      const target = toReactivationTarget(input, now, cfg);
-
-      // Stop chasing a patient who has self-served: if they now have a future booking
-      // (rebooked directly with the practice) or no longer qualify at all, and they are
-      // mid-cadence, END the cadence and mark the target 'converted'. Without this the
-      // active cadence keeps firing reactivation messages at a patient who already
-      // booked — the exact "why are you still texting me, I've got an appointment" case.
-      const stoppedQualifying = input.futureBookingExists || !target;
-      const targetId = `${siteId}:${patient.id}`;
-      if (stoppedQualifying && inCadenceIds.has(targetId)) {
-        const cad = await getCadenceByTarget(targetId);
-        if (cad && (cad.status === "active" || cad.status === "paused")) {
-          await updateCadence(cad.id, { status: "converted", endedAt: now.toISOString() });
-        }
-        await setTargetStatus(targetId, "converted");
-        converted += 1;
-      }
-
-      // Recall owns a patient from due-soon through the grace boundary. While an
-      // open recall row exists (due / in_cadence) reactivation must not chase the
-      // SAME patient for ANY reason, not just overdue_recall: a long-interval
-      // recall only lightly overdue can independently trip the `lapsed` rule
-      // (last real visit > 18 months) and, without this, the patient would be
-      // contacted by both modules at once. Recall hands off (graduated) past the
-      // grace boundary, at which point the key leaves openRecall and reactivation
-      // legitimately adopts the patient. Also never (re-)enrol a patient with a
-      // future booking.
-      if (target && !input.futureBookingExists && !openRecall.has(target.id)) {
-        targets.push(target);
-      }
-
-      // Advance the mark only after this record is fully processed.
-      const updated = patientUpdatedAt(p);
-      if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
+      pending.push({ p, patient });
       processed += 1;
     }
 
     if (capped) break outer;
     if (rawPatients.length < PER_PAGE) break;
     page += 1;
+  }
+
+  // 3. Fetch each pending patient's appointments + invoices in BOUNDED-CONCURRENCY
+  //    batches (was a serial ~2-calls-per-patient loop that starved later sites). A
+  //    failed read leaves the patient unenriched -> skipped below (retry next run),
+  //    never messaging on an unread record and never advancing the mark past them.
+  const enriched = new Map<string, { lastVisitAt: string | null; futureBookingExists: boolean; historicSpend: number }>();
+  await mapWithConcurrency(pending, PATIENT_CONCURRENCY, async ({ patient }) => {
+    try {
+      // Page the patient's appointments: an unpaged call caps at ~100 rows, so a
+      // long-standing patient's FUTURE booking could sit past page 1 and be missed,
+      // making futureBookingExists a false negative — we'd reactivate a patient who
+      // already has an appointment. Loop until a short page (bounded).
+      const all: unknown[] = [];
+      for (let ap = 1; ap <= 20; ap += 1) {
+        const r = await client.getPatientAppointments(patient.id, ap, PER_PAGE);
+        const rows = Array.isArray(r.appointments) ? r.appointments : [];
+        all.push(...rows);
+        if (rows.length < PER_PAGE) break;
+      }
+      const inv = await client.getPatientInvoices(patient.id);
+      const appts = summariseAppointments({ appointments: all }, now);
+      enriched.set(patient.id, {
+        lastVisitAt: appts.lastVisitAt,
+        futureBookingExists: appts.futureBookingExists,
+        historicSpend: deriveHistoricSpend(inv),
+      });
+    } catch {
+      // leave unset -> skipped in step 4
+    }
+  });
+
+  // 4. Classify each enriched patient into a cohort (no Dentally I/O). Advance the
+  //    high-water mark only for FULLY-processed (enriched) patients, in page order.
+  const targets = [];
+  let highWaterMark = updatedAfter ?? null;
+  for (const { p, patient } of pending) {
+    const data = enriched.get(patient.id);
+    if (!data) continue; // failed secondary read: skip, do not advance the mark past them
+
+    const open = openByPatient.get(patient.id) ?? { plan: null, amountOutstanding: 0 };
+    const input: ReactivationInput = {
+      siteId,
+      patient,
+      lastVisitAt: data.lastVisitAt,
+      futureBookingExists: data.futureBookingExists,
+      plan: open.plan,
+      amountOutstanding: open.amountOutstanding,
+      historicSpend: data.historicSpend,
+      lastTouchAt: null,
+    };
+
+    const target = toReactivationTarget(input, now, cfg);
+
+    // Stop chasing a patient who has self-served: if they now have a future booking
+    // (rebooked directly with the practice) or no longer qualify at all, and they are
+    // mid-cadence, END the cadence and mark the target 'converted'. Without this the
+    // active cadence keeps firing reactivation messages at a patient who already
+    // booked — the exact "why are you still texting me, I've got an appointment" case.
+    const stoppedQualifying = input.futureBookingExists || !target;
+    const targetId = `${siteId}:${patient.id}`;
+    if (stoppedQualifying && inCadenceIds.has(targetId)) {
+      const cad = await getCadenceByTarget(targetId);
+      if (cad && (cad.status === "active" || cad.status === "paused")) {
+        await updateCadence(cad.id, { status: "converted", endedAt: now.toISOString() });
+      }
+      await setTargetStatus(targetId, "converted");
+      converted += 1;
+    }
+
+    // Recall owns a patient from due-soon through the grace boundary. While an
+    // open recall row exists (due / in_cadence) reactivation must not chase the
+    // SAME patient for ANY reason, not just overdue_recall: a long-interval
+    // recall only lightly overdue can independently trip the `lapsed` rule
+    // (last real visit > 18 months) and, without this, the patient would be
+    // contacted by both modules at once. Recall hands off (graduated) past the
+    // grace boundary, at which point the key leaves openRecall and reactivation
+    // legitimately adopts the patient. Also never (re-)enrol a patient with a
+    // future booking.
+    if (target && !input.futureBookingExists && !openRecall.has(target.id)) {
+      targets.push(target);
+    }
+
+    const updated = patientUpdatedAt(p);
+    if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
   }
 
   const ranked = rankTargets(targets, now);
@@ -342,10 +354,16 @@ export async function POST(request: Request) {
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
     });
     const cfg = config();
+    // Rotate which site goes first each run (by hour), so a budget squeeze can never
+    // PERMANENTLY starve whichever site is listed last — worst-case staleness is
+    // bounded to N-1 cycles instead of forever.
+    const sites = vitalitySiteIds();
+    const offset = sites.length > 0 ? new Date().getUTCHours() % sites.length : 0;
+    const ordered = [...sites.slice(offset), ...sites.slice(0, offset)];
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
-    for (const siteId of vitalitySiteIds()) {
+    for (const siteId of ordered) {
       try {
         perSite.push(await syncSite(client, siteId, cfg));
       } catch (e) {
