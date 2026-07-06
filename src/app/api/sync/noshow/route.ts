@@ -40,6 +40,10 @@ const MAX_APPOINTMENTS_PER_RUN = 300;
 // practice's active list; a site larger than this leaves late-page patients out of
 // the map, and their appointments are safely skipped (never messaged) until covered.
 const MAX_PATIENT_PAGES = 200;
+// Concurrency for the per-patient risk-history fetches within a site. Bounded so a
+// site finishes fast — serial calls made the biggest site burn ~3 of the 5 function
+// minutes and starve the last site — without spiking concurrent Dentally load.
+const HISTORY_CONCURRENCY = 6;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -157,6 +161,26 @@ function ymd(d: Date): string {
 }
 
 /**
+ * Run `fn` over `items` with at most `limit` in flight at once. Bounded-concurrency
+ * fan-out for the per-patient history reads: fast without spiking Dentally load.
+ */
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i;
+      i += 1;
+      await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+}
+
+/**
  * Preserve a target's lifecycle status + attempt count across re-syncs, so an
  * (incremental) upsert never resets a confirmed/cancelled appointment to
  * "scheduled". A moved appointment (same id, new start) is re-defended afresh:
@@ -223,7 +247,8 @@ async function syncSite(
   // Per-run history cache: the risk score needs each patient's past attendance,
   // which is patient-level not appointment-level. Fetch getPatientAppointments at
   // most once per unique patient and reuse it for their other slots in the window.
-  const historyCache = new Map<string, ReturnType<typeof summariseHistory>>();
+  // null = a failed history read for that patient (skip their appointments, retry next run).
+  const historyCache = new Map<string, ReturnType<typeof summariseHistory> | null>();
 
   const allTargets: NoshowTarget[] = [];
   let pulled = 0;
@@ -259,7 +284,11 @@ async function syncSite(
     }
     pulled += rawAppts.length;
 
-    const pageTargets: NoshowTarget[] = [];
+    // Phase 1 — classify the page with NO per-appointment I/O: map, cap, terminal,
+    // consent. Collect the live (consented, non-terminal) appointments so their risk
+    // history can be fetched in a bounded-concurrency batch below, rather than one
+    // slow serial call each (which starved the last site in a shared 300s function).
+    const pageLive: Array<{ appt: ApptFields; consent: ReturnType<typeof mapPatientConsent> }> = [];
     for (const rawAppt of rawAppts) {
       const appt = mapAppointment(rawAppt);
       if (!appt) continue;
@@ -291,20 +320,34 @@ async function syncSite(
       const consent = consentByPatient.get(appt.patientId);
       if (!consent) continue;
 
-      // History once per unique patient (cached). A failed fetch skips this
-      // appointment (retry next run), never messaging on an unread record.
-      let history = historyCache.get(appt.patientId);
-      if (history === undefined) {
-        try {
-          // includeCancelled: real Dentally EXCLUDES Did-not-attend rows by default,
-          // which would zero priorNoShows and gut the risk score's history component.
-          const historyRes = await client.getPatientAppointments(appt.patientId, 1, 100, true);
-          history = summariseHistory(historyRes, now);
-        } catch {
-          continue;
-        }
-        historyCache.set(appt.patientId, history);
+      pageLive.push({ appt, consent });
+      processed += 1;
+    }
+
+    // Phase 2 — fetch each live patient's risk history ONCE, in bounded-concurrency
+    // batches (dedup by patient; a patient already cached from an earlier page is
+    // skipped). A failed read caches null so Phase 3 skips that patient's
+    // appointments — never messaging on an unread record — and retries next run.
+    const needHistory = [...new Set(pageLive.map((x) => x.appt.patientId))].filter(
+      (pid) => !historyCache.has(pid),
+    );
+    await mapWithConcurrency(needHistory, HISTORY_CONCURRENCY, async (pid) => {
+      try {
+        // includeCancelled: real Dentally EXCLUDES Did-not-attend rows by default,
+        // which would zero priorNoShows and gut the risk score's history component.
+        const historyRes = await client.getPatientAppointments(pid, 1, 100, true);
+        historyCache.set(pid, summariseHistory(historyRes, now));
+      } catch {
+        historyCache.set(pid, null);
       }
+    });
+
+    // Phase 3 — build targets from the cached history (no I/O). A null history is a
+    // failed read for that patient: skip, exactly like the old serial skip-on-fail.
+    const pageTargets: NoshowTarget[] = [];
+    for (const { appt, consent } of pageLive) {
+      const history = historyCache.get(appt.patientId);
+      if (!history) continue;
 
       const input: NoshowInput = {
         siteId,
@@ -327,7 +370,6 @@ async function syncSite(
 
       const target = toNoshowTarget(input, cfg);
       if (target) pageTargets.push(target);
-      processed += 1;
     }
 
     // Preserve lifecycle status + attempts for this page before upserting, then
