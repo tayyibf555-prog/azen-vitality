@@ -13,7 +13,7 @@ import type {
 } from "./types";
 
 // Re-export shared sync_state helpers (DRY: identical, resource-generic).
-export { getSyncState, setSyncState } from "@/lib/coordinator/repository";
+export { getSyncState, setSyncState, getBackfillCursor, setBackfillCursor } from "@/lib/coordinator/repository";
 
 // ---------------------------------------------------------------------------
 // Row shapes.

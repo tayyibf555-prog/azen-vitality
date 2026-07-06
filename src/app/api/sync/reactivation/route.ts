@@ -10,6 +10,8 @@ import {
   upsertTargets,
   getSyncState,
   setSyncState,
+  getBackfillCursor,
+  setBackfillCursor,
   listTargets,
   getCadenceByTarget,
   updateCadence,
@@ -44,11 +46,10 @@ const PATIENT_CONCURRENCY = 8;
 // NO sort control (only updated_after/created_after/site_id filters), so the
 // updated_after high-water-mark + per-run cap strands older-updated patients on a
 // from-scratch pass (they never get classified). Until the full pass finishes we page
-// EVERY patient by page number, storing the cursor in a dedicated sync_state row;
-// BACKFILL_DONE marks it complete, after which we switch to the updated_after mark for
-// steady-state incremental (which only ever sees the small set of changed patients).
-const BACKFILL_RESOURCE = `${RESOURCE}:backfill`;
-const BACKFILL_DONE = "done";
+// EVERY patient by page number, storing the cursor in the sync_state row's
+// backfill_page/backfill_done columns (high_water_mark is a timestamptz and cannot hold
+// a page number); once done we switch to the updated_after mark for steady-state
+// incremental (which only ever sees the small set of changed patients).
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -197,14 +198,12 @@ async function syncSite(
   cfg: ReactivationConfig,
 ): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; processed: number; remaining: number; mode: string; backfillPage: number | null }> {
   const now = new Date();
-  // Backfill vs incremental (see BACKFILL_RESOURCE above). The backfill row's cursor is
-  // the last fully-paged page number, or "done" once the one-time full pass completed.
-  const backfillState = await getSyncState(siteId, BACKFILL_RESOURCE);
-  const backfilling = backfillState?.highWaterMark !== BACKFILL_DONE;
-  const startPage =
-    backfilling && backfillState?.highWaterMark
-      ? (Number.parseInt(backfillState.highWaterMark, 10) || 0) + 1
-      : 1;
+  // Backfill vs incremental. The cursor (backfill_page + backfill_done) lives on this
+  // site's sync_state row; done=false (the default) means the one-time full pass has
+  // not finished, so we resume paging from backfill_page + 1.
+  const cursor = await getBackfillCursor(siteId, RESOURCE);
+  const backfilling = !cursor.done;
+  const startPage = backfilling && cursor.page ? cursor.page + 1 : 1;
   const mainState = backfilling ? null : await getSyncState(siteId, RESOURCE);
   // Backfill pages EVERY patient (no filter); incremental pages the updated_after window.
   const updatedAfter = backfilling ? undefined : (mainState?.highWaterMark ?? undefined);
@@ -392,15 +391,13 @@ async function syncSite(
 
   if (backfilling) {
     if (backfillComplete) {
-      // Seed the incremental mark FIRST, THEN flip the cursor to done (review-caught):
-      // if the second write fails, the backfill stays in-progress and the next run
-      // harmlessly re-pages the short final page and retries — never 'done' with an
-      // unset mark, which would drop into a capped, un-ordered scan that strands patients.
-      await setSyncState(siteId, RESOURCE, now.toISOString());
-      await setSyncState(siteId, BACKFILL_RESOURCE, BACKFILL_DONE);
+      // Mark done AND seed the incremental watermark in ONE atomic upsert, so a partial
+      // write can never leave done=true with an unset mark (which would drop into a
+      // capped, un-ordered scan that re-strands patients).
+      await setBackfillCursor(siteId, RESOURCE, { page: lastCompletedPage, done: true, highWaterMark: now.toISOString() });
     } else {
       // More pages (or a failed page to retry): persist the safe cursor to resume from.
-      await setSyncState(siteId, BACKFILL_RESOURCE, String(safeCursor));
+      await setBackfillCursor(siteId, RESOURCE, { page: safeCursor, done: false });
     }
   } else if (highWaterMark) {
     // Incremental: advance the updated_after mark (only when a record contributed one),

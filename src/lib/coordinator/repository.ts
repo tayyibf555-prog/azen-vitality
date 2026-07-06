@@ -572,3 +572,48 @@ export async function setSyncState(
   );
   if (error) throw error;
 }
+
+/**
+ * One-time historical-backfill cursor for a (site, resource). Lives in dedicated
+ * sync_state columns (backfill_page is an integer page number, backfill_done a flag)
+ * — high_water_mark is a timestamptz and cannot hold a page number. `done=false`
+ * (the default on any existing row) means the full pass has not finished yet.
+ */
+export async function getBackfillCursor(
+  siteId: string,
+  resource: string,
+): Promise<{ page: number | null; done: boolean }> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("sync_state")
+    .select("backfill_page, backfill_done")
+    .eq("site_id", siteId)
+    .eq("resource", resource)
+    .maybeSingle();
+  if (error) throw error;
+  const row = data as { backfill_page: number | null; backfill_done: boolean } | null;
+  return { page: row?.backfill_page ?? null, done: row?.backfill_done ?? false };
+}
+
+/**
+ * Persist the backfill cursor. On completion pass highWaterMark to seed the
+ * incremental mark in the SAME upsert, so done + the mark are set atomically (a
+ * partial write can never leave done=true with an unset mark).
+ */
+export async function setBackfillCursor(
+  siteId: string,
+  resource: string,
+  opts: { page: number | null; done: boolean; highWaterMark?: string },
+): Promise<void> {
+  const db = serviceClient();
+  const row: Record<string, unknown> = {
+    site_id: siteId,
+    resource,
+    backfill_page: opts.page,
+    backfill_done: opts.done,
+    last_run_at: new Date().toISOString(),
+  };
+  if (opts.highWaterMark !== undefined) row.high_water_mark = opts.highWaterMark;
+  const { error } = await db.from("sync_state").upsert(row, { onConflict: "site_id,resource" });
+  if (error) throw error;
+}

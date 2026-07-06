@@ -1,16 +1,19 @@
 // Reactivation one-time historical backfill: Dentally's /v1/patients has no sort, so
 // the updated_after high-water-mark strands older-updated patients on a from-scratch
-// pass. Backfill pages EVERY patient by page NUMBER (cursor in a dedicated sync_state
-// row) until a short page, then switches to updated_after incremental. This pins the
-// state machine: start -> resume from cursor -> complete -> incremental.
+// pass. Backfill pages EVERY patient by page NUMBER (cursor in the sync_state row's
+// backfill_page/backfill_done columns) until a short page, then switches to
+// updated_after incremental. This pins the state machine: start -> resume -> complete
+// -> incremental, plus the two review-caught failure guards.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const CAP = 300; // MAX_PATIENTS_PER_RUN
 const PER_PAGE = 100;
 
 const store = vi.hoisted(() => ({
-  syncState: new Map<string, string>(), // resource -> highWaterMark
-  setCalls: [] as Array<{ resource: string; value: string }>,
+  cursor: { page: null as number | null, done: false },
+  mainHwm: null as string | null,
+  backfillSets: [] as Array<{ page: number | null; done: boolean; highWaterMark?: string }>,
+  mainSets: [] as string[],
   patientTotal: 0,
   listCalls: [] as Array<{ page: number; updatedAfter: string | undefined }>,
   failPatientId: null as string | null,
@@ -40,11 +43,13 @@ const repo = vi.hoisted(() => ({
   getCadenceByTarget: vi.fn(async () => null),
   updateCadence: vi.fn(async () => {}),
   setTargetStatus: vi.fn(async () => {}),
-  getSyncState: (_s: string, resource: string) =>
-    Promise.resolve(store.syncState.has(resource) ? { highWaterMark: store.syncState.get(resource)! } : null),
-  setSyncState: (_s: string, resource: string, value: string) => {
-    store.syncState.set(resource, value);
-    store.setCalls.push({ resource, value });
+  getSyncState: () => Promise.resolve(store.mainHwm !== null ? { highWaterMark: store.mainHwm } : null),
+  setSyncState: (_s: string, _r: string, v: string) => { store.mainHwm = v; store.mainSets.push(v); return Promise.resolve(); },
+  getBackfillCursor: () => Promise.resolve({ page: store.cursor.page, done: store.cursor.done }),
+  setBackfillCursor: (_s: string, _r: string, opts: { page: number | null; done: boolean; highWaterMark?: string }) => {
+    store.cursor = { page: opts.page, done: opts.done };
+    store.backfillSets.push(opts);
+    if (opts.highWaterMark !== undefined) store.mainHwm = opts.highWaterMark;
     return Promise.resolve();
   },
 }));
@@ -65,8 +70,10 @@ vi.mock("@/lib/reactivation/repository", () => ({
   getCadenceByTarget: () => repo.getCadenceByTarget(),
   updateCadence: () => repo.updateCadence(),
   setTargetStatus: () => repo.setTargetStatus(),
-  getSyncState: (s: string, r: string) => repo.getSyncState(s, r),
+  getSyncState: (s: string, r: string) => repo.getSyncState(),
   setSyncState: (s: string, r: string, v: string) => repo.setSyncState(s, r, v),
+  getBackfillCursor: (s: string, r: string) => repo.getBackfillCursor(),
+  setBackfillCursor: (s: string, r: string, o: { page: number | null; done: boolean; highWaterMark?: string }) => repo.setBackfillCursor(s, r, o),
 }));
 vi.mock("@/lib/recall/repository", () => ({ listOpenRecallPatientKeys: async () => new Set<string>() }));
 vi.mock("@/lib/mock/clients", () => ({
@@ -86,8 +93,10 @@ async function run() {
 }
 
 beforeEach(() => {
-  store.syncState = new Map();
-  store.setCalls = [];
+  store.cursor = { page: null, done: false };
+  store.mainHwm = null;
+  store.backfillSets = [];
+  store.mainSets = [];
   store.listCalls = [];
   store.patientTotal = 0;
   store.failPatientId = null;
@@ -105,27 +114,35 @@ describe("reactivation historical backfill (page cursor)", () => {
     expect(site.mode).toBe("backfill");
     expect(site.processed).toBe(CAP); // 3 whole pages
     expect(site.backfillPage).toBe(3);
-    // Cursor stored, main resource NOT stamped yet (backfill not finished).
-    expect(store.setCalls).toContainEqual({ resource: "reactivation:backfill", value: "3" });
-    expect(store.setCalls.some((c) => c.resource === "reactivation")).toBe(false);
+    expect(store.backfillSets).toContainEqual({ page: 3, done: false });
+    expect(store.mainSets).toHaveLength(0); // incremental mark NOT seeded mid-backfill
     // Backfill pages ignore updated_after (they must see ALL patients).
     expect(store.listCalls.map((c) => c.page)).toEqual([1, 2, 3]);
     expect(store.listCalls.every((c) => c.updatedAfter === undefined)).toBe(true);
   });
 
-  it("resumes from the cursor and completes on a short page, seeding the incremental mark", async () => {
-    store.syncState.set("reactivation:backfill", "3");
+  it("resumes from the cursor and completes on a short page, seeding the incremental mark atomically", async () => {
+    store.cursor = { page: 3, done: false };
     store.patientTotal = 350;
     const site = await run();
 
     expect(site.mode).toBe("backfill-done");
     expect(store.listCalls[0].page).toBe(4); // resumed AFTER the cursor page
-    expect(site.processed).toBe(50); // remaining 50 on the short final page
-    // Cursor marked done AND the incremental watermark seeded (an ISO timestamp).
-    expect(store.setCalls).toContainEqual({ resource: "reactivation:backfill", value: "done" });
-    const mainSet = store.setCalls.find((c) => c.resource === "reactivation");
-    expect(mainSet).toBeTruthy();
-    expect(Number.isNaN(Date.parse(mainSet!.value))).toBe(false);
+    // Single atomic write sets done=true AND seeds the incremental mark (ISO timestamp).
+    const doneWrite = store.backfillSets.find((s) => s.done);
+    expect(doneWrite).toBeTruthy();
+    expect(Number.isNaN(Date.parse(doneWrite!.highWaterMark ?? ""))).toBe(false);
+  });
+
+  it("after backfill is done, runs incrementally with updated_after", async () => {
+    store.cursor = { page: 4, done: true };
+    store.mainHwm = "2026-07-06T12:00:00Z";
+    store.patientTotal = 2; // short first page -> ends immediately
+    const site = await run();
+
+    expect(site.mode).toBe("incremental");
+    expect(site.backfillPage).toBeNull();
+    expect(store.listCalls[0].updatedAfter).toBe("2026-07-06T12:00:00Z");
   });
 
   it("does NOT advance the cursor past a page with a failed patient read (no silent skip)", async () => {
@@ -134,34 +151,21 @@ describe("reactivation historical backfill (page cursor)", () => {
     const site = await run();
 
     expect(site.mode).toBe("backfill");
-    // Page 2 had an enrichment failure -> cursor rewinds to just before it (page 1),
-    // so the failed patient's page is re-paged next run rather than skipped forever.
+    // Page 2 failed -> cursor rewinds to just before it (page 1), so the failed
+    // patient's page is re-paged next run rather than skipped forever.
     expect(site.backfillPage).toBe(1);
-    expect(store.setCalls).toContainEqual({ resource: "reactivation:backfill", value: "1" });
+    expect(store.backfillSets).toContainEqual({ page: 1, done: false });
   });
 
   it("does NOT mark backfill done if the final page had a failed patient", async () => {
-    store.syncState.set("reactivation:backfill", "3");
+    store.cursor = { page: 3, done: false };
     store.patientTotal = 350;
     store.failPatientId = "pat-320"; // on the final short page 4 (300-349)
     const site = await run();
 
     expect(site.mode).toBe("backfill"); // NOT backfill-done
-    expect(store.setCalls.some((c) => c.resource === "reactivation:backfill" && c.value === "done")).toBe(false);
-    // The main incremental mark must NOT be seeded while a patient is still unclassified.
-    expect(store.setCalls.some((c) => c.resource === "reactivation")).toBe(false);
-    expect(store.setCalls).toContainEqual({ resource: "reactivation:backfill", value: "3" });
-  });
-
-  it("after backfill is done, runs incrementally with updated_after", async () => {
-    store.syncState.set("reactivation:backfill", "done");
-    store.syncState.set("reactivation", "2026-07-06T12:00:00Z");
-    store.patientTotal = 2; // short first page -> ends immediately
-    const site = await run();
-
-    expect(site.mode).toBe("incremental");
-    expect(site.backfillPage).toBeNull();
-    // Incremental passes the stored high-water mark as updated_after.
-    expect(store.listCalls[0].updatedAfter).toBe("2026-07-06T12:00:00Z");
+    expect(store.backfillSets.some((s) => s.done)).toBe(false);
+    expect(store.mainSets).toHaveLength(0); // incremental mark NOT seeded while a patient is unclassified
+    expect(store.backfillSets).toContainEqual({ page: 3, done: false });
   });
 });
