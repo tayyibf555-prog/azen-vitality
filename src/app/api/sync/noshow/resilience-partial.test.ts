@@ -68,6 +68,7 @@ vi.mock("@/lib/noshow/repository", () => ({
   upsertTargets: (...a: unknown[]) => repo.upsertTargets(a[0] as unknown[]),
   listTargets: (...a: unknown[]) => repo.listTargets(),
   getCadenceByTarget: (...a: unknown[]) => repo.getCadenceByTarget(),
+  getCadencesByTargets: async () => new Map(),
   createCadence: (...a: unknown[]) => repo.createCadence(),
   updateCadence: (...a: unknown[]) => repo.updateCadence(),
   setTargetStatus: (...a: unknown[]) => repo.setTargetStatus(...a),

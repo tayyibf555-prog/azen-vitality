@@ -5,7 +5,7 @@
 // the run or the other patients' targets. Client, repo, lock and sites are mocked.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const HISTORY_CONCURRENCY = 6; // must match the route constant
+const HISTORY_CONCURRENCY = 10; // must match the route constant
 
 const repo = vi.hoisted(() => ({
   upsertCalls: [] as Array<Array<{ dentallyPatientId: string }>>,
@@ -63,6 +63,7 @@ vi.mock("@/lib/noshow/repository", () => ({
   upsertTargets: (...a: unknown[]) => repo.upsertTargets(a[0] as Array<{ dentallyPatientId: string }>),
   listTargets: () => repo.listTargets(),
   getCadenceByTarget: () => repo.getCadenceByTarget(),
+  getCadencesByTargets: async () => new Map(),
   createCadence: () => repo.createCadence(),
   updateCadence: () => repo.updateCadence(),
   setTargetStatus: () => repo.setTargetStatus(),

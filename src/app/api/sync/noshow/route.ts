@@ -11,6 +11,7 @@ import {
   upsertTargets,
   listTargets,
   getCadenceByTarget,
+  getCadencesByTargets,
   createCadence,
   updateCadence,
   setTargetStatus,
@@ -43,7 +44,7 @@ const MAX_PATIENT_PAGES = 200;
 // Concurrency for the per-patient risk-history fetches within a site. Bounded so a
 // site finishes fast — serial calls made the biggest site burn ~3 of the 5 function
 // minutes and starve the last site — without spiking concurrent Dentally load.
-const HISTORY_CONCURRENCY = 6;
+const HISTORY_CONCURRENCY = 10;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -395,13 +396,20 @@ async function syncSite(
   // target that does not already have one. No consent -> stays on the worklist
   // for a manual call, but we never message without it. A RESCHEDULED target keeps
   // its cadence row but has it re-anchored to the new appointment time.
+  //
+  // Existing cadences are read in ONE batched query (was a getCadenceByTarget
+  // round-trip per target — ~250 sequential DB reads per site, which ate the shared
+  // 300s budget and starved the last site). Writes stay per-target (they are few).
+  const eligible = allTargets.filter(
+    (t) => t.status === "scheduled" && t.consent.sms && enrolment(new Date(t.appointmentStartAt), now) !== null,
+  );
+  const cadenceByTarget = await getCadencesByTargets(eligible.map((t) => t.id));
   let enrolled = 0;
   let reanchored = 0;
-  for (const t of allTargets) {
-    if (t.status !== "scheduled" || !t.consent.sms) continue;
+  for (const t of eligible) {
     const e = enrolment(new Date(t.appointmentStartAt), now);
     if (!e) continue;
-    const cadence = await getCadenceByTarget(t.id);
+    const cadence = cadenceByTarget.get(t.id) ?? null;
     if (cadence) {
       if (!reanchorIds.has(t.id)) continue; // unchanged appointment: leave the cadence as-is
       // Rescheduled: re-point the existing cadence at the new start (recompute the
@@ -496,10 +504,16 @@ export async function POST(request: Request) {
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
     });
     const cfg = config();
+    // Rotate which site goes first each run (by hour), so a budget squeeze can
+    // never PERMANENTLY starve whichever site happens to be listed last — every
+    // site leads once every N cycles and worst-case staleness is bounded.
+    const sites = vitalitySiteIds();
+    const offset = sites.length > 0 ? new Date().getUTCHours() % sites.length : 0;
+    const ordered = [...sites.slice(offset), ...sites.slice(0, offset)];
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
-    for (const siteId of vitalitySiteIds()) {
+    for (const siteId of ordered) {
       try {
         perSite.push(await syncSite(client, siteId, cfg));
       } catch (e) {

@@ -49,6 +49,13 @@ vi.mock("@/lib/noshow/repository", () => ({
   upsertTargets: (...a: unknown[]) => repo.upsertTargets(...a),
   listTargets: (...a: unknown[]) => repo.listTargets(...a),
   getCadenceByTarget: (...a: unknown[]) => repo.getCadenceByTarget(...a),
+  // Batched variant used by the enrolment pass: mirror getCadenceByTarget's
+  // single-cadence fixture for every requested id.
+  getCadencesByTargets: async (ids: string[]) => {
+    const m = new Map<string, unknown>();
+    if (repo.cadence) for (const id of ids) m.set(id, repo.cadence);
+    return m;
+  },
   createCadence: (...a: unknown[]) => repo.createCadence(...a),
   updateCadence: (...a: unknown[]) => repo.updateCadence(...a),
   setTargetStatus: (...a: unknown[]) => repo.setTargetStatus(...a),

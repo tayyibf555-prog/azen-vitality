@@ -92,6 +92,7 @@ vi.mock("@/lib/noshow/repository", () => ({
   upsertTargets: vi.fn(async () => {}),
   listTargets: vi.fn(async () => []),
   getCadenceByTarget: vi.fn(async () => null),
+  getCadencesByTargets: vi.fn(async () => new Map()),
   createCadence: vi.fn(async () => {}),
   setTargetStatus: vi.fn(async () => {}),
   getSyncState: vi.fn(async () => null),

@@ -205,6 +205,31 @@ export async function getCadenceByTarget(targetId: string): Promise<NoshowCadenc
   return data ? rowToCadence(data as CadenceRow) : null;
 }
 
+/**
+ * Latest cadence per target for a whole batch, in ONE query. The sync's
+ * enrolment pass previously called getCadenceByTarget once per target — ~250
+ * sequential round-trips per site, which ate the shared 300s function budget
+ * and starved the last site. Mirrors getCadenceByTarget's latest-first pick.
+ */
+export async function getCadencesByTargets(
+  targetIds: string[],
+): Promise<Map<string, NoshowCadence>> {
+  const out = new Map<string, NoshowCadence>();
+  if (targetIds.length === 0) return out;
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("noshow_cadence")
+    .select("*")
+    .in("target_id", targetIds)
+    .order("started_at", { ascending: false });
+  if (error) throw error;
+  for (const row of (data ?? []) as CadenceRow[]) {
+    const c = rowToCadence(row);
+    if (!out.has(c.targetId)) out.set(c.targetId, c); // newest first: keep the latest
+  }
+  return out;
+}
+
 export async function listDueCadences(nowIso: string): Promise<NoshowCadence[]> {
   const db = serviceClient();
   const { data, error } = await db
