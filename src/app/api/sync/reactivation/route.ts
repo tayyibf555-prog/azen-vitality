@@ -32,6 +32,10 @@ const PER_PAGE = 100;
 // function limit. The high-water mark only advances past fully-processed records,
 // so the next cron tick resumes where this one stopped.
 const MAX_PATIENTS_PER_RUN = 300;
+// Hard bound on the open-plan index scan. Real Dentally ignores the site filter on
+// /v1/treatment_plans and returns no outstanding on the plan, so the early-stop below
+// halts this at one page on live data; the cap is a backstop against a large mock.
+const MAX_PLAN_PAGES = 30;
 // Concurrency for the per-patient secondary reads (appointments + invoices). Bounded
 // so a site finishes fast — serial ~2 calls/patient made a big site burn the whole
 // 300s function and starve the sites after it — without spiking Dentally load.
@@ -198,13 +202,28 @@ async function syncSite(
   );
   let converted = 0;
 
-  // 1. Index the site's open treatment plans by patient (carries outstanding + accepted_at).
+  // 1. Index the site's OPEN treatment plans by patient (outstanding + accepted_at),
+  //    used only for stalled-plan detection. GUARDED + BOUNDED: real Dentally ignores
+  //    the site filter (returns the whole 5-practice group's plans) AND carries no
+  //    amount_outstanding on the plan (it lives on invoices), so unbounded this pages
+  //    the entire group's plan history sequentially for ZERO open plans — slow and
+  //    fragile enough to error the whole site sync (that starved N17/Romford Road on
+  //    the full-pass catch-up). Stop once a full first page yields no open plan (the
+  //    live-data signature); cap the pages; and never let a plan-read failure sink the
+  //    run (lapsed detection does not need plan data).
   const openByPatient = new Map<string, OpenPlan>();
-  for (let pp = 1; ; pp++) {
-    const res = await client.listTreatmentPlans({ siteId, page: pp, perPage: PER_PAGE });
-    const rawPlans = Array.isArray(res.treatment_plans) ? res.treatment_plans : [];
-    for (const [k, v] of indexOpenPlansByPatient(rawPlans)) openByPatient.set(k, v);
-    if (rawPlans.length < PER_PAGE) break;
+  try {
+    for (let pp = 1; pp <= MAX_PLAN_PAGES; pp++) {
+      const res = await client.listTreatmentPlans({ siteId, page: pp, perPage: PER_PAGE });
+      const rawPlans = Array.isArray(res.treatment_plans) ? res.treatment_plans : [];
+      for (const [k, v] of indexOpenPlansByPatient(rawPlans)) openByPatient.set(k, v);
+      if (rawPlans.length < PER_PAGE) break;
+      // A full first page with no open plan => this endpoint isn't giving us
+      // outstanding data (real Dentally); paging the rest is wasted. Stop.
+      if (pp === 1 && openByPatient.size === 0) break;
+    }
+  } catch (err) {
+    console.error(`[reactivation] plan indexing failed for site ${siteId}; continuing without plan data`, err);
   }
 
   // 2. Page patients up to the per-run cap, collecting the raw records with NO

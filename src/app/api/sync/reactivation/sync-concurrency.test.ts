@@ -12,7 +12,7 @@ const conc = vi.hoisted(() => ({ inFlight: 0, peak: 0, apptCalls: new Set<string
 
 const dent = vi.hoisted(() => ({
   patients: [] as unknown[],
-  listTreatmentPlans: vi.fn(async () => ({ treatment_plans: [] as unknown[] })),
+  listTreatmentPlans: vi.fn(async (_a?: unknown) => ({ treatment_plans: [] as unknown[] })),
   listPatients: vi.fn(async (a: { page?: number }) => ({ patients: (a?.page ?? 1) === 1 ? dent.patients : [] })),
   getPatientAppointments: vi.fn(async (id: string) => {
     conc.apptCalls.add(id);
