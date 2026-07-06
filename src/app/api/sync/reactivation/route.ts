@@ -40,6 +40,15 @@ const MAX_PLAN_PAGES = 30;
 // so a site finishes fast — serial ~2 calls/patient made a big site burn the whole
 // 300s function and starve the sites after it — without spiking Dentally load.
 const PATIENT_CONCURRENCY = 8;
+// One-time historical backfill uses a page-NUMBER cursor. Dentally's /v1/patients has
+// NO sort control (only updated_after/created_after/site_id filters), so the
+// updated_after high-water-mark + per-run cap strands older-updated patients on a
+// from-scratch pass (they never get classified). Until the full pass finishes we page
+// EVERY patient by page number, storing the cursor in a dedicated sync_state row;
+// BACKFILL_DONE marks it complete, after which we switch to the updated_after mark for
+// steady-state incremental (which only ever sees the small set of changed patients).
+const BACKFILL_RESOURCE = `${RESOURCE}:backfill`;
+const BACKFILL_DONE = "done";
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -186,10 +195,19 @@ async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: ReactivationConfig,
-): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; processed: number; remaining: number }> {
-  const state = await getSyncState(siteId, RESOURCE);
-  const updatedAfter = state?.highWaterMark ?? undefined;
+): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; processed: number; remaining: number; mode: string; backfillPage: number | null }> {
   const now = new Date();
+  // Backfill vs incremental (see BACKFILL_RESOURCE above). The backfill row's cursor is
+  // the last fully-paged page number, or "done" once the one-time full pass completed.
+  const backfillState = await getSyncState(siteId, BACKFILL_RESOURCE);
+  const backfilling = backfillState?.highWaterMark !== BACKFILL_DONE;
+  const startPage =
+    backfilling && backfillState?.highWaterMark
+      ? (Number.parseInt(backfillState.highWaterMark, 10) || 0) + 1
+      : 1;
+  const mainState = backfilling ? null : await getSyncState(siteId, RESOURCE);
+  // Backfill pages EVERY patient (no filter); incremental pages the updated_after window.
+  const updatedAfter = backfilling ? undefined : (mainState?.highWaterMark ?? undefined);
 
   // Patients with an open recall target (due or in cadence), so an overdue recall
   // is not chased by both modules at once (recall owns it until it hands off).
@@ -226,17 +244,19 @@ async function syncSite(
     console.error(`[reactivation] plan indexing failed for site ${siteId}; continuing without plan data`, err);
   }
 
-  // 2. Page patients up to the per-run cap, collecting the raw records with NO
-  //    per-patient I/O yet (that is batched in step 3). The cap bounds attempted
-  //    patients so a large backlog can't blow the 300s function limit.
-  const pending: Array<{ p: Raw; patient: ReactivationInput["patient"] }> = [];
+  // 2. Page patients, collecting raw records with NO per-patient I/O yet (batched in
+  //    step 3). BACKFILL pages by NUMBER from the cursor and takes WHOLE pages (so the
+  //    cursor never skips a partially-processed page); INCREMENTAL pages the
+  //    updated_after window with a mid-page cap. Both bound the run at ~cap patients so
+  //    a large base can't blow the 300s limit.
+  const pending: Array<{ p: Raw; patient: ReactivationInput["patient"]; page: number }> = [];
   let pulled = 0;
   let processed = 0;
   let remaining = 0;
-  let capped = false;
-  let page = 1;
+  let lastCompletedPage = startPage - 1;
+  let reachedEnd = false;
 
-  outer: for (;;) {
+  for (let page = startPage; ; page += 1) {
     const res = await client.listPatients({ siteId: dentallySiteId(siteId), updatedAfter, page, perPage: PER_PAGE });
     const rawPatients = Array.isArray(res.patients) ? res.patients : [];
     pulled += rawPatients.length;
@@ -245,18 +265,22 @@ async function syncSite(
       const p = asRecord(rawPatient);
       const patient = mapPatient(p, "");
       if (!patient.id) continue;
-      if (processed >= MAX_PATIENTS_PER_RUN) {
+      // Incremental honours the cap mid-page (rest of the page = remaining, retried
+      // next run). Backfill takes the whole page and enforces the cap at the boundary.
+      if (!backfilling && processed >= MAX_PATIENTS_PER_RUN) {
         remaining += 1;
-        capped = true;
         continue;
       }
-      pending.push({ p, patient });
+      pending.push({ p, patient, page });
       processed += 1;
     }
 
-    if (capped) break outer;
-    if (rawPatients.length < PER_PAGE) break;
-    page += 1;
+    lastCompletedPage = page;
+    if (rawPatients.length < PER_PAGE) {
+      reachedEnd = true;
+      break;
+    }
+    if (processed >= MAX_PATIENTS_PER_RUN) break; // stop at this page boundary; resume next run
   }
 
   // 3. Fetch each pending patient's appointments + invoices in BOUNDED-CONCURRENCY
@@ -346,10 +370,54 @@ async function syncSite(
 
   const ranked = rankTargets(targets, now);
   await upsertTargets(ranked);
-  // Leave the prior mark UNCHANGED when no record contributed one, so the next run
-  // re-fetches rather than skipping. Only persist when we actually advanced it.
-  if (highWaterMark) await setSyncState(siteId, RESOURCE, highWaterMark);
-  return { siteId, pulled, upserted: ranked.length, converted, processed, remaining };
+
+  // BACKFILL cursor safety (review-caught): the resume unit is a whole PAGE, but a
+  // per-patient enrichment read can fail (caught above), leaving that patient
+  // unclassified. Advancing the cursor past that page would skip them for the ENTIRE
+  // backfill (the only pass that sees never-updated patients) with no self-heal. So
+  // only advance PAST pages whose patients were ALL enriched: rewind to just before the
+  // earliest failed page, and only complete when the final page was reached AND nothing
+  // was skipped. A transient failure therefore re-pages next run (idempotent upserts)
+  // instead of dropping the patient.
+  let firstFailedPage: number | null = null;
+  if (backfilling) {
+    for (const { patient, page: pg } of pending) {
+      if (!enriched.has(patient.id) && (firstFailedPage === null || pg < firstFailedPage)) {
+        firstFailedPage = pg;
+      }
+    }
+  }
+  const safeCursor = firstFailedPage !== null ? firstFailedPage - 1 : lastCompletedPage;
+  const backfillComplete = backfilling && reachedEnd && firstFailedPage === null;
+
+  if (backfilling) {
+    if (backfillComplete) {
+      // Seed the incremental mark FIRST, THEN flip the cursor to done (review-caught):
+      // if the second write fails, the backfill stays in-progress and the next run
+      // harmlessly re-pages the short final page and retries — never 'done' with an
+      // unset mark, which would drop into a capped, un-ordered scan that strands patients.
+      await setSyncState(siteId, RESOURCE, now.toISOString());
+      await setSyncState(siteId, BACKFILL_RESOURCE, BACKFILL_DONE);
+    } else {
+      // More pages (or a failed page to retry): persist the safe cursor to resume from.
+      await setSyncState(siteId, BACKFILL_RESOURCE, String(safeCursor));
+    }
+  } else if (highWaterMark) {
+    // Incremental: advance the updated_after mark (only when a record contributed one),
+    // so the next run re-fetches rather than skipping when nothing did.
+    await setSyncState(siteId, RESOURCE, highWaterMark);
+  }
+  const mode = backfilling ? (backfillComplete ? "backfill-done" : "backfill") : "incremental";
+  return {
+    siteId,
+    pulled,
+    upserted: ranked.length,
+    converted,
+    processed,
+    remaining,
+    mode,
+    backfillPage: backfilling ? safeCursor : null,
+  };
 }
 
 export async function POST(request: Request) {
