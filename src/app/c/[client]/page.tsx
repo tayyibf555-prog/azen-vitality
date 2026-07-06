@@ -62,24 +62,33 @@ export default async function ClientHomePage({
 
   // Both data loads are best-effort: a failed read renders an empty section, never
   // a broken landing page.
-  let brief: DailyBrief;
-  try {
-    brief = await generateBrief({
+  // The two loads run CONCURRENTLY: the diary rail no longer waits behind the whole
+  // brief (nor behind the brief's slowest builder). Each has its own fallback so a
+  // failed read renders empty, never a broken page. They share ONE underlying
+  // today-appointments fetch (listAppointments is request-memoized), so running them
+  // together does not double the upstream load.
+  const [brief, diary] = await Promise.all([
+    generateBrief({
       clientId: client.id,
       siteIds,
       role: isOwner ? "client_owner" : "client_coordinator",
       now,
-    });
-  } catch {
-    brief = {
-      generatedAt: now.toISOString(),
-      role: isOwner ? "client_owner" : "client_coordinator",
-      appointmentsToday: 0,
-      sections: [],
-      headline: [],
-    };
-  }
-  const diary = await getTodayDiary(client.id, now);
+    }).catch(
+      (): DailyBrief => ({
+        generatedAt: now.toISOString(),
+        role: isOwner ? "client_owner" : "client_coordinator",
+        appointmentsToday: 0,
+        sections: [],
+        headline: [],
+      }),
+    ),
+    getTodayDiary(client.id, now).catch(() => ({
+      slots: [],
+      next: null,
+      fillPercent: null,
+      gapCount: 0,
+    })),
+  ]);
 
   // Day stats, computed the same way the Daily brief page computes them.
   const noshowLine = brief.sections.find((s) => s.key === "noshow")?.items[0];
@@ -113,19 +122,19 @@ export default async function ClientHomePage({
         <div className={isOwner ? "grid grid-cols-2 gap-4 lg:grid-cols-5" : "grid grid-cols-2 gap-4 lg:grid-cols-4"}>
           <StatCard
             label="Appointments today"
-            value={String(brief.appointmentsToday)}
+            value={brief.appointmentsToday}
             icon={CalendarDays}
             hint="Across your sites"
           />
           <StatCard
             label="To confirm"
-            value={String(noshowLine?.count ?? 0)}
+            value={noshowLine?.count ?? 0}
             icon={ShieldAlert}
             hint="High no-show risk"
           />
           <StatCard
             label="Overnight"
-            value={String(overnightLine?.count ?? 0)}
+            value={overnightLine?.count ?? 0}
             icon={PhoneMissed}
             hint="Missed after hours"
           />

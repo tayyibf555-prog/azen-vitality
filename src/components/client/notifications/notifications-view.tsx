@@ -39,27 +39,27 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
       <div className="grid auto-rows-fr grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <StatCard
           label="High priority"
-          value={String(highCount)}
+          value={highCount}
           icon={ShieldAlert}
           hint="Needs action now"
         />
-        <StatCard label="Total" value={String(items.length)} icon={Bell} hint="Across all sources" />
+        <StatCard label="Total" value={items.length} icon={Bell} hint="Across all sources" />
         <StatCard
           label="Compliance"
-          value={String(byType.compliance ?? 0)}
+          value={byType.compliance ?? 0}
           icon={ShieldCheck}
           hint="Audits, policies, training"
         />
         <StatCard
           label="No-show risk"
-          value={String(byType.no_show ?? 0)}
+          value={byType.no_show ?? 0}
           icon={CalendarX}
           hint="High-risk appointments"
         />
         {(byType.lead ?? 0) > 0 ? (
           <StatCard
             label="New enquiries"
-            value={String(byType.lead ?? 0)}
+            value={byType.lead ?? 0}
             icon={Sparkles}
             hint="High-intent, to contact"
           />
@@ -67,7 +67,7 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
         {(byType.onboarding ?? 0) > 0 ? (
           <StatCard
             label="Onboarding"
-            value={String(byType.onboarding ?? 0)}
+            value={byType.onboarding ?? 0}
             icon={UserPlus}
             hint="Submissions to review"
           />

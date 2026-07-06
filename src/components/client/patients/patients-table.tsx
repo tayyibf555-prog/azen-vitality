@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
-import { cn, gbp, relativeTime } from "@/lib/utils";
+import { cn, gbp, num, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import {
@@ -132,13 +132,13 @@ export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[];
   );
 }
 
-function Stat({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
+function Stat({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string | number }) {
   return (
     <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5">
       <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
         <Icon size={12} className="text-blue-dark" /> {label}
       </p>
-      <p className="mt-0.5 text-sm font-bold text-navy">{value}</p>
+      <p className="mt-0.5 text-sm font-bold text-navy">{typeof value === "number" ? num(value) : value}</p>
     </div>
   );
 }
@@ -237,7 +237,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat icon={Clock} label="Last seen" value={lastSeen ? relativeTime(lastSeen, now) : "No record"} />
             <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
-            <Stat icon={Activity} label="Visits" value={String(completed.length)} />
+            <Stat icon={Activity} label="Visits" value={completed.length} />
             <Stat icon={PoundSterling} label="Lifetime spend" value={gbp(lifetimeSpend)} />
           </div>
 

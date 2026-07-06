@@ -48,10 +48,10 @@ export async function AfterHoursView({ clientSlug }: { clientSlug: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="New" value={String(newCount)} icon={Inbox} hint="Awaiting a follow-up" />
-        <StatCard label="Followed up" value={String(followedUp)} icon={CheckCircle2} hint="Team reached back out" />
-        <StatCard label="Booked" value={String(booked)} icon={CalendarCheck} hint="Turned into an appointment" />
-        <StatCard label="Today" value={String(today)} icon={Clock} hint="Captured today" />
+        <StatCard label="New" value={newCount} icon={Inbox} hint="Awaiting a follow-up" />
+        <StatCard label="Followed up" value={followedUp} icon={CheckCircle2} hint="Team reached back out" />
+        <StatCard label="Booked" value={booked} icon={CalendarCheck} hint="Turned into an appointment" />
+        <StatCard label="Today" value={today} icon={Clock} hint="Captured today" />
       </div>
 
       {captures.length === 0 ? (

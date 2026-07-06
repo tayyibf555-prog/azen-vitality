@@ -21,6 +21,12 @@ export function compact(value: number) {
   return new Intl.NumberFormat("en-GB", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
+/** Whole number with thousands separators (en-GB): 1234 -> "1,234". Use for any
+ *  count shown to the user so figures stay readable past three digits. */
+export function num(value: number) {
+  return new Intl.NumberFormat("en-GB", { maximumFractionDigits: 0 }).format(value);
+}
+
 /** "3 minutes ago" style relative time from an ISO string, against a fixed reference. */
 export function relativeTime(iso: string, now: Date) {
   const diffMs = now.getTime() - new Date(iso).getTime();

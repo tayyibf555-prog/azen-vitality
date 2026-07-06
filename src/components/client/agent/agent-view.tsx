@@ -60,11 +60,11 @@ export async function AgentView({ clientSlug, channel }: { clientSlug: string; c
           icon={Bot}
           hint={allEnabled ? "Answering replies" : "Routing to your team"}
         />
-        <StatCard label="Conversations" value={String(analytics.total)} icon={MessagesSquare} hint="Patients texted" />
-        <StatCard label="Booked" value={String(analytics.booked)} icon={CalendarCheck} hint="Appointments made" />
+        <StatCard label="Conversations" value={analytics.total} icon={MessagesSquare} hint="Patients texted" />
+        <StatCard label="Booked" value={analytics.booked} icon={CalendarCheck} hint="Appointments made" />
         <StatCard
           label="Needs a human"
-          value={String(analytics.needsHuman)}
+          value={analytics.needsHuman}
           icon={UserCog}
           hint="Waiting for your team"
         />

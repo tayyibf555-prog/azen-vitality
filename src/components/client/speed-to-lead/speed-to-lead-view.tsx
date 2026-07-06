@@ -50,9 +50,9 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="New" value={String(newLeads.length)} icon={Inbox} hint="Awaiting first contact" />
-        <StatCard label="Contacted" value={String(contacted.length)} icon={Send} hint="First reply sent, in conversation" />
-        <StatCard label="Booked" value={String(booked.length)} icon={CheckCircle2} hint="Enquiry turned into a booking" />
+        <StatCard label="New" value={newLeads.length} icon={Inbox} hint="Awaiting first contact" />
+        <StatCard label="Contacted" value={contacted.length} icon={Send} hint="First reply sent, in conversation" />
+        <StatCard label="Booked" value={booked.length} icon={CheckCircle2} hint="Enquiry turned into a booking" />
         <StatCard label="Median response" value={medianResponseLabel(leads)} icon={Timer} hint="Enquiry to first contact" />
       </div>
 

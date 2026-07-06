@@ -145,19 +145,19 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Appointments today"
-          value={String(brief.appointmentsToday)}
+          value={brief.appointmentsToday}
           icon={CalendarDays}
           hint="Across your sites"
         />
         <StatCard
           label="To confirm"
-          value={String(noshowLine?.count ?? 0)}
+          value={noshowLine?.count ?? 0}
           icon={ShieldAlert}
           hint="High no-show risk"
         />
         <StatCard
           label="Overnight"
-          value={String(overnightLine?.count ?? 0)}
+          value={overnightLine?.count ?? 0}
           icon={PhoneMissed}
           hint="Missed after hours"
         />

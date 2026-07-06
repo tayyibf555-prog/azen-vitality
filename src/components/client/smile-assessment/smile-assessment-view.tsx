@@ -37,15 +37,15 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Total" value={String(responses.length)} icon={Sparkles} hint="Quiz submissions" />
+        <StatCard label="Total" value={responses.length} icon={Sparkles} hint="Quiz submissions" />
         <StatCard
           label="High intent"
-          value={String(high.length)}
+          value={high.length}
           icon={Flame}
           hint={`${contacted} fast-tracked to contact`}
         />
-        <StatCard label="Medium" value={String(medium.length)} icon={Gauge} hint="Worth a follow-up" />
-        <StatCard label="Low" value={String(low.length)} icon={Leaf} hint="Nurture for later" />
+        <StatCard label="Medium" value={medium.length} icon={Gauge} hint="Worth a follow-up" />
+        <StatCard label="Low" value={low.length} icon={Leaf} hint="Nurture for later" />
       </div>
 
       <SmileAssessmentWorkspace clientSlug={clientSlug} responses={responses} nowIso={nowIso} />

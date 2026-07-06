@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, num } from "@/lib/utils";
 
 export function StatCard({
   label,
@@ -12,7 +12,9 @@ export function StatCard({
   className,
 }: {
   label: string;
-  value: string;
+  /** A number is auto-formatted with thousands separators (1234 -> "1,234"). Pass a
+   *  pre-formatted string for currency (gbp()) or any non-numeric value. */
+  value: string | number;
   icon?: LucideIcon;
   /** Positive or negative percentage change. `goodWhenUp` flips colour logic. */
   delta?: { value: number; goodWhenUp?: boolean };
@@ -56,7 +58,7 @@ export function StatCard({
       </div>
       <div className="mt-2 flex items-end justify-between gap-2">
         <span className={cn("text-2xl font-extrabold tracking-tight", emphasis ? "text-white" : "text-navy")}>
-          {value}
+          {typeof value === "number" ? num(value) : value}
         </span>
         {delta ? (
           <span

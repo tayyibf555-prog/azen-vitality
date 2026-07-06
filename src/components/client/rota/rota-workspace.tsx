@@ -64,15 +64,15 @@ export function RotaWorkspace({ clientSlug }: { clientSlug: string }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Staff" value={String(staffCount)} icon={Users} hint="Active on the rota" />
+        <StatCard label="Staff" value={staffCount} icon={Users} hint="Active on the rota" />
         <StatCard
           label="Shifts this week"
-          value={String(shiftsThisWeek)}
+          value={shiftsThisWeek}
           icon={CalendarRange}
           hint="Generated across all sites"
         />
-        <StatCard label="Notified" value={String(notified)} icon={MessageSquare} hint="Texted their shifts" />
-        <StatCard label="Sites" value={String(siteCount)} icon={MapPin} hint="Covered by the rota" />
+        <StatCard label="Notified" value={notified} icon={MessageSquare} hint="Texted their shifts" />
+        <StatCard label="Sites" value={siteCount} icon={MapPin} hint="Covered by the rota" />
       </div>
 
       <div

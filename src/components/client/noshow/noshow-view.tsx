@@ -45,10 +45,10 @@ export async function NoshowView({ clientSlug }: { clientSlug: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Upcoming" value={String(upcoming.length)} icon={CalendarClock} hint="Awaiting confirmation" />
-        <StatCard label="Confirmed" value={String(confirmed.length)} icon={CheckCircle2} hint="Patient confirmed" />
-        <StatCard label="High risk" value={String(atRisk.length)} icon={AlertTriangle} hint="Most likely to no-show" />
-        <StatCard label="Waitlist" value={String(waiting.length)} icon={Users} hint="Ready to fill a gap" />
+        <StatCard label="Upcoming" value={upcoming.length} icon={CalendarClock} hint="Awaiting confirmation" />
+        <StatCard label="Confirmed" value={confirmed.length} icon={CheckCircle2} hint="Patient confirmed" />
+        <StatCard label="High risk" value={atRisk.length} icon={AlertTriangle} hint="Most likely to no-show" />
+        <StatCard label="Waitlist" value={waiting.length} icon={Users} hint="Ready to fill a gap" />
       </div>
 
       <NoshowTabs targets={targets} waitlist={waitlist} nowIso={nowIso} />

@@ -67,7 +67,7 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
         />
         <StatCard
           label="Open opportunities"
-          value={String(open.length)}
+          value={open.length}
           icon={ListChecks}
           hint="Plans not yet completed"
         />
@@ -79,7 +79,7 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
         />
         <StatCard
           label="Average days stalled"
-          value={String(avgDaysStalled)}
+          value={avgDaysStalled}
           icon={Clock}
           hint="Across stalled plans"
         />

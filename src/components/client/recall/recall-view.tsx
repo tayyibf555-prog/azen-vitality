@@ -45,10 +45,10 @@ export async function RecallView({ clientSlug }: { clientSlug: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Due soon" value={String(dueSoon.length)} icon={Clock} hint="Within the lead window" />
-        <StatCard label="Overdue" value={String(overdue.length)} icon={AlertTriangle} hint="Past due, inside the recall window" />
-        <StatCard label="In cadence" value={String(inCadence.length)} icon={Send} hint="Active outreach sequences" />
-        <StatCard label="Booked back" value={String(booked.length)} icon={CheckCircle2} hint="Recalls booked in" />
+        <StatCard label="Due soon" value={dueSoon.length} icon={Clock} hint="Within the lead window" />
+        <StatCard label="Overdue" value={overdue.length} icon={AlertTriangle} hint="Past due, inside the recall window" />
+        <StatCard label="In cadence" value={inCadence.length} icon={Send} hint="Active outreach sequences" />
+        <StatCard label="Booked back" value={booked.length} icon={CheckCircle2} hint="Recalls booked in" />
       </div>
 
       {targets.length === 0 ? (

@@ -64,8 +64,8 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <StatCard label="Outstanding" value={gbp(totalOutstanding)} icon={PoundSterling} hint="Across open plans" />
-        <StatCard label="Open plans" value={String(rows.length)} icon={ReceiptText} hint="With a balance" />
-        <StatCard label="Patients" value={String(patientCount)} icon={Users} hint="Owing money" />
+        <StatCard label="Open plans" value={rows.length} icon={ReceiptText} hint="With a balance" />
+        <StatCard label="Patients" value={patientCount} icon={Users} hint="Owing money" />
       </div>
 
       <SectionCard title="Outstanding balances" description="Highest owed first." bodyClassName="p-0">

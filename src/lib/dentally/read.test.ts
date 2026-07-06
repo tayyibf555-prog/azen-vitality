@@ -39,7 +39,7 @@ vi.mock("./client", () => ({
   },
 }));
 
-import { listPatients, listAppointments, dentallyReadKey } from "./read";
+import { listPatients, listAppointments, listOutstanding, dentallyReadKey } from "./read";
 
 beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "k");
@@ -88,5 +88,69 @@ describe("dentallyReadKey (read-only key selection)", () => {
     vi.stubEnv("DENTALLY_API_KEY", "");
     vi.stubEnv("DENTALLY_PROD_READONLY_API_KEY", "");
     expect(dentallyReadKey()).toBe("");
+  });
+});
+
+// listOutstanding scans treatment_plans ONCE (real Dentally ignores site_id and
+// repeats the whole group per site), attributes each plan by its PATIENT's site
+// (plans carry no site_id), and drops other-practice patients. Regression cover for
+// the review-caught bug where an empty middle site aborted the whole scan.
+describe("listOutstanding", () => {
+  const plan = (id: string, patientId: string, outstanding: number | undefined, value = 500) => ({
+    id,
+    patient_id: patientId,
+    nickname: `Plan ${id}`,
+    private_treatment_value: String(value),
+    start_date: "2026-01-01",
+    ...(outstanding !== undefined ? { amount_outstanding: outstanding } : {}),
+  });
+  const patient = (id: string, site: string) => ({ id, first_name: "P", last_name: id, site_id: site });
+
+  it("collects outstanding plans from ALL sites even when a middle site is empty", async () => {
+    const bySite: Record<string, unknown[]> = {
+      "site-1": [plan("a", "pat-1", 100)],
+      "site-2": [], // legitimately empty — must NOT abort the scan
+      "site-3": [plan("c", "pat-3", 200)],
+    };
+    state.listTreatmentPlans = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({ treatment_plans: (a.page ?? 1) === 1 ? bySite[a.siteId ?? ""] ?? [] : [] })) as never;
+    const patBySite: Record<string, unknown[]> = {
+      "site-1": [patient("pat-1", "site-1")],
+      "site-2": [],
+      "site-3": [patient("pat-3", "site-3")],
+    };
+    state.listPatients = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({ patients: (a.page ?? 1) === 1 ? patBySite[a.siteId ?? ""] ?? [] : [] })) as never;
+
+    const out = await listOutstanding(["site-1", "site-2", "site-3"]);
+    expect(out.map((o) => o.patientId).sort()).toEqual(["pat-1", "pat-3"]); // site-3 NOT skipped
+  });
+
+  it("dedups the ignored-filter repeat, drops other-practice plans, and stops early", async () => {
+    // Every site returns the SAME group-wide list (real Dentally ignoring site_id).
+    const group = [plan("x", "pat-vit", 300), plan("y", "pat-other", 400)];
+    const calls: string[] = [];
+    state.listTreatmentPlans = ((a: { siteId?: string; page?: number }) => {
+      calls.push(`${a.siteId}:${a.page ?? 1}`);
+      return Promise.resolve({ treatment_plans: (a.page ?? 1) === 1 ? group : [] });
+    }) as never;
+    // /v1/patients IS filtered server-side: only the Vitality patient comes back.
+    state.listPatients = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({ patients: a.siteId === "site-1" && (a.page ?? 1) === 1 ? [patient("pat-vit", "site-1")] : [] })) as never;
+
+    const out = await listOutstanding(["site-1", "site-2", "site-3"]);
+    expect(out.map((o) => o.patientId)).toEqual(["pat-vit"]); // pat-other dropped (not in allowlist)
+    expect(calls.some((c) => c.startsWith("site-3"))).toBe(false); // early-stopped after site-2
+  });
+
+  it("returns [] without scanning patients when nothing is outstanding (live data)", async () => {
+    state.listTreatmentPlans = ((a: { page?: number }) =>
+      Promise.resolve({ treatment_plans: (a.page ?? 1) === 1 ? [plan("a", "pat-1", undefined)] : [] })) as never;
+    const spy = vi.fn(() => Promise.resolve({ patients: [] }));
+    state.listPatients = spy as never;
+
+    const out = await listOutstanding(["site-1", "site-2", "site-3"]);
+    expect(out).toEqual([]);
+    expect(spy).not.toHaveBeenCalled(); // patient scan skipped on the no-outstanding path
   });
 });

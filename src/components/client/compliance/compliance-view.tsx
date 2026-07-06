@@ -34,19 +34,19 @@ export function ComplianceView({ clientSlug }: { clientSlug: string }) {
         />
         <StatCard
           label="Audits overdue"
-          value={String(r.auditsOverdue)}
+          value={r.auditsOverdue}
           icon={ClipboardCheck}
           hint={`+ ${r.auditsDue} due soon`}
         />
         <StatCard
           label="Policies to action"
-          value={String(r.policiesNeedingAttention)}
+          value={r.policiesNeedingAttention}
           icon={FileText}
           hint="Review due or missing"
         />
         <StatCard
           label="Training expiring"
-          value={String(r.trainingExpiring)}
+          value={r.trainingExpiring}
           icon={GraduationCap}
           hint="Overdue or due soon"
         />

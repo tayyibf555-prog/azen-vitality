@@ -115,7 +115,7 @@ export default async function OwnerManagementPage({
         />
         <StatCard
           label="Open opportunities"
-          value={String(openCount)}
+          value={openCount}
           icon={ListChecks}
           hint="Plans not yet completed"
         />

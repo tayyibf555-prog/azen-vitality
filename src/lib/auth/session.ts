@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { supabaseServer } from "@/lib/supabase/auth-server";
 import { serviceClient } from "@/lib/supabase/server";
 import { SITES, getSites } from "@/lib/mock/clients";
@@ -29,8 +30,14 @@ interface AppUserRow {
  * Verifies the Supabase Auth session server-side (auth.getUser hits the auth
  * server, so a forged cookie does not pass), then resolves the user's role +
  * client from app_user. Site scope is derived here, never trusted from input.
+ *
+ * Wrapped in React cache(): a single /c/[client] render resolves the session up
+ * to three times (root layout, guardPage, and the page body), each an auth-server
+ * round-trip + a DB read. cache() collapses them to one per request (no cross-
+ * request sharing — auth stays per-request correct).
  */
-export async function getSessionUser(): Promise<AuthedUser | null> {
+export const getSessionUser = cache(_getSessionUser);
+async function _getSessionUser(): Promise<AuthedUser | null> {
   const supabase = await supabaseServer();
   const {
     data: { user },

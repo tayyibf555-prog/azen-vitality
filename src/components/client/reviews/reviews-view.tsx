@@ -57,25 +57,25 @@ export async function ReviewsView({ clientSlug }: { clientSlug: string }) {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Attended today"
-          value={String(attendedToday)}
+          value={attendedToday}
           icon={CheckCircle2}
           hint="Marked seen so far"
         />
         <StatCard
           label="Requests scheduled"
-          value={String(scheduled)}
+          value={scheduled}
           icon={Clock}
           hint="Queued to send later"
         />
         <StatCard
           label="Sent"
-          value={String(sent)}
+          value={sent}
           icon={Send}
           hint="Review request delivered"
         />
         <StatCard
           label="Opted out / skipped"
-          value={String(optedOut)}
+          value={optedOut}
           icon={MinusCircle}
           hint="No consent or opted out"
         />

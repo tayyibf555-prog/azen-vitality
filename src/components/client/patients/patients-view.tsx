@@ -31,10 +31,10 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Patients" value={String(patients.length)} icon={Users} hint="Across all sites" />
-        <StatCard label="Active" value={String(active)} icon={UserCheck} hint="Currently active" />
-        <StatCard label="Lapsed" value={String(lapsed)} icon={UserX} hint="Archived or inactive" />
-        <StatCard label="Due a recall" value={String(dueRecall)} icon={CalendarClock} hint="Recall date passed" />
+        <StatCard label="Patients" value={patients.length} icon={Users} hint="Across all sites" />
+        <StatCard label="Active" value={active} icon={UserCheck} hint="Currently active" />
+        <StatCard label="Lapsed" value={lapsed} icon={UserX} hint="Archived or inactive" />
+        <StatCard label="Due a recall" value={dueRecall} icon={CalendarClock} hint="Recall date passed" />
       </div>
 
       <PatientsTable patients={patients} nowIso={nowIso} />
