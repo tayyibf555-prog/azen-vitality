@@ -38,26 +38,63 @@ function recallTone(recallIso: string | null, nowIso: string): Tone {
   return recallIso <= nowIso ? "warning" : "info";
 }
 
+export type PatientFilter = "active" | "recall" | "lapsed" | "all";
+
+const FILTERS: { key: PatientFilter; label: string }[] = [
+  { key: "active", label: "Active" },
+  { key: "recall", label: "Recall due" },
+  { key: "lapsed", label: "Lapsed" },
+  { key: "all", label: "All" },
+];
+
+// The at-a-glance caption under the search box, per selected segment.
+const FILTER_CAPTION: Record<PatientFilter, string> = {
+  active: "Active patients",
+  recall: "Patients due a recall",
+  lapsed: "Lapsed patients",
+  all: "All patients",
+};
+
+// A tailored empty state per segment, so a genuinely empty segment reads clearly.
+const FILTER_EMPTY: Record<PatientFilter, { title: string; description: string }> = {
+  active: { title: "No active patients", description: "No active patients to show." },
+  recall: { title: "No recalls due", description: "No patients due a recall." },
+  lapsed: { title: "No lapsed patients", description: "No lapsed patients to show." },
+  all: { title: "No patients", description: "No patients to show." },
+};
+
 export function PatientsTable({
   patients,
   nowIso,
   clientSlug,
+  initialFilter = "active",
 }: {
   patients: PatientRecord[];
   nowIso: string;
   clientSlug: string;
+  initialFilter?: PatientFilter;
 }) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const searchParams = useSearchParams();
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<PatientFilter>(initialFilter);
   // Server-side search: the initial `patients` prop is only a bounded first slice, so
   // to reach anyone beyond it we query Dentally directly (debounced). `serverResults`
   // is null when no search is active (show the initial slice), [] for "no matches".
   const [serverResults, setServerResults] = useState<PatientRecord[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Rows for the current filter, fetched server-side when the user changes segment.
+  // Null means "use the server-rendered initial slice" (the initial active view, so
+  // there is no fetch-flash on first paint). Non-null once a fetch has resolved.
+  const [filterRows, setFilterRows] = useState<PatientRecord[] | null>(null);
+  const [filterLoading, setFilterLoading] = useState(false);
 
   const searchActive = q.trim().length >= 2;
+  // The initial segment renders straight from the server-provided slice; any other
+  // segment must be fetched. Once the user leaves and returns to the initial segment
+  // we still have the slice to fall back on, so no fetch is needed there either.
+  const usingInitialSlice = filter === initialFilter && filterRows === null;
 
   useEffect(() => {
     const needle = q.trim();
@@ -92,20 +129,66 @@ export function PatientsTable({
     };
   }, [q, clientSlug]);
 
+  // Fetch the selected segment's rows. Skipped while a search is active (search spans
+  // the whole base and overrides the filter) and skipped for the initial slice (already
+  // server-rendered). Race-safe via `alive`: a superseding segment change discards a
+  // late response. Clearing a search re-runs this and restores the selected segment.
+  useEffect(() => {
+    if (searchActive) return;
+    if (filter === initialFilter && filterRows === null) return; // initial slice already shown
+    let alive = true;
+    setFilterLoading(true);
+    fetch(`/api/dentally/patients?client=${encodeURIComponent(clientSlug)}&filter=${encodeURIComponent(filter)}`, {
+      cache: "no-store",
+    })
+      .then((r) => r.json())
+      .then((d: { patients?: PatientRecord[] }) => {
+        if (alive) setFilterRows(d.patients ?? []);
+      })
+      .catch(() => {
+        if (alive) setFilterRows([]);
+      })
+      .finally(() => {
+        if (alive) setFilterLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+    // filterRows is intentionally omitted: it is set inside this effect, and the
+    // `=== null` guard is only meant to gate the very first initial-slice paint.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, initialFilter, clientSlug, searchActive]);
+
+  // The rows currently backing the table for the selected segment: the server-rendered
+  // slice for the initial segment, the fetched rows otherwise. Memoised so it is stable
+  // across renders (it feeds the ?patient effect's dependencies).
+  const loadedRows = useMemo(
+    () => (usingInitialSlice ? patients : filterRows ?? []),
+    [usingInitialSlice, patients, filterRows],
+  );
+
   // Open a patient directly when arriving via the command palette (?patient=id).
+  // Resolve against whichever rows are currently loaded (slice, filter, or search).
   useEffect(() => {
     const pid = searchParams.get("patient");
-    if (pid && patients.some((p) => p.id === pid)) setSelectedId(pid);
-  }, [searchParams, patients]);
+    if (!pid) return;
+    const inLoaded = loadedRows.some((p) => p.id === pid);
+    const inSearch = serverResults?.some((p) => p.id === pid) ?? false;
+    if (inLoaded || inSearch) setSelectedId(pid);
+  }, [searchParams, loadedRows, serverResults]);
 
-  // When a server search is active, show its results; otherwise the initial slice.
-  const rows = searchActive ? serverResults ?? [] : patients;
+  // Precedence: an active search overrides the filter; otherwise the selected segment
+  // (server-rendered slice for the initial segment, fetched rows for the rest).
+  const rows = searchActive ? serverResults ?? [] : loadedRows;
+  const loading = searchActive ? searching : filterLoading;
 
-  // The selected patient may live in the initial slice OR the current search results.
+  // The selected patient may live in the current rows OR the current search results.
   const selected =
-    patients.find((p) => p.id === selectedId) ??
+    loadedRows.find((p) => p.id === selectedId) ??
     serverResults?.find((p) => p.id === selectedId) ??
     null;
+
+  const emptyCopy = FILTER_EMPTY[filter];
 
   const columns: Column<PatientRecord>[] = [
     { key: "name", header: "Patient", cell: (p) => <span className="font-semibold text-navy">{p.name}</span> },
@@ -153,21 +236,46 @@ export function PatientsTable({
         title="All patients"
         description="Click a patient to open their record."
         actions={
-          <div className="relative">
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search name, phone or email"
-              className="w-64 rounded-full border border-line-strong bg-card py-1.5 pl-9 pr-9 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
-            />
-            {searching ? (
-              <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted" />
-            ) : null}
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <div className="inline-flex flex-wrap gap-1 rounded-full border border-line-strong bg-card p-1" role="group" aria-label="Filter patients">
+              {FILTERS.map(({ key, label }) => {
+                const active = filter === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setFilter(key)}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
+                      active ? "bg-blue-dark text-white shadow-sm" : "text-muted hover:text-ink",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search name, phone or email"
+                className="w-64 rounded-full border border-line-strong bg-card py-1.5 pl-9 pr-9 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+              />
+              {searching ? (
+                <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted" />
+              ) : null}
+            </div>
           </div>
         }
         bodyClassName="p-0"
       >
+        <p className="flex items-center gap-2 border-b border-line px-5 py-2.5 text-xs text-muted">
+          {searchActive ? "Search results" : FILTER_CAPTION[filter]}
+          {loading ? <Loader2 size={12} className="animate-spin" /> : null}
+        </p>
         <DataTable
           columns={columns}
           rows={rows}
@@ -176,8 +284,14 @@ export function PatientsTable({
           className="px-2 py-1"
           empty={
             <EmptyState
-              title={searching ? "Searching…" : "No patients match"}
-              description={searching ? "Looking across your patient database." : "Try a different search."}
+              title={loading ? "Loading…" : searchActive ? "No patients match" : emptyCopy.title}
+              description={
+                loading
+                  ? "Looking across your patient database."
+                  : searchActive
+                    ? "Try a different search."
+                    : emptyCopy.description
+              }
               className="m-4"
             />
           }

@@ -47,7 +47,12 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
         Counts reflect the patients currently shown. Search to find any patient.
       </p>
 
-      <PatientsTable patients={patients} nowIso={nowIso} clientSlug={clientSlug} />
+      <PatientsTable
+        patients={patients.filter((p) => p.active)}
+        nowIso={nowIso}
+        clientSlug={clientSlug}
+        initialFilter="active"
+      />
     </>
   );
 }
