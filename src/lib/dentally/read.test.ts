@@ -95,20 +95,22 @@ describe("dentallyReadKey (read-only key selection)", () => {
 
 // listOutstanding scans the INVOICES index ONCE (real Dentally holds the balance on
 // invoices, not plans, and may ignore site_id and repeat the whole group per site),
-// computes balance = total - paid, aggregates per patient, attributes by the patient's
-// site, and drops other-practice patients. Regression cover for the review-caught bug
-// where an empty middle site aborted the whole scan.
+// reads the balance from `amount_outstanding`, aggregates per patient, attributes by the
+// patient's site, and drops other-practice patients. Uses the REAL Dentally invoice shape
+// (amount / amount_outstanding / boolean paid / status) so it guards the live path — the
+// earlier mock shape (numeric total/paid) hid a bug that returned 0 for every real invoice.
 describe("listOutstanding", () => {
-  const inv = (id: string, patientId: string, total: number, paid: number, extra: Record<string, unknown> = {}) => ({
-    id, patient_id: patientId, total, paid, ...extra,
+  // amountOutstanding is Dentally's `amount_outstanding`; `paid` is a BOOLEAN live.
+  const inv = (id: string, patientId: string, amount: number, amountOutstanding: number, extra: Record<string, unknown> = {}) => ({
+    id, patient_id: patientId, amount, amount_outstanding: amountOutstanding, paid: amountOutstanding === 0, status: "new", ...extra,
   });
   const patient = (id: string, site: string) => ({ id, first_name: "P", last_name: id, site_id: site });
 
   it("collects outstanding invoices from ALL sites even when a middle site is empty", async () => {
     const bySite: Record<string, unknown[]> = {
-      "site-1": [inv("a", "pat-1", 500, 100)], // 400 owed
+      "site-1": [inv("a", "pat-1", 500, 400)], // 400 owed
       "site-2": [], // legitimately empty — must NOT abort the scan
-      "site-3": [inv("c", "pat-3", 300, 0)], // 300 owed
+      "site-3": [inv("c", "pat-3", 300, 300)], // 300 owed
     };
     state.listInvoices = ((a: { siteId?: string; page?: number }) =>
       Promise.resolve({ invoices: (a.page ?? 1) === 1 ? bySite[a.siteId ?? ""] ?? [] : [] })) as never;
@@ -127,9 +129,9 @@ describe("listOutstanding", () => {
 
   it("aggregates several unpaid invoices per patient and ranks by amount owed", async () => {
     const group = [
-      inv("x1", "pat-a", 1000, 0), // 1000
-      inv("x2", "pat-a", 500, 200), // 300 -> pat-a owes 1300
-      inv("y1", "pat-b", 800, 0), // 800
+      inv("x1", "pat-a", 1000, 1000), // 1000
+      inv("x2", "pat-a", 500, 300), // 300 -> pat-a owes 1300
+      inv("y1", "pat-b", 800, 800), // 800
     ];
     state.listInvoices = ((a: { page?: number }) =>
       Promise.resolve({ invoices: (a.page ?? 1) === 1 ? group : [] })) as never;
@@ -146,9 +148,34 @@ describe("listOutstanding", () => {
     expect(out[0].planName).toBe("2 outstanding invoices");
   });
 
+  it("handles the live shape: boolean `paid` with no explicit balance falls back to gross", async () => {
+    // Guards the review-caught bug: real Dentally `paid` is a BOOLEAN, not a number. An
+    // unpaid invoice with no amount_outstanding must owe its gross, a paid one must owe 0.
+    state.listInvoices = ((a: { page?: number }) =>
+      Promise.resolve({
+        invoices:
+          (a.page ?? 1) === 1
+            ? [
+                { id: "f1", patient_id: "pat-1", amount: 700, paid: false, status: "new" }, // owes 700
+                { id: "f2", patient_id: "pat-2", amount: 400, paid: true, status: "paid" }, // owes 0
+              ]
+            : [],
+      })) as never;
+    state.listPatients = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({
+        patients:
+          a.siteId === "site-1" && (a.page ?? 1) === 1
+            ? [patient("pat-1", "site-1"), patient("pat-2", "site-1")]
+            : [],
+      })) as never;
+
+    const out = await listOutstanding(["site-1"]);
+    expect(out.map((o) => [o.patientId, o.outstanding])).toEqual([["pat-1", 700]]);
+  });
+
   it("dedups the ignored-filter repeat, drops other-practice patients, and stops early", async () => {
     // Every site returns the SAME group-wide list (real Dentally ignoring site_id).
-    const group = [inv("x", "pat-vit", 300, 0), inv("y", "pat-other", 400, 0)];
+    const group = [inv("x", "pat-vit", 300, 300), inv("y", "pat-other", 400, 400)];
     const calls: string[] = [];
     state.listInvoices = ((a: { siteId?: string; page?: number }) => {
       calls.push(`${a.siteId}:${a.page ?? 1}`);
@@ -169,10 +196,10 @@ describe("listOutstanding", () => {
         invoices:
           (a.page ?? 1) === 1
             ? [
-                inv("s", "pat-1", 500, 500), // settled (paid == total)
-                inv("d", "pat-2", 900, 0, { state: "draft" }),
-                inv("c", "pat-3", 900, 0, { state: "cancelled" }),
-                inv("w", "pat-4", 900, 0, { state: "written_off" }),
+                inv("s", "pat-1", 500, 0), // settled (amount_outstanding 0, paid true)
+                inv("d", "pat-2", 900, 900, { status: "draft" }),
+                inv("c", "pat-3", 900, 900, { status: "cancelled" }),
+                inv("w", "pat-4", 900, 900, { status: "written_off" }),
               ]
             : [],
       })) as never;

@@ -413,7 +413,7 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
     .catch(() => [] as Record<string, unknown>[]);
 
   const [appointments, plans, notes, invoices] = await Promise.all([apptsP, plansP, notesP, invoicesP]);
-  const lifetimeSpend = invoices.reduce((sum, r) => sum + num(r.paid), 0);
+  const lifetimeSpend = invoices.reduce((sum, r) => sum + invoicePaid(r), 0);
   const outstanding = invoices.reduce((sum, r) => sum + invoiceOutstanding(r), 0);
   appointments.sort((a, b) => (a.start < b.start ? 1 : -1)); // newest first
   return { appointments, plans, notes, lifetimeSpend, outstanding };
@@ -425,14 +425,42 @@ export function listOutstanding(siteIds: string[]): Promise<OutstandingRecord[]>
   return cachedRead(`outstanding:${[...siteIds].sort().join("|")}`, () => _listOutstandingUncached(siteIds));
 }
 
-/** The balance still owed on one invoice, or 0 when it is settled or not a live debt.
- *  Prefers an explicit balance field; else gross/total minus paid. Draft, cancelled
- *  and written-off invoices never count. Shared by the scan and the per-patient read. */
+// Invoice statuses that are NOT a live debt (never counted as outstanding or paid).
+// Real Dentally uses `status` (e.g. "new"); the exact non-debt vocabulary is confirmed
+// against the sandbox — this set is deliberately permissive so an unknown status still
+// counts as owed rather than being silently dropped.
+const NON_DEBT_INVOICE_STATUSES = new Set(["cancelled", "written_off", "void", "credited", "draft"]);
+
+/**
+ * The balance still owed on one invoice, or 0 when settled / not a live debt.
+ *
+ * CALIBRATED to the documented real Dentally invoice shape: `amount` (gross),
+ * `amount_outstanding` (the balance, already net of partial payments), `paid` (a
+ * BOOLEAN), `status`. Falls back to the mock/legacy numeric shape (`total` - numeric
+ * `paid`) so both work. The earlier version read `outstanding`/`total`/`gross` and a
+ * numeric `paid`, none of which exist on live Dentally, so it returned 0 for every
+ * real invoice. Confirm exact field units (pounds vs pence) against the sandbox.
+ */
 function invoiceOutstanding(r: Record<string, unknown>): number {
-  const state = str(r.state);
-  if (state === "cancelled" || state === "written_off" || state === "draft") return 0;
-  const balance = r.outstanding != null ? num(r.outstanding) : num(r.total ?? r.gross ?? r.value) - num(r.paid);
-  return balance > 0 ? balance : 0;
+  const status = str(r.status) ?? str(r.state);
+  if (status && NON_DEBT_INVOICE_STATUSES.has(status)) return 0;
+  // Dentally's own balance field already reflects partial payments — trust it first.
+  if (r.amount_outstanding != null) return Math.max(0, num(r.amount_outstanding));
+  if (r.outstanding != null) return Math.max(0, num(r.outstanding));
+  const gross = num(r.total ?? r.amount ?? r.gross ?? r.value);
+  // Live `paid` is a boolean (fully paid?); mock `paid` is the numeric amount paid.
+  if (typeof r.paid === "boolean") return r.paid ? 0 : Math.max(0, gross);
+  return Math.max(0, gross - num(r.paid));
+}
+
+/** The amount already PAID on one invoice. Live Dentally: gross minus the outstanding
+ *  balance (or the full gross when the boolean `paid` is true); mock: the numeric `paid`.
+ *  Used for lifetime spend, which otherwise summed booleans (1/0) as pounds on live. */
+function invoicePaid(r: Record<string, unknown>): number {
+  if (typeof r.paid === "number") return num(r.paid); // mock/legacy shape
+  const gross = num(r.amount ?? r.total);
+  if (r.amount_outstanding != null) return Math.max(0, gross - num(r.amount_outstanding));
+  return r.paid === true ? gross : 0;
 }
 
 async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingRecord[]> {
@@ -467,7 +495,7 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
           if (!patientId) continue;
           const agg = byPatient.get(patientId) ?? { outstanding: 0, invoiced: 0, latest: null, count: 0 };
           agg.outstanding += outstanding;
-          agg.invoiced += num(r.total ?? r.gross ?? r.value);
+          agg.invoiced += num(r.amount ?? r.total ?? r.gross ?? r.value);
           agg.count += 1;
           const at = str(r.created_at) ?? str(r.date) ?? str(r.issued_at);
           if (at && (!agg.latest || at > agg.latest)) agg.latest = at;

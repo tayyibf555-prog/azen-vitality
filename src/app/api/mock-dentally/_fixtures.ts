@@ -429,9 +429,13 @@ export interface MockAppointment {
 export interface MockInvoice {
   id: string;
   patient_id: string;
-  paid: number;
-  /** Gross invoice value. outstanding = total - paid; total == paid for a settled invoice. */
-  total: number;
+  // Mirrors the REAL Dentally invoice shape so the outstanding scan exercises the live
+  // code path: `amount` (gross), `amount_outstanding` (balance owed, net of partial
+  // payments), `paid` (a BOOLEAN, fully paid?), `status`. outstanding = amount_outstanding.
+  amount: number;
+  amount_outstanding: number;
+  paid: boolean;
+  status: string;
 }
 
 // Appointment history. Past visits set "last visit"; a future one marks an
@@ -517,26 +521,27 @@ MOCK_APPOINTMENTS.push(...noshowUpcomingAppointments());
 // below carries a real balance (paid < total) and drives the Payments outstanding
 // scan the way real Dentally does (balances live on invoices, not on plans).
 export const MOCK_INVOICES: MockInvoice[] = [
-  { id: "inv-001a", patient_id: "pat-001", paid: 1340, total: 1340 },
-  { id: "inv-002a", patient_id: "pat-002", paid: 1850, total: 1850 },
-  { id: "inv-002b", patient_id: "pat-002", paid: 640, total: 640 },
-  { id: "inv-003a", patient_id: "pat-003", paid: 980, total: 980 },
-  { id: "inv-004a", patient_id: "pat-004", paid: 1200, total: 1200 },
-  { id: "inv-005a", patient_id: "pat-005", paid: 700, total: 700 },
-  { id: "inv-006a", patient_id: "pat-006", paid: 450, total: 450 },
-  { id: "inv-007a", patient_id: "pat-007", paid: 280, total: 280 },
-  { id: "inv-008a", patient_id: "pat-008", paid: 320, total: 320 },
-  { id: "inv-009a", patient_id: "pat-009", paid: 2100, total: 2100 },
-  { id: "inv-010a", patient_id: "pat-010", paid: 1200, total: 1200 },
-  { id: "inv-010b", patient_id: "pat-010", paid: 480, total: 480 },
-  { id: "inv-011a", patient_id: "pat-011", paid: 950, total: 950 },
-  // Outstanding balances (paid < total): money still owed on a finalised invoice.
-  { id: "inv-002c", patient_id: "pat-002", paid: 500, total: 2000 },
-  { id: "inv-005b", patient_id: "pat-005", paid: 0, total: 850 },
-  { id: "inv-009b", patient_id: "pat-009", paid: 1000, total: 3400 },
-  { id: "inv-012a", patient_id: "pat-012", paid: 0, total: 1200 },
-  { id: "inv-013a", patient_id: "pat-013", paid: 250, total: 700 },
-  { id: "inv-016a", patient_id: "pat-016", paid: 0, total: 600 },
+  // Settled (amount_outstanding 0, paid true): the lifetime-spend history.
+  { id: "inv-001a", patient_id: "pat-001", amount: 1340, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-002a", patient_id: "pat-002", amount: 1850, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-002b", patient_id: "pat-002", amount: 640, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-003a", patient_id: "pat-003", amount: 980, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-004a", patient_id: "pat-004", amount: 1200, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-005a", patient_id: "pat-005", amount: 700, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-006a", patient_id: "pat-006", amount: 450, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-007a", patient_id: "pat-007", amount: 280, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-008a", patient_id: "pat-008", amount: 320, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-009a", patient_id: "pat-009", amount: 2100, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-010a", patient_id: "pat-010", amount: 1200, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-010b", patient_id: "pat-010", amount: 480, amount_outstanding: 0, paid: true, status: "paid" },
+  { id: "inv-011a", patient_id: "pat-011", amount: 950, amount_outstanding: 0, paid: true, status: "paid" },
+  // Outstanding (amount_outstanding > 0, paid false): a real balance owed. Drives Payments.
+  { id: "inv-002c", patient_id: "pat-002", amount: 2000, amount_outstanding: 1500, paid: false, status: "new" },
+  { id: "inv-005b", patient_id: "pat-005", amount: 850, amount_outstanding: 850, paid: false, status: "new" },
+  { id: "inv-009b", patient_id: "pat-009", amount: 3400, amount_outstanding: 2400, paid: false, status: "new" },
+  { id: "inv-012a", patient_id: "pat-012", amount: 1200, amount_outstanding: 1200, paid: false, status: "new" },
+  { id: "inv-013a", patient_id: "pat-013", amount: 700, amount_outstanding: 450, paid: false, status: "new" },
+  { id: "inv-016a", patient_id: "pat-016", amount: 600, amount_outstanding: 600, paid: false, status: "new" },
 ];
 
 // --- Patient notes (clinical + admin) -------------------------------------
