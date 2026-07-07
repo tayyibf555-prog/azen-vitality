@@ -134,6 +134,13 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
 // one page). Loop pages until a short (< PER_PAGE) one, bounded by MAX_PAGES.
 const PER_PAGE = 100;
 const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad upstream can't loop forever
+// The outstanding scan pages treatment_plans, but real Dentally plans carry no
+// amount_outstanding (it lives on invoices), so on live data the scan always
+// yields nothing regardless of depth — paging the whole group's plans (up to 100
+// pages) just to return [] is pure latency on Home/Payments/the brief. Bound it
+// tighter: the mock's per-site plans fit comfortably, and live data is unaffected
+// (still []). The real per-plan balances arrive with the invoices integration.
+const OUTSTANDING_MAX_PAGES = 25;
 
 async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[]> {
   const out: T[] = [];
@@ -145,10 +152,41 @@ async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[
   return out;
 }
 
+// Cross-request TTL cache for the expensive live Dentally DISPLAY reads. Every
+// force-dynamic page re-pages Dentally on navigation; on a real-size practice
+// (thousands of patients + the whole group's treatment plans) that makes the app
+// feel slow, and the reads compete with the hourly backfill for the rate budget.
+// Fluid Compute keeps instances warm, so a short per-instance TTL turns repeat and
+// SHARED reads (Home, Payments and the brief all want the same outstanding +
+// appointments) into instant hits. DISPLAY only: the sync/backfill uses the raw
+// DentallyClient directly, so its data always stays fresh. Stale by at most the TTL.
+const READ_CACHE_TTL_MS = 60_000;
+const readCache = new Map<string, { at: number; value: unknown }>();
+
+async function cachedRead<T>(key: string, fn: () => Promise<T>, ttlMs = READ_CACHE_TTL_MS): Promise<T> {
+  // Unit tests exercise the real read directly (no cross-test cache pollution).
+  if (process.env.VITEST) return fn();
+  const now = Date.now();
+  const hit = readCache.get(key);
+  if (hit && now - hit.at < ttlMs) return hit.value as T;
+  const value = await fn();
+  readCache.set(key, { at: now, value });
+  if (readCache.size > 300) {
+    // Bound memory: drop the oldest quarter of entries.
+    for (const [k] of [...readCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 75)) {
+      readCache.delete(k);
+    }
+  }
+  return value;
+}
+
 /** All patients across the given sites. The 3 sites are paged CONCURRENTLY (peak
  *  concurrency = site count), so wall-clock is the slowest single site, not the sum.
  *  /v1/patients DOES honour site_id server-side, so this stays a per-site scan. */
-export async function listPatients(siteIds: string[]): Promise<PatientRecord[]> {
+export function listPatients(siteIds: string[]): Promise<PatientRecord[]> {
+  return cachedRead(`patients:${[...siteIds].sort().join("|")}`, () => _listPatientsUncached(siteIds));
+}
+async function _listPatientsUncached(siteIds: string[]): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
@@ -239,8 +277,13 @@ export async function listAppointments(
   siteIds: string[],
   range?: { from?: string; to?: string },
 ): Promise<AppointmentRecord[]> {
-  const out = [...(await listAppointmentsCached(siteIds.join("|"), range?.from ?? "", range?.to ?? ""))];
-  return out.sort((a, b) => (a.start < b.start ? -1 : 1));
+  const from = range?.from ?? "";
+  const to = range?.to ?? "";
+  const rows = await cachedRead(
+    `appts:${siteIds.join("|")}:${from}:${to}`,
+    () => listAppointmentsCached(siteIds.join("|"), from, to),
+  );
+  return [...rows].sort((a, b) => (a.start < b.start ? -1 : 1));
 }
 
 export interface PlanRecord {
@@ -320,7 +363,10 @@ export async function getPatientDetail(patientId: string, siteId: string): Promi
 }
 
 /** Treatment plans with money still outstanding, across the given sites, with patient names. */
-export async function listOutstanding(siteIds: string[]): Promise<OutstandingRecord[]> {
+export function listOutstanding(siteIds: string[]): Promise<OutstandingRecord[]> {
+  return cachedRead(`outstanding:${[...siteIds].sort().join("|")}`, () => _listOutstandingUncached(siteIds));
+}
+async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingRecord[]> {
   const client = dentallyFromEnv();
 
   // 1. Scan treatment_plans ONCE. Real Dentally IGNORES the site_id filter and
@@ -336,7 +382,7 @@ export async function listOutstanding(siteIds: string[]): Promise<OutstandingRec
     const siteId = siteIds[s];
     let ignoredFilter = false;
     try {
-      for (let page = 1; page <= MAX_PAGES; page += 1) {
+      for (let page = 1; page <= OUTSTANDING_MAX_PAGES; page += 1) {
         const res = await client.listTreatmentPlans({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE });
         const plans = res.treatment_plans ?? [];
         let newInPage = 0;
