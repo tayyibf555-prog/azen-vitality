@@ -8,9 +8,10 @@ import { getSite } from "@/lib/mock";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import {
   Search, X, Phone, Mail, MessageSquare, CalendarClock, Clock, Loader2, History, ReceiptText,
-  StickyNote, CalendarPlus, Activity, PoundSterling, Cake,
+  StickyNote, CalendarPlus, Activity, PoundSterling, Cake, NotebookPen,
 } from "lucide-react";
 import type { PatientRecord, AppointmentRecord, PlanRecord, NoteRecord } from "@/lib/dentally/read";
+import { PatientNotesPanel } from "./patient-notes-panel";
 
 const APPT_STATE_TONE: Record<string, Tone> = {
   booked: "info",
@@ -298,11 +299,11 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
               <div className="space-y-5">
                 <section className="space-y-3">
                   <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                    <StickyNote size={15} className="text-blue-dark" /> Notes
+                    <StickyNote size={15} className="text-blue-dark" /> Clinical notes (Dentally)
                   </h3>
                   {notes.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
-                      No notes on record.
+                      No clinical notes in Dentally.
                     </p>
                   ) : (
                     <ul className="space-y-2">
@@ -317,6 +318,13 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
                       ))}
                     </ul>
                   )}
+                </section>
+
+                <section className="space-y-3">
+                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
+                    <NotebookPen size={15} className="text-blue-dark" /> Practice notes
+                  </h3>
+                  <PatientNotesPanel siteId={patient.siteId} patientId={patient.id} />
                 </section>
 
                 <section className="space-y-3">
