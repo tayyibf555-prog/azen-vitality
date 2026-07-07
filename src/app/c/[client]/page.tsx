@@ -185,7 +185,7 @@ export default async function ClientHomePage({
       </div>
 
       {/* Owner band: is it paying off. Server-gated — coordinators never receive it. */}
-      {isOwner ? <OverviewDashboard hideHero variant="embedded" /> : null}
+      {isOwner ? <OverviewDashboard hideHero variant="embedded" siteIds={siteIds} /> : null}
     </>
   );
 }

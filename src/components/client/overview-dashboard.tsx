@@ -148,11 +148,16 @@ const RECALL_MIN = 0.45;
 export function OverviewDashboard({
   hideHero = false,
   variant = "standalone",
+  siteIds,
 }: {
   hideHero?: boolean;
   /** "embedded" = the owner band on Home: revenue lives in the Home header card,
    *  so the emphasised stat is dropped to avoid saying the same number twice. */
   variant?: "standalone" | "embedded";
+  /** The dashboard's selected site(s) (default N15); omitted → all of the
+   *  client's sites. Scopes the by-site breakdown so the band never names other
+   *  sites under a single-site header. */
+  siteIds?: string[];
 }) {
   const params = useParams<{ client: string }>();
   const client = getClient(params.client);
@@ -206,10 +211,16 @@ export function OverviewDashboard({
   }
 
   const metrics = getClientMetrics(client.id);
-  const siteMetrics = getSiteMetrics(client.siteIds);
+  // Scope the band to the dashboard's selected site (default N15); omitted → all
+  // sites. When a single site is selected the by-site breakdown, exceptions and
+  // headline totals all derive from that site, so nothing contradicts the header.
+  const scopedSiteIds = siteIds && siteIds.length ? siteIds : client.siteIds;
+  const allSites = scopedSiteIds.length >= client.siteIds.length;
+  const siteMetrics = getSiteMetrics(scopedSiteIds);
 
   const totalLeads = siteMetrics.reduce((a, s) => a + s.leadsIn, 0);
   const totalBooked = siteMetrics.reduce((a, s) => a + s.consultationsBooked, 0);
+  const totalRevenue = siteMetrics.reduce((a, s) => a + s.recoveredRevenue, 0);
   const avgCostPerBooking = siteMetrics.length
     ? Math.round(siteMetrics.reduce((a, s) => a + s.costPerBooking, 0) / siteMetrics.length)
     : 0;
@@ -246,20 +257,20 @@ export function OverviewDashboard({
       <div className={variant === "embedded" ? "grid grid-cols-3 gap-4" : "grid grid-cols-2 gap-4 lg:grid-cols-4"}>
         <StatCard
           label="Leads in"
-          value={compact(metrics?.leadsIn ?? totalLeads)}
+          value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
           icon={TrendingUp}
-          hint="Across all sites, last 30 days"
+          hint={allSites ? "Across all sites, last 30 days" : "Selected site, last 30 days"}
         />
         <StatCard
           label="Consultations booked"
-          value={compact(metrics?.consultationsBooked ?? totalBooked)}
+          value={compact(allSites ? (metrics?.consultationsBooked ?? totalBooked) : totalBooked)}
           icon={CalendarCheck}
         />
         {variant === "standalone" ? (
           <StatCard
             emphasis
             label="Revenue recovered"
-            value={gbp(metrics?.recoveredRevenue ?? 0)}
+            value={gbp(allSites ? (metrics?.recoveredRevenue ?? totalRevenue) : totalRevenue)}
             icon={PoundSterling}
           />
         ) : null}
@@ -274,7 +285,7 @@ export function OverviewDashboard({
       <div className="grid gap-6 lg:grid-cols-3">
         <SectionCard
           title="Revenue recovered"
-          description="Recovered revenue per week across all sites"
+          description={allSites ? "Recovered revenue per week across all sites" : "Recovered revenue per week"}
           className="lg:col-span-2"
         >
           {metrics ? (

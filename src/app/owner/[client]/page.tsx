@@ -149,7 +149,7 @@ export default async function OwnerManagementPage({
         )}
       </SectionCard>
 
-      <OverviewDashboard hideHero />
+      <OverviewDashboard hideHero siteIds={siteIds} />
           </>
         }
       />
