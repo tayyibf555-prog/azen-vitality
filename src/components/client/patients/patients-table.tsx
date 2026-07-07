@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, gbp, num, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
@@ -76,6 +76,8 @@ export function PatientsTable({
 }) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<PatientFilter>(initialFilter);
@@ -175,7 +177,13 @@ export function PatientsTable({
     const inLoaded = loadedRows.some((p) => p.id === pid);
     const inSearch = serverResults?.some((p) => p.id === pid) ?? false;
     if (inLoaded || inSearch) setSelectedId(pid);
-  }, [searchParams, loadedRows, serverResults]);
+    // Consume the one-shot ?patient instruction: strip it from the URL so a refresh
+    // lands on the clean list instead of re-opening the same record every time.
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.delete("patient");
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, loadedRows, serverResults, router, pathname]);
 
   // Precedence: an active search overrides the filter; otherwise the selected segment
   // (server-rendered slice for the initial segment, fetched rows for the rest).
