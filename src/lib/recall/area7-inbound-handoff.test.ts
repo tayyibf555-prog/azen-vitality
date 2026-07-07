@@ -130,15 +130,18 @@ describe("inbound handoff — reply correlated to a recall outbound", () => {
     expect(rcUpdateCadence).not.toHaveBeenCalled(); // but no pause on a non-active cadence
   });
 
-  it("precedence: when reactivation matches first, recall correlation is not consulted", async () => {
+  it("a reactivation reply ALSO consults recall, so a dual-enrolled patient has both paused", async () => {
     reFind.mockResolvedValue({ targetId: "site-cc:p-9", siteId: "site-cc" });
     reGetCadence.mockResolvedValue({ id: "re-cad", status: "active" });
+    // recall finds no target for this number in this scenario.
 
     await POST(inbound("+447700900123", "hello"));
 
-    // Reactivation handles it; recall's finder is never called (target ? null : ...).
+    // Reactivation handles it; recall is now consulted on EVERY inbound (no longer
+    // short-circuited by a reactivation match) so both cadences can pause. Here recall
+    // finds nothing, so it logs no recall inbound touch.
     expect(reInsertInbound).toHaveBeenCalled();
-    expect(rcFind).not.toHaveBeenCalled();
+    expect(rcFind).toHaveBeenCalled();
     expect(rcInsertInbound).not.toHaveBeenCalled();
   });
 });

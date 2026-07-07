@@ -80,6 +80,10 @@ vi.mock("@/lib/cron-lock", () => ({
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-1", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
 }));
+vi.mock("@/lib/messaging/frequency", () => ({
+  wasContactedToday: async () => false,
+  recordContacted: async () => {},
+}));
 
 import { POST } from "./route";
 

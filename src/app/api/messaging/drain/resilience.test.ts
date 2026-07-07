@@ -99,6 +99,10 @@ vi.mock("@/lib/dentally/client", () => {
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-cc", clientId: "vitality" }],
 }));
+vi.mock("@/lib/messaging/frequency", () => ({
+  wasContactedToday: async () => false,
+  recordContacted: async () => {},
+}));
 
 import { POST as drainPOST } from "./route";
 import * as reactivation from "@/lib/reactivation/repository";

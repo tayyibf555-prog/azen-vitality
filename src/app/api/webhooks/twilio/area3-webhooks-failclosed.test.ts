@@ -406,8 +406,21 @@ describe("inbound routing chain", () => {
       expect.objectContaining({ targetId: "patient:789", cadenceId: "cad-1", siteId: "site-a", channel: "sms" }),
     );
     expect(reactivationRepo.updateCadence).toHaveBeenCalledWith("cad-1", { status: "paused" });
-    // Reactivation matched, so the recall lookup is skipped entirely.
-    expect(recallRepo.findTargetByAddress).not.toHaveBeenCalled();
+    // Recall is now checked on EVERY inbound (so a patient in both cadences has both
+    // paused); here recall finds nothing, so only the reactivation cadence pauses.
+    expect(recallRepo.findTargetByAddress).toHaveBeenCalled();
+    expect(recallRepo.updateCadence).not.toHaveBeenCalled();
+  });
+
+  it("pauses BOTH cadences when a number is enrolled in reactivation AND recall", async () => {
+    vi.mocked(reactivationRepo.findTargetByAddress).mockResolvedValueOnce({ targetId: "patient:999", siteId: "site-a" } as never);
+    vi.mocked(reactivationRepo.getCadenceByTarget).mockResolvedValueOnce({ id: "cad-x", status: "active" } as never);
+    vi.mocked(recallRepo.findTargetByAddress).mockResolvedValueOnce({ targetId: "patient:999", siteId: "site-a" } as never);
+    vi.mocked(recallRepo.getCadenceByTarget).mockResolvedValueOnce({ id: "rcad-x", status: "active" } as never);
+    await inboundPOST(signed(INBOUND_URL, { From: "+447700900999", Body: "Sorry, been busy" }));
+    // The fix: BOTH pause, not just the first match, so neither sweep keeps chasing.
+    expect(reactivationRepo.updateCadence).toHaveBeenCalledWith("cad-x", { status: "paused" });
+    expect(recallRepo.updateCadence).toHaveBeenCalledWith("rcad-x", { status: "paused" });
   });
 
   it("falls back to recall when reactivation misses", async () => {
@@ -424,7 +437,8 @@ describe("inbound routing chain", () => {
       expect.objectContaining({ targetId: "patient:456", cadenceId: "rcad-1", siteId: "site-b" }),
     );
     expect(recallRepo.updateCadence).toHaveBeenCalledWith("rcad-1", { status: "paused" });
-    expect(coordinatorRepo.findTargetByAddress).not.toHaveBeenCalled();
+    // The coordinator is now also checked on every inbound; here it finds nothing.
+    expect(coordinatorRepo.findTargetByAddress).toHaveBeenCalled();
   });
 
   it("falls back to the coordinator when reactivation and recall both miss", async () => {

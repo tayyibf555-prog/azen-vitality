@@ -2,6 +2,8 @@ import { DentallyClient, DentallyError } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
+import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
+import { londonDayKey } from "@/lib/time/london";
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import type { MessageChannel } from "@/lib/messaging/types";
@@ -82,12 +84,21 @@ interface OutboxSource {
   recordSent: (id: string, touchId: string, fields: { provider: string; providerMessageId: string; toAddress: string }) => Promise<void>;
   markFailed: (id: string) => Promise<void>;
   markBlocked: (id: string) => Promise<void>;
+  // Transactional = an appointment confirmation the patient is expecting. It ALWAYS
+  // sends (never blocked by the daily frequency cap) but still stamps the day, so
+  // same-day OUTREACH (recall/reactivation/coordinator/reviews) yields to it.
+  transactional?: boolean;
 }
 
+// Order matters: this is the cross-module priority for the once-per-day cap. The FIRST
+// source to reach a recipient on a given day wins; every later source that day is
+// blocked. Transactional confirmations (no-show) drain first so a reminder never loses
+// its slot to outreach, then outreach in priority order (recall > reactivation >
+// coordinator > reviews).
 const SOURCES: OutboxSource[] = [
-  { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
+  { name: "noshow", list: listNoshowQueued, claim: claimNoshow, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked, transactional: true },
   { name: "recall", list: listRecallQueued, claim: claimRecall, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
-  { name: "noshow", list: listNoshowQueued, claim: claimNoshow, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked },
+  { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
   { name: "coordinator", list: listCoordinatorQueued, claim: claimCoordinator, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },
   { name: "reviews", list: listReviewsQueued, claim: claimReviews, recordSent: recordReviewsSent, markFailed: markReviewsFailed, markBlocked: markReviewsBlocked },
 ];
@@ -97,6 +108,7 @@ async function drainSource(
   client: DentallyClient,
   siteIds: string[],
   statusCallbackUrl: string | undefined,
+  today: string,
 ): Promise<{ drained: number; sent: number; failed: number; blocked: number }> {
   const rows = await source.list(siteIds);
   let sent = 0, failed = 0, blocked = 0;
@@ -173,6 +185,17 @@ async function drainSource(
       continue;
     }
 
+    // Cross-module daily frequency cap: at most one OUTREACH message per recipient per
+    // London day across ALL modules, so a patient is never chased by two systems the
+    // same day. Keyed by the resolved address (dedupes SMS + WhatsApp on one number).
+    // Transactional confirmations (no-show) are exempt from being blocked but still
+    // stamp the day after sending, so same-day outreach yields to them. Fail-open.
+    if (!source.transactional && (await wasContactedToday(row.siteId, to, today))) {
+      await source.markBlocked(row.id);
+      blocked += 1;
+      continue;
+    }
+
     // Atomically claim the row (queued -> sending) IMMEDIATELY before dispatch.
     // The cron lock stops concurrent drains, but a run killed at maxDuration (or a
     // crash) between sendMessage returning and recordSent committing would leave
@@ -227,6 +250,9 @@ async function drainSource(
       }
     }
     sent += 1;
+    // Stamp the day so later sources this run and later ticks apply the once-per-day
+    // cap to this recipient. Best-effort: a failure here never affects the sent message.
+    await recordContacted(row.siteId, to, today, source.name);
   }
   // 'drained' counts rows this run actually examined; rows deferred past a cap
   // break stay queued for the next tick and are not counted.
@@ -261,6 +287,9 @@ export async function POST(request: Request): Promise<Response> {
       : undefined;
 
     const siteIds = vitalitySiteIds();
+    // The Europe/London calendar day, computed once so every source this run shares one
+    // "today" for the cross-module frequency cap (a run cannot straddle local midnight).
+    const today = londonDayKey(new Date());
     // Owner kill switch: a disabled system's outbox must not send. Fetch the
     // disabled set once (fail-open: an error here returns an empty set, so a
     // toggle-table blip never halts delivery — see systems/repository). Single
@@ -283,7 +312,7 @@ export async function POST(request: Request): Promise<Response> {
       // recall/noshow/coordinator/reviews from delivering their queued rows.
       // The rows of the failing module stay 'queued' for the next tick.
       try {
-        const r = await drainSource(source, client, siteIds, statusCallbackUrl);
+        const r = await drainSource(source, client, siteIds, statusCallbackUrl, today);
         perSource[source.name] = r;
         drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
       } catch (err) {

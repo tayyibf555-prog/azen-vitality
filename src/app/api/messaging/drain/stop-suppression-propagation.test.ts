@@ -189,6 +189,10 @@ vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-stop", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
 }));
 
+vi.mock("@/lib/messaging/frequency", () => ({
+  wasContactedToday: async () => false,
+  recordContacted: async () => {},
+}));
 // REAL suppression module (its serviceClient is the only mocked dependency).
 import { addSuppression } from "@/lib/messaging/suppression";
 import { POST } from "./route";

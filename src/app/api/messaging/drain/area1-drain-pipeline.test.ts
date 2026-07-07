@@ -110,6 +110,12 @@ vi.mock("@/lib/systems/repository", () => ({
   getDisabledSlugs: async () => new Set(fakes.disabledSlugs),
 }));
 
+// The cross-module daily frequency cap is exercised in its own test; here it must
+// no-op (default: nobody contacted yet) so it never touches the DB or the network.
+vi.mock("@/lib/messaging/frequency", () => ({
+  wasContactedToday: async () => false,
+  recordContacted: async () => {},
+}));
 // NOTE: "@/lib/messaging/send" is deliberately NOT mocked — the real provider
 // pipeline runs, gated by MESSAGING_DRY_RUN and the stubbed global fetch.
 import { POST } from "./route";

@@ -148,8 +148,11 @@ export async function POST(request: Request): Promise<Response> {
   // Who is texting us? Reactivation linkage drives cadence side-effects; the
   // identity drives who the agent thinks it is talking to. Either may be absent.
   const target = await findTargetByAddress(from);
-  // A reply may instead correlate to a recall outbound (recall has its own outbox).
-  const recallTarget = target ? null : await findRecallTargetByAddress(from);
+  // A reply may ALSO correlate to a recall outbound (recall has its own outbox). Resolve
+  // it unconditionally, not only when reactivation misses: a patient enrolled in BOTH
+  // cadences must have BOTH paused when they reply, otherwise the recall sweep keeps
+  // chasing a patient who has already engaged.
+  const recallTarget = await findRecallTargetByAddress(from);
   let identity: PhoneIdentity | null = await identifyByPhone(from, { dentally });
 
   // When the directory and Dentally both miss but this number is in a cadence,
@@ -194,9 +197,11 @@ export async function POST(request: Request): Promise<Response> {
     // Capture is a side log; never let it affect the agent reply.
   }
 
-  // Cadence side-effects when this number is in a cadence. A reply pauses the
-  // active sequence so we stop chasing once the patient engages. The reply may
-  // correlate to either a reactivation or a recall cadence.
+  // Cadence side-effects when this number is in a cadence. A reply pauses the active
+  // sequence so we stop chasing once the patient engages. Crucially this pauses EVERY
+  // cadence the number is enrolled in, not just the first match: a patient in both
+  // reactivation and recall (and/or a coordinator follow-up) should have ALL of them
+  // stop the moment they reply, otherwise the un-paused one keeps chasing them.
   if (target) {
     const cadence = await getCadenceByTarget(target.targetId);
     await insertInboundTouch({
@@ -209,7 +214,8 @@ export async function POST(request: Request): Promise<Response> {
     if (cadence && cadence.status === "active") {
       await updateCadence(cadence.id, { status: "paused" });
     }
-  } else if (recallTarget) {
+  }
+  if (recallTarget) {
     const cadence = await getRecallCadenceByTarget(recallTarget.targetId);
     await insertRecallInboundTouch({
       targetId: recallTarget.targetId,
@@ -221,19 +227,18 @@ export async function POST(request: Request): Promise<Response> {
     if (cadence && cadence.status === "active") {
       await updateRecallCadence(cadence.id, { status: "paused" });
     }
-  } else {
-    // A reply may instead correlate to a treatment-coordinator follow-up. Log it
-    // as an inbound coordinator_touch so the coordinator sweep pauses the cadence
-    // (it skips any opportunity with an inbound touch) and stops chasing.
-    const coordTarget = await findCoordinatorTargetByAddress(from);
-    if (coordTarget) {
-      await insertCoordinatorInboundTouch({
-        opportunityId: coordTarget.opportunityId,
-        siteId: coordTarget.siteId,
-        channel,
-        body,
-      });
-    }
+  }
+  // A reply may also correlate to a treatment-coordinator follow-up. Log it as an
+  // inbound coordinator_touch so the coordinator sweep pauses that cadence too (it
+  // skips any opportunity with an inbound touch) and stops chasing.
+  const coordTarget = await findCoordinatorTargetByAddress(from);
+  if (coordTarget) {
+    await insertCoordinatorInboundTouch({
+      opportunityId: coordTarget.opportunityId,
+      siteId: coordTarget.siteId,
+      channel,
+      body,
+    });
   }
 
   // STOP keyword: suppress the right ref and do not reply.
