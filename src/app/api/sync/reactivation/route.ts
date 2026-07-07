@@ -196,6 +196,7 @@ async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: ReactivationConfig,
+  maxPatients: number = MAX_PATIENTS_PER_RUN,
 ): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; processed: number; remaining: number; mode: string; backfillPage: number | null }> {
   const now = new Date();
   // Backfill vs incremental. The cursor (backfill_page + backfill_done) lives on this
@@ -266,7 +267,7 @@ async function syncSite(
       if (!patient.id) continue;
       // Incremental honours the cap mid-page (rest of the page = remaining, retried
       // next run). Backfill takes the whole page and enforces the cap at the boundary.
-      if (!backfilling && processed >= MAX_PATIENTS_PER_RUN) {
+      if (!backfilling && processed >= maxPatients) {
         remaining += 1;
         continue;
       }
@@ -279,7 +280,7 @@ async function syncSite(
       reachedEnd = true;
       break;
     }
-    if (processed >= MAX_PATIENTS_PER_RUN) break; // stop at this page boundary; resume next run
+    if (processed >= maxPatients) break; // stop at this page boundary; resume next run
   }
 
   // 3. Fetch each pending patient's appointments + invoices in BOUNDED-CONCURRENCY
@@ -438,18 +439,36 @@ export async function POST(request: Request) {
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
     });
     const cfg = config();
-    // Rotate which site goes first each run (by hour), so a budget squeeze can never
-    // PERMANENTLY starve whichever site is listed last — worst-case staleness is
-    // bounded to N-1 cycles instead of forever.
     const sites = vitalitySiteIds();
-    const offset = sites.length > 0 ? new Date().getUTCHours() % sites.length : 0;
-    const ordered = [...sites.slice(offset), ...sites.slice(0, offset)];
+    // TEMPORARY N15-first acceleration for the client handoff: while N15's one-time
+    // historical backfill is unfinished, devote the whole run to N15 with a larger
+    // (still proven-safe) cap so it completes fastest. The other two sites pause and
+    // resume automatically the moment N15's backfill flips to done. This keeps the
+    // per-run Dentally load in line with the normal all-three run (one site's plan
+    // index + ~900 patients), so it adds no extra rate-limit pressure.
+    const FOCUS_SITE = "site-cc"; // N15 Vitality Dental
+    const FOCUS_CAP = 900;
+    const focusCursor = sites.includes(FOCUS_SITE)
+      ? await getBackfillCursor(FOCUS_SITE, RESOURCE)
+      : { page: null, done: true };
+    let ordered: string[];
+    let capFor: number;
+    if (!focusCursor.done) {
+      ordered = [FOCUS_SITE];
+      capFor = FOCUS_CAP;
+    } else {
+      // Normal steady state: rotate which site goes first each run (by hour), so a
+      // budget squeeze can never PERMANENTLY starve whichever site is listed last.
+      const offset = sites.length > 0 ? new Date().getUTCHours() % sites.length : 0;
+      ordered = [...sites.slice(offset), ...sites.slice(0, offset)];
+      capFor = MAX_PATIENTS_PER_RUN;
+    }
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
     for (const siteId of ordered) {
       try {
-        perSite.push(await syncSite(client, siteId, cfg));
+        perSite.push(await syncSite(client, siteId, cfg, capFor));
       } catch (e) {
         perSite.push({ siteId, error: String(e) });
       }
