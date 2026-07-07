@@ -38,11 +38,59 @@ function recallTone(recallIso: string | null, nowIso: string): Tone {
   return recallIso <= nowIso ? "warning" : "info";
 }
 
-export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[]; nowIso: string }) {
+export function PatientsTable({
+  patients,
+  nowIso,
+  clientSlug,
+}: {
+  patients: PatientRecord[];
+  nowIso: string;
+  clientSlug: string;
+}) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const searchParams = useSearchParams();
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Server-side search: the initial `patients` prop is only a bounded first slice, so
+  // to reach anyone beyond it we query Dentally directly (debounced). `serverResults`
+  // is null when no search is active (show the initial slice), [] for "no matches".
+  const [serverResults, setServerResults] = useState<PatientRecord[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  const searchActive = q.trim().length >= 2;
+
+  useEffect(() => {
+    const needle = q.trim();
+    if (needle.length < 2) {
+      setServerResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    // `alive` is flipped by cleanup: a superseding keystroke (or unmount) both clears
+    // the pending timeout AND, if a fetch already fired, discards its late response so
+    // stale results never overwrite the current query's.
+    let alive = true;
+    const t = setTimeout(() => {
+      fetch(`/api/dentally/patients?client=${encodeURIComponent(clientSlug)}&search=${encodeURIComponent(needle)}`, {
+        cache: "no-store",
+      })
+        .then((r) => r.json())
+        .then((d: { patients?: PatientRecord[] }) => {
+          if (alive) setServerResults(d.patients ?? []);
+        })
+        .catch(() => {
+          if (alive) setServerResults([]);
+        })
+        .finally(() => {
+          if (alive) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [q, clientSlug]);
 
   // Open a patient directly when arriving via the command palette (?patient=id).
   useEffect(() => {
@@ -50,15 +98,14 @@ export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[];
     if (pid && patients.some((p) => p.id === pid)) setSelectedId(pid);
   }, [searchParams, patients]);
 
-  const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return patients;
-    return patients.filter((p) =>
-      [p.name, p.email ?? "", p.phone ?? ""].some((v) => v.toLowerCase().includes(needle)),
-    );
-  }, [patients, q]);
+  // When a server search is active, show its results; otherwise the initial slice.
+  const rows = searchActive ? serverResults ?? [] : patients;
 
-  const selected = patients.find((p) => p.id === selectedId) ?? null;
+  // The selected patient may live in the initial slice OR the current search results.
+  const selected =
+    patients.find((p) => p.id === selectedId) ??
+    serverResults?.find((p) => p.id === selectedId) ??
+    null;
 
   const columns: Column<PatientRecord>[] = [
     { key: "name", header: "Patient", cell: (p) => <span className="font-semibold text-navy">{p.name}</span> },
@@ -112,8 +159,11 @@ export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[];
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search name, phone or email"
-              className="w-64 rounded-full border border-line-strong bg-card py-1.5 pl-9 pr-3 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+              className="w-64 rounded-full border border-line-strong bg-card py-1.5 pl-9 pr-9 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
             />
+            {searching ? (
+              <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted" />
+            ) : null}
           </div>
         }
         bodyClassName="p-0"
@@ -124,7 +174,13 @@ export function PatientsTable({ patients, nowIso }: { patients: PatientRecord[];
           getRowKey={(p) => p.id}
           onRowClick={(p) => setSelectedId(p.id)}
           className="px-2 py-1"
-          empty={<EmptyState title="No patients match" description="Try a different search." className="m-4" />}
+          empty={
+            <EmptyState
+              title={searching ? "Searching…" : "No patients match"}
+              description={searching ? "Looking across your patient database." : "Try a different search."}
+              className="m-4"
+            />
+          }
         />
       </SectionCard>
 

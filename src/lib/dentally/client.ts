@@ -29,7 +29,7 @@ function shiftDay(ymd: string | undefined, days: number): string | undefined {
 }
 
 export interface ListPlansArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
-export interface ListPatientsArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
+export interface ListPatientsArgs { siteId: string; updatedAfter?: string; query?: string; page?: number; perPage?: number; }
 export interface AvailabilityArgs { siteId: string; fromDate?: string; toDate?: string; duration?: number; }
 
 export class DentallyClient {
@@ -114,8 +114,10 @@ export class DentallyClient {
   }
 
   listPatients(a: ListPatientsArgs) {
+    // `query` is Dentally's name/contact search param. Existing callers omit it, so
+    // it stays undefined and the request is unchanged (get() drops undefined params).
     return this.get<{ patients: unknown[] }>("/v1/patients", {
-      site_id: a.siteId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
+      site_id: a.siteId, updated_after: a.updatedAfter, query: a.query, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
   getPatientAppointments(patientId: string, page = 1, perPage = 100, includeCancelled = false) {

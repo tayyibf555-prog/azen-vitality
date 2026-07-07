@@ -43,15 +43,22 @@ function serialise(p: MockPatient) {
   };
 }
 
-// GET /api/mock-dentally/v1/patients?site_id=&mobile_phone=&page=&per_page=
+// GET /api/mock-dentally/v1/patients?site_id=&mobile_phone=&query=&page=&per_page=
 export async function GET(request: Request): Promise<Response> {
   const unauthorized = unauthorizedIfMissingBearer(request);
   if (unauthorized) return unauthorized;
   const url = new URL(request.url);
   const siteId = url.searchParams.get("site_id");
   const phone = url.searchParams.get("mobile_phone");
+  const query = url.searchParams.get("query");
   let all = siteId ? patientsForSite(siteId) : MOCK_PATIENTS;
   if (phone) all = all.filter((p) => phoneMatches(p.mobile_phone, phone));
+  if (query) {
+    // Mirror Dentally's `query=` name/contact search: case-insensitive substring on
+    // the full name (first + last) so the patients-table search behaves in dev/tests.
+    const needle = query.trim().toLowerCase();
+    all = all.filter((p) => `${p.first_name} ${p.last_name}`.toLowerCase().includes(needle));
+  }
   return Response.json({ patients: all.map(serialise) });
 }
 

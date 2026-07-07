@@ -142,9 +142,9 @@ const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad ups
 // (still []). The real per-plan balances arrive with the invoices integration.
 const OUTSTANDING_MAX_PAGES = 25;
 
-async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[]> {
+async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: number = MAX_PAGES): Promise<T[]> {
   const out: T[] = [];
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
+  for (let page = 1; page <= maxPages; page += 1) {
     const rows = await fetchPage(page);
     out.push(...rows);
     if (rows.length < PER_PAGE) break; // short page => last page
@@ -182,17 +182,22 @@ async function cachedRead<T>(key: string, fn: () => Promise<T>, ttlMs = READ_CAC
 
 /** All patients across the given sites. The 3 sites are paged CONCURRENTLY (peak
  *  concurrency = site count), so wall-clock is the slowest single site, not the sum.
- *  /v1/patients DOES honour site_id server-side, so this stays a per-site scan. */
-export function listPatients(siteIds: string[]): Promise<PatientRecord[]> {
-  return cachedRead(`patients:${[...siteIds].sort().join("|")}`, () => _listPatientsUncached(siteIds));
+ *  /v1/patients DOES honour site_id server-side, so this stays a per-site scan.
+ *  `opts.maxPages` bounds the per-site page scan (e.g. the Patients page shows a fast
+ *  first ~300); callers that omit it keep the full scan (name resolution, sync, etc.). */
+export function listPatients(siteIds: string[], opts?: { maxPages?: number }): Promise<PatientRecord[]> {
+  const key = `patients:${[...siteIds].sort().join("|")}:${opts?.maxPages ?? "all"}`;
+  return cachedRead(key, () => _listPatientsUncached(siteIds, opts?.maxPages));
 }
-async function _listPatientsUncached(siteIds: string[]): Promise<PatientRecord[]> {
+async function _listPatientsUncached(siteIds: string[], maxPages?: number): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
       try {
-        const rows = await pageAll((page) =>
-          client.listPatients({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.patients ?? []),
+        const rows = await pageAll(
+          (page) =>
+            client.listPatients({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.patients ?? []),
+          maxPages,
         );
         return rows.map((p) => toPatient(p as Record<string, unknown>));
       } catch (err) {
@@ -200,6 +205,44 @@ async function _listPatientsUncached(siteIds: string[]): Promise<PatientRecord[]
         // here is otherwise indistinguishable from a genuinely empty site and silently
         // drops the whole site's data.
         console.error(`[dentally] listPatients failed for site ${siteId}; skipping this site`, err);
+        return [] as PatientRecord[];
+      }
+    }),
+  );
+  return perSite.flat().sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// A server-side search fans a `query=` string out to Dentally per site (name/contact),
+// so we never page the whole ~8k patient book to find one person. Bounded to 3 pages
+// per site (300 matches/site is far beyond any usable result set) and cached briefly,
+// keyed on the query, so a debounced keystroke stream doesn't hammer Dentally.
+const SEARCH_MAX_PAGES = 3;
+
+/** Server-side patient search across the given sites via Dentally's `query=` param
+ *  (name/contact). Returns [] for a trimmed query shorter than 2 chars. Sites are
+ *  searched CONCURRENTLY with the same per-site resilience as listPatients (a site
+ *  that errors yields [] and is logged), results flattened and sorted by name. */
+export function searchPatients(siteIds: string[], query: string): Promise<PatientRecord[]> {
+  const q = query.trim();
+  if (q.length < 2) return Promise.resolve([]);
+  const key = `patsearch:${[...siteIds].sort().join("|")}:${q}`;
+  return cachedRead(key, () => _searchPatientsUncached(siteIds, q), 30_000);
+}
+async function _searchPatientsUncached(siteIds: string[], query: string): Promise<PatientRecord[]> {
+  const client = dentallyFromEnv();
+  const perSite = await Promise.all(
+    siteIds.map(async (siteId) => {
+      try {
+        const rows = await pageAll(
+          (page) =>
+            client
+              .listPatients({ siteId: dentallySiteId(siteId), query, page, perPage: PER_PAGE })
+              .then((res) => res.patients ?? []),
+          SEARCH_MAX_PAGES,
+        );
+        return rows.map((p) => toPatient(p as Record<string, unknown>));
+      } catch (err) {
+        console.error(`[dentally] searchPatients failed for site ${siteId}; skipping this site`, err);
         return [] as PatientRecord[];
       }
     }),
