@@ -179,6 +179,75 @@ export const ROI_SUMMARY: RoiSummary = {
   trend: TREND,
 };
 
+// --- Proportional scaling (per-site scoping) -----------------------------------
+
+// Scale the practice-wide ROI summary down to a selected site's share of the
+// client total. `share` is the selected site(s)' fraction of client revenue
+// (0..1); when it is 1 (all sites selected) the output equals the input within
+// rounding, so the "All sites" view is unchanged. Money is rounded to whole
+// pounds and counts to whole ints; ratios (return on spend, cost per new patient,
+// per-channel cpl/cpa/roi) are recomputed from the scaled totals and guarded
+// against divide-by-zero exactly as the base ROI_SUMMARY is.
+//
+// PURE: no React, no network, no mutation of the input.
+export function scaleRoiSummary(summary: RoiSummary, share: number): RoiSummary {
+  const scaleMoney = (value: number): number => Math.round(value * share);
+  const scaleCount = (value: number): number => Math.round(value * share);
+
+  const channels: Channel[] = summary.channels.map((c) => {
+    const spendGbp = scaleMoney(c.spendGbp);
+    const leads = scaleCount(c.leads);
+    const newPatients = scaleCount(c.newPatients);
+    const revenueGbp = scaleMoney(c.revenueGbp);
+    return {
+      id: c.id,
+      name: c.name,
+      spendGbp,
+      leads,
+      newPatients,
+      revenueGbp,
+      cplGbp: spendGbp > 0 && leads > 0 ? round2(spendGbp / leads) : 0,
+      cpaGbp: spendGbp > 0 && newPatients > 0 ? round2(spendGbp / newPatients) : 0,
+      roiX: spendGbp > 0 ? round2(revenueGbp / spendGbp) : null,
+    };
+  });
+
+  const funnel: FunnelStage[] = summary.funnel.map((stage) => ({
+    key: stage.key,
+    label: stage.label,
+    count: scaleCount(stage.count),
+    // Conversion fractions are scale-invariant, so they carry over unchanged.
+    conversionFromPrev: stage.conversionFromPrev,
+  }));
+
+  const trend: TrendPoint[] = summary.trend.map((point) => ({
+    month: point.month,
+    spendGbp: scaleMoney(point.spendGbp),
+    revenueGbp: scaleMoney(point.revenueGbp),
+    newPatients: scaleCount(point.newPatients),
+  }));
+
+  const spendGbp = scaleMoney(summary.spendGbp);
+  const leads = scaleCount(summary.leads);
+  const newPatients = scaleCount(summary.newPatients);
+  const bookings = scaleCount(summary.bookings);
+  const revenueGbp = scaleMoney(summary.revenueGbp);
+
+  return {
+    periodDays: summary.periodDays,
+    spendGbp,
+    leads,
+    newPatients,
+    bookings,
+    revenueGbp,
+    costPerAcquisitionGbp: newPatients > 0 ? round2(spendGbp / newPatients) : 0,
+    returnX: spendGbp > 0 ? round2(revenueGbp / spendGbp) : 0,
+    funnel,
+    channels,
+    trend,
+  };
+}
+
 // --- Pure helper selectors (minimal) -------------------------------------------
 
 // The channel with the highest return on spend. Zero-spend channels (roiX = null)

@@ -12,7 +12,7 @@ import { DiaryRail } from "@/components/client/home/diary-rail";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
-import { getClientMetrics } from "@/lib/mock";
+import { getSiteMetrics } from "@/lib/mock";
 import { getSessionUser } from "@/lib/auth/session";
 import { OWNER_ROLES } from "@/lib/nav";
 import { generateBrief } from "@/lib/daily-brief/generate";
@@ -96,7 +96,9 @@ export default async function ClientHomePage({
   const overnightLine = brief.sections.find((s) => s.key === "overnight")?.items[0];
   const moneyLine = brief.sections.find((s) => s.key === "money")?.items[0];
   const headline = brief.headline[0] ?? null;
-  const recovered = getClientMetrics(client.id)?.recoveredRevenue ?? 0;
+  // Scope the recovered-revenue figure to the selected site(s) (default N15) so it
+  // matches the rest of the dashboard rather than always summing every practice.
+  const recovered = getSiteMetrics(siteIds).reduce((sum, s) => sum + s.recoveredRevenue, 0);
   const briefHref = `/c/${clientSlug}/daily-brief`;
 
   return (

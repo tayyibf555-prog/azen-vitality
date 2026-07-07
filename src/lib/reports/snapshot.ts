@@ -9,8 +9,8 @@
 // review reads sensibly and differs from the monthly one. Compliance position is
 // a point-in-time picture and is not scaled.
 
-import { ROI_SUMMARY, topChannelByRoi } from "@/lib/roi/mock";
-import type { Channel } from "@/lib/roi/types";
+import { ROI_SUMMARY, scaleRoiSummary, topChannelByRoi } from "@/lib/roi/mock";
+import type { Channel, RoiSummary } from "@/lib/roi/types";
 import { READINESS } from "@/lib/compliance/mock";
 
 export type ReportPeriod = "week" | "month";
@@ -66,8 +66,8 @@ function scaleToWindow(value: number, period: ReportPeriod): number {
 
 // The channel with the LOWEST return on spend among those that actually spend
 // (zero-spend channels carry a null ROI and are not a fair "weakest" pick).
-function weakestSpendingChannel(): Channel | null {
-  const withRoi = ROI_SUMMARY.channels.filter(
+function weakestSpendingChannel(summary: RoiSummary): Channel | null {
+  const withRoi = summary.channels.filter(
     (c): c is Channel & { roiX: number } => c.roiX !== null,
   );
   if (withRoi.length === 0) return null;
@@ -76,8 +76,8 @@ function weakestSpendingChannel(): Channel | null {
 
 // Direction of travel for new patients over the trend (compare the last point to
 // the one before it). Only meaningful for the monthly review.
-function trendDirection(): ReportSnapshot["trendDirection"] {
-  const t = ROI_SUMMARY.trend;
+function trendDirection(summary: RoiSummary): ReportSnapshot["trendDirection"] {
+  const t = summary.trend;
   if (t.length < 2) return "steady";
   const last = t[t.length - 1].newPatients;
   const prev = t[t.length - 2].newPatients;
@@ -90,9 +90,14 @@ function trendDirection(): ReportSnapshot["trendDirection"] {
  * Build a compact snapshot of the practice's position for the chosen period.
  * Deterministic and pure: same inputs in, same object out, ready to feed the
  * report prompt or render above the AI output.
+ *
+ * `share` scopes the ROI-derived figures to the selected site(s): the site's
+ * fraction of client recovered revenue (0..1). It defaults to 1 (all sites), so
+ * existing callers are unchanged. Compliance (READINESS) figures are point-in-time
+ * and are NOT scaled.
  */
-export function buildSnapshot(period: ReportPeriod): ReportSnapshot {
-  const s = ROI_SUMMARY;
+export function buildSnapshot(period: ReportPeriod, share = 1): ReportSnapshot {
+  const s = scaleRoiSummary(ROI_SUMMARY, share);
 
   const spendGbp = roundMoney(scaleToWindow(s.spendGbp, period));
   const leads = roundInt(scaleToWindow(s.leads, period));
@@ -103,8 +108,8 @@ export function buildSnapshot(period: ReportPeriod): ReportSnapshot {
   const returnX = round1(s.returnX);
   const costPerNewPatientGbp = roundMoney(s.costPerAcquisitionGbp);
 
-  const top = topChannelByRoi();
-  const weakest = weakestSpendingChannel();
+  const top = topChannelByRoi(s);
+  const weakest = weakestSpendingChannel(s);
 
   // Conversion headlines straight off the funnel (scale-invariant fractions).
   const first = s.funnel[0];
@@ -145,6 +150,6 @@ export function buildSnapshot(period: ReportPeriod): ReportSnapshot {
     complianceScore: READINESS.overallScore,
     auditsOverdue: READINESS.auditsOverdue,
     lifecycleRevenueGbp,
-    trendDirection: period === "month" ? trendDirection() : null,
+    trendDirection: period === "month" ? trendDirection(s) : null,
   };
 }

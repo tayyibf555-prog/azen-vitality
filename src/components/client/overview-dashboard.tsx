@@ -225,6 +225,13 @@ export function OverviewDashboard({
     ? Math.round(siteMetrics.reduce((a, s) => a + s.costPerBooking, 0) / siteMetrics.length)
     : 0;
 
+  // The weekly revenue trend is only held practice-wide; when a single site is
+  // selected, scale it by that site's share of recovered revenue so the chart
+  // matches the scoped figures rather than showing the whole group.
+  const clientRevenue = metrics?.recoveredRevenue ?? 0;
+  const revenueShare = allSites || clientRevenue <= 0 ? 1 : totalRevenue / clientRevenue;
+  const trend = (metrics?.trend ?? []).map((t) => ({ ...t, value: Math.round(t.value * revenueShare) }));
+
   const leads = [...(liveLeads ?? LEADS)].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
@@ -288,8 +295,8 @@ export function OverviewDashboard({
           description={allSites ? "Recovered revenue per week across all sites" : "Recovered revenue per week"}
           className="lg:col-span-2"
         >
-          {metrics ? (
-            <BarChart data={metrics.trend} format={(v) => gbp(v)} height={200} />
+          {trend.length > 0 ? (
+            <BarChart data={trend} format={(v) => gbp(v)} height={200} />
           ) : (
             <p className="text-sm text-muted">No trend data yet.</p>
           )}

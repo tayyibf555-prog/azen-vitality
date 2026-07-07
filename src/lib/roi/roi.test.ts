@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ROI_SUMMARY, CHANNELS, topChannelByRoi, topChannelByRevenue } from "./mock";
+import { ROI_SUMMARY, CHANNELS, scaleRoiSummary, topChannelByRoi, topChannelByRevenue } from "./mock";
 import { ACCOUNT_SUMMARY } from "@/lib/meta-ads/mock";
 
 function sum(pick: (n: number) => number, values: number[]): number {
@@ -114,6 +114,67 @@ describe("trend ends on the current period and grows", () => {
         ROI_SUMMARY.trend[i - 1].newPatients,
       );
     }
+  });
+});
+
+describe("scaleRoiSummary scopes the summary to a site's share", () => {
+  it("share === 1 leaves every figure unchanged", () => {
+    const scaled = scaleRoiSummary(ROI_SUMMARY, 1);
+    expect(scaled.spendGbp).toBe(ROI_SUMMARY.spendGbp);
+    expect(scaled.leads).toBe(ROI_SUMMARY.leads);
+    expect(scaled.newPatients).toBe(ROI_SUMMARY.newPatients);
+    expect(scaled.bookings).toBe(ROI_SUMMARY.bookings);
+    expect(scaled.revenueGbp).toBe(ROI_SUMMARY.revenueGbp);
+    expect(scaled.costPerAcquisitionGbp).toBeCloseTo(ROI_SUMMARY.costPerAcquisitionGbp, 2);
+    expect(scaled.returnX).toBeCloseTo(ROI_SUMMARY.returnX, 2);
+    expect(scaled.funnel).toEqual(ROI_SUMMARY.funnel);
+    expect(scaled.channels).toEqual(ROI_SUMMARY.channels);
+    expect(scaled.trend).toEqual(ROI_SUMMARY.trend);
+  });
+
+  it("scales totals, channels and trend by the share and rounds sensibly", () => {
+    const share = 0.5;
+    const scaled = scaleRoiSummary(ROI_SUMMARY, share);
+    expect(scaled.spendGbp).toBe(Math.round(ROI_SUMMARY.spendGbp * share));
+    expect(scaled.revenueGbp).toBe(Math.round(ROI_SUMMARY.revenueGbp * share));
+    expect(scaled.newPatients).toBe(Math.round(ROI_SUMMARY.newPatients * share));
+    // Every figure is a whole number after scaling.
+    for (const c of scaled.channels) {
+      expect(Number.isInteger(c.spendGbp)).toBe(true);
+      expect(Number.isInteger(c.leads)).toBe(true);
+      expect(Number.isInteger(c.newPatients)).toBe(true);
+      expect(Number.isInteger(c.revenueGbp)).toBe(true);
+    }
+    for (const p of scaled.trend) {
+      expect(Number.isInteger(p.spendGbp)).toBe(true);
+      expect(Number.isInteger(p.newPatients)).toBe(true);
+    }
+  });
+
+  it("recomputes ratios from the scaled totals and never divides by zero", () => {
+    const scaled = scaleRoiSummary(ROI_SUMMARY, 0.3);
+    if (scaled.newPatients > 0) {
+      expect(scaled.costPerAcquisitionGbp).toBeCloseTo(scaled.spendGbp / scaled.newPatients, 2);
+    }
+    if (scaled.spendGbp > 0) {
+      expect(scaled.returnX).toBeCloseTo(scaled.revenueGbp / scaled.spendGbp, 2);
+    }
+    for (const c of scaled.channels) {
+      if (c.spendGbp === 0) {
+        expect(c.cplGbp).toBe(0);
+        expect(c.cpaGbp).toBe(0);
+        expect(c.roiX).toBeNull();
+      } else {
+        expect(c.roiX).not.toBeNull();
+        expect(Number.isFinite(c.roiX as number)).toBe(true);
+      }
+    }
+  });
+
+  it("does not mutate the input summary", () => {
+    const before = ROI_SUMMARY.spendGbp;
+    scaleRoiSummary(ROI_SUMMARY, 0.4);
+    expect(ROI_SUMMARY.spendGbp).toBe(before);
   });
 });
 

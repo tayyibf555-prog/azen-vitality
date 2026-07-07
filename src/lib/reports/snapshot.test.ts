@@ -49,4 +49,22 @@ describe("buildSnapshot is deterministic and consistent with the sources", () =>
       expect(m.topChannel.roiX).toBeGreaterThanOrEqual(m.weakestChannel.roiX);
     }
   });
+
+  it("defaults to the full practice (share 1) and matches an explicit share of 1", () => {
+    expect(buildSnapshot("month")).toEqual(buildSnapshot("month", 1));
+    expect(buildSnapshot("week")).toEqual(buildSnapshot("week", 1));
+  });
+
+  it("scales the acquisition figures by the share but not compliance", () => {
+    const full = buildSnapshot("month");
+    const half = buildSnapshot("month", 0.5);
+    expect(half.spendGbp).toBeLessThan(full.spendGbp);
+    expect(half.newPatients).toBeLessThan(full.newPatients);
+    expect(half.revenueGbp).toBeLessThan(full.revenueGbp);
+    // Compliance is point-in-time and must NOT be scaled.
+    expect(half.complianceScore).toBe(full.complianceScore);
+    expect(half.auditsOverdue).toBe(full.auditsOverdue);
+    // Return on spend is scale-invariant.
+    expect(half.returnX).toBe(full.returnX);
+  });
 });

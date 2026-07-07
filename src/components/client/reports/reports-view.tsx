@@ -1,6 +1,7 @@
 import { Coins, UserPlus, TrendingUp, Gauge } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
-import { getClient } from "@/lib/mock";
+import { getClient, getSites, getSiteMetrics } from "@/lib/mock";
+import { getViewSiteIds } from "@/lib/site-view";
 import { money, count } from "@/components/client/roi/format";
 import { buildSnapshot } from "@/lib/reports/snapshot";
 import { ReportsWorkspace } from "./reports-workspace";
@@ -9,14 +10,28 @@ import { ReportsWorkspace } from "./reports-workspace";
 // practice owner, pulling together acquisition, conversion, lifecycle and
 // compliance with concrete recommendations. The headline numbers come from the
 // monthly snapshot so there is always something on screen; the narrative review
-// is generated on demand. Data is mock until the live sources connect.
-export function ReportsView({ clientSlug }: { clientSlug: string }) {
+// is generated on demand. The acquisition figures are scoped to the selected
+// site(s) by proportional scaling (the site's share of client recovered revenue);
+// compliance readiness is point-in-time and is not scaled. Data is mock until the
+// live sources connect.
+export async function ReportsView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
   if (!client) {
     return <PageHeader title="Reports" description="This client could not be found." />;
   }
 
-  const s = buildSnapshot("month");
+  // The selected site(s)' share of the client's total recovered revenue. When
+  // all sites are chosen this is 1 and the figures are unchanged.
+  const siteIds = await getViewSiteIds(client.id);
+  const allSiteIds = getSites(client.id).map((site) => site.id);
+  const scopedRevenue = getSiteMetrics(siteIds).reduce((total, m) => total + m.recoveredRevenue, 0);
+  const clientTotalRevenue = getSiteMetrics(allSiteIds).reduce(
+    (total, m) => total + m.recoveredRevenue,
+    0,
+  );
+  const share = clientTotalRevenue > 0 ? scopedRevenue / clientTotalRevenue : 1;
+
+  const s = buildSnapshot("month", share);
 
   return (
     <>
