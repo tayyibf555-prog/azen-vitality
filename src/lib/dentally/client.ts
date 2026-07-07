@@ -28,7 +28,7 @@ function shiftDay(ymd: string | undefined, days: number): string | undefined {
   return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-export interface ListPlansArgs { siteId: string; updatedAfter?: string; page?: number; perPage?: number; }
+export interface ListPlansArgs { siteId: string; patientId?: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface ListPatientsArgs { siteId: string; updatedAfter?: string; query?: string; page?: number; perPage?: number; }
 export interface AvailabilityArgs { siteId: string; fromDate?: string; toDate?: string; duration?: number; }
 
@@ -74,7 +74,7 @@ export class DentallyClient {
 
   listTreatmentPlans(a: ListPlansArgs) {
     return this.get<{ treatment_plans: unknown[] }>("/v1/treatment_plans", {
-      site_id: a.siteId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
+      site_id: a.siteId, patient_id: a.patientId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
   getPatient(id: string) { return this.get<{ patient: unknown }>(`/v1/patients/${id}`); }

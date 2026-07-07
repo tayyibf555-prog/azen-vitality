@@ -350,8 +350,12 @@ export interface PatientDetail {
   lifetimeSpend: number;
 }
 
-/** Full record for one patient: appointment history, treatment plans, notes, lifetime spend. */
-export async function getPatientDetail(patientId: string, siteId: string): Promise<PatientDetail> {
+/** Full record for one patient: appointment history, treatment plans, notes, lifetime spend.
+ *  Cached (short TTL) so re-opening the same record is instant. */
+export function getPatientDetail(patientId: string, siteId: string): Promise<PatientDetail> {
+  return cachedRead(`patientdetail:${siteId}:${patientId}`, () => _getPatientDetailUncached(patientId, siteId), 30_000);
+}
+async function _getPatientDetailUncached(patientId: string, siteId: string): Promise<PatientDetail> {
   const client = dentallyFromEnv();
 
   const apptsP = client
@@ -359,8 +363,17 @@ export async function getPatientDetail(patientId: string, siteId: string): Promi
     .then((res) => (res.appointments ?? []).map((a) => toAppointment(a as Record<string, unknown>, siteId)))
     .catch(() => [] as AppointmentRecord[]);
 
-  const plansP = pageAll((page) =>
-    client.listTreatmentPlans({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.treatment_plans ?? []),
+  // Query THIS patient's plans directly (patient_id) instead of paging the whole
+  // group's treatment_plans (up to 100 calls) to filter one patient out — that was
+  // ~100 Dentally calls on every record open. A patient has few plans, so a small
+  // bound is plenty; the client-side filter stays as a safety net in case Dentally
+  // ignores patient_id the way it ignores site_id.
+  const plansP = pageAll(
+    (page) =>
+      client
+        .listTreatmentPlans({ siteId: dentallySiteId(siteId), patientId, page, perPage: PER_PAGE })
+        .then((res) => res.treatment_plans ?? []),
+    5,
   )
     .then((plans) =>
       plans
