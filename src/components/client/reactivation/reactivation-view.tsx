@@ -1,7 +1,8 @@
 import { RotateCcw, PoundSterling, Users, CheckCircle2, Send } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/reactivation/worklist";
-import { getClient, getSites, NOW } from "@/lib/mock/clients";
+import { getClient, NOW } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listTargets, listCadences } from "@/lib/reactivation/repository";
 import type { ReactivationCadence, ReactivationTarget } from "@/lib/reactivation/types";
 import { gbp } from "@/lib/utils";
@@ -28,7 +29,7 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Reactivation" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const { targets, cadences } = await loadData(siteIds);
 
   const dormant = targets.filter((t) => t.status === "dormant" || t.status === "in_cadence");

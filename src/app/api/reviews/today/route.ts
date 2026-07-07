@@ -1,4 +1,5 @@
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listAppointments } from "@/lib/dentally/read";
@@ -38,7 +39,7 @@ export async function GET(request: Request): Promise<Response> {
   if (denied) return denied;
 
   // Limit to the sites this user may act on (when enforced); otherwise all client sites.
-  const allSiteIds = getSites(client.id).map((s) => s.id);
+  const allSiteIds = await getViewSiteIds(client.id);
   const siteIds = auth ? allSiteIds.filter((id) => auth.siteIds.includes(id)) : allSiteIds;
 
   const today = londonDayKey(new Date());

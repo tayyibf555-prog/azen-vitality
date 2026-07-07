@@ -1,6 +1,7 @@
 import { Bell, ShieldAlert, ShieldCheck, CalendarX, UserPlus, Sparkles } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { buildNotifications } from "@/lib/notifications/build";
 import { countByType } from "@/lib/notifications/logic";
 import type { NotificationItem } from "@/lib/notifications/types";
@@ -17,7 +18,7 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
     return <PageHeader title="Notifications" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
 
   let items: NotificationItem[] = [];
   try {

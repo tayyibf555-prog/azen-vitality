@@ -1,4 +1,5 @@
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listLeads } from "@/lib/speed-to-lead/repository";
@@ -21,7 +22,7 @@ export async function GET(request: Request): Promise<Response> {
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const rows = await listLeads({ siteIds });
 
   const byStage: Record<LeadStage, number> = {

@@ -1,4 +1,5 @@
-import { getClient, getSites } from "@/lib/mock";
+import { getClient } from "@/lib/mock";
+import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import { listThreads } from "@/lib/inbox/repository";
 
@@ -20,7 +21,7 @@ export async function GET(request: Request): Promise<Response> {
 
   // Site scope is derived from the verified user when enforced, never trusted
   // from input; falls back to the client's sites in unenforced (local) mode.
-  const clientSiteIds = getSites(client.id).map((s) => s.id);
+  const clientSiteIds = await getViewSiteIds(client.id);
   const siteIds = auth ? clientSiteIds.filter((id) => auth.siteIds.includes(id)) : clientSiteIds;
 
   try {

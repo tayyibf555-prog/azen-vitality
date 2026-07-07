@@ -2,26 +2,35 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Building2, Check, ChevronDown } from "lucide-react";
 import { getClient, getSites } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ALL_SITES, SITE_VIEW_COOKIE } from "@/lib/site-view-shared";
 
-const ALL_SITES = "__all__";
-
-export function ClientTopbar() {
+export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { selected?: string }) {
   const params = useParams<{ client: string }>();
+  const router = useRouter();
   const { user } = useAuth();
   const client = getClient(params.client);
   const sites = client ? getSites(client.id) : [];
 
-  const [selected, setSelected] = useState<string>(ALL_SITES);
+  const [selected, setSelected] = useState<string>(initialSelected);
   const [open, setOpen] = useState(false);
 
   const selectedLabel =
     selected === ALL_SITES ? "All sites" : sites.find((s) => s.id === selected)?.name ?? "All sites";
+
+  // Persist the choice (a year) and re-render the server components so the whole
+  // dashboard re-scopes to the chosen site. The cookie rides the refresh request.
+  function choose(value: string) {
+    setSelected(value);
+    setOpen(false);
+    document.cookie = `${SITE_VIEW_COOKIE}=${value}; path=/; max-age=31536000; samesite=lax`;
+    router.refresh();
+  }
 
   return (
     <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-line bg-card px-8">
@@ -39,26 +48,20 @@ export function ClientTopbar() {
         </button>
         {open ? (
           <div className="absolute left-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-lg border border-line bg-card py-1 shadow-lg">
-            <SiteOption
-              label="All sites"
-              active={selected === ALL_SITES}
-              onSelect={() => {
-                setSelected(ALL_SITES);
-                setOpen(false);
-              }}
-            />
-            {sites.length ? <div className="my-1 border-t border-line" /> : null}
             {sites.map((s) => (
               <SiteOption
                 key={s.id}
                 label={s.name}
                 active={selected === s.id}
-                onSelect={() => {
-                  setSelected(s.id);
-                  setOpen(false);
-                }}
+                onSelect={() => choose(s.id)}
               />
             ))}
+            {sites.length ? <div className="my-1 border-t border-line" /> : null}
+            <SiteOption
+              label="All sites"
+              active={selected === ALL_SITES}
+              onSelect={() => choose(ALL_SITES)}
+            />
           </div>
         ) : null}
       </div>

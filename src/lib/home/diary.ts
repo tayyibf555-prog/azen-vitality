@@ -42,9 +42,15 @@ function londonTime(iso: string): string {
   });
 }
 
-export async function getTodayDiary(clientId: string, now: Date): Promise<TodayDiary> {
+export async function getTodayDiary(
+  clientId: string,
+  now: Date,
+  scopeSiteIds?: string[],
+): Promise<TodayDiary> {
   const sites = getSites(clientId);
-  const siteIds = sites.map((s) => s.id);
+  // Scope the diary to the caller's selected site(s) (default view = N15); keep
+  // the full site-name map so labels resolve whatever the scope.
+  const siteIds = scopeSiteIds ?? sites.map((s) => s.id);
   const siteName = new Map(sites.map((s) => [s.id, s.name]));
   const today = londonDayKey(now);
 

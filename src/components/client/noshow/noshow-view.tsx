@@ -1,7 +1,8 @@
 import { CalendarClock, CheckCircle2, AlertTriangle, Users } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { NoshowTabs } from "./noshow-tabs";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listTargets, listWaitlist } from "@/lib/noshow/repository";
 import type { NoshowTarget, WaitlistEntry } from "@/lib/noshow/types";
 
@@ -26,7 +27,7 @@ export async function NoshowView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="No-show defence" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const { targets, waitlist } = await loadData(siteIds);
   // No-show is forward-looking: anchor to the real present, not the mock history NOW.
   const nowIso = new Date().toISOString();

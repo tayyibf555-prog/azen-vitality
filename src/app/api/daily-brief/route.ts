@@ -1,4 +1,5 @@
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import { generateBrief } from "@/lib/daily-brief/generate";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -30,7 +31,7 @@ export async function GET(request: Request): Promise<Response> {
   // Role comes from the authed user when enforced; default to client_owner so
   // the dashboard headline still renders all priorities in the pilot.
   const role: Role = auth?.role ?? "client_owner";
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
 
   const ctx: BriefContext = { clientId: client.id, siteIds, role, now: new Date() };
   const brief = await generateBrief(ctx);

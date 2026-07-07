@@ -1,4 +1,5 @@
-import { getClient, getSites } from "@/lib/mock";
+import { getClient } from "@/lib/mock";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listPatients } from "@/lib/dentally/read";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 
@@ -14,7 +15,7 @@ export async function GET(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   try {
     const patients = await listPatients(siteIds);
     return Response.json({

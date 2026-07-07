@@ -10,7 +10,8 @@ import { PageHeader, StatCard } from "@/components/primitives";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import { DiaryRail } from "@/components/client/home/diary-rail";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { getClientMetrics } from "@/lib/mock";
 import { getSessionUser } from "@/lib/auth/session";
 import { OWNER_ROLES } from "@/lib/nav";
@@ -58,7 +59,7 @@ export default async function ClientHomePage({
   }
 
   const now = new Date();
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
 
   // Both data loads are best-effort: a failed read renders an empty section, never
   // a broken landing page.
@@ -82,7 +83,7 @@ export default async function ClientHomePage({
         headline: [],
       }),
     ),
-    getTodayDiary(client.id, now).catch(() => ({
+    getTodayDiary(client.id, now, siteIds).catch(() => ({
       slots: [],
       next: null,
       fillPercent: null,

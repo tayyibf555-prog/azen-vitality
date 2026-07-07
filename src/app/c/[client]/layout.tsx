@@ -3,6 +3,7 @@ import { ClientTopbar } from "@/components/client/client-topbar";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
 import { guardPage } from "@/lib/auth/page-guard";
 import { getClient } from "@/lib/mock/clients";
+import { getViewSiteSelection } from "@/lib/site-view";
 import { getDisabledSlugs } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
@@ -24,11 +25,14 @@ export default async function ClientLayout({
   // owner-only systems API. Fail-open: getDisabledSlugs never throws.
   const clientRecord = getClient(client);
   const disabledSlugs = clientRecord ? [...(await getDisabledSlugs(clientRecord.id))] : [];
+  // The switcher opens on the current selection (default N15) so its label matches
+  // the site the dashboard is actually showing.
+  const selectedSite = clientRecord ? await getViewSiteSelection(clientRecord.id) : undefined;
   return (
     <div className="flex min-h-screen bg-cream">
       <ClientSidebar disabledSlugs={disabledSlugs} />
       <div className="flex min-h-screen flex-1 flex-col">
-        <ClientTopbar />
+        <ClientTopbar selected={selectedSite} />
         <main className="flex-1">
           <div className="mx-auto max-w-[1400px] space-y-6 px-8 py-7">{children}</div>
         </main>

@@ -1,7 +1,8 @@
 import { Zap, Inbox, Send, CheckCircle2, Timer } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "./worklist";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listLeads } from "@/lib/speed-to-lead/repository";
 import { firstResponseSeconds, toDashboardLead } from "@/lib/speed-to-lead/types";
 import type { SpeedToLeadLead } from "@/lib/speed-to-lead/types";
@@ -35,7 +36,7 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Speed-to-lead" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const leads = await loadLeads(siteIds);
 
   const newLeads = leads.filter((l) => l.stage === "new");

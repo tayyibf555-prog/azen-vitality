@@ -1,4 +1,5 @@
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { generateTasks } from "@/lib/task-queue/generate";
@@ -25,7 +26,7 @@ export async function GET(request: Request): Promise<Response> {
   const tasks = await generateTasks({
     clientId: client.id,
     clientSlug,
-    siteIds: getSites(client.id).map((s) => s.id),
+    siteIds: await getViewSiteIds(client.id),
     nowIso: new Date().toISOString(),
   });
 

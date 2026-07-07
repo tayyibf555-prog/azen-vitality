@@ -1,7 +1,8 @@
 import { Sparkles, Flame, Gauge, Leaf } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { SmileAssessmentWorkspace } from "./smile-assessment-workspace";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listResponses } from "@/lib/smile-assessment/repository";
 import type { AssessmentResponse } from "@/lib/smile-assessment/types";
 
@@ -19,7 +20,7 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
     return <PageHeader title="Smile Assessment" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const responses = await loadResponses(siteIds);
   const nowIso = new Date().toISOString();
 

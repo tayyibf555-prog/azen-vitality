@@ -1,7 +1,8 @@
 import { HeartPulse, PoundSterling, ListChecks, CheckCircle2, Clock } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/coordinator/worklist";
-import { getClient, getSites, NOW } from "@/lib/mock/clients";
+import { getClient, NOW } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
 import { gbp } from "@/lib/utils";
@@ -34,7 +35,7 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
     );
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const opportunities = await loadOpportunities(siteIds);
 
   const open = opportunities.filter((o) => o.status !== "completed");

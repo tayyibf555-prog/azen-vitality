@@ -71,14 +71,16 @@ export function CalendarBoard({
   appointments,
   sites,
   nowIso,
+  initialSiteFilter = "all",
 }: {
   appointments: AppointmentRecord[];
   sites: { id: string; name: string }[];
   nowIso: string;
+  initialSiteFilter?: string;
 }) {
   const today = nowIso.slice(0, 10);
   const [day, setDay] = useState(today);
-  const [siteFilter, setSiteFilter] = useState<string>("all");
+  const [siteFilter, setSiteFilter] = useState<string>(initialSiteFilter);
   const [view, setView] = useState<"day" | "week">("day");
   const siteName = (id: string) => sites.find((s) => s.id === id)?.name ?? id;
 

@@ -11,7 +11,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { PageHeader, StatCard, SectionCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { getSessionUser } from "@/lib/auth/session";
 import { generateBrief } from "@/lib/daily-brief/generate";
 import type { BriefContext, BriefSection, DailyBrief } from "@/lib/daily-brief/types";
@@ -122,7 +123,7 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
     // unenforced / no session: keep the owner default.
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const now = new Date();
   const ctx: BriefContext = { clientId: client.id, siteIds, role, now };
 

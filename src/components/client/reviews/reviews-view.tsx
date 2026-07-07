@@ -1,6 +1,7 @@
 import { CheckCircle2, Clock, Send, MinusCircle } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { getClient, getSites } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listAppointments } from "@/lib/dentally/read";
 import { listByAppointments } from "@/lib/reviews/repository";
 import type { ReviewRequest } from "@/lib/reviews/types";
@@ -23,8 +24,8 @@ export async function ReviewsView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Reviews" description="This client could not be found." />;
   }
 
-  const sites = getSites(client.id);
-  const siteIds = sites.map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
+  const sites = getSites(client.id).filter((s) => siteIds.includes(s.id));
   const siteNames: SiteName[] = sites.map((s) => ({ id: s.id, name: s.name }));
 
   const today = new Date().toISOString().slice(0, 10);

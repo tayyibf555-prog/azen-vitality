@@ -1,5 +1,6 @@
 import { PageHeader } from "@/components/primitives";
-import { getClient, getSites } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listThreads } from "@/lib/inbox/repository";
 import type { Thread } from "@/lib/inbox/types";
 import { InboxWorkspace } from "./inbox-workspace";
@@ -23,7 +24,7 @@ export async function InboxView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Conversations" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const threads = await loadThreads(siteIds);
 
   return (

@@ -7,7 +7,8 @@ import {
   type Column,
 } from "@/components/primitives";
 import { PoundSterling, ReceiptText, Users } from "lucide-react";
-import { getClient, getSites, NOW } from "@/lib/mock/clients";
+import { getClient, NOW } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { getSite } from "@/lib/mock";
 import { gbp, relativeTime } from "@/lib/utils";
 import { listOutstanding, type OutstandingRecord } from "@/lib/dentally/read";
@@ -18,7 +19,7 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Payments" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   const now = NOW;
 
   let rows: OutstandingRecord[] = [];

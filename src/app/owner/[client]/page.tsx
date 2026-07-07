@@ -10,6 +10,7 @@ import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { OwnerViewSwitch } from "@/components/owner/owner-view-switch";
 import { SystemsCatalog } from "@/components/owner/systems-catalog";
 import { getClient, getSites, getSite } from "@/lib/mock";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
 import { gbp } from "@/lib/utils";
@@ -72,8 +73,8 @@ export default async function OwnerManagementPage({
     );
   }
 
-  const sites = getSites(client.id);
-  const siteIds = sites.map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
+  const sites = getSites(client.id).filter((s) => siteIds.includes(s.id));
   const opportunities = await loadOpportunities(siteIds);
 
   const open = opportunities.filter((o) => o.status !== "completed");

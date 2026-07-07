@@ -1,6 +1,7 @@
 import { PageHeader, StatCard } from "@/components/primitives";
 import { Users, UserCheck, UserX, CalendarClock } from "lucide-react";
-import { getClient, getSites, NOW } from "@/lib/mock/clients";
+import { getClient, NOW } from "@/lib/mock/clients";
+import { getViewSiteIds } from "@/lib/site-view";
 import { listPatients, type PatientRecord } from "@/lib/dentally/read";
 import { PatientsTable } from "./patients-table";
 
@@ -10,7 +11,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Patients" description="This client could not be found." />;
   }
 
-  const siteIds = getSites(client.id).map((s) => s.id);
+  const siteIds = await getViewSiteIds(client.id);
   let patients: PatientRecord[] = [];
   try {
     patients = await listPatients(siteIds);
