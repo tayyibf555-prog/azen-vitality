@@ -359,6 +359,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
   const [plans, setPlans] = useState<PlanRecord[]>([]);
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [lifetimeSpend, setLifetimeSpend] = useState(0);
+  const [outstanding, setOutstanding] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -368,12 +369,13 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
       cache: "no-store",
     })
       .then((r) => r.json())
-      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[]; notes?: NoteRecord[]; lifetimeSpend?: number }) => {
+      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[]; notes?: NoteRecord[]; lifetimeSpend?: number; outstanding?: number }) => {
         if (!alive) return;
         setAppointments(d.appointments ?? []);
         setPlans(d.plans ?? []);
         setNotes(d.notes ?? []);
         setLifetimeSpend(d.lifetimeSpend ?? 0);
+        setOutstanding(d.outstanding ?? 0);
       })
       .catch(() => {})
       .finally(() => alive && setLoading(false));
@@ -418,6 +420,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
             <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
             <Stat icon={Activity} label="Visits" value={completed.length} />
             <Stat icon={PoundSterling} label="Lifetime spend" value={gbp(lifetimeSpend)} />
+            {outstanding > 0 ? <Stat icon={ReceiptText} label="Outstanding" value={gbp(outstanding)} /> : null}
           </div>
 
           {loading ? (

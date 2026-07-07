@@ -31,6 +31,7 @@ import {
   Home,
   Briefcase,
   Power,
+  Rocket,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -309,6 +310,14 @@ export const CLIENT_NAV: NavGroup[] = [
   {
     label: "Account",
     items: [
+      {
+        slug: "getting-started",
+        label: "Getting started",
+        icon: Rocket,
+        status: "live",
+        roles: OWNER_ROLES,
+        note: "The practice owner's go-live checklist: the eleven items we need from the practice (with three go-live gates that block patient messaging) to move the platform from read-and-review mode to fully live, with per-item detail on what each means and how to do it.",
+      },
       { slug: "settings", label: "Settings", icon: Settings, status: "live", roles: OWNER_ROLES, note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
     ],
   },
@@ -388,7 +397,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "operations",
     label: "Operations",
     icon: Briefcase,
-    slugs: ["rota", "compliance", "reports", "co-pilot", "controls", "settings"],
+    slugs: ["getting-started", "rota", "compliance", "reports", "co-pilot", "controls", "settings"],
   },
 ];
 

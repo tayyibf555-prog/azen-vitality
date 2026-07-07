@@ -224,11 +224,11 @@ async function buildMoneySection(ctx: BriefContext): Promise<BriefSection> {
     const total = outstanding.reduce((sum, o) => sum + o.outstanding, 0);
     const large = outstanding.filter((o) => o.outstanding > HIGH_VALUE_OUTSTANDING);
     items.push({
-      title: `${formatGbp(total)} outstanding across ${outstanding.length} plan${outstanding.length === 1 ? "" : "s"}`,
+      title: `${formatGbp(total)} outstanding across ${outstanding.length} account${outstanding.length === 1 ? "" : "s"}`,
       detail:
         large.length > 0
           ? `${large.length} balance${large.length === 1 ? "" : "s"} over ${formatGbp(HIGH_VALUE_OUTSTANDING)} to prioritise.`
-          : "Balances owed across accepted treatment plans.",
+          : "Balances owed on unpaid invoices.",
       priority: large.length > 0 ? "medium" : "low",
       count: outstanding.length,
       value: total,

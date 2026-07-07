@@ -158,6 +158,17 @@ export class DentallyClient {
   getPatientInvoices(patientId: string) {
     return this.get<{ invoices: unknown[] }>("/v1/invoices", { patient_id: patientId });
   }
+  /**
+   * List invoices for the outstanding-balance scan. With `patientId` it is one
+   * patient's invoices; without, it is the practice index (paged), which real
+   * Dentally may return group-wide (like treatment_plans) regardless of site_id.
+   * The balance is derived from each invoice's gross/total vs paid.
+   */
+  listInvoices(a: { patientId?: string; siteId?: string; page?: number; perPage?: number }) {
+    return this.get<{ invoices: unknown[] }>("/v1/invoices", {
+      patient_id: a.patientId, site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
   getPatientNotes(patientId: string) {
     return this.get<{ patient_notes: unknown[] }>("/v1/patient_notes", { patient_id: patientId });
   }

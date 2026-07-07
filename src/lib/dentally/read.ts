@@ -134,12 +134,11 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
 // one page). Loop pages until a short (< PER_PAGE) one, bounded by MAX_PAGES.
 const PER_PAGE = 100;
 const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad upstream can't loop forever
-// The outstanding scan pages treatment_plans, but real Dentally plans carry no
-// amount_outstanding (it lives on invoices), so on live data the scan always
-// yields nothing regardless of depth — paging the whole group's plans (up to 100
-// pages) just to return [] is pure latency on Home/Payments/the brief. Bound it
-// tighter: the mock's per-site plans fit comfortably, and live data is unaffected
-// (still []). The real per-plan balances arrive with the invoices integration.
+// The outstanding scan pages the INVOICES index (real Dentally holds the balance on
+// invoices, not on treatment_plans, which carry no amount_outstanding). Real Dentally
+// may ignore site_id here and return the whole group per site, so the scan dedupes by
+// invoice id and stops early once a later site adds nothing new. Bounded so a large
+// practice's invoice history cannot loop unbounded on the page path.
 const OUTSTANDING_MAX_PAGES = 25;
 
 async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: number = MAX_PAGES): Promise<T[]> {
@@ -348,6 +347,8 @@ export interface PatientDetail {
   plans: PlanRecord[];
   notes: NoteRecord[];
   lifetimeSpend: number;
+  /** Balance still owed across this patient's unpaid invoices (0 if all settled). */
+  outstanding: number;
 }
 
 /** Full record for one patient: appointment history, treatment plans, notes, lifetime spend.
@@ -406,99 +407,112 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
     )
     .catch(() => [] as NoteRecord[]);
 
-  const spendP = client
+  const invoicesP = client
     .getPatientInvoices(patientId)
-    .then((res) =>
-      (res.invoices ?? []).reduce<number>((sum, inv) => sum + num((inv as Record<string, unknown>).paid), 0),
-    )
-    .catch(() => 0);
+    .then((res) => (res.invoices ?? []).map((inv) => inv as Record<string, unknown>))
+    .catch(() => [] as Record<string, unknown>[]);
 
-  const [appointments, plans, notes, lifetimeSpend] = await Promise.all([apptsP, plansP, notesP, spendP]);
+  const [appointments, plans, notes, invoices] = await Promise.all([apptsP, plansP, notesP, invoicesP]);
+  const lifetimeSpend = invoices.reduce((sum, r) => sum + num(r.paid), 0);
+  const outstanding = invoices.reduce((sum, r) => sum + invoiceOutstanding(r), 0);
   appointments.sort((a, b) => (a.start < b.start ? 1 : -1)); // newest first
-  return { appointments, plans, notes, lifetimeSpend };
+  return { appointments, plans, notes, lifetimeSpend, outstanding };
 }
 
-/** Treatment plans with money still outstanding, across the given sites, with patient names. */
+/** Outstanding balances across the given sites, one aggregated row per patient, from
+ *  unpaid invoices (real Dentally holds the balance on invoices, not on plans). */
 export function listOutstanding(siteIds: string[]): Promise<OutstandingRecord[]> {
   return cachedRead(`outstanding:${[...siteIds].sort().join("|")}`, () => _listOutstandingUncached(siteIds));
 }
+
+/** The balance still owed on one invoice, or 0 when it is settled or not a live debt.
+ *  Prefers an explicit balance field; else gross/total minus paid. Draft, cancelled
+ *  and written-off invoices never count. Shared by the scan and the per-patient read. */
+function invoiceOutstanding(r: Record<string, unknown>): number {
+  const state = str(r.state);
+  if (state === "cancelled" || state === "written_off" || state === "draft") return 0;
+  const balance = r.outstanding != null ? num(r.outstanding) : num(r.total ?? r.gross ?? r.value) - num(r.paid);
+  return balance > 0 ? balance : 0;
+}
+
 async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingRecord[]> {
   const client = dentallyFromEnv();
 
-  // 1. Scan treatment_plans ONCE. Real Dentally IGNORES the site_id filter and
-  //    returns the entire (5-practice) group's plans on every site call, so the old
-  //    per-site loop paged the identical firehose 3x. Dedup by plan id and stop as
-  //    soon as a later site's first page adds nothing new (the ignored-filter
-  //    signature); the mock, which DOES filter per site, keeps scanning each site.
-  //    amount_outstanding is not on real plans (it lives on invoices) -> on live
-  //    data this collects nothing and we return below WITHOUT the patient scan.
+  // 1. Scan the invoices index ONCE. Real Dentally may IGNORE the site_id filter and
+  //    return the entire (5-practice) group's invoices on every site call, so dedupe
+  //    by invoice id and stop as soon as a later site's first page adds nothing new
+  //    (the ignored-filter signature). A finalised invoice with total > paid is a live
+  //    balance owed. Aggregate per patient (a patient can carry several unpaid ones).
+  //    If the index rejects a site-scoped/unscoped list, the per-site catch fails safe
+  //    to [] rather than crashing Payments/Home/the brief.
   const seen = new Set<string>();
-  const raw: Array<{ patientId: string; planName: string; planned: number; outstanding: number; acceptedAt: string | null }> = [];
+  const byPatient = new Map<string, { outstanding: number; invoiced: number; latest: string | null; count: number }>();
   for (let s = 0; s < siteIds.length; s += 1) {
     const siteId = siteIds[s];
     let ignoredFilter = false;
     try {
       for (let page = 1; page <= OUTSTANDING_MAX_PAGES; page += 1) {
-        const res = await client.listTreatmentPlans({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE });
-        const plans = res.treatment_plans ?? [];
+        const res = await client.listInvoices({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE });
+        const invoices = res.invoices ?? [];
         let newInPage = 0;
-        for (const pl of plans) {
-          const r = pl as Record<string, unknown>;
+        for (const inv of invoices) {
+          const r = inv as Record<string, unknown>;
           const id = String(r.id ?? "");
-          if (id && seen.has(id)) continue; // already counted (real Dentally repeats the group per site)
+          if (id && seen.has(id)) continue; // already counted (Dentally repeats the group per site)
           if (id) seen.add(id);
           newInPage += 1;
-          const outstanding = num(r.amount_outstanding);
+          const outstanding = invoiceOutstanding(r);
           if (outstanding <= 0) continue;
-          raw.push({
-            patientId: String(r.patient_id ?? ""),
-            planName: str(r.nickname) ?? str(r.name) ?? "Treatment plan",
-            planned: num(r.private_treatment_value ?? r.planned_private_treatment_value),
-            outstanding,
-            acceptedAt: str(r.start_date) ?? str(r.accepted_at),
-          });
+          const patientId = String(r.patient_id ?? "");
+          if (!patientId) continue;
+          const agg = byPatient.get(patientId) ?? { outstanding: 0, invoiced: 0, latest: null, count: 0 };
+          agg.outstanding += outstanding;
+          agg.invoiced += num(r.total ?? r.gross ?? r.value);
+          agg.count += 1;
+          const at = str(r.created_at) ?? str(r.date) ?? str(r.issued_at);
+          if (at && (!agg.latest || at > agg.latest)) agg.latest = at;
+          byPatient.set(patientId, agg);
         }
-        // Ignored-filter signature: a NON-first site returned a page of plans of
+        // Ignored-filter signature: a NON-first site returned a page of invoices of
         // which NONE are new — it is repeating an earlier site's list (real Dentally
-        // ignores site_id), so the whole group is already covered. Stop scanning.
-        // An EMPTY site (no plans) or an errored site is NOT this signature — a site
-        // can legitimately have no plans — so those must NEVER stop the scan, or the
-        // per-site-filtering mock would silently drop a later site's real plans.
-        if (s > 0 && plans.length > 0 && newInPage === 0) {
+        // ignores site_id), so the whole group is already covered. An EMPTY site (no
+        // invoices) or an errored site is NOT this signature and must never stop the
+        // scan, or a per-site-filtering source would silently drop a later site.
+        if (s > 0 && invoices.length > 0 && newInPage === 0) {
           ignoredFilter = true;
           break;
         }
-        if (plans.length < PER_PAGE) break;
+        if (invoices.length < PER_PAGE) break;
       }
     } catch (err) {
-      console.error(`[dentally] listTreatmentPlans failed for site ${siteId}; skipping this site`, err);
+      console.error(`[dentally] listInvoices failed for site ${siteId}; skipping this site`, err);
     }
     if (ignoredFilter) break;
   }
 
   // Live-data fast path: nothing outstanding -> skip the (expensive) patient scan.
-  if (raw.length === 0) return [];
+  if (byPatient.size === 0) return [];
 
-  // 2. Resolve patient name + real site only for the plans that survived. Plans carry
-  //    no site_id, so attribute by the patient's site and DROP any plan whose patient
-  //    is not in the requested Vitality sites — this is what keeps the other four
-  //    practices' plans on the shared group key from leaking into this client's view.
+  // 2. Resolve patient name + real site only for the patients that carry a balance.
+  //    Invoices are attributed by the patient's site and DROP any whose patient is not
+  //    in the requested Vitality sites — this keeps the other four practices' balances
+  //    on the shared group index from leaking into this client's view.
   const patients = await listPatients(siteIds);
   const nameById = new Map(patients.map((p) => [p.id, p.name]));
   const siteByPatient = new Map(patients.map((p) => [p.id, p.siteId]));
   const allow = new Set(siteIds);
   const out: OutstandingRecord[] = [];
-  for (const p of raw) {
-    const site = siteByPatient.get(p.patientId);
+  for (const [patientId, agg] of byPatient) {
+    const site = siteByPatient.get(patientId);
     if (!site || !allow.has(site)) continue;
     out.push({
-      patientId: p.patientId,
-      patientName: nameById.get(p.patientId) ?? "Patient",
+      patientId,
+      patientName: nameById.get(patientId) ?? "Patient",
       siteId: site,
-      planName: p.planName,
-      planned: p.planned,
-      outstanding: p.outstanding,
-      acceptedAt: p.acceptedAt,
+      planName: agg.count === 1 ? "Outstanding invoice" : `${agg.count} outstanding invoices`,
+      planned: agg.invoiced,
+      outstanding: agg.outstanding,
+      acceptedAt: agg.latest,
     });
   }
   return out.sort((a, b) => b.outstanding - a.outstanding);

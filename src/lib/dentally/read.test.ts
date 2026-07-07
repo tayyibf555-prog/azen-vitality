@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
   listPatients: (_a: unknown): Promise<unknown> => Promise.resolve({ patients: [] }),
   listAppointments: (_a: unknown): Promise<unknown> => Promise.resolve({ appointments: [] }),
   listTreatmentPlans: (_a: unknown): Promise<unknown> => Promise.resolve({ treatment_plans: [] }),
+  listInvoices: (_a: unknown): Promise<unknown> => Promise.resolve({ invoices: [] }),
 }));
 
 vi.mock("./client", () => ({
@@ -36,6 +37,7 @@ vi.mock("./client", () => ({
     listPatients(a: unknown) { return state.listPatients(a); }
     listAppointments(a: unknown) { return state.listAppointments(a); }
     listTreatmentPlans(a: unknown) { return state.listTreatmentPlans(a); }
+    listInvoices(a: unknown) { return state.listInvoices(a); }
   },
 }));
 
@@ -91,29 +93,25 @@ describe("dentallyReadKey (read-only key selection)", () => {
   });
 });
 
-// listOutstanding scans treatment_plans ONCE (real Dentally ignores site_id and
-// repeats the whole group per site), attributes each plan by its PATIENT's site
-// (plans carry no site_id), and drops other-practice patients. Regression cover for
-// the review-caught bug where an empty middle site aborted the whole scan.
+// listOutstanding scans the INVOICES index ONCE (real Dentally holds the balance on
+// invoices, not plans, and may ignore site_id and repeat the whole group per site),
+// computes balance = total - paid, aggregates per patient, attributes by the patient's
+// site, and drops other-practice patients. Regression cover for the review-caught bug
+// where an empty middle site aborted the whole scan.
 describe("listOutstanding", () => {
-  const plan = (id: string, patientId: string, outstanding: number | undefined, value = 500) => ({
-    id,
-    patient_id: patientId,
-    nickname: `Plan ${id}`,
-    private_treatment_value: String(value),
-    start_date: "2026-01-01",
-    ...(outstanding !== undefined ? { amount_outstanding: outstanding } : {}),
+  const inv = (id: string, patientId: string, total: number, paid: number, extra: Record<string, unknown> = {}) => ({
+    id, patient_id: patientId, total, paid, ...extra,
   });
   const patient = (id: string, site: string) => ({ id, first_name: "P", last_name: id, site_id: site });
 
-  it("collects outstanding plans from ALL sites even when a middle site is empty", async () => {
+  it("collects outstanding invoices from ALL sites even when a middle site is empty", async () => {
     const bySite: Record<string, unknown[]> = {
-      "site-1": [plan("a", "pat-1", 100)],
+      "site-1": [inv("a", "pat-1", 500, 100)], // 400 owed
       "site-2": [], // legitimately empty — must NOT abort the scan
-      "site-3": [plan("c", "pat-3", 200)],
+      "site-3": [inv("c", "pat-3", 300, 0)], // 300 owed
     };
-    state.listTreatmentPlans = ((a: { siteId?: string; page?: number }) =>
-      Promise.resolve({ treatment_plans: (a.page ?? 1) === 1 ? bySite[a.siteId ?? ""] ?? [] : [] })) as never;
+    state.listInvoices = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({ invoices: (a.page ?? 1) === 1 ? bySite[a.siteId ?? ""] ?? [] : [] })) as never;
     const patBySite: Record<string, unknown[]> = {
       "site-1": [patient("pat-1", "site-1")],
       "site-2": [],
@@ -124,15 +122,37 @@ describe("listOutstanding", () => {
 
     const out = await listOutstanding(["site-1", "site-2", "site-3"]);
     expect(out.map((o) => o.patientId).sort()).toEqual(["pat-1", "pat-3"]); // site-3 NOT skipped
+    expect(out.find((o) => o.patientId === "pat-1")?.outstanding).toBe(400);
   });
 
-  it("dedups the ignored-filter repeat, drops other-practice plans, and stops early", async () => {
+  it("aggregates several unpaid invoices per patient and ranks by amount owed", async () => {
+    const group = [
+      inv("x1", "pat-a", 1000, 0), // 1000
+      inv("x2", "pat-a", 500, 200), // 300 -> pat-a owes 1300
+      inv("y1", "pat-b", 800, 0), // 800
+    ];
+    state.listInvoices = ((a: { page?: number }) =>
+      Promise.resolve({ invoices: (a.page ?? 1) === 1 ? group : [] })) as never;
+    state.listPatients = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({
+        patients:
+          a.siteId === "site-1" && (a.page ?? 1) === 1
+            ? [patient("pat-a", "site-1"), patient("pat-b", "site-1")]
+            : [],
+      })) as never;
+
+    const out = await listOutstanding(["site-1"]);
+    expect(out.map((o) => [o.patientId, o.outstanding])).toEqual([["pat-a", 1300], ["pat-b", 800]]);
+    expect(out[0].planName).toBe("2 outstanding invoices");
+  });
+
+  it("dedups the ignored-filter repeat, drops other-practice patients, and stops early", async () => {
     // Every site returns the SAME group-wide list (real Dentally ignoring site_id).
-    const group = [plan("x", "pat-vit", 300), plan("y", "pat-other", 400)];
+    const group = [inv("x", "pat-vit", 300, 0), inv("y", "pat-other", 400, 0)];
     const calls: string[] = [];
-    state.listTreatmentPlans = ((a: { siteId?: string; page?: number }) => {
+    state.listInvoices = ((a: { siteId?: string; page?: number }) => {
       calls.push(`${a.siteId}:${a.page ?? 1}`);
-      return Promise.resolve({ treatment_plans: (a.page ?? 1) === 1 ? group : [] });
+      return Promise.resolve({ invoices: (a.page ?? 1) === 1 ? group : [] });
     }) as never;
     // /v1/patients IS filtered server-side: only the Vitality patient comes back.
     state.listPatients = ((a: { siteId?: string; page?: number }) =>
@@ -143,9 +163,19 @@ describe("listOutstanding", () => {
     expect(calls.some((c) => c.startsWith("site-3"))).toBe(false); // early-stopped after site-2
   });
 
-  it("returns [] without scanning patients when nothing is outstanding (live data)", async () => {
-    state.listTreatmentPlans = ((a: { page?: number }) =>
-      Promise.resolve({ treatment_plans: (a.page ?? 1) === 1 ? [plan("a", "pat-1", undefined)] : [] })) as never;
+  it("ignores settled, draft, cancelled and written-off invoices and skips the patient scan when nothing is owed", async () => {
+    state.listInvoices = ((a: { page?: number }) =>
+      Promise.resolve({
+        invoices:
+          (a.page ?? 1) === 1
+            ? [
+                inv("s", "pat-1", 500, 500), // settled (paid == total)
+                inv("d", "pat-2", 900, 0, { state: "draft" }),
+                inv("c", "pat-3", 900, 0, { state: "cancelled" }),
+                inv("w", "pat-4", 900, 0, { state: "written_off" }),
+              ]
+            : [],
+      })) as never;
     const spy = vi.fn(() => Promise.resolve({ patients: [] }));
     state.listPatients = spy as never;
 

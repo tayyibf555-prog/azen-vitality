@@ -430,6 +430,8 @@ export interface MockInvoice {
   id: string;
   patient_id: string;
   paid: number;
+  /** Gross invoice value. outstanding = total - paid; total == paid for a settled invoice. */
+  total: number;
 }
 
 // Appointment history. Past visits set "last visit"; a future one marks an
@@ -511,21 +513,30 @@ function noshowUpcomingAppointments(): MockAppointment[] {
 }
 MOCK_APPOINTMENTS.push(...noshowUpcomingAppointments());
 
-// Paid invoices = lifetime spend proxy.
+// Invoices. Settled ones (paid == total) are the lifetime-spend proxy; the block
+// below carries a real balance (paid < total) and drives the Payments outstanding
+// scan the way real Dentally does (balances live on invoices, not on plans).
 export const MOCK_INVOICES: MockInvoice[] = [
-  { id: "inv-001a", patient_id: "pat-001", paid: 1340 },
-  { id: "inv-002a", patient_id: "pat-002", paid: 1850 },
-  { id: "inv-002b", patient_id: "pat-002", paid: 640 },
-  { id: "inv-003a", patient_id: "pat-003", paid: 980 },
-  { id: "inv-004a", patient_id: "pat-004", paid: 1200 },
-  { id: "inv-005a", patient_id: "pat-005", paid: 700 },
-  { id: "inv-006a", patient_id: "pat-006", paid: 450 },
-  { id: "inv-007a", patient_id: "pat-007", paid: 280 },
-  { id: "inv-008a", patient_id: "pat-008", paid: 320 },
-  { id: "inv-009a", patient_id: "pat-009", paid: 2100 },
-  { id: "inv-010a", patient_id: "pat-010", paid: 1200 },
-  { id: "inv-010b", patient_id: "pat-010", paid: 480 },
-  { id: "inv-011a", patient_id: "pat-011", paid: 950 },
+  { id: "inv-001a", patient_id: "pat-001", paid: 1340, total: 1340 },
+  { id: "inv-002a", patient_id: "pat-002", paid: 1850, total: 1850 },
+  { id: "inv-002b", patient_id: "pat-002", paid: 640, total: 640 },
+  { id: "inv-003a", patient_id: "pat-003", paid: 980, total: 980 },
+  { id: "inv-004a", patient_id: "pat-004", paid: 1200, total: 1200 },
+  { id: "inv-005a", patient_id: "pat-005", paid: 700, total: 700 },
+  { id: "inv-006a", patient_id: "pat-006", paid: 450, total: 450 },
+  { id: "inv-007a", patient_id: "pat-007", paid: 280, total: 280 },
+  { id: "inv-008a", patient_id: "pat-008", paid: 320, total: 320 },
+  { id: "inv-009a", patient_id: "pat-009", paid: 2100, total: 2100 },
+  { id: "inv-010a", patient_id: "pat-010", paid: 1200, total: 1200 },
+  { id: "inv-010b", patient_id: "pat-010", paid: 480, total: 480 },
+  { id: "inv-011a", patient_id: "pat-011", paid: 950, total: 950 },
+  // Outstanding balances (paid < total): money still owed on a finalised invoice.
+  { id: "inv-002c", patient_id: "pat-002", paid: 500, total: 2000 },
+  { id: "inv-005b", patient_id: "pat-005", paid: 0, total: 850 },
+  { id: "inv-009b", patient_id: "pat-009", paid: 1000, total: 3400 },
+  { id: "inv-012a", patient_id: "pat-012", paid: 0, total: 1200 },
+  { id: "inv-013a", patient_id: "pat-013", paid: 250, total: 700 },
+  { id: "inv-016a", patient_id: "pat-016", paid: 0, total: 600 },
 ];
 
 // --- Patient notes (clinical + admin) -------------------------------------
@@ -600,6 +611,10 @@ export function updateAppointmentFields(id: string, patch: Partial<MockAppointme
 }
 export function invoicesForPatient(patientId: string): MockInvoice[] {
   return MOCK_INVOICES.filter((i) => i.patient_id === patientId);
+}
+/** Every invoice, for the practice-wide index (the outstanding scan). */
+export function allInvoices(): MockInvoice[] {
+  return MOCK_INVOICES;
 }
 export function notesForPatient(patientId: string): MockPatientNote[] {
   return MOCK_PATIENT_NOTES.filter((n) => n.patient_id === patientId).sort((a, b) =>

@@ -32,13 +32,15 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
   const totalOutstanding = rows.reduce((sum, r) => sum + r.outstanding, 0);
   const patientCount = new Set(rows.map((r) => r.patientId)).size;
 
+  const largestBalance = rows[0]?.outstanding ?? 0; // rows are sorted highest-owed first
+
   const columns: Column<OutstandingRecord>[] = [
     { key: "patient", header: "Patient", cell: (r) => <span className="font-semibold text-navy">{r.patientName}</span> },
-    { key: "plan", header: "Treatment plan", cell: (r) => <span className="text-ink">{r.planName}</span> },
+    { key: "plan", header: "Account", cell: (r) => <span className="text-ink">{r.planName}</span> },
     { key: "site", header: "Site", cell: (r) => <span className="text-muted">{getSite(r.siteId)?.name ?? r.siteId}</span> },
     {
       key: "planned",
-      header: "Plan value",
+      header: "Invoiced",
       cell: (r) => <span className="tabular-nums text-muted">{gbp(r.planned)}</span>,
       align: "right",
     },
@@ -50,7 +52,7 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
     },
     {
       key: "accepted",
-      header: "Accepted",
+      header: "Last invoice",
       cell: (r) => <span className="text-muted">{r.acceptedAt ? relativeTime(r.acceptedAt, now) : "Unknown"}</span>,
       align: "right",
     },
@@ -60,13 +62,13 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Payments"
-        description="Outstanding balances across accepted treatment plans, live from Dentally. Ranked by what is owed."
+        description="Outstanding balances owed on unpaid invoices, live from Dentally. Ranked by what is owed."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <StatCard label="Outstanding" value={gbp(totalOutstanding)} icon={PoundSterling} hint="Across open plans" />
-        <StatCard label="Open plans" value={rows.length} icon={ReceiptText} hint="With a balance" />
-        <StatCard label="Patients" value={patientCount} icon={Users} hint="Owing money" />
+        <StatCard label="Outstanding" value={gbp(totalOutstanding)} icon={PoundSterling} hint="Total owed" />
+        <StatCard label="Patients" value={patientCount} icon={Users} hint="With a balance" />
+        <StatCard label="Largest balance" value={gbp(largestBalance)} icon={ReceiptText} hint="Single account" />
       </div>
 
       <SectionCard title="Outstanding balances" description="Highest owed first." bodyClassName="p-0">
