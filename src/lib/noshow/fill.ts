@@ -68,6 +68,7 @@ export async function offerSlotToNextCandidate(
     patientName: candidate.patientName,
     startAt: slot.startAt,
     practitioner: slot.practitioner,
+    siteId: slot.siteId,
   });
   // Offer touches are not tied to a defended target (target_id null).
   const touch = await insertTouch({

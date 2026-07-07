@@ -8,7 +8,7 @@
 // Europe/London display correctness (DST) is checked against draft copy.
 import { describe, it, expect } from "vitest";
 import { NOSHOW_CADENCE, stepDef, enrolment, advanceAfter } from "./cadence";
-import { draftSlotOffer } from "./draft";
+import { draftSlotOffer, buildNoshowPrompt } from "./draft";
 
 const HOUR = 3_600_000;
 
@@ -121,5 +121,18 @@ describe("Europe/London display in patient-facing copy (DST correctness)", () =>
     const copy = draftSlotOffer({ patientName: "Sam Lee", startAt: "2026-07-10T09:30:00.000Z", practitioner: "Dr Khan" });
     expect(copy).not.toMatch(/\b(NHS|private|funding)\b/i);
     expect(copy).not.toMatch(/[—–]/); // no em/en dash
+  });
+
+  it("names the practice in the slot offer so it is not an unbranded SMS", () => {
+    const copy = draftSlotOffer({ patientName: "Priya Patel", startAt: "2026-07-10T09:30:00.000Z", practitioner: null, siteId: "site-cc" });
+    expect(copy).toContain("N15 Vitality Dental");
+  });
+
+  it("names the practice in the confirmation prompt (both the rule and the payload)", () => {
+    const target = { siteId: "site-cc", patientName: "Priya Patel", appointmentStartAt: "2026-07-10T09:30:00.000Z", practitioner: null } as never;
+    const step = { step: 1, purpose: "confirm" } as never;
+    const { system, user } = buildNoshowPrompt(target, "sms", step);
+    expect(user).toContain("N15 Vitality Dental");
+    expect(system).toMatch(/name the practice/i);
   });
 });

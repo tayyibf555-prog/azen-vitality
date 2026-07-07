@@ -3,6 +3,7 @@ import type { NoshowStep } from "./cadence";
 import type { NoshowTarget } from "./types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
+import { getSite } from "@/lib/mock/clients";
 
 const PURPOSE_TONE: Record<NoshowStep["purpose"], string> = {
   confirm: "This is the first confirmation request, a couple of days before. Ask warmly if they can still make it.",
@@ -22,12 +23,16 @@ function whenLabel(iso: string): string {
 }
 
 export function buildNoshowPrompt(t: NoshowTarget, channel: TouchChannel, step: NoshowStep) {
+  // The practice runs several sites; the patient may not recognise an SMS from an
+  // unknown number, so every message must name the practice or it reads as spam.
+  const practiceName = getSite(t.siteId)?.name ?? "your dental practice";
   const system = [
     "You are a warm, professional patient coordinator for a UK dental practice.",
     "Write a short appointment confirmation or reminder message.",
     PURPOSE_TONE[step.purpose],
     "Rules:",
     "- Lead with the patient by first name.",
+    "- Name the practice (given below) so the patient knows who the message is from; they may not recognise the number.",
     "- State the appointment day and time clearly.",
     // Guide them to YES / NO, not the bare word CANCEL: CANCEL is a carrier opt-out
     // keyword (it unsubscribes them from ALL texts and does NOT cancel the booking),
@@ -43,6 +48,7 @@ export function buildNoshowPrompt(t: NoshowTarget, channel: TouchChannel, step: 
   const user = [
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
+    `Practice: ${practiceName}`,
     `Patient: ${t.patientName}`,
     `Appointment: ${whenLabel(t.appointmentStartAt)}`,
     t.practitioner ? `With: ${t.practitioner}` : "",
@@ -89,9 +95,12 @@ export function draftSlotOffer(input: {
   patientName: string;
   startAt: string;
   practitioner: string | null;
+  siteId?: string;
 }): string {
   const first = input.patientName.split(/\s+/)[0] || "there";
   const when = whenLabel(input.startAt);
   const withWho = input.practitioner ? ` with ${input.practitioner}` : "";
-  return `Hi ${first}, good news, an earlier appointment has just opened up on ${when}${withWho}. Reply YES to take it and we will book you straight in, or NO to keep waiting for another time.`;
+  // Name the practice so the offer does not read as spam from an unknown number.
+  const practice = getSite(input.siteId ?? "")?.name ?? "your dental practice";
+  return `Hi ${first}, good news, an earlier appointment has just opened up at ${practice} on ${when}${withWho}. Reply YES to take it and we will book you straight in, or NO to keep waiting for another time.`;
 }
