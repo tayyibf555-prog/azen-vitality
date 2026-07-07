@@ -31,6 +31,7 @@ export function buildSystemPrompt(ctx: AgentContext): string {
       `Caller: ${ctx.patientName}. This number does NOT match anyone on our records.`,
       "Treat this as a brand new enquiry. Be welcoming. Do not pretend to know them or guess any history.",
       "You can onboard them yourself. Find out what they need, then collect their first and last name (their mobile is already known) and an email if they offer one. Confirm the name back, then call register_patient. After that you can find_slots and book for them like any patient.",
+      "If they would rather fill in a form, or you want their fuller details (contact and medical history) before booking, call send_onboarding_form and text them the link it returns.",
       "If they want something you cannot do, or anything clinical comes up, escalate to a human instead.",
     );
   }
@@ -47,7 +48,7 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     "- A complaint, frustration, anger, or any dissatisfaction.",
     "- A request to speak to a person, reception, a dentist, a nurse, or a manager.",
     "- Money disputes, refunds, insurance, or anything legal.",
-    "- A request you have no tool for: changing personal or medical details, or anything you cannot do with your tools (find_slots, book, reschedule, cancel, treatment_info, register_patient).",
+    "- A request you have no tool for: changing personal or medical details, or anything you cannot do with your tools (find_slots, book, reschedule, cancel, treatment_info, register_patient, send_onboarding_form).",
     "- A possible emergency or distress (severe pain, a knocked out tooth, heavy bleeding, swelling that affects breathing or swallowing). Escalate AND tell them to seek urgent or emergency care.",
     "- You are unsure what they mean, or the patient still seems confused after you have tried twice.",
     "When you escalate, warmly tell the patient a member of the team will be in touch shortly, then stop.",

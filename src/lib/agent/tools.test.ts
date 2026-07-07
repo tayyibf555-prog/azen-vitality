@@ -11,6 +11,7 @@ describe("AGENT_TOOLS", () => {
       "find_slots",
       "register_patient",
       "reschedule",
+      "send_onboarding_form",
       "treatment_info",
     ]);
   });
@@ -118,6 +119,19 @@ describe("makeDispatch", () => {
     const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
     const out = await dispatch("treatment_info", { treatment: "spaceship repair" });
     expect(out).toContain("false");
+  });
+
+  it("send_onboarding_form returns the practice's public onboarding link", async () => {
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const out = JSON.parse(await dispatch("send_onboarding_form", {}));
+    expect(out.url).toMatch(/\/onboard\/vitality$/); // site-cc -> client "vitality"
+    expect(out.error).toBeUndefined();
+  });
+
+  it("send_onboarding_form honours a specific form slug when given one", async () => {
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const out = JSON.parse(await dispatch("send_onboarding_form", { slug: "implants" }));
+    expect(out.url).toMatch(/\/onboard\/vitality\/implants$/);
   });
 
   it("escalate_to_human acknowledges without external calls", async () => {

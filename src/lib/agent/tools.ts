@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { DentallyClient } from "@/lib/dentally/client";
 import { findTreatment } from "@/lib/treatments/catalog";
+import { getSite, getClient } from "@/lib/mock/clients";
 import type { AgentContext } from "./types";
 
 export const AGENT_TOOLS: Anthropic.Tool[] = [
@@ -86,6 +87,18 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
         email: { type: "string", description: "email address if they give one (optional)" },
       },
       required: ["firstName", "lastName"],
+    },
+  },
+  {
+    name: "send_onboarding_form",
+    description:
+      "Text this person a link to the new-patient onboarding form so they can register and share their details (contact, medical history) before booking. Use for a new enquiry as an alternative to collecting their name inline, or when they would rather fill in a form. Include the returned url in your reply to them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "Optional specific form slug; omit for the practice's default onboarding form" },
+      },
+      required: [],
     },
   },
   {
@@ -227,6 +240,19 @@ export function makeDispatch(deps: ToolDeps) {
         });
         registeredPatientId = patient.id;
         return JSON.stringify({ registered: true, patientId: patient.id });
+      }
+      case "send_onboarding_form": {
+        // Resolve the practice's public onboarding URL from the conversation's site.
+        // Returns the link for the agent to include in its reply (it does not send it
+        // itself, so the agent keeps one warm message per turn). Pilot: clientId === slug.
+        const site = getSite(deps.context.siteId);
+        const clientSlug = site ? getClient(site.clientId)?.slug ?? site.clientId : null;
+        if (!clientSlug) {
+          return JSON.stringify({ error: "Could not resolve the onboarding form link for this practice." });
+        }
+        const base = process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
+        const extra = typeof input.slug === "string" && input.slug.trim() ? `/${input.slug.trim()}` : "";
+        return JSON.stringify({ url: `${base}/onboard/${clientSlug}${extra}` });
       }
       case "escalate_to_human":
         return JSON.stringify({ escalated: true, reason: input.reason ?? "" });
