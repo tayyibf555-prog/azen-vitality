@@ -10,7 +10,7 @@ import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { OwnerViewSwitch } from "@/components/owner/owner-view-switch";
 import { SystemsCatalog } from "@/components/owner/systems-catalog";
 import { getClient, getSites, getSite } from "@/lib/mock";
-import { getViewSiteIds } from "@/lib/site-view";
+import { getViewScope } from "@/lib/site-view";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
 import { gbp } from "@/lib/utils";
@@ -73,7 +73,8 @@ export default async function OwnerManagementPage({
     );
   }
 
-  const siteIds = await getViewSiteIds(client.id);
+  const scope = await getViewScope(client.id);
+  const siteIds = scope.siteIds;
   const sites = getSites(client.id).filter((s) => siteIds.includes(s.id));
   const opportunities = await loadOpportunities(siteIds);
 
@@ -130,7 +131,11 @@ export default async function OwnerManagementPage({
 
       <SectionCard
         title="Treatment recovery"
-        description="Accepted but incomplete treatment across all sites, live from the coordinator."
+        description={
+          scope.isAllSites
+            ? "Accepted but incomplete treatment across all sites, live from the coordinator."
+            : `Accepted but incomplete treatment at ${scope.siteName}, live from the coordinator.`
+        }
         bodyClassName="p-0"
       >
         {opportunities.length === 0 ? (

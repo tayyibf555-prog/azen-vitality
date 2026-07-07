@@ -11,7 +11,7 @@ import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board"
 import { DiaryRail } from "@/components/client/home/diary-rail";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { getClient } from "@/lib/mock/clients";
-import { getViewSiteIds } from "@/lib/site-view";
+import { getViewScope } from "@/lib/site-view";
 import { getSiteMetrics } from "@/lib/mock";
 import { getSessionUser } from "@/lib/auth/session";
 import { OWNER_ROLES } from "@/lib/nav";
@@ -59,7 +59,8 @@ export default async function ClientHomePage({
   }
 
   const now = new Date();
-  const siteIds = await getViewSiteIds(client.id);
+  const scope = await getViewScope(client.id);
+  const siteIds = scope.siteIds;
 
   // Both data loads are best-effort: a failed read renders an empty section, never
   // a broken landing page.
@@ -110,7 +111,9 @@ export default async function ClientHomePage({
             <h1 className="text-2xl font-bold tracking-tight text-navy">{longDate(now)}</h1>
             <p className="mt-0.5 text-sm text-muted">
               {isOwner
-                ? "Here is the morning picture across your sites. Start at the top."
+                ? scope.isAllSites
+                  ? "Here is the morning picture across your sites. Start at the top."
+                  : `Here is the morning picture for ${scope.siteName}. Start at the top.`
                 : "Here is your morning. Start at the top."}
             </p>
           </div>
@@ -127,7 +130,7 @@ export default async function ClientHomePage({
             label="Appointments today"
             value={brief.appointmentsToday}
             icon={CalendarDays}
-            hint="Across your sites"
+            hint={scope.isAllSites ? "Across your sites" : scope.siteName ?? undefined}
           />
           <StatCard
             label="To confirm"

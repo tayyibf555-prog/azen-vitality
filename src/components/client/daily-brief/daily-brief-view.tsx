@@ -12,7 +12,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { PageHeader, StatCard, SectionCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
 import { getClient } from "@/lib/mock/clients";
-import { getViewSiteIds } from "@/lib/site-view";
+import { getViewScope } from "@/lib/site-view";
 import { getSessionUser } from "@/lib/auth/session";
 import { generateBrief } from "@/lib/daily-brief/generate";
 import type { BriefContext, BriefSection, DailyBrief } from "@/lib/daily-brief/types";
@@ -123,9 +123,17 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
     // unenforced / no session: keep the owner default.
   }
 
-  const siteIds = await getViewSiteIds(client.id);
+  const scope = await getViewScope(client.id);
+  const siteIds = scope.siteIds;
   const now = new Date();
   const ctx: BriefContext = { clientId: client.id, siteIds, role, now };
+
+  // The owner greeting names the selected site when a single site is in view, so
+  // the brief header does not claim an all-sites scope the data no longer has.
+  const greeting =
+    role === "client_owner" && !scope.isAllSites
+      ? `Here is the morning brief for ${scope.siteName}.`
+      : ROLE_GREETING[role];
 
   let brief: DailyBrief;
   try {
@@ -141,14 +149,14 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
 
   return (
     <>
-      <PageHeader title="Daily brief" description={`${longDate(now)}. ${ROLE_GREETING[role]}`} />
+      <PageHeader title="Daily brief" description={`${longDate(now)}. ${greeting}`} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Appointments today"
           value={brief.appointmentsToday}
           icon={CalendarDays}
-          hint="Across your sites"
+          hint={scope.isAllSites ? "Across your sites" : scope.siteName ?? undefined}
         />
         <StatCard
           label="To confirm"

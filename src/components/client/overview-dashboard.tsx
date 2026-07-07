@@ -216,6 +216,9 @@ export function OverviewDashboard({
   // headline totals all derive from that site, so nothing contradicts the header.
   const scopedSiteIds = siteIds && siteIds.length ? siteIds : client.siteIds;
   const allSites = scopedSiteIds.length >= client.siteIds.length;
+  // Copy-ready name of the single selected site (null when All sites), so hints
+  // and subtitles name the site instead of claiming an all-sites scope.
+  const scopedSiteName = allSites ? null : getSite(scopedSiteIds[0])?.name ?? null;
   const siteMetrics = getSiteMetrics(scopedSiteIds);
 
   const totalLeads = siteMetrics.reduce((a, s) => a + s.leadsIn, 0);
@@ -257,7 +260,11 @@ export function OverviewDashboard({
         <PageHeader
           hero
           title="Overview"
-          description="Your cross-site view of the funnel: what came in, what was booked, and the revenue recovered."
+          description={
+            allSites
+              ? "Your cross-site view of the funnel: what came in, what was booked, and the revenue recovered."
+              : `${scopedSiteName}: what came in, what was booked, and the revenue recovered.`
+          }
         />
       )}
 
@@ -266,7 +273,7 @@ export function OverviewDashboard({
           label="Leads in"
           value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
           icon={TrendingUp}
-          hint={allSites ? "Across all sites, last 30 days" : "Selected site, last 30 days"}
+          hint={allSites ? "Across all sites, last 30 days" : `${scopedSiteName}, last 30 days`}
         />
         <StatCard
           label="Consultations booked"
@@ -292,7 +299,7 @@ export function OverviewDashboard({
       <div className="grid gap-6 lg:grid-cols-3">
         <SectionCard
           title="Revenue recovered"
-          description={allSites ? "Recovered revenue per week across all sites" : "Recovered revenue per week"}
+          description={allSites ? "Recovered revenue per week across all sites" : `Recovered revenue per week at ${scopedSiteName}`}
           className="lg:col-span-2"
         >
           {trend.length > 0 ? (
@@ -307,7 +314,9 @@ export function OverviewDashboard({
           description="Exceptions only. Silence means on target."
         >
           {exceptions.length === 0 ? (
-            <p className="text-sm text-muted">All sites on target this month.</p>
+            <p className="text-sm text-muted">
+              {allSites ? "All sites on target this month." : `${scopedSiteName} on target this month.`}
+            </p>
           ) : (
             <ul className="space-y-2.5">
               {exceptions.map((e) => (
@@ -329,7 +338,11 @@ export function OverviewDashboard({
 
       <SectionCard
         title="Funnel detail"
-        description="Recent enquiries and per-site performance across the funnel."
+        description={
+          allSites
+            ? "Recent enquiries and per-site performance across the funnel."
+            : `Recent enquiries and ${scopedSiteName} performance across the funnel.`
+        }
         bodyClassName="p-0"
       >
         <Tabs

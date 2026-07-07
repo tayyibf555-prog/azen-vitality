@@ -54,9 +54,12 @@ interface DayColumn {
 
 export function RotaThisWeek({
   clientSlug,
+  inScope,
   onShiftsLoaded,
 }: {
   clientSlug: string;
+  /** Keeps only shifts at the site(s) the view is scoped to (all sites, or the selected one). */
+  inScope: (shift: RotaShift) => boolean;
   /** Reports the loaded shift set up to the workspace so the StatCards stay in sync. */
   onShiftsLoaded: (shifts: RotaShift[]) => void;
 }) {
@@ -138,17 +141,21 @@ export function RotaThisWeek({
     }
   }
 
+  // The shifts at the site(s) the view is scoped to. Everything the grid derives
+  // (weeks, day columns) works off this so a single-site view shows only that site.
+  const scopedShifts = useMemo(() => shifts.filter(inScope), [shifts, inScope]);
+
   // The distinct Mondays covered by the shift set, in order, so the view can page
   // one week at a time.
   const weeks = useMemo<string[]>(() => {
     const set = new Set<string>();
-    for (const shift of shifts) {
+    for (const shift of scopedShifts) {
       const wd = weekdayOf(shift.shiftDate);
       if (!wd || !ROTA_WEEKDAYS.includes(wd)) continue;
       set.add(mondayOf(shift.shiftDate));
     }
     return [...set].sort();
-  }, [shifts]);
+  }, [scopedShifts]);
 
   const clampedIndex = weeks.length ? Math.min(Math.max(weekIndex, 0), weeks.length - 1) : 0;
   const weekStart = weeks[clampedIndex];
@@ -160,7 +167,7 @@ export function RotaThisWeek({
     const today = londonTodayKey();
     return ROTA_WEEKDAYS.map((_, offset) => {
       const dayKey = addDaysKey(weekStart, offset);
-      const dayShifts = shifts
+      const dayShifts = scopedShifts
         .filter((s) => s.shiftDate === dayKey)
         .sort(
           (a, b) =>
@@ -176,7 +183,7 @@ export function RotaThisWeek({
         shifts: dayShifts,
       };
     });
-  }, [weekStart, shifts]);
+  }, [weekStart, scopedShifts]);
 
   const generateButton = (
     <Button variant="primary" size="sm" onClick={generate} disabled={generating}>

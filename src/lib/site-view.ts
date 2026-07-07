@@ -40,3 +40,35 @@ export async function getViewSiteIds(clientId: string): Promise<string[]> {
   if (sel === ALL_SITES) return all;
   return [sel];
 }
+
+export interface ViewScope {
+  /** Site ids to query for this view. */
+  siteIds: string[];
+  /** Raw selection: a site id or ALL_SITES. */
+  selection: string;
+  /** True when the whole group is selected. */
+  isAllSites: boolean;
+  /** The single selected site's name, or null when All sites. */
+  siteName: string | null;
+  /** Copy-ready label: the site name (e.g. "N15 Vitality Dental") or "all sites". */
+  label: string;
+}
+
+/**
+ * One resolved scope for a dashboard view: the site ids to query AND a copy-ready
+ * label, so a view can both fetch scoped data and phrase its subtitles/hints for
+ * the selected site instead of hardcoding "across all sites".
+ */
+export async function getViewScope(clientId: string): Promise<ViewScope> {
+  const sites = getSites(clientId);
+  const selection = await getViewSiteSelection(clientId);
+  const isAllSites = selection === ALL_SITES;
+  const site = isAllSites ? null : sites.find((s) => s.id === selection) ?? null;
+  return {
+    siteIds: isAllSites ? sites.map((s) => s.id) : [selection],
+    selection,
+    isAllSites,
+    siteName: site?.name ?? null,
+    label: isAllSites ? "all sites" : site?.name ?? "the selected site",
+  };
+}

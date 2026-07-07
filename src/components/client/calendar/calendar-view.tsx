@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/primitives";
 import { getClient, getSites, NOW } from "@/lib/mock/clients";
-import { getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
+import { getViewScope } from "@/lib/site-view";
 import { listAppointments, type AppointmentRecord } from "@/lib/dentally/read";
 import { CalendarBoard } from "./calendar-board";
 
@@ -14,11 +14,12 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Calendar" description="This client could not be found." />;
   }
 
-  // Load every site's appointments so switching sites in the board is instant;
-  // the initial filter follows the dashboard's selected site (default N15).
-  const sites = getSites(client.id);
-  const siteIds = sites.map((s) => s.id);
-  const selection = await getViewSiteSelection(client.id);
+  // Scope the diary to the dashboard's selected site (default N15) so only that
+  // site's appointments load; "All sites" loads every site and the board's in-view
+  // filter works within that set.
+  const scope = await getViewScope(client.id);
+  const siteIds = scope.siteIds;
+  const sites = getSites(client.id).filter((s) => siteIds.includes(s.id));
 
   // Load a window around now; the board navigates within it.
   const from = new Date(NOW);
@@ -43,7 +44,7 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
         appointments={appointments}
         sites={sites.map((s) => ({ id: s.id, name: s.name }))}
         nowIso={NOW.toISOString()}
-        initialSiteFilter={selection === ALL_SITES ? "all" : selection}
+        initialSiteFilter={scope.isAllSites ? "all" : scope.selection}
       />
     </>
   );

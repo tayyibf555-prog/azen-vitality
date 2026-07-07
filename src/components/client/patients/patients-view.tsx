@@ -1,7 +1,7 @@
 import { PageHeader, StatCard } from "@/components/primitives";
 import { Users, UserCheck, UserX, CalendarClock } from "lucide-react";
 import { getClient, NOW } from "@/lib/mock/clients";
-import { getViewSiteIds } from "@/lib/site-view";
+import { getViewScope } from "@/lib/site-view";
 import { listPatients, type PatientRecord } from "@/lib/dentally/read";
 import { PatientsTable } from "./patients-table";
 
@@ -11,10 +11,10 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Patients" description="This client could not be found." />;
   }
 
-  const siteIds = await getViewSiteIds(client.id);
+  const scope = await getViewScope(client.id);
   let patients: PatientRecord[] = [];
   try {
-    patients = await listPatients(siteIds);
+    patients = await listPatients(scope.siteIds);
   } catch {
     patients = [];
   }
@@ -32,7 +32,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Patients" value={patients.length} icon={Users} hint="Across all sites" />
+        <StatCard label="Patients" value={patients.length} icon={Users} hint={scope.isAllSites ? "Across all sites" : scope.label} />
         <StatCard label="Active" value={active} icon={UserCheck} hint="Currently active" />
         <StatCard label="Lapsed" value={lapsed} icon={UserX} hint="Archived or inactive" />
         <StatCard label="Due a recall" value={dueRecall} icon={CalendarClock} hint="Recall date passed" />

@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarRange, Users, Settings2, MessageSquare, MapPin } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatCard } from "@/components/primitives";
-import { getSites } from "@/lib/mock/clients";
 import type { RotaShift, RotaStaff } from "@/lib/rota/types";
 import { RotaThisWeek } from "./rota-this-week";
 import { RotaStaffPanel } from "./rota-staff-panel";
@@ -29,14 +28,34 @@ const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
   { key: "settings", label: "Settings", icon: Settings2 },
 ];
 
-export function RotaWorkspace({ clientSlug }: { clientSlug: string }) {
+export function RotaWorkspace({
+  clientSlug,
+  siteIds,
+  isAllSites,
+  siteName,
+}: {
+  clientSlug: string;
+  /** The site(s) the current view is scoped to (single site, or every site for "All sites"). */
+  siteIds: string[];
+  /** True when the switcher is on "All sites". */
+  isAllSites: boolean;
+  /** The selected site's name when a single site is chosen, else null. */
+  siteName: string | null;
+}) {
   const [tab, setTab] = useState<TabKey>("week");
   const [staffCount, setStaffCount] = useState(0);
   const [shiftsThisWeek, setShiftsThisWeek] = useState(0);
   const [notified, setNotified] = useState(0);
 
-  // Number of configured sites is static mock data; the other counts come from the API.
-  const siteCount = getSites(clientSlug).length;
+  // The generate route returns shifts for every site (there is no scoped read
+  // route), so we filter to the selected site(s) here for the displayed grid and
+  // the shift counts. A stable Set keeps the filter cheap and referentially safe
+  // for the memoised child.
+  const scopedSiteIds = useMemo(() => new Set(siteIds), [siteIds]);
+  const inScope = useCallback((s: RotaShift) => scopedSiteIds.has(s.siteId), [scopedSiteIds]);
+
+  // Sites the view covers: every configured site for "All sites", else just the one.
+  const siteCount = siteIds.length;
 
   const refreshStaffCount = useCallback(async () => {
     try {
@@ -54,12 +73,16 @@ export function RotaWorkspace({ clientSlug }: { clientSlug: string }) {
   }, [refreshStaffCount]);
 
   // The "This week" tab reports its loaded shifts here, so the StatCards reflect the
-  // same data without a second generate call.
-  const onShiftsLoaded = useCallback((shifts: RotaShift[]) => {
-    const week = shifts.filter((s) => withinDays(s.shiftDate, 7));
-    setShiftsThisWeek(week.length);
-    setNotified(week.filter((s) => s.status === "notified").length);
-  }, []);
+  // same data without a second generate call. Scope to the selected site(s) so the
+  // counts match the grid.
+  const onShiftsLoaded = useCallback(
+    (shifts: RotaShift[]) => {
+      const week = shifts.filter((s) => inScope(s) && withinDays(s.shiftDate, 7));
+      setShiftsThisWeek(week.length);
+      setNotified(week.filter((s) => s.status === "notified").length);
+    },
+    [inScope],
+  );
 
   return (
     <div className="space-y-4">
@@ -69,7 +92,7 @@ export function RotaWorkspace({ clientSlug }: { clientSlug: string }) {
           label="Shifts this week"
           value={shiftsThisWeek}
           icon={CalendarRange}
-          hint="Generated across all sites"
+          hint={isAllSites || !siteName ? "Generated across all sites" : `Generated for ${siteName}`}
         />
         <StatCard label="Notified" value={notified} icon={MessageSquare} hint="Texted their shifts" />
         <StatCard label="Sites" value={siteCount} icon={MapPin} hint="Covered by the rota" />
@@ -107,7 +130,7 @@ export function RotaWorkspace({ clientSlug }: { clientSlug: string }) {
 
       <div role="tabpanel" id={`rota-panel-${tab}`} aria-labelledby={`rota-tab-${tab}`}>
         {tab === "week" ? (
-          <RotaThisWeek clientSlug={clientSlug} onShiftsLoaded={onShiftsLoaded} />
+          <RotaThisWeek clientSlug={clientSlug} inScope={inScope} onShiftsLoaded={onShiftsLoaded} />
         ) : null}
         {tab === "staff" ? (
           <RotaStaffPanel clientSlug={clientSlug} onChanged={refreshStaffCount} />
