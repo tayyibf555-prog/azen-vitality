@@ -35,6 +35,31 @@ describe("runAgentTurn", () => {
     expect(r.replyText).toContain("team will be in touch");
   });
 
+  it("BLOCKS a booking write when the patient has not explicitly confirmed", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "book", { slotStart: "2026-06-22T09:00:00Z", treatment: "Invisalign" }))
+      .mockResolvedValueOnce(textMessage("Just to confirm, shall I book you in for Monday 22 June at 9am?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ booked: true, appointmentId: "appt-1" }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    // The inbound is a question, not a confirmation, so the write must be refused.
+    const r = await runAgentTurn([{ role: "user", content: "what have you got on tuesday?" }], deps);
+    expect(dispatch).not.toHaveBeenCalled(); // book never reached Dentally
+    expect(r.replyText).toContain("confirm");
+  });
+
+  it("ALLOWS a booking write once the patient has explicitly confirmed", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "book", { slotStart: "2026-06-22T09:00:00Z", treatment: "Invisalign" }))
+      .mockResolvedValueOnce(textMessage("Booked. See you Monday 22 June at 9am."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ booked: true, appointmentId: "appt-1" }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn([{ role: "user", content: "yes please, book it" }], deps);
+    expect(dispatch).toHaveBeenCalledWith("book", expect.objectContaining({ slotStart: "2026-06-22T09:00:00Z" }));
+    expect(r.replyText).toContain("Booked");
+  });
+
   it("returns escalated with empty reply if it never stops calling tools", async () => {
     const create = vi.fn().mockResolvedValue(toolUseMessage("tu", "find_slots", { treatment: "x" }));
     const dispatch = vi.fn().mockResolvedValue("{}");

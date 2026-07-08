@@ -25,6 +25,37 @@ const DEFAULT_MAX_ROUNDS = 4;
 const DEFAULT_MAX_TOKENS = 700;
 const MODEL = SONNET;
 
+// Appointment WRITES that must never happen without an explicit patient confirmation.
+const APPOINTMENT_MUTATIONS = new Set(["book", "reschedule", "cancel"]);
+
+// A patient must give a clear affirmative before the agent is allowed to WRITE an
+// appointment change. This is the deterministic floor beneath the prompt's "read it
+// back and get a clear yes" instruction: a booking/reschedule/cancel is never written
+// on a question or an ambiguous message, even if the model tries. A false negative just
+// forces one more confirming turn (safe); the model's own judgement is the sufficient
+// condition on top, so this only ever makes a write harder, never easier.
+const AFFIRMATIVE =
+  /\b(yes|yeah|yep|yup|ok|okay|sure|confirm(ed)?|correct|that'?s (right|correct|fine|great|perfect|good)|sounds? good|that works|works for me|go ahead|go for it|book (it|me)|do it|please do|perfect|great|lovely|brilliant|absolutely|definitely)\b/i;
+
+function looksAffirmative(text: string): boolean {
+  return AFFIRMATIVE.test(text);
+}
+
+/** Text of the most recent patient (user) message, for the confirmation gate. */
+function latestPatientText(history: MessageParam[]): string {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const m = history[i];
+    if (m.role !== "user") continue;
+    if (typeof m.content === "string") return m.content;
+    const text = m.content
+      .filter((b): b is TextBlock => (b as { type?: string }).type === "text")
+      .map((b) => b.text)
+      .join(" ");
+    if (text) return text;
+  }
+  return "";
+}
+
 export async function runAgentTurn(
   history: MessageParam[],
   deps: AgentRunDeps,
@@ -32,6 +63,9 @@ export async function runAgentTurn(
   const messages: MessageParam[] = [...history];
   const toolCalls: { name: string; input: Record<string, unknown> }[] = [];
   let escalated = false;
+  // Fixed for the whole turn: whether the single inbound that triggered this turn is a
+  // clear affirmative. Appointment writes (book/reschedule/cancel) are gated on it below.
+  const patientConfirmed = looksAffirmative(latestPatientText(history));
 
   const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
   for (let round = 0; round < maxRounds; round++) {
@@ -84,6 +118,22 @@ export async function runAgentTurn(
           type: "tool_result",
           tool_use_id: tu.id,
           content: JSON.stringify({ error: "Skipped: handing over to a human." }),
+        });
+        continue;
+      }
+      // Hard confirmation gate: an appointment WRITE is refused unless the patient's
+      // latest inbound is an explicit affirmative. Hand the model a refusal so it asks
+      // for a clear yes rather than believing the booking already happened. This is the
+      // deterministic backstop to the prompt-level "read it back and confirm" rule, so
+      // the AI can never book, move or cancel a real appointment off an ambiguous reply.
+      if (APPOINTMENT_MUTATIONS.has(tu.name) && !patientConfirmed) {
+        console.warn(`[agent] ${tu.name} blocked: no explicit patient confirmation in the latest message`);
+        results.push({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: JSON.stringify({
+            error: "Not confirmed. Read back the exact date, time, site and treatment and get a clear yes from the patient before this can be done.",
+          }),
         });
         continue;
       }

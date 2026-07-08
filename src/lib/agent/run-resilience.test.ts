@@ -49,7 +49,7 @@ describe("run: malformed tool args", () => {
       .mockResolvedValueOnce(toolMessage([{ id: "t1", name: "book", input: null }]))
       .mockResolvedValueOnce(textMessage("done"));
     const dispatch = vi.fn(async (..._a: unknown[]): Promise<string> => "{}");
-    const r = await runAgentTurn([{ role: "user", content: "book" }], deps(create, dispatch));
+    const r = await runAgentTurn([{ role: "user", content: "yes please, book it" }], deps(create, dispatch));
     expect(r.replyText).toBe("done");
     // Dispatched with an object (the ?? {} fallback), never undefined/null.
     expect(dispatch).toHaveBeenCalledTimes(1);
@@ -67,7 +67,7 @@ describe("run: malformed tool args", () => {
       })
       .mockResolvedValueOnce(textMessage("ok"));
     const dispatch = vi.fn(async (..._a: unknown[]): Promise<string> => "{}");
-    const r = await runAgentTurn([{ role: "user", content: "book" }], deps(create, dispatch));
+    const r = await runAgentTurn([{ role: "user", content: "yes please, book it" }], deps(create, dispatch));
     expect(r.replyText).toBe("ok");
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
@@ -86,7 +86,7 @@ describe("run: dispatch throwing", () => {
     const dispatch = vi.fn(async (..._a: unknown[]): Promise<string> => {
       throw new Error("dentally write failed");
     });
-    const r = await runAgentTurn([{ role: "user", content: "book" }], deps(create, dispatch));
+    const r = await runAgentTurn([{ role: "user", content: "yes please, book it" }], deps(create, dispatch));
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledTimes(2); // the loop continued rather than aborting
     expect(r.escalated).toBe(true);
