@@ -100,10 +100,10 @@ describe("tool safety: mutation scoping and the IDOR surface", () => {
     const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX });
     // Even if a crafted message coaxed the model to pass a patient_id, the tool
     // schema has no such field and dispatch injects context.patientId itself.
-    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", treatment: "Invisalign", patient_id: "pat-999" });
+    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", finishTime: "2026-06-22T09:30:00Z", practitionerId: "42", treatment: "Invisalign", patient_id: "pat-999" });
     const payload = dentally.createAppointment.mock.calls[0][0];
-    expect(payload.patient_id).toBe("pat-010");
-    expect(payload.site_id).toBe("site-cc");
+    expect(payload.patient_id).toBe("pat-010"); // context-pinned, ignores the crafted pat-999
+    // site_id is no longer sent (the site is implied by the practitioner in real Dentally).
     // The book tool schema exposes no patient/site override.
     const bookTool = AGENT_TOOLS.find((t) => t.name === "book")!;
     expect(Object.keys(bookTool.input_schema.properties ?? {})).not.toContain("patient_id");

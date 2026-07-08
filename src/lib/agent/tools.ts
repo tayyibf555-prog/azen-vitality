@@ -4,6 +4,18 @@ import { findTreatment } from "@/lib/treatments/catalog";
 import { getSite, getClient } from "@/lib/mock/clients";
 import type { AgentContext } from "./types";
 
+// Real Dentally requires the appointment `reason` to be one of a fixed set (calibrated
+// against developer.dentally.co): Exam, Scale & Polish, Exam + Scale & Polish,
+// Continuing Treatment, Emergency, Review, Other. The patient's treatment interest is
+// mapped onto the closest reason; the specific treatment name is carried in the notes.
+function reasonForTreatment(treatment: string): string {
+  const t = treatment.toLowerCase();
+  if (/\b(check\s*-?up|exam|recall)\b/.test(t)) return "Exam";
+  if (/\b(hygien|scale|polish|clean)\b/.test(t)) return "Scale & Polish";
+  if (/\b(emergency|urgent|knocked|broken tooth|severe pain)\b/.test(t)) return "Emergency";
+  return "Other";
+}
+
 export const AGENT_TOOLS: Anthropic.Tool[] = [
   {
     name: "find_slots",
@@ -185,29 +197,37 @@ export function makeDispatch(deps: ToolDeps) {
           // Unknown caller not yet registered: force the register_patient step first.
           return JSON.stringify({ error: "Register this new patient with register_patient before booking." });
         }
-        // Real Dentally requires finish_time and practitioner_id. Prefer the exact values
-        // from the chosen slot (find_slots returns them); otherwise derive finish_time
-        // from the treatment's typical length. (appointment_type_id may ALSO be required
-        // on live Dentally — calibrate against the sandbox before enabling real writes.)
+        // Calibrated to the real Dentally POST /v1/appointments contract
+        // (developer.dentally.co): start_time, finish_time, practitioner_id AND a
+        // `reason` from the fixed enum are all REQUIRED. There is NO `treatment` field
+        // (the treatment name goes in notes) and no site_id (the site is implied by the
+        // practitioner). Prefer the slot's exact values from find_slots; derive
+        // finish_time from the treatment length only as a fallback.
+        const treatmentName = typeof input.treatment === "string" ? input.treatment : "";
         const start = typeof input.slotStart === "string" ? input.slotStart : "";
         const startMs = Date.parse(start);
-        const durationMin = findTreatment(typeof input.treatment === "string" ? input.treatment : "")?.durationMinutes ?? 30;
+        const durationMin = findTreatment(treatmentName)?.durationMinutes ?? 30;
         const finishTime =
           typeof input.finishTime === "string" && input.finishTime
             ? input.finishTime
             : Number.isNaN(startMs)
-              ? undefined
+              ? ""
               : new Date(startMs + durationMin * 60_000).toISOString();
-        const payload: Record<string, unknown> = {
+        const practitionerId = typeof input.practitionerId === "string" ? input.practitionerId : "";
+        // Dentally rejects an appointment with no practitioner or no end time. Never send
+        // an invalid write: ask the model to re-pick a slot from find_slots instead.
+        if (!practitionerId || !finishTime) {
+          return JSON.stringify({ error: "That slot is missing its practitioner or end time. Call find_slots again and book one of the slots it returns." });
+        }
+        const { appointment } = await deps.dentally.createAppointment({
           patient_id: patientId,
-          site_id: deps.context.siteId,
           start_time: start,
-          treatment: input.treatment,
+          finish_time: finishTime,
+          practitioner_id: practitionerId,
+          reason: reasonForTreatment(treatmentName),
+          notes: treatmentName ? `Booked via assistant: ${treatmentName}` : "Booked via assistant",
           booked_via_api: true,
-        };
-        if (finishTime) payload.finish_time = finishTime;
-        if (typeof input.practitionerId === "string" && input.practitionerId) payload.practitioner_id = input.practitionerId;
-        const { appointment } = await deps.dentally.createAppointment(payload);
+        });
         return JSON.stringify({ booked: true, appointmentId: appointment.id });
       }
       case "find_appointments": {

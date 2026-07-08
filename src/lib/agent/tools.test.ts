@@ -31,50 +31,55 @@ describe("makeDispatch", () => {
     expect(out).toContain("2026-06-22T09:00:00Z");
   });
 
-  it("book calls createAppointment with booked_via_api and the patient/site", async () => {
+  it("book sends the calibrated real-Dentally fields: reason/practitioner/finish, not treatment/site_id", async () => {
     const dentally = {
       getAvailability: vi.fn(),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-1" } }),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
-    const out = await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", treatment: "Invisalign" });
+    const out = await dispatch("book", {
+      slotStart: "2026-06-22T09:00:00Z",
+      finishTime: "2026-06-22T09:30:00Z",
+      practitionerId: "42",
+      treatment: "Invisalign",
+    });
     const payload = dentally.createAppointment.mock.calls[0][0];
-    expect(payload).toMatchObject({ patient_id: "pat-010", site_id: "site-cc", booked_via_api: true });
+    expect(payload).toMatchObject({
+      patient_id: "pat-010",
+      start_time: "2026-06-22T09:00:00Z",
+      finish_time: "2026-06-22T09:30:00Z",
+      practitioner_id: "42",
+      reason: "Other", // Invisalign -> Other; the treatment name goes in notes
+      booked_via_api: true,
+    });
+    expect(payload.treatment).toBeUndefined(); // NOT a Dentally field
+    expect(payload.site_id).toBeUndefined(); // site is implied by the practitioner
+    expect(payload.notes).toContain("Invisalign");
     expect(out).toContain("appt-1");
   });
 
-  it("book calibrates the payload for real Dentally: finish_time + practitioner_id from the slot", async () => {
-    const dentally = {
-      getAvailability: vi.fn(),
-      createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-2" } }),
-    };
+  it("book maps the treatment onto a valid Dentally reason enum", async () => {
+    const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "a" } }) };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
-    // With the slot's finishTime + practitionerId supplied, they pass straight through.
-    await dispatch("book", {
-      slotStart: "2026-06-22T09:00:00Z",
-      finishTime: "2026-06-22T09:30:00Z",
-      practitionerId: "prac-1",
-      treatment: "Invisalign",
-    });
-    expect(dentally.createAppointment.mock.calls[0][0]).toMatchObject({
-      start_time: "2026-06-22T09:00:00Z",
-      finish_time: "2026-06-22T09:30:00Z",
-      practitioner_id: "prac-1",
-    });
+    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", finishTime: "2026-06-22T09:30:00Z", practitionerId: "42", treatment: "checkup" });
+    expect(dentally.createAppointment.mock.calls[0][0]).toMatchObject({ reason: "Exam" }); // checkup -> Exam
+  });
+
+  it("book REFUSES to write a slot with no practitioner (never sends an invalid payload)", async () => {
+    const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn() };
+    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const out = await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", finishTime: "2026-06-22T09:30:00Z", treatment: "Invisalign" });
+    expect(dentally.createAppointment).not.toHaveBeenCalled();
+    expect(JSON.parse(out).error).toBeTruthy();
   });
 
   it("book derives finish_time from the treatment length when the slot omits it", async () => {
-    const dentally = {
-      getAvailability: vi.fn(),
-      createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-3" } }),
-    };
+    const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-3" } }) };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
-    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", treatment: "Invisalign" });
+    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", practitionerId: "42", treatment: "Invisalign" });
     const payload = dentally.createAppointment.mock.calls[0][0];
-    // finish_time is present and after start; no practitioner_id when the slot omits it.
     expect(typeof payload.finish_time).toBe("string");
     expect(Date.parse(payload.finish_time as string)).toBeGreaterThan(Date.parse("2026-06-22T09:00:00Z"));
-    expect(payload.practitioner_id).toBeUndefined();
   });
 
   it("find_appointments returns only upcoming, active appointments", async () => {
@@ -137,7 +142,7 @@ describe("makeDispatch", () => {
     );
     expect(reg).toContain("pat-new");
 
-    await dispatch("book", { slotStart: "2026-07-01T09:00:00Z", treatment: "Checkup" });
+    await dispatch("book", { slotStart: "2026-07-01T09:00:00Z", finishTime: "2026-07-01T09:30:00Z", practitionerId: "42", treatment: "Checkup" });
     expect(dentally.createAppointment).toHaveBeenCalledWith(expect.objectContaining({ patient_id: "pat-new" }));
   });
 
