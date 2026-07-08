@@ -1,5 +1,5 @@
 import { ShieldCheck, ClipboardCheck, FileText, GraduationCap } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/primitives";
+import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { READINESS } from "@/lib/compliance/mock";
 import { statusLabel } from "./status";
@@ -24,6 +24,10 @@ export function ComplianceView({ clientSlug }: { clientSlug: string }) {
         title="Compliance"
         description="Your CQC and GDC compliance organised in one place: a readiness view across the five key lines of enquiry, the recurring audit and check calendar, the policy library and the staff training matrix, with an AI readiness check. This is decision-support and an organiser, not legal advice, and the data is mock for now."
       />
+
+      {/* The header hints "mock for now" but the stat cards do not; this note makes
+          the readiness %, audits and training figures unmistakably sample. */}
+      <SampleNote>Sample data, not yet from your live sources. Readiness and audit figures are pilot estimates until your real records are connected.</SampleNote>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard

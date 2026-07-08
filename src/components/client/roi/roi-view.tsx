@@ -1,5 +1,5 @@
 import { Coins, UserPlus, Target, TrendingUp } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/primitives";
+import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient, getSites, getSiteMetrics } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { ROI_SUMMARY, scaleRoiSummary } from "@/lib/roi/mock";
@@ -40,6 +40,11 @@ export async function RoiView({ clientSlug }: { clientSlug: string }) {
         title="ROI"
         description="How your patient-acquisition spend turns into booked patients and treatment revenue across every channel."
       />
+
+      {/* Whole section is sample: spend, cost per patient, attributed revenue, the
+          multiplier, funnel, growth trend and channel breakdown all come from the
+          mock until Meta and Dentally connect. One banner covers it. */}
+      <SampleNote>Sample data, not yet from your live sources. Every figure on this page is a pilot estimate until your Meta and Dentally accounts connect.</SampleNote>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard

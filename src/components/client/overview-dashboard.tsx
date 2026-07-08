@@ -16,6 +16,8 @@ import {
   SectionCard,
   StatCard,
   StatusPill,
+  SampleBadge,
+  SampleNote,
   DataTable,
   BarChart,
   ProgressMeter,
@@ -268,17 +270,23 @@ export function OverviewDashboard({
         />
       )}
 
+      {/* One section-level note covers every figure below: the KPI cards, the
+          weekly revenue chart and the by-site table are all sample until the live
+          sources connect. Kept lightweight per-card via the "Sample" hints too. */}
+      <SampleNote>Sample data, not yet from your live sources. These figures are for the pilot only.</SampleNote>
+
       <div className={variant === "embedded" ? "grid grid-cols-3 gap-4" : "grid grid-cols-2 gap-4 lg:grid-cols-4"}>
         <StatCard
           label="Leads in"
           value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
           icon={TrendingUp}
-          hint={allSites ? "Across all sites, last 30 days" : `${scopedSiteName}, last 30 days`}
+          hint={`Sample · ${allSites ? "across all sites, last 30 days" : `${scopedSiteName}, last 30 days`}`}
         />
         <StatCard
           label="Consultations booked"
           value={compact(allSites ? (metrics?.consultationsBooked ?? totalBooked) : totalBooked)}
           icon={CalendarCheck}
+          hint="Sample figure"
         />
         {variant === "standalone" ? (
           <StatCard
@@ -286,13 +294,14 @@ export function OverviewDashboard({
             label="Revenue recovered"
             value={gbp(allSites ? (metrics?.recoveredRevenue ?? totalRevenue) : totalRevenue)}
             icon={PoundSterling}
+            hint="Sample until live data connects"
           />
         ) : null}
         <StatCard
           label="Cost per booking"
           value={gbp(avgCostPerBooking)}
           icon={Target}
-          hint="Blended average"
+          hint="Sample · blended average"
         />
       </div>
 
@@ -301,6 +310,7 @@ export function OverviewDashboard({
           title="Revenue recovered"
           description={allSites ? "Recovered revenue per week across all sites" : `Recovered revenue per week at ${scopedSiteName}`}
           className="lg:col-span-2"
+          actions={<SampleBadge />}
         >
           {trend.length > 0 ? (
             <BarChart data={trend} format={(v) => gbp(v)} height={200} />
@@ -364,11 +374,16 @@ export function OverviewDashboard({
               key: "site",
               label: "By site",
               content: (
-                <DataTable
-                  columns={SITE_COLUMNS}
-                  rows={siteMetrics}
-                  getRowKey={(m) => m.siteId}
-                />
+                // The by-site table is all sample; the sibling "Recent enquiries"
+                // tab is LIVE, so the caption is scoped to this tab only.
+                <div className="space-y-3">
+                  <SampleNote>Sample data, not yet from your live sources.</SampleNote>
+                  <DataTable
+                    columns={SITE_COLUMNS}
+                    rows={siteMetrics}
+                    getRowKey={(m) => m.siteId}
+                  />
+                </div>
               ),
             },
           ]}

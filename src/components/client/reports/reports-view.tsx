@@ -1,5 +1,5 @@
 import { Coins, UserPlus, TrendingUp, Gauge } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/primitives";
+import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient, getSites, getSiteMetrics } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { money, count } from "@/components/client/roi/format";
@@ -37,8 +37,12 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Reports"
-        description="AI weekly and monthly business reviews across acquisition, conversion, lifecycle and compliance, with recommendations. The figures are mock until the live sources connect."
+        description="AI weekly and monthly business reviews across acquisition, conversion, lifecycle and compliance, with recommendations."
       />
+
+      {/* Was a subtle line in the header description; promoted to a visible banner so
+          the figures below are unmistakably sample. */}
+      <SampleNote>Sample data, not yet from your live sources. The figures in these reviews are pilot estimates until the live sources connect.</SampleNote>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard

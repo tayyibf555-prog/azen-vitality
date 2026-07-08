@@ -1,5 +1,5 @@
 import { Coins, Users, Target, CalendarCheck } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/primitives";
+import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { ACCOUNT_SUMMARY } from "@/lib/meta-ads/mock";
 import { money, count } from "./format";
@@ -23,6 +23,10 @@ export function MetaAdsView({ clientSlug }: { clientSlug: string }) {
         title="Meta Ads"
         description="Plan, build and track your Facebook and Instagram campaigns in one place, with AI-written ad copy, a launch guide, analytics and a library of winning dental ads."
       />
+
+      {/* Header disclaimer: spend, leads, cost per lead and booked stats are all
+          sample until the practice's Meta account connects. */}
+      <SampleNote>Sample data, not yet from your live sources. Spend, leads and cost figures are pilot estimates until your Meta account connects.</SampleNote>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
