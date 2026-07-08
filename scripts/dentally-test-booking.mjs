@@ -99,6 +99,9 @@ const dayStr = (offset) => new Date(Date.now() + offset * 86_400_000).toISOStrin
       reason: "Other",
       notes: "TEST booking via Azen assistant validation - please delete",
       booked_via_api: true,
+      // TEST-ONLY: suppress double-booking errors so a scheduling clash cannot mask a
+      // payload success. NOT part of the real agent payload.
+      ...(process.env.TEST_FORCE === "true" ? { force_changes: true } : {}),
     },
   };
   log("POST /v1/appointments  (payload we are sending)", payload);
