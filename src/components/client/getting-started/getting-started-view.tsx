@@ -1,17 +1,23 @@
-import { PageHeader, SectionCard, StatCard, StatusPill, type Tone } from "@/components/primitives";
-import { ListChecks, ShieldAlert, Rocket } from "lucide-react";
-import { getClient } from "@/lib/mock/clients";
+"use client";
 
-// The go-live checklist is static onboarding content: what the practice needs to
-// provide before the platform stops being read-and-review only and starts
-// contacting patients. Mirrors the prepared onboarding sheet exactly (11 items,
-// 3 go-live gates, per-item detail), so it stays the single source of truth the
-// practice owner reads. Owner/staff facing, never patient facing.
+import { useEffect, useState } from "react";
+import { PageHeader, SectionCard, StatCard, StatusPill, ProgressMeter, type Tone } from "@/components/primitives";
+import { ListChecks, ShieldAlert, Rocket, Check } from "lucide-react";
+import { getClient } from "@/lib/mock/clients";
+import { cn } from "@/lib/utils";
+
+// The go-live checklist: what the practice needs to provide before the platform
+// stops being read-and-review only and starts contacting patients. The 11 items /
+// 3 go-live gates mirror the prepared onboarding sheet exactly. Owners can now TICK
+// items off; ticks persist per practice (shared between owners) via
+// /api/getting-started. Owner/staff facing, never patient facing.
 
 /** The badges shown against each item, matching the sheet's legend. */
 type ItemTag = "gate" | "practice" | "we" | "optional";
 
 interface ChecklistItem {
+  /** Stable id for persistence; must not change once shipped, or a tick resets. */
+  key: string;
   name: string;
   why: string;
   /** The "More info" disclosure body: one or more paragraphs of plain detail. */
@@ -38,6 +44,7 @@ const SECTIONS: ChecklistSection[] = [
     gated: true,
     items: [
       {
+        key: "consent",
         name: "Patient consent and opt-out list",
         why: "Confirm which patients may be contacted for recall and reactivation, the lawful basis, and any do-not-contact list. The single most important item before anything sends.",
         detail: [
@@ -53,6 +60,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["gate", "practice"],
       },
       {
+        key: "email-domain",
         name: "Email sending domain",
         why: "Access to your domain's DNS so emails send from your own address, for example hello@vitalitydental.co.uk, not a generic one. You grant access, we do the technical setup.",
         detail: [
@@ -68,6 +76,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["gate", "practice"],
       },
       {
+        key: "approve-tone",
         name: "Approve the message tone and templates",
         why: "Sign off how the AI speaks to patients, across recall, reactivation, reminders and replies, before a single message goes out.",
         detail: [
@@ -90,6 +99,7 @@ const SECTIONS: ChecklistSection[] = [
     sub: "Replaces the sample content with your practice's own.",
     items: [
       {
+        key: "usps",
         name: "Reasons to choose the practice",
         why: "Your genuine selling points. The AI weaves these into its messages, so the same true reasons show up across every channel.",
         detail: [
@@ -105,6 +115,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["practice"],
       },
       {
+        key: "knowledge",
         name: "Practice knowledge",
         why: "Services, price ranges, opening hours per site, dentist bios and common questions, so the AI answers patients accurately.",
         detail: [
@@ -120,6 +131,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["practice"],
       },
       {
+        key: "rota-details",
         name: "Staff rota details",
         why: "Staff list, availability and working hours, so the rota generates correctly and texts each person their shifts.",
         detail: [
@@ -135,6 +147,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["practice"],
       },
       {
+        key: "compliance-docs",
         name: "Compliance documents",
         why: "Your real policies, audit dates and training records. The compliance dashboard currently runs on sample data.",
         detail: [
@@ -157,6 +170,7 @@ const SECTIONS: ChecklistSection[] = [
     sub: "Your calls, made when you are ready.",
     items: [
       {
+        key: "go-live-decision",
         name: "Go-live decision, per system",
         why: "Turn each system on when you are ready. You hold the on and off switches, so you can start with one and add the rest.",
         detail: [
@@ -172,6 +186,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["practice"],
       },
       {
+        key: "dpa",
         name: "Data-processing agreement",
         why: "The GDPR paperwork covering how patient data is stored and used. We provide the template, you review and sign.",
         detail: [
@@ -187,6 +202,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["practice", "we"],
       },
       {
+        key: "staff-logins",
         name: "Staff logins and roles",
         why: "Tell us who needs access and at what level. We create the accounts.",
         detail: [
@@ -202,6 +218,7 @@ const SECTIONS: ChecklistSection[] = [
         tags: ["practice", "we"],
       },
       {
+        key: "meta-access",
         name: "Meta Ads account access",
         why: "If you want us to run and track Facebook and Instagram campaigns, grant access to your ad account so we can report real return on spend.",
         detail: [
@@ -220,6 +237,10 @@ const SECTIONS: ChecklistSection[] = [
     ],
   },
 ];
+
+const ALL_ITEMS = SECTIONS.flatMap((s) => s.items);
+const TOTAL_ITEMS = ALL_ITEMS.length;
+const GATE_COUNT = ALL_ITEMS.filter((i) => i.tags.includes("gate")).length;
 
 /** The legend / tag styling, mapped onto the shared StatusPill tones. */
 const TAG_META: Record<ItemTag, { label: string; tone: Tone }> = {
@@ -251,18 +272,59 @@ function ItemTags({ item }: { item: ChecklistItem }) {
 
 export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
+
+  // Ticked state, shared per practice. Loaded from the API; toggles persist there
+  // so both owners see the same progress. Optimistic: the box flips instantly and
+  // reverts if the save fails.
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/getting-started?client=${encodeURIComponent(clientSlug)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("state fetch failed"))))
+      .then((j: { ok?: boolean; state?: Record<string, boolean> }) => {
+        if (active && j.ok) setChecked(j.state ?? {});
+      })
+      .catch(() => {
+        // Keep everything un-ticked on error; the checklist still works.
+      })
+      .finally(() => {
+        if (active) setLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [clientSlug]);
+
+  async function toggle(key: string) {
+    if (!loaded) return;
+    const next = !checked[key];
+    setChecked((c) => ({ ...c, [key]: next })); // optimistic
+    try {
+      const res = await fetch("/api/getting-started", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ client: clientSlug, key, checked: next }),
+      });
+      if (!res.ok) throw new Error("save failed");
+    } catch {
+      setChecked((c) => ({ ...c, [key]: !next })); // revert
+    }
+  }
+
   if (!client) {
     return <PageHeader title="Getting started" description="This client could not be found." />;
   }
 
-  const totalItems = SECTIONS.reduce((sum, s) => sum + s.items.length, 0);
-  const gateCount = SECTIONS.flatMap((s) => s.items).filter((i) => i.tags.includes("gate")).length;
+  const doneCount = ALL_ITEMS.filter((i) => checked[i.key]).length;
+  const fraction = TOTAL_ITEMS ? doneCount / TOTAL_ITEMS : 0;
 
   return (
     <>
       <PageHeader
         title="Getting started"
-        description="Your go-live checklist. The platform, your data and every feature are already built and running, in read and review mode. This short list is only what we need from the practice to go fully live."
+        description="Your go-live checklist. The platform, your data and every feature are already built and running, in read and review mode. This short list is only what we need from the practice to go fully live. Tick items off as you send them, both owners share the same list."
       />
 
       <SectionCard bodyClassName="p-5">
@@ -271,7 +333,7 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
           every patient, worklist and draft, but it does not contact patients or run campaigns until the items below are
           in place. We handle all the technical connections ourselves (your phone and WhatsApp senders, Google reviews,
           website form and domain). Open <span className="font-semibold text-navy">More info</span> on any item for what
-          it means and how to do it.
+          it means and how to do it, and <span className="font-semibold text-navy">tick the box</span> once you have sent it.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">Key</span>
@@ -284,10 +346,25 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
       </SectionCard>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Items from the practice" value={totalItems} icon={ListChecks} hint="Across three steps" />
-        <StatCard label="Go-live gates" value={gateCount} icon={ShieldAlert} hint="Block messaging until cleared" />
+        <StatCard
+          emphasis
+          label="Ticked off"
+          value={`${doneCount} / ${TOTAL_ITEMS}`}
+          icon={ListChecks}
+          hint={doneCount === TOTAL_ITEMS ? "All items done" : "Items you have sent"}
+        />
+        <StatCard label="Go-live gates" value={GATE_COUNT} icon={ShieldAlert} hint="Block messaging until cleared" />
         <StatCard label="Platform" value="Built" icon={Rocket} hint="Data and features already live" />
       </div>
+
+      <SectionCard bodyClassName="p-4">
+        <div className="flex items-center gap-3">
+          <ProgressMeter value={fraction} className="flex-1" />
+          <span className="shrink-0 text-sm font-semibold text-navy tabular-nums">
+            {doneCount} of {TOTAL_ITEMS} done
+          </span>
+        </div>
+      </SectionCard>
 
       {SECTIONS.map((section) => (
         <SectionCard
@@ -298,30 +375,60 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
           className={section.gated ? "ring-warning/30" : undefined}
         >
           <ul className="divide-y divide-line">
-            {section.items.map((item) => (
-              <li key={item.name} className="px-5 py-4">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 space-y-1">
-                    <p className="text-sm font-semibold text-navy">{item.name}</p>
-                    <p className="max-w-2xl text-sm leading-relaxed text-muted">{item.why}</p>
+            {section.items.map((item) => {
+              const isChecked = Boolean(checked[item.key]);
+              return (
+                <li key={item.key} className="flex items-start gap-3.5 px-5 py-4">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isChecked}
+                    aria-label={isChecked ? `Mark "${item.name}" not done` : `Mark "${item.name}" done`}
+                    disabled={!loaded}
+                    onClick={() => toggle(item.key)}
+                    className={cn(
+                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40",
+                      isChecked
+                        ? "border-success bg-success text-white"
+                        : "border-line-strong bg-card hover:border-blue-royal/60",
+                      !loaded && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    {isChecked ? <Check size={13} strokeWidth={3} /> : null}
+                  </button>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 space-y-1">
+                        <p
+                          className={cn(
+                            "text-sm font-semibold text-navy transition-colors",
+                            isChecked && "text-muted line-through decoration-muted/50",
+                          )}
+                        >
+                          {item.name}
+                        </p>
+                        <p className="max-w-2xl text-sm leading-relaxed text-muted">{item.why}</p>
+                      </div>
+                      <ItemTags item={item} />
+                    </div>
+                    <details className="group mt-3">
+                      <summary className="inline-flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full bg-blue-royal/10 px-3 py-1 text-xs font-semibold text-blue-royal transition-colors hover:bg-blue-royal/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40">
+                        <span className="text-[9px] leading-none transition-transform group-open:rotate-90">&#9656;</span>
+                        <span>More info</span>
+                      </summary>
+                      <div className="mt-2.5 max-w-2xl space-y-2 rounded-xl bg-card-muted px-4 py-3 text-sm leading-relaxed text-muted">
+                        {item.detail.map((para) => (
+                          <p key={para.lead}>
+                            <span className="font-semibold text-navy">{para.lead}</span> {para.body}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
                   </div>
-                  <ItemTags item={item} />
-                </div>
-                <details className="group mt-3">
-                  <summary className="inline-flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full bg-blue-royal/10 px-3 py-1 text-xs font-semibold text-blue-royal transition-colors hover:bg-blue-royal/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40">
-                    <span className="text-[9px] leading-none transition-transform group-open:rotate-90">&#9656;</span>
-                    <span>More info</span>
-                  </summary>
-                  <div className="mt-2.5 max-w-2xl space-y-2 rounded-xl bg-card-muted px-4 py-3 text-sm leading-relaxed text-muted">
-                    {item.detail.map((para) => (
-                      <p key={para.lead}>
-                        <span className="font-semibold text-navy">{para.lead}</span> {para.body}
-                      </p>
-                    ))}
-                  </div>
-                </details>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </SectionCard>
       ))}

@@ -27,6 +27,7 @@ import { NotificationsView } from "@/components/client/notifications/notificatio
 import { PracticeBrainView } from "@/components/client/practice-brain";
 import { SettingsView } from "@/components/client/settings/settings-view";
 import { SystemsView } from "@/components/client/systems/systems-view";
+import { GettingStartedView } from "@/components/client/getting-started/getting-started-view";
 import { ModulePlaceholder } from "@/components/client/module-placeholder";
 import { CLIENT_MODULE_SLUGS } from "@/lib/nav";
 import { requireModuleAccess } from "@/lib/auth/page-guard";
@@ -163,6 +164,10 @@ export default async function OwnerModulePage({
 
   if (module === "controls") {
     return <SystemsView clientSlug={client} />;
+  }
+
+  if (module === "getting-started") {
+    return <GettingStartedView clientSlug={client} />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {
