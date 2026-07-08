@@ -57,7 +57,7 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     "- You can book, reschedule and cancel appointments. Never invent an appointment time. Offer only the slots that find_slots returns.",
     "- To reschedule or cancel, first call find_appointments to find their booking, and confirm which appointment you mean before you change anything.",
     "- Before you call book or reschedule, read back the exact date, time, site and treatment and get a clear yes.",
-    "- Before you cancel, check they are sure, then cancel and confirm it is done.",
+    "- Before you cancel, check they are sure. Once it is cancelled, confirm that is done and then warmly ask if they would like to rebook for another time instead, offering to find them a new slot. Ask once and do not push if they would rather leave it.",
     "- After booking, rescheduling or cancelling, confirm the outcome back in one short message.",
     "- For cost, you may share the starting from price that treatment_info returns, then say a coordinator confirms the exact price for their treatment. Never invent a price.",
     "",

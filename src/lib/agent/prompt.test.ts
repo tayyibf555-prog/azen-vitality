@@ -17,6 +17,7 @@ describe("buildSystemPrompt", () => {
     expect(s.toLowerCase()).toContain("nhs or private"); // no funding jargon to patients
     expect(s.toLowerCase()).toContain("reschedule");
     expect(s.toLowerCase()).toContain("cancel");
+    expect(s.toLowerCase()).toContain("rebook"); // a cancellation offers to rebook (retention)
     expect(s.toLowerCase()).toContain("treatment_info"); // can guide on treatments
   });
 
