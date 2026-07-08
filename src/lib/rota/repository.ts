@@ -48,10 +48,19 @@ function rowToStaff(r: StaffRow): RotaStaff {
   };
 }
 
-export async function listStaff(clientId: string, opts?: { activeOnly?: boolean }): Promise<RotaStaff[]> {
+export async function listStaff(
+  clientId: string,
+  opts?: { activeOnly?: boolean; siteIds?: string[] },
+): Promise<RotaStaff[]> {
   const db = serviceClient();
   let q = db.from("rota_staff").select("*").eq("client_id", clientId);
   if (opts?.activeOnly) q = q.eq("active", true);
+  // Site scope: when a specific site (or set) is selected, show staff assigned to it
+  // PLUS "any site" floating staff (site_id null, who work across sites). An all-sites
+  // view passes no siteIds and sees everyone. Ids are safe (site-cc etc., no commas).
+  if (opts?.siteIds && opts.siteIds.length > 0) {
+    q = q.or(`site_id.in.(${opts.siteIds.join(",")}),site_id.is.null`);
+  }
   const { data, error } = await q.order("created_at", { ascending: true });
   if (error) throw error;
   return (data as StaffRow[]).map(rowToStaff);

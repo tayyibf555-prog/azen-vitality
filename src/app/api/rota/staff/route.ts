@@ -2,6 +2,7 @@ import { getClient } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listStaff, createStaff } from "@/lib/rota/repository";
+import { getViewScope } from "@/lib/site-view";
 import type { Availability } from "@/lib/rota/types";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +46,11 @@ export async function GET(request: Request): Promise<Response> {
   const roleDenied = requireOwnerRole(auth);
   if (roleDenied) return roleDenied;
 
-  const staff = await listStaff(client.id);
+  // Scope the staff list to the selected site (N15 by default) plus any floating
+  // "any site" staff, so the Staff tab does not show other practices' teams. An
+  // all-sites view sees everyone.
+  const scope = await getViewScope(client.id);
+  const staff = await listStaff(client.id, scope.isAllSites ? undefined : { siteIds: scope.siteIds });
   return Response.json({ ok: true, staff });
 }
 
