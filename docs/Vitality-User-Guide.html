@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vitality Dental — How to use your platform</title>
+<style>
+  :root{
+    --navy:#0b2049; --navy2:#0a1c40; --blue:#2379ab; --sky:#5bc4f7;
+    --page:#eef2f8; --card:#ffffff; --ink:#33405c; --muted:#64748b;
+    --line:#dde5f0; --line-strong:#c8d4e6; --card-muted:#e6edf7;
+    --green:#1a8f5b; --amber:#c07a12; --red:#d1495b;
+    --shadow:0 18px 40px -22px rgba(11,32,73,.45);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--page); color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+    font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:880px; margin:0 auto; padding:0 22px 80px}
+  h1,h2,h3,h4{color:var(--navy); line-height:1.2; text-wrap:balance; margin:0}
+  p{margin:0}
+  a{color:var(--blue)}
+  strong{color:var(--navy)}
+  .muted{color:var(--muted)}
+
+  /* Cover */
+  .cover{
+    background:linear-gradient(155deg,#0b2049 0%,#0a1c40 55%,#071634 100%);
+    color:#eaf1fb; border-radius:0 0 28px 28px; padding:64px 48px 56px; position:relative; overflow:hidden;
+    margin-bottom:44px;
+  }
+  .cover .glyph{position:absolute; right:-44px; bottom:-120px; width:26rem; height:26rem; color:rgba(255,255,255,.05); pointer-events:none}
+  .brandrow{display:flex; align-items:center; gap:12px; font-weight:800}
+  .logo{display:inline-flex; height:40px; width:40px; align-items:center; justify-content:center; border-radius:12px; background:var(--blue); color:#fff; font-size:20px; font-weight:800}
+  .cover h1{color:#fff; font-size:38px; margin:34px 0 10px; max-width:16ch}
+  .cover p.sub{color:#a9c4ea; font-size:18px; max-width:46ch}
+  .cover .meta{margin-top:30px; color:#7fa6d8; font-size:13px; letter-spacing:.02em}
+
+  /* Sections */
+  section.block{margin:44px 0 0}
+  .eyebrow{display:inline-block; font-size:12px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:var(--blue); margin-bottom:8px}
+  h2{font-size:26px; margin-bottom:6px}
+  h2 + p.lede{color:var(--muted); font-size:17px; margin-bottom:18px; max-width:62ch}
+  .rule{height:1px; background:var(--line); border:0; margin:40px 0 0}
+
+  /* Contents */
+  .toc{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px 26px; box-shadow:var(--shadow)}
+  .toc h2{font-size:19px; margin-bottom:12px}
+  .toc ol{margin:0; padding-left:20px; columns:2; column-gap:34px}
+  .toc li{margin:5px 0; break-inside:avoid}
+  .toc a{color:var(--ink); text-decoration:none}
+  .toc a:hover{color:var(--blue)}
+
+  /* Cards / callouts */
+  .card{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px 24px; box-shadow:var(--shadow)}
+  .note{border-radius:14px; padding:14px 18px; font-size:15px; display:flex; gap:12px; align-items:flex-start}
+  .note .ic{flex:0 0 auto; font-weight:800}
+  .note.tip{background:#e9f6ee; border:1px solid #bfe4cd; color:#155e3b}
+  .note.tip .ic{color:var(--green)}
+  .note.warn{background:#fdf3e3; border:1px solid #f0d9ac; color:#8a5a10}
+  .note.warn .ic{color:var(--amber)}
+  .note.info{background:#e8f2fb; border:1px solid #c2ddf2; color:#1c4e79}
+  .note.info .ic{color:var(--blue)}
+  .note b{color:inherit}
+
+  /* Steps */
+  ol.steps{counter-reset:s; list-style:none; margin:14px 0 0; padding:0}
+  ol.steps li{position:relative; padding:0 0 0 40px; margin:0 0 12px}
+  ol.steps li::before{
+    counter-increment:s; content:counter(s);
+    position:absolute; left:0; top:0; height:26px; width:26px; border-radius:50%;
+    background:var(--blue); color:#fff; font-size:13px; font-weight:800;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps li b{color:var(--navy)}
+
+  /* How-it-works flow */
+  .flow{display:flex; flex-wrap:wrap; gap:10px; align-items:stretch; margin-top:8px}
+  .flow .step{flex:1 1 150px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; box-shadow:var(--shadow)}
+  .flow .step .n{font-size:12px; font-weight:800; color:var(--blue)}
+  .flow .step h4{font-size:15px; margin:4px 0 4px}
+  .flow .step p{font-size:13.5px; color:var(--muted); line-height:1.5}
+
+  /* App window mockup */
+  .app{border:1px solid var(--line-strong); border-radius:14px; overflow:hidden; box-shadow:var(--shadow); background:#fff; margin:6px 0 0}
+  .app .bar{display:flex; align-items:center; gap:8px; padding:9px 14px; background:#0b2049; border-bottom:1px solid #0a1730}
+  .app .bar .dot{height:10px; width:10px; border-radius:50%}
+  .app .bar .url{margin-left:10px; font-size:12px; color:#a9c4ea; background:#0a1c40; border:1px solid #274d86; border-radius:999px; padding:3px 12px}
+  .app .body{display:grid; grid-template-columns:170px 1fr; min-height:230px}
+  .side{background:linear-gradient(180deg,#0b2049,#0a1c40); padding:14px 10px; color:#a9c4ea}
+  .side .si{display:flex; align-items:center; gap:9px; font-size:13px; padding:8px 10px; border-radius:9px; margin-bottom:3px}
+  .side .si .sq{height:16px; width:16px; border-radius:5px; background:#274d86; flex:0 0 auto}
+  .side .si.active{background:#fff; color:#0b2049; font-weight:700}
+  .side .si.active .sq{background:var(--blue)}
+  .side .lbl{font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:#5f7bad; padding:6px 10px 4px}
+  .main{background:var(--page); padding:16px 18px}
+  .m-h{display:flex; align-items:center; justify-content:space-between; margin-bottom:12px}
+  .m-h .t{font-size:15px; font-weight:800; color:var(--navy)}
+  .m-h .site{font-size:11px; color:var(--muted); background:#fff; border:1px solid var(--line); border-radius:999px; padding:3px 10px}
+  .stat{background:#fff; border:1px solid var(--line); border-radius:12px; padding:11px 13px}
+  .stat .k{font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+  .stat .v{font-size:20px; font-weight:800; color:var(--navy); line-height:1.2; margin-top:2px}
+  .stat.emph{background:var(--blue); border-color:var(--blue)}
+  .stat.emph .k{color:#cfe6f5} .stat.emph .v{color:#fff}
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:9px}
+  .grid2{display:grid; grid-template-columns:repeat(2,1fr); gap:9px}
+  .panel{background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 13px; margin-top:10px}
+  .panel .pt{font-size:12px; font-weight:800; color:var(--navy); margin-bottom:8px}
+  .row{display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-top:1px solid var(--line); font-size:12.5px}
+  .row:first-of-type{border-top:0}
+  .row .nm{font-weight:600; color:var(--navy)}
+  .row .su{font-size:11px; color:var(--muted)}
+  .pill{font-size:10.5px; font-weight:700; border-radius:999px; padding:2px 9px; white-space:nowrap}
+  .pill.g{background:#e2f4ea; color:#15794a} .pill.a{background:#fbeed3; color:#8a5a10}
+  .pill.r{background:#fbe0e4; color:#a4243b} .pill.b{background:#e2eefb; color:#1c4e79} .pill.n{background:#eef1f6; color:#5b6577}
+  .bubble{max-width:78%; padding:8px 11px; border-radius:13px; font-size:12px; margin:6px 0}
+  .bubble.in{background:#fff; border:1px solid var(--line); color:var(--ink)}
+  .bubble.out{background:var(--blue); color:#fff; margin-left:auto}
+  .bars{display:flex; align-items:flex-end; gap:8px; height:78px; padding-top:6px}
+  .bars i{flex:1; background:linear-gradient(180deg,var(--sky),var(--blue)); border-radius:5px 5px 0 0; display:block}
+  .toggle{display:flex; align-items:center; justify-content:space-between; padding:9px 11px; background:#fff; border:1px solid var(--line); border-radius:10px; margin-top:8px; font-size:12.5px; font-weight:600; color:var(--navy)}
+  .sw{height:18px; width:32px; border-radius:999px; position:relative; flex:0 0 auto}
+  .sw.on{background:var(--green)} .sw.off{background:#c8d0dd}
+  .sw::after{content:""; position:absolute; top:2px; height:14px; width:14px; border-radius:50%; background:#fff}
+  .sw.on::after{right:2px} .sw.off::after{left:2px}
+  .cap{font-size:12.5px; color:var(--muted); margin-top:8px; text-align:center}
+
+  /* Callout numbers used with a screen */
+  .calln{display:inline-flex; height:20px; width:20px; border-radius:50%; background:var(--navy); color:#fff; font-size:11px; font-weight:800; align-items:center; justify-content:center; margin-right:7px; flex:0 0 auto}
+  ul.legend{list-style:none; margin:14px 0 0; padding:0}
+  ul.legend li{display:flex; align-items:flex-start; gap:2px; margin:0 0 9px; font-size:14.5px}
+  ul.legend li span.tx{padding-top:1px}
+
+  /* Module block */
+  .mod{display:grid; grid-template-columns:1fr; gap:18px; margin-top:22px; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px 24px; box-shadow:var(--shadow); break-inside:avoid}
+  .mod h3{font-size:20px; display:flex; align-items:center; gap:10px}
+  .mod .tag{font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:#fff; background:var(--blue); border-radius:999px; padding:3px 10px}
+  .mod .tag.own{background:var(--navy)}
+  .mod .what{margin-top:8px; font-size:15.5px}
+  .mod h4{font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:16px 0 0}
+  .mini{margin-top:6px}
+
+  .who table{width:100%; border-collapse:collapse; font-size:14.5px; background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .who th,.who td{text-align:left; padding:11px 14px; border-bottom:1px solid var(--line)}
+  .who th{background:var(--navy); color:#fff; font-size:13px; letter-spacing:.02em}
+  .who tr:last-child td{border-bottom:0}
+  .who td.y{color:var(--green); font-weight:700} .who td.n{color:var(--muted)}
+  .who td .g{color:var(--navy); font-weight:600}
+
+  @media (max-width:640px){
+    .cover{padding:44px 24px 40px} .cover h1{font-size:30px}
+    .wrap{padding:0 14px 60px}
+    .toc ol{columns:1}
+    .app .body{grid-template-columns:120px 1fr}
+    .grid3{grid-template-columns:1fr 1fr}
+  }
+  @media print{
+    body{background:#fff}
+    .cover{border-radius:0}
+    .card,.mod,.app,.toc,.flow .step{box-shadow:none}
+    section.block{break-inside:avoid}
+    h2{break-after:avoid}
+    .mod{break-inside:avoid}
+    a{color:var(--ink); text-decoration:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <svg class="glyph" aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.4c-2.1 0-3.5.9-4.6.9-1 0-1.7-.5-2.6-.5C3.3 2.8 2.4 4.3 2.4 6.6c0 2 .7 3.4 1.2 5.3.3 1.2.4 2.1.6 3.6.3 2.4.5 4.4.9 5.6.3.9.8 1.5 1.5 1.5.9 0 1.2-1 1.5-2.6.3-1.6.5-3.3 1.4-3.3s1.1 1.7 1.4 3.3c.3 1.6.6 2.6 1.5 2.6.7 0 1.2-.6 1.5-1.5.4-1.2.6-3.2.9-5.6.2-1.5.3-2.4.6-3.6.5-1.9 1.2-3.3 1.2-5.3 0-2.3-.9-3.8-2.4-3.8-.9 0-1.6.5-2.6.5-1.1 0-2.5-.9-4.6-.9z"/></svg>
+  <div class="brandrow"><span class="logo"><svg viewBox="0 0 24 24" fill="currentColor" style="width:58%;height:58%"><path d="M12 2.4c-2.1 0-3.5.9-4.6.9-1 0-1.7-.5-2.6-.5C3.3 2.8 2.4 4.3 2.4 6.6c0 2 .7 3.4 1.2 5.3.3 1.2.4 2.1.6 3.6.3 2.4.5 4.4.9 5.6.3.9.8 1.5 1.5 1.5.9 0 1.2-1 1.5-2.6.3-1.6.5-3.3 1.4-3.3s1.1 1.7 1.4 3.3c.3 1.6.6 2.6 1.5 2.6.7 0 1.2-.6 1.5-1.5.4-1.2.6-3.2.9-5.6.2-1.5.3-2.4.6-3.6.5-1.9 1.2-3.3 1.2-5.3 0-2.3-.9-3.8-2.4-3.8-.9 0-1.6.5-2.6.5-1.1 0-2.5-.9-4.6-.9z"/></svg></span><span style="font-size:18px">Vitality <span style="font-weight:600;opacity:.72">Dental</span></span></div>
+  <h1>Your practice platform, explained simply</h1>
+  <p class="sub">A plain-English guide to using your Vitality Dental platform. What every screen does, and how to use it, step by step.</p>
+  <div class="meta">Prepared for Vitality Dental &nbsp;•&nbsp; Owners &amp; practice team &nbsp;•&nbsp; Version 1</div>
+</div>
+
+<div class="wrap">
+
+  <div class="toc">
+    <h2>What's inside</h2>
+    <ol>
+      <li><a href="#what">What your platform does, in one minute</a></li>
+      <li><a href="#signin">Signing in</a></li>
+      <li><a href="#around">Finding your way around</a></li>
+      <li><a href="#home">Your Home screen</a></li>
+      <li><a href="#everyday">Every day: diary, patients, money, tasks</a></li>
+      <li><a href="#winback">Winning back patients</a></li>
+      <li><a href="#newpatients">New patient enquiries</a></li>
+      <li><a href="#agents">The AI messaging agents</a></li>
+      <li><a href="#owner">Owner tools</a></li>
+      <li><a href="#who">Who can see what</a></li>
+      <li><a href="#good">Good to know before go-live</a></li>
+      <li><a href="#help">Getting help</a></li>
+    </ol>
+  </div>
+
+  <!-- 1. WHAT -->
+  <section class="block" id="what">
+    <span class="eyebrow">Start here</span>
+    <h2>What your platform does, in one minute</h2>
+    <p class="lede">Your Vitality Dental platform sits on top of Dentally, the software the practice already uses. It quietly watches for opportunities and does the chasing for you, so patients get booked in and nothing slips through the cracks.</p>
+
+    <div class="flow">
+      <div class="step"><div class="n">1</div><h4>It reads Dentally</h4><p>Appointments, recalls, treatment plans and balances, all live from your existing system.</p></div>
+      <div class="step"><div class="n">2</div><h4>It spots the work</h4><p>Who is due a recall, who never came back, who has unfinished treatment, who might not show.</p></div>
+      <div class="step"><div class="n">3</div><h4>It writes the message</h4><p>A friendly, on-brand text or email, ready for you to approve, or sent automatically.</p></div>
+      <div class="step"><div class="n">4</div><h4>It handles the reply</h4><p>The patient replies, the AI agent answers, books them in, and updates your platform.</p></div>
+    </div>
+
+    <div class="note info" style="margin-top:18px"><span class="ic">i</span><div>You are always in control. Every automatic system has an on/off switch, messages can be set to need your approval first, and anything the AI is unsure about (a clinical question, a complaint) is handed straight to a human.</div></div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 2. SIGN IN -->
+  <section class="block" id="signin">
+    <span class="eyebrow">Getting in</span>
+    <h2>Signing in</h2>
+    <p class="lede">Open the web address we gave you and sign in with your practice email and password. There is nothing to install.</p>
+
+    <div class="app">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">azen-vitality.vercel.app/login</span></div>
+      <div class="body" style="grid-template-columns:1fr 1fr">
+        <div class="main" style="background:#fff; display:flex; flex-direction:column; justify-content:center; padding:26px 30px">
+          <div class="brandrow" style="color:var(--navy); margin-bottom:16px"><span class="logo" style="height:32px;width:32px"><svg viewBox="0 0 24 24" fill="currentColor" style="width:58%;height:58%"><path d="M12 2.4c-2.1 0-3.5.9-4.6.9-1 0-1.7-.5-2.6-.5C3.3 2.8 2.4 4.3 2.4 6.6c0 2 .7 3.4 1.2 5.3.3 1.2.4 2.1.6 3.6.3 2.4.5 4.4.9 5.6.3.9.8 1.5 1.5 1.5.9 0 1.2-1 1.5-2.6.3-1.6.5-3.3 1.4-3.3s1.1 1.7 1.4 3.3c.3 1.6.6 2.6 1.5 2.6.7 0 1.2-.6 1.5-1.5.4-1.2.6-3.2.9-5.6.2-1.5.3-2.4.6-3.6.5-1.9 1.2-3.3 1.2-5.3 0-2.3-.9-3.8-2.4-3.8-.9 0-1.6.5-2.6.5-1.1 0-2.5-.9-4.6-.9z"/></svg></span><span style="font-size:15px">Vitality <span style="font-weight:600;color:var(--muted)">Dental</span></span></div>
+          <div style="font-size:18px;font-weight:800;color:var(--navy)">Sign in</div>
+          <div class="su" style="margin:2px 0 12px">Enter your email and password to continue.</div>
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Email <span class="calln" style="margin-left:6px">1</span></div>
+          <div class="stat" style="margin:3px 0 9px;color:var(--muted);font-size:12px">you@vitalitydental.co.uk</div>
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Password</div>
+          <div class="stat" style="margin:3px 0 12px;color:var(--muted);font-size:12px">••••••••</div>
+          <div style="background:var(--blue);color:#fff;text-align:center;font-weight:700;font-size:13px;border-radius:9px;padding:9px"><span class="calln" style="background:#fff;color:var(--blue)">2</span>Sign in</div>
+        </div>
+        <div style="background:linear-gradient(155deg,#0b2049,#071634); position:relative; overflow:hidden">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="position:absolute;right:-24px;bottom:-72px;width:15rem;height:15rem;color:rgba(255,255,255,.06)"><path d="M12 2.4c-2.1 0-3.5.9-4.6.9-1 0-1.7-.5-2.6-.5C3.3 2.8 2.4 4.3 2.4 6.6c0 2 .7 3.4 1.2 5.3.3 1.2.4 2.1.6 3.6.3 2.4.5 4.4.9 5.6.3.9.8 1.5 1.5 1.5.9 0 1.2-1 1.5-2.6.3-1.6.5-3.3 1.4-3.3s1.1 1.7 1.4 3.3c.3 1.6.6 2.6 1.5 2.6.7 0 1.2-.6 1.5-1.5.4-1.2.6-3.2.9-5.6.2-1.5.3-2.4.6-3.6.5-1.9 1.2-3.3 1.2-5.3 0-2.3-.9-3.8-2.4-3.8-.9 0-1.6.5-2.6.5-1.1 0-2.5-.9-4.6-.9z"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <ul class="legend">
+      <li><span class="calln">1</span><span class="tx">Type the <b>email address</b> we set up for you and your <b>password</b>. Owners and the practice manager each have their own login.</span></li>
+      <li><span class="calln">2</span><span class="tx">Press <b>Sign in</b>. You will land on your home screen automatically. If the email or password is wrong it will tell you, so you can try again.</span></li>
+    </ul>
+    <div class="note tip"><span class="ic">✓</span><div>Tip: save the web address as a bookmark, or add it to your phone's home screen, so it is one tap to open.</div></div>
+    <div class="note warn" style="margin-top:12px"><span class="ic">!</span><div>Keep your password private. If you ever forget it or want it changed, contact us and we will reset it. Please do not share one login between people, each person has their own.</div></div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 3. AROUND -->
+  <section class="block" id="around">
+    <span class="eyebrow">The basics</span>
+    <h2>Finding your way around</h2>
+    <p class="lede">Everything lives behind a simple menu on the left, grouped into five plain buckets. The bit in the middle changes depending on what you pick.</p>
+
+    <div class="app">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">azen-vitality.vercel.app</span></div>
+      <div class="body">
+        <div class="side">
+          <div class="si" style="background:#0a1c40;color:#eaf1fb"><span class="sq" style="background:var(--sky)"></span>Vitality N15 ▾</div>
+          <div class="lbl">Menu</div>
+          <div class="si active"><span class="sq"></span>Home</div>
+          <div class="si"><span class="sq"></span>Patients</div>
+          <div class="si"><span class="sq"></span>Messages</div>
+          <div class="si"><span class="sq"></span>Growth</div>
+          <div class="si"><span class="sq"></span>Operations</div>
+        </div>
+        <div class="main">
+          <div class="m-h"><span class="t">Home</span><span class="site">Search  ⌘K</span></div>
+          <div class="grid3">
+            <div class="stat"><div class="k">To do today</div><div class="v">7</div></div>
+            <div class="stat"><div class="k">In the diary</div><div class="v">28</div></div>
+            <div class="stat emph"><div class="k">Recovered</div><div class="v">£12k</div></div>
+          </div>
+          <div class="panel"><div class="pt">Today's diary</div>
+            <div class="row"><span><span class="nm">9:00 Sarah L.</span><span class="su"> Exam</span></span><span class="pill g">Confirmed</span></div>
+            <div class="row"><span><span class="nm">9:30 David P.</span><span class="su"> Hygiene</span></span><span class="pill a">Awaiting reply</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="legend">
+      <li><span class="calln">1</span><span class="tx"><b>The site switcher</b> (top left). If the group has more than one location, pick which one you are looking at here. It defaults to <b>Vitality N15</b>. Behind the scenes the automatic messaging still runs for every site, this just changes what you see on screen.</span></li>
+      <li><span class="calln">2</span><span class="tx"><b>The five menus.</b> <b>Home</b> is your daily starting point. <b>Patients</b> holds the diary, records and everything about looking after existing patients. <b>Messages</b> is where the conversations and AI agents live. <b>Growth</b> is for bringing new patients in. <b>Operations</b> is the owner's business and setup area.</span></li>
+      <li><span class="calln">3</span><span class="tx"><b>Search.</b> Press the search box (or the <b>⌘K</b> / <b>Ctrl-K</b> shortcut) to jump to any screen or patient by typing its name.</span></li>
+    </ul>
+    <div class="note info"><span class="ic">i</span><div>The practice manager sees the day-to-day menus. The <b>Operations</b> area and a few business screens are for owners only, so a shorter menu is completely normal, nothing is broken. There is a full list further down in <a href="#who">Who can see what</a>.</div></div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 4. HOME -->
+  <section class="block" id="home">
+    <span class="eyebrow">Your daily starting point</span>
+    <h2>Your Home screen</h2>
+    <p class="lede">Open this first thing each morning. It pulls the day together in one place: what is in the diary, what needs doing, who has enquired, and (for owners) the money the platform has brought back.</p>
+
+    <div class="app">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">azen-vitality.vercel.app</span></div>
+      <div class="body">
+        <div class="side">
+          <div class="si" style="background:#0a1c40;color:#eaf1fb"><span class="sq" style="background:var(--sky)"></span>Vitality N15 ▾</div>
+          <div class="lbl">Menu</div>
+          <div class="si active"><span class="sq"></span>Home</div>
+          <div class="si"><span class="sq"></span>Patients</div>
+          <div class="si"><span class="sq"></span>Messages</div>
+          <div class="si"><span class="sq"></span>Growth</div>
+          <div class="si"><span class="sq"></span>Operations</div>
+        </div>
+        <div class="main">
+          <div class="m-h"><span class="t">Good morning</span><span class="site">Vitality N15</span></div>
+          <div class="grid3">
+            <div class="stat"><div class="k">Tasks need attention</div><div class="v">7</div></div>
+            <div class="stat"><div class="k">Booked today</div><div class="v">28</div></div>
+            <div class="stat emph"><div class="k">Revenue recovered</div><div class="v">£12.4k</div></div>
+          </div>
+          <div class="grid2" style="margin-top:10px">
+            <div class="panel" style="margin-top:0"><div class="pt">Next tasks</div>
+              <div class="row"><span class="nm">Call back Aisha K.</span><span class="pill b">New enquiry</span></div>
+              <div class="row"><span class="nm">Confirm 2:30 implant</span><span class="pill a">High value</span></div>
+              <div class="row"><span class="nm">Chase £480 balance</span><span class="pill n">Payments</span></div>
+            </div>
+            <div class="panel" style="margin-top:0"><div class="pt">Today's diary</div>
+              <div class="row"><span class="nm">9:00 Sarah L.</span><span class="pill g">Confirmed</span></div>
+              <div class="row"><span class="nm">9:30 David P.</span><span class="pill a">Awaiting</span></div>
+              <div class="row"><span class="nm">10:15 Mo A.</span><span class="pill g">Confirmed</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="legend">
+      <li><span class="calln">1</span><span class="tx"><b>The numbers along the top</b> are a quick pulse: how many tasks need doing, how many patients are booked today, and how much revenue the platform has recovered. (During the trial these show sample figures, see <a href="#good">Good to know</a>.)</span></li>
+      <li><span class="calln">2</span><span class="tx"><b>Next tasks</b> is your worklist. Work down it top to bottom, the most important job is always first. Click any line to open it.</span></li>
+      <li><span class="calln">3</span><span class="tx"><b>Today's diary</b> shows who is coming in and whether they have confirmed. Green means confirmed, amber means we are still waiting to hear back.</span></li>
+    </ul>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 5. EVERY DAY -->
+  <section class="block" id="everyday">
+    <span class="eyebrow">The core, for the whole team</span>
+    <h2>Every day: diary, patients, money, tasks</h2>
+    <p class="lede">These are the screens the front desk uses most. They all read live from Dentally, so what you see matches your practice management system.</p>
+
+    <!-- Calendar -->
+    <div class="mod">
+      <h3>Calendar <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it is:</b> your live Dentally diary, shown in a clean daily view. Move day by day, filter by location, and see at a glance who is booked in and whether they have confirmed.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/calendar</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Home</div><div class="si active"><span class="sq"></span>Patients</div><div class="si"><span class="sq"></span>Messages</div></div>
+            <div class="main"><div class="m-h"><span class="t">Diary — Tue 8 Jul</span><span class="site">◀  Today  ▶</span></div>
+              <div class="panel" style="margin-top:0">
+                <div class="row"><span><span class="nm">9:00  Sarah Lindqvist</span><span class="su"> Exam · Dr Siddiqui</span></span><span class="pill g">Confirmed</span></div>
+                <div class="row"><span><span class="nm">9:30  David Price</span><span class="su"> Hygiene · Dr Khan</span></span><span class="pill a">Awaiting reply</span></div>
+                <div class="row"><span><span class="nm">10:15 Mohammed Ali</span><span class="su"> Review · Dr Siddiqui</span></span><span class="pill g">Confirmed</span></div>
+                <div class="row"><span><span class="nm">11:00 (free slot)</span><span class="su"> 30 min</span></span><span class="pill b">Open</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Use the <b>arrows</b> at the top to move between days, or jump back to <b>Today</b>.</li>
+        <li>If you run more than one location, use the <b>site switcher</b> to see just that diary.</li>
+        <li>A coloured tag shows each appointment's state: <b>Confirmed</b>, <b>Awaiting reply</b>, or an <b>open slot</b> you could fill.</li>
+      </ol>
+    </div>
+
+    <!-- Patients -->
+    <div class="mod">
+      <h3>Patients <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it is:</b> your whole patient list from Dentally, searchable. Open anyone to see their recall dates, last visit, balance, and any notes.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/patients</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Home</div><div class="si active"><span class="sq"></span>Patients</div><div class="si"><span class="sq"></span>Messages</div></div>
+            <div class="main"><div class="m-h"><span class="t">Patients</span><span class="site">🔍 Search name or number</span></div>
+              <div class="panel" style="margin-top:0">
+                <div class="row"><span><span class="nm">Sarah Lindqvist</span><span class="su"> Last visit Jan · Recall due Jul</span></span><span class="pill a">Due recall</span></div>
+                <div class="row"><span><span class="nm">David Price</span><span class="su"> Last visit May · Balance £120</span></span><span class="pill r">Owes £120</span></div>
+                <div class="row"><span><span class="nm">Mohammed Ali</span><span class="su"> Last visit Jun · Up to date</span></span><span class="pill g">Active</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Type a <b>name or phone number</b> in the search box to find someone.</li>
+        <li>Click a patient to open their <b>record</b>: recall dates, last visit, balance owed, and notes.</li>
+        <li>You can add a quick <b>note</b> to any patient, by typing or by voice. Notes stay in your platform; Dentally is only ever read, never changed by mistake.</li>
+      </ol>
+    </div>
+
+    <!-- Payments -->
+    <div class="mod">
+      <h3>Payments <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it is:</b> everyone who owes money on accepted treatment, biggest balance first, live from Dentally. A simple list of what to chase.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/payments</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Home</div><div class="si active"><span class="sq"></span>Patients</div><div class="si"><span class="sq"></span>Messages</div></div>
+            <div class="main"><div class="m-h"><span class="t">Outstanding balances</span><span class="site">Total £4,860</span></div>
+              <div class="panel" style="margin-top:0">
+                <div class="row"><span><span class="nm">Helen Carter</span><span class="su"> Implant plan</span></span><span class="pill r">£1,200</span></div>
+                <div class="row"><span><span class="nm">David Price</span><span class="su"> Crown</span></span><span class="pill r">£480</span></div>
+                <div class="row"><span><span class="nm">Amara Osei</span><span class="su"> Whitening</span></span><span class="pill a">£120</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Scan the list from the <b>top</b>, the largest balances are shown first.</li>
+        <li>Click a name to open the patient and see what the balance relates to.</li>
+        <li>Use it as your daily <b>money-to-chase</b> list.</li>
+      </ol>
+    </div>
+
+    <!-- Task queue -->
+    <div class="mod">
+      <h3>Task queue <span class="tag">Home / Growth</span></h3>
+      <p class="what"><b>What it is:</b> instead of a messy to-do board, this hands the front desk the single most important job to do next, then the next, and so on. New enquiries get a fast first touch, then spaced follow-ups before anyone goes cold.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Open it and deal with the <b>task on top</b>.</li>
+        <li>Mark it done, and the <b>next</b> one appears.</li>
+        <li>Trust the order, the platform already worked out the priority for you.</li>
+      </ol>
+    </div>
+
+    <!-- Notifications + Daily brief -->
+    <div class="mod">
+      <h3>Notifications &amp; Daily brief <span class="tag">Home</span></h3>
+      <p class="what"><b>What they are:</b> <b>Notifications</b> gathers anything that needs attention now, a new enquiry, a no-show risk, a new onboarding form, a compliance reminder. The <b>Daily brief</b> is a short morning summary that reads the diary and hands each person a prioritised list: who to chase, gaps to fill, no-show risks, and high-value patients arriving that day.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Glance at <b>Notifications</b> through the day, it is your alerts bell.</li>
+        <li>Read the <b>Daily brief</b> each morning to see your priorities in one place.</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 6. WIN BACK -->
+  <section class="block" id="winback">
+    <span class="eyebrow">Automatic, working in the background</span>
+    <h2>Winning back patients</h2>
+    <p class="lede">This is where the platform earns its keep. These systems find patients who are due back, have drifted away, or have unfinished treatment, and gently bring them in. Each one shows you a worklist and, where you like, drafts the message for you to approve.</p>
+
+    <!-- Recall -->
+    <div class="mod">
+      <h3>Recall concierge <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it does:</b> reads the exact dentist and hygienist recall dates your clinicians set in Dentally, and messages those patients to rebook, by text or email, respecting who has agreed to be contacted.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/recall</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Home</div><div class="si active"><span class="sq"></span>Patients</div><div class="si"><span class="sq"></span>Messages</div></div>
+            <div class="main"><div class="m-h"><span class="t">Recall — due to rebook</span><span class="site">34 patients</span></div>
+              <div class="panel" style="margin-top:0">
+                <div class="row"><span><span class="nm">Sarah Lindqvist</span><span class="su"> Dentist recall · 2 weeks overdue</span></span><span class="pill a">Draft ready</span></div>
+                <div class="row"><span><span class="nm">Mohammed Ali</span><span class="su"> Hygiene recall · due now</span></span><span class="pill b">Queued</span></div>
+                <div class="row"><span><span class="nm">Grace Owusu</span><span class="su"> Replied “yes please”</span></span><span class="pill g">Booking</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Open the list to see who is <b>due or overdue</b> a recall.</li>
+        <li>Read the <b>draft message</b> the AI has prepared and either approve it or let it send on its schedule.</li>
+        <li>When a patient replies, the <b>booking agent</b> takes over to find them a time.</li>
+      </ol>
+    </div>
+
+    <!-- Reactivation -->
+    <div class="mod">
+      <h3>Reactivation <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it does:</b> finds patients who quietly stopped coming (lapsed), and treatment plans that were started but never finished, and invites them back. It is careful, it never contacts someone marked as left the practice, and it leaves the very old, cold records alone.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Review the <b>worklist</b> of lapsed patients and stalled treatment, sorted by how much they are worth winning back.</li>
+        <li>Approve the friendly <b>“we would love to see you again”</b> message, or let it run automatically.</li>
+        <li>Replies flow into your inbox and the agent books them in.</li>
+      </ol>
+    </div>
+
+    <!-- Treatment coordinator -->
+    <div class="mod">
+      <h3>Treatment Coordinator <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it does:</b> the highest-value system. It finds treatment a patient accepted but has not completed (a crown, implants, Invisalign), ranks it by value, re-presents finance options, follows up, and books the next step.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Open the list, the biggest opportunities are at the top.</li>
+        <li>Review the suggested <b>follow-up message</b> and any finance reminder.</li>
+        <li>Approve it, or hand a high-value case to a coordinator to call personally.</li>
+      </ol>
+    </div>
+
+    <!-- No-show -->
+    <div class="mod">
+      <h3>No-show defence <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it does:</b> automatically confirms upcoming appointments so fewer people miss them. It texts <b>“are you still coming?”</b> two days before, a reminder the day before, and a final nudge a few hours before. Patients most likely to miss are handled first. If someone says no or cancels, the freed slot is offered to a waitlist so the gap gets filled.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/no-show-defence</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Home</div><div class="si active"><span class="sq"></span>Patients</div><div class="si"><span class="sq"></span>Messages</div></div>
+            <div class="main"><div class="m-h"><span class="t">Upcoming — confirmation status</span><span class="site">Higher risk first</span></div>
+              <div class="panel" style="margin-top:0">
+                <div class="row"><span><span class="nm">David Price</span><span class="su"> Tomorrow 9:30 · missed 2 before</span></span><span class="pill r">Higher risk</span></div>
+                <div class="row"><span><span class="nm">Sarah Lindqvist</span><span class="su"> Tomorrow 9:00 · replied YES</span></span><span class="pill g">Confirmed</span></div>
+                <div class="row"><span><span class="nm">Amara Osei</span><span class="su"> Cancelled · slot re-offered</span></span><span class="pill b">Filling</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Mostly, leave it running, it works on its own from the live diary.</li>
+        <li>Check the list to see who has <b>confirmed</b> (green) and who is <b>higher risk</b> (red).</li>
+        <li>When a patient replies, their status updates here and in the diary automatically.</li>
+      </ol>
+    </div>
+
+    <!-- Reviews -->
+    <div class="mod">
+      <h3>Reviews <span class="tag">Patients menu</span></h3>
+      <p class="what"><b>What it does:</b> helps you collect more Google reviews. After an appointment you mark who attended, and a polite, compliant review request is sent automatically a few hours later or the next day.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>At the end of the day, <b>tick who attended</b>.</li>
+        <li>The review request goes out on its own, no chasing needed.</li>
+        <li>Watch your review count grow over time.</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 7. NEW PATIENTS -->
+  <section class="block" id="newpatients">
+    <span class="eyebrow">Bringing new patients in</span>
+    <h2>New patient enquiries</h2>
+    <p class="lede">These screens capture new interest and turn it into booked patients quickly, because responding fast makes an enormous difference to whether someone books.</p>
+
+    <!-- Smile assessment -->
+    <div class="mod">
+      <h3>Smile Assessment <span class="tag">Growth menu</span></h3>
+      <p class="what"><b>What it does:</b> a short, friendly quiz you can put on your website or link from an advert. It asks a few questions, scores how ready and well-suited each enquiry is, and fast-tracks the keen ones straight to booking while nurturing the rest. It only ever judges interest and fit, never anything clinical.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/assess/vitality</span></div>
+          <div class="body" style="grid-template-columns:1fr"><div class="main" style="padding:20px 24px">
+            <div style="font-size:15px;font-weight:800;color:var(--navy);margin-bottom:4px">What would you love to change about your smile?</div>
+            <div class="su" style="margin-bottom:12px">One quick question at a time.</div>
+            <div class="grid2">
+              <div class="stat" style="text-align:center">Straighten it</div>
+              <div class="stat" style="text-align:center">Whiten it</div>
+              <div class="stat" style="text-align:center">Replace a tooth</div>
+              <div class="stat emph" style="text-align:center">Just a check-up</div>
+            </div>
+          </div></div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Owners set up a <b>campaign link</b> to share (on the website, social media, or an advert).</li>
+        <li>Enquiries come in and appear in your worklist with a <b>score</b>.</li>
+        <li>Hot enquiries are contacted immediately by the booking agent.</li>
+      </ol>
+    </div>
+
+    <!-- Speed to lead -->
+    <div class="mod">
+      <h3>Speed-to-lead <span class="tag">Growth menu</span></h3>
+      <p class="what"><b>What it does:</b> the moment a new enquiry arrives, it reaches out within about 30 seconds, by text, email or WhatsApp, and records how quickly you responded. Replying in seconds rather than minutes dramatically improves how many enquiries turn into patients.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Let it make the <b>instant first contact</b> automatically.</li>
+        <li>Check the worklist to see <b>who has replied</b> and pick up the conversation if needed.</li>
+        <li>Use the response-time labels to spot any enquiry that slipped through.</li>
+      </ol>
+    </div>
+
+    <!-- Onboarding -->
+    <div class="mod">
+      <h3>Onboarding <span class="tag">Patients / Growth</span></h3>
+      <p class="what"><b>What it does:</b> a smart, branded new-patient form (at a link like <b>/onboard/vitality</b>) that collects contact details, a brief medical history, documents and consent, one step at a time. Completed forms land here for the team to review and register.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Send the <b>form link</b> to a new patient (the agents can text it automatically too).</li>
+        <li>When they submit, it appears in your <b>submissions</b> list.</li>
+        <li>Review it and register the patient. You can create different forms for different purposes.</li>
+      </ol>
+    </div>
+
+    <!-- Meta ads -->
+    <div class="mod">
+      <h3>Meta Ads <span class="tag own">Owners only</span></h3>
+      <p class="what"><b>What it does:</b> plan, build and track Facebook and Instagram campaigns without an agency. It gives you ready-to-launch templates, AI-written ad copy, a step-by-step launch guide, performance figures, and a library of proven dental ads. It follows UK advertising rules for dentistry.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Pick a <b>template</b> and let the AI draft the wording.</li>
+        <li>Follow the <b>launch guide</b> to put it live on your own Meta account.</li>
+        <li>Come back to see how it is performing.</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 8. AGENTS -->
+  <section class="block" id="agents">
+    <span class="eyebrow">The conversations</span>
+    <h2>The AI messaging agents</h2>
+    <p class="lede">This is where every patient conversation lives. The AI agents can handle most of it, and you can step in and take over any chat whenever you want.</p>
+
+    <!-- Conversations -->
+    <div class="mod">
+      <h3>Conversations <span class="tag">Messages menu</span></h3>
+      <p class="what"><b>What it is:</b> one shared inbox for every patient conversation, across text, WhatsApp, after-hours calls and the automatic systems, grouped per person. You can read anything and jump in to reply yourself at any point.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/conversations</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Home</div><div class="si"><span class="sq"></span>Patients</div><div class="si active"><span class="sq"></span>Messages</div></div>
+            <div class="main"><div class="m-h"><span class="t">Sarah Lindqvist</span><span class="site">SMS · consented</span></div>
+              <div class="panel" style="margin-top:0;background:transparent;border:0;padding:0">
+                <div class="bubble out">Hi Sarah, you are due a check-up at Vitality. Would you like me to find you a time?</div>
+                <div class="bubble in">Yes please, something after work?</div>
+                <div class="bubble out">Of course. We have Thursday 5:40pm or Friday 6pm. Which suits?</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Open any <b>conversation</b> to read the full history.</li>
+        <li>Let the agent continue, or press <b>take over</b> to reply in your own words.</li>
+        <li>Everything respects consent and opt-outs. During the trial, replies are in test mode (see <a href="#good">Good to know</a>).</li>
+      </ol>
+    </div>
+
+    <!-- Booking + WhatsApp -->
+    <div class="mod">
+      <h3>Booking agent &amp; WhatsApp agent <span class="tag">Messages menu</span></h3>
+      <p class="what"><b>What they do:</b> these are the two-way AI assistants. When a patient texts (or messages on WhatsApp), the agent recognises them from their phone number, answers questions, books, reschedules or cancels appointments, sends reminders, and hands anything clinical, any complaint, or anything it is unsure about straight to a human. The two agents behave the same way, one over normal text, one over WhatsApp.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Mostly it runs itself, patients simply text your number and get looked after.</li>
+        <li>On these screens you can see how it is set up and review its conversations.</li>
+        <li>Anything handed to a human appears in <b>Conversations</b> for you to answer.</li>
+      </ol>
+      <div class="note info"><span class="ic">i</span><div>The agent never gives clinical or dental advice, and never mentions funding types. It sticks to booking, reminders, simple questions and friendly help, exactly as a great receptionist would.</div></div>
+    </div>
+
+    <!-- After hours -->
+    <div class="mod">
+      <h3>After-hours capture <span class="tag">Messages menu</span></h3>
+      <p class="what"><b>What it does:</b> catches calls the practice misses out of hours (or during a genuine rush) and books them, so enquiries that arrive when the phone is unattended are not lost. It is deliberately only for missed and overflow calls, not a replacement receptionist during opening hours.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Leave it on to <b>capture missed calls</b> automatically.</li>
+        <li>Review anything captured the next morning in the worklist.</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 9. OWNER -->
+  <section class="block" id="owner">
+    <span class="eyebrow">For owners</span>
+    <h2>Owner tools</h2>
+    <p class="lede">These live in the <b>Operations</b> menu and a couple of business screens. They are for the practice owners, the practice manager does not see them.</p>
+
+    <!-- System controls -->
+    <div class="mod">
+      <h3>System controls <span class="tag own">Owners only</span></h3>
+      <p class="what"><b>What it is:</b> your master on/off panel. Every automatic system (recall, reactivation, no-show defence, the agents, and the rest) has a single switch. Turning one off is a proper stop: it hides that module and halts all its behind-the-scenes work, so nothing sends until you switch it back on. This is your safety valve.</p>
+      <div class="mini">
+        <div class="app"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url">/controls</span></div>
+          <div class="body"><div class="side"><div class="si"><span class="sq"></span>Growth</div><div class="si active"><span class="sq"></span>Operations</div></div>
+            <div class="main"><div class="m-h"><span class="t">System controls</span><span class="site">Owner only</span></div>
+              <div class="toggle">Recall concierge<span class="sw on"></span></div>
+              <div class="toggle">No-show defence<span class="sw on"></span></div>
+              <div class="toggle">Reactivation<span class="sw off"></span></div>
+              <div class="toggle">WhatsApp agent<span class="sw on"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Flip a <b>switch off</b> to instantly pause a system, and on to resume it.</li>
+        <li>Everything is <b>on by default</b>. Use this if you ever want to stop something quickly.</li>
+      </ol>
+    </div>
+
+    <!-- Settings + getting started -->
+    <div class="mod">
+      <h3>Settings &amp; Getting started <span class="tag own">Owners only</span></h3>
+      <p class="what"><b>What they are:</b> <b>Settings</b> is where your services connect (Dentally, text and email sending, reviews, Meta) and where you set whether messages send for real or stay in test mode. <b>Getting started</b> is a plain checklist of what we need from the practice to go fully live, including the few items that must be in place before any real patient messages can send.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Work through the <b>Getting started</b> checklist with us.</li>
+        <li>In <b>Settings</b>, check each service shows as connected.</li>
+        <li>When you are ready, we switch messaging from test mode to live together.</li>
+      </ol>
+    </div>
+
+    <!-- Business insights -->
+    <div class="mod">
+      <h3>ROI, Reports &amp; Ask the brain <span class="tag own">Owners only</span></h3>
+      <p class="what"><b>What they are:</b> <b>ROI</b> shows how your spend turns into leads, bookings and revenue, with your cost per new patient. <b>Reports</b> writes plain-English weekly and monthly business reviews with recommendations. <b>Ask the brain</b> lets you ask the platform questions about your practice and get grounded answers.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Open <b>ROI</b> to see the money picture at a glance.</li>
+        <li>Read the latest <b>Report</b> for a written summary and suggestions.</li>
+        <li>Type a question into <b>Ask the brain</b> whenever you want a quick answer.</li>
+      </ol>
+    </div>
+
+    <!-- Compliance + rota + usps -->
+    <div class="mod">
+      <h3>Compliance, Staff rota &amp; USPs <span class="tag own">Owners only</span></h3>
+      <p class="what"><b>What they are:</b> <b>Compliance</b> organises your CQC and GDC readiness, an audit calendar, policy library and staff training matrix (it is an organiser and decision-support, not legal advice). <b>Staff rota</b> generates shifts from your opening hours and staff availability and texts each person their shifts. <b>USPs</b> is where owners list the practice's selling points, which the AI agents weave into their messages.</p>
+      <h4>How to use it</h4>
+      <ol class="steps">
+        <li>Use <b>Compliance</b> to keep audits, policies and training in one place.</li>
+        <li>Set your rules in <b>Staff rota</b> and let it build and send the schedule.</li>
+        <li>Keep your <b>USPs</b> short and truthful, the agents will use them.</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 10. WHO -->
+  <section class="block" id="who">
+    <span class="eyebrow">Access</span>
+    <h2>Who can see what</h2>
+    <p class="lede">There are two kinds of login. <b>Owners</b> see everything. The <b>practice manager</b> sees the day-to-day running of the practice, but not the business, financial and setup screens.</p>
+
+    <div class="who">
+      <table>
+        <tr><th>Area</th><th>Owner</th><th>Practice manager</th></tr>
+        <tr><td class="g">Home, Calendar, Patients, Payments</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td class="g">Recall, Reactivation, Treatment Coordinator</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td class="g">No-show defence, Reviews</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td class="g">Smile Assessment, Speed-to-lead, Onboarding</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td class="g">Conversations, Booking agent, WhatsApp, After-hours</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td class="g">Task queue, Notifications, Daily brief</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td class="g">ROI, Reports</td><td class="y">Yes</td><td class="n">No</td></tr>
+        <tr><td class="g">Meta Ads, USPs</td><td class="y">Yes</td><td class="n">No</td></tr>
+        <tr><td class="g">Compliance, Staff rota</td><td class="y">Yes</td><td class="n">No</td></tr>
+        <tr><td class="g">Ask the brain, System controls</td><td class="y">Yes</td><td class="n">No</td></tr>
+        <tr><td class="g">Settings, Getting started</td><td class="y">Yes</td><td class="n">No</td></tr>
+      </table>
+    </div>
+    <div class="note info" style="margin-top:14px"><span class="ic">i</span><div>So if the practice manager has a shorter left-hand menu than an owner, that is exactly right. Nothing is missing or broken.</div></div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 11. GOOD TO KNOW -->
+  <section class="block" id="good">
+    <span class="eyebrow">Please read</span>
+    <h2>Good to know before go-live</h2>
+
+    <div class="note warn"><span class="ic">!</span><div><b>Test mode until we go live.</b> While we set up, the platform is in a safe test mode. It does everything as normal, spots the work and drafts the messages, but it does not actually send texts or emails to patients yet. When the practice is ready and the checklist is complete, we turn on real sending together. Nothing goes to a patient before you say so.</div></div>
+
+    <div class="note info" style="margin-top:12px"><span class="ic">i</span><div><b>Some figures are sample data for now.</b> Where a screen shows a small <b>“Sample”</b> label, those numbers are placeholders for the trial, so you can see how the screen looks. They are replaced with your real figures once your live data is fully connected.</div></div>
+
+    <div class="note tip" style="margin-top:12px"><span class="ic">✓</span><div><b>It is safe with your patients.</b> Every message respects who has agreed to be contacted and who has opted out. If a patient replies STOP, they are removed. The AI never gives clinical advice and always hands difficult or sensitive messages to a human. It reads your Dentally, it does not change anything in it by accident.</div></div>
+
+    <div class="note info" style="margin-top:12px"><span class="ic">i</span><div><b>It works around the clock.</b> The background systems (confirmations, recalls, follow-ups) keep running 24 hours a day, even when no one is logged in and the practice is closed.</div></div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- 12. HELP -->
+  <section class="block" id="help">
+    <span class="eyebrow">Support</span>
+    <h2>Getting help</h2>
+    <p class="lede">If anything is unclear, or you want a screen changed, a login added, or a system turned on or off, just tell us. This platform is built for your practice and we adjust it as you need.</p>
+    <div class="card" style="margin-top:16px">
+      <p style="font-size:15.5px"><b>A few quick reminders</b></p>
+      <ul style="margin:10px 0 0; padding-left:20px; color:var(--ink)">
+        <li style="margin:6px 0">Sign in at your web address with your own email and password.</li>
+        <li style="margin:6px 0">Start each day on <b>Home</b> and work the tasks from the top.</li>
+        <li style="margin:6px 0">A shorter menu for the practice manager is normal.</li>
+        <li style="margin:6px 0">Nothing sends to patients until we switch on live mode together.</li>
+        <li style="margin:6px 0">Owners can pause any system instantly in <b>System controls</b>.</li>
+      </ul>
+    </div>
+    <p class="muted" style="margin-top:22px; font-size:13px; text-align:center">Prepared for Vitality Dental &nbsp;•&nbsp; Built by Azen &nbsp;•&nbsp; This guide describes the platform in plain terms for the practice team.</p>
+  </section>
+
+</div>
+</body>
+</html>
