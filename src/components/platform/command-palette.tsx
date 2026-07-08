@@ -6,6 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import { Search, CornerDownLeft, Bot, User } from "lucide-react";
 import { CLIENT_NAV, navForRole } from "@/lib/nav";
 import { useAuth } from "@/lib/auth/mock-auth";
+import { useModKey } from "@/components/platform/sidebar-shortcuts";
 import { cn } from "@/lib/utils";
 
 interface Patient {
@@ -38,6 +39,7 @@ export function CommandPalette({
 }) {
   const router = useRouter();
   const { user } = useAuth();
+  const mod = useModKey();
   const isOwner = basePath.startsWith("/owner");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -73,7 +75,7 @@ export function CommandPalette({
       list.push({
         key: "copilot",
         label: "Ask the co-pilot",
-        hint: "⌘J",
+        hint: `${mod}J`,
         icon: Bot,
         group: "Actions",
         onSelect: () => {
@@ -118,7 +120,7 @@ export function CommandPalette({
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, patients, basePath, isOwner, user?.role]);
+  }, [query, patients, basePath, isOwner, user?.role, mod]);
 
   if (!open) return null;
 

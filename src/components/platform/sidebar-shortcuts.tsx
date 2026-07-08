@@ -11,8 +11,12 @@ import { Search, Wand2 } from "lucide-react";
 export function useModKey(): string {
   const [mod, setMod] = useState("⌘");
   useEffect(() => {
-    const p = navigator.platform ?? "";
-    if (!/Mac|iPhone|iPad|iPod/.test(p)) setMod("Ctrl+");
+    // Prefer the modern userAgentData.platform ("Windows", "macOS"), fall back to
+    // the (deprecated but universal) navigator.platform ("Win32", "MacIntel"), then
+    // the userAgent string ("Windows NT", "Macintosh"). Anything not Apple → Ctrl.
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    const source = nav.userAgentData?.platform || nav.platform || nav.userAgent || "";
+    if (!/Mac|iPhone|iPad|iPod|Darwin/i.test(source)) setMod("Ctrl+");
   }, []);
   return mod;
 }

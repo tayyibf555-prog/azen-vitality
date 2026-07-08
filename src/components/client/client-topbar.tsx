@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Building2, Check, ChevronDown } from "lucide-react";
+import { Building2, Check, ChevronDown, Menu } from "lucide-react";
 import { getClient, getSites } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ALL_SITES, SITE_VIEW_COOKIE } from "@/lib/site-view-shared";
+import { toggleMobileNav } from "@/components/platform/mobile-nav";
 
 export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { selected?: string }) {
   const params = useParams<{ client: string }>();
@@ -33,9 +34,19 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-line bg-card px-8">
-      {/* Site switcher */}
-      <div className="relative">
+    <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-3 border-b border-line bg-card px-4 lg:px-8">
+      {/* Left: mobile menu toggle + site switcher */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={toggleMobileNav}
+          aria-label="Open menu"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-line-strong text-navy transition-colors hover:bg-card-muted lg:hidden"
+        >
+          <Menu size={18} />
+        </button>
+        {/* Site switcher */}
+        <div className="relative">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -64,6 +75,7 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
             />
           </div>
         ) : null}
+        </div>
       </div>
 
       {/* Right side */}

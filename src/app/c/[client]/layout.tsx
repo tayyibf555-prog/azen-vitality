@@ -34,7 +34,7 @@ export default async function ClientLayout({
       <div className="flex min-h-screen flex-1 flex-col">
         <ClientTopbar selected={selectedSite} />
         <main className="flex-1">
-          <div className="mx-auto max-w-[1400px] space-y-6 px-8 py-7">{children}</div>
+          <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">{children}</div>
         </main>
       </div>
       <PlatformShortcuts />

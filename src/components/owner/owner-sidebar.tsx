@@ -9,6 +9,7 @@ import { categoriesForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { SidebarShortcuts, useModKey } from "@/components/platform/sidebar-shortcuts";
+import { useMobileNav } from "@/components/platform/mobile-nav";
 import { cn } from "@/lib/utils";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -42,6 +43,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
   const router = useRouter();
   const { user, logout } = useAuth();
   const modKey = useModKey();
+  const { open: navOpen, setOpen: setNavOpen } = useMobileNav();
 
   const clientSlug = params.client;
   const client = getClient(clientSlug);
@@ -134,7 +136,21 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
   };
 
   return (
-    <aside className="chrome-nav sticky top-0 flex h-screen w-[296px] shrink-0 flex-col self-start border-r border-navy-line">
+    <>
+      {navOpen ? (
+        <div
+          onClick={() => setNavOpen(false)}
+          className="fixed inset-0 z-40 bg-navy/50 backdrop-blur-sm lg:hidden"
+          aria-hidden
+        />
+      ) : null}
+      <aside
+        className={cn(
+          "chrome-nav fixed left-0 top-0 z-50 flex h-screen w-[296px] max-w-[85vw] shrink-0 flex-col self-start border-r border-navy-line transition-transform duration-200 ease-out",
+          "lg:sticky lg:z-auto lg:max-w-none lg:translate-x-0",
+          navOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
       {/* Client context */}
       <div className="flex items-center gap-4 px-5 py-5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -273,5 +289,6 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
         )}
       </div>
     </aside>
+    </>
   );
 }
