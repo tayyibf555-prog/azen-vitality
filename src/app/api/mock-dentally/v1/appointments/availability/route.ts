@@ -15,11 +15,21 @@ export async function GET(request: Request): Promise<Response> {
     d.setUTCDate(d.getUTCDate() + offset);
     return d.toISOString().slice(0, 10);
   };
+  // Slots mirror the real Dentally availability shape: each carries finish_time and a
+  // practitioner_id, which the booking agent echoes back into `book` (real Dentally
+  // requires both). finish_time = start + duration.
+  const slot = (startIso: string, durationMin: number, practitionerId: string) => ({
+    start_time: startIso,
+    finish_time: new Date(Date.parse(startIso) + durationMin * 60_000).toISOString(),
+    duration: durationMin,
+    practitioner_id: practitionerId,
+    site_id: siteId,
+  });
   const availability = [
-    { start_time: `${day(0)}T09:00:00Z`, duration: 30, site_id: siteId },
-    { start_time: `${day(0)}T15:30:00Z`, duration: 30, site_id: siteId },
-    { start_time: `${day(1)}T11:00:00Z`, duration: 30, site_id: siteId },
-    { start_time: `${day(3)}T17:00:00Z`, duration: 30, site_id: siteId },
+    slot(`${day(0)}T09:00:00Z`, 30, "prac-1"),
+    slot(`${day(0)}T15:30:00Z`, 30, "prac-2"),
+    slot(`${day(1)}T11:00:00Z`, 30, "prac-1"),
+    slot(`${day(3)}T17:00:00Z`, 30, "prac-2"),
   ];
   return Response.json({ availability });
 }

@@ -27,6 +27,8 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         slotStart: { type: "string", description: "ISO datetime of the chosen slot, exactly as returned by find_slots" },
+        finishTime: { type: "string", description: "ISO end datetime of the chosen slot from find_slots (optional; derived from the treatment length if omitted)" },
+        practitionerId: { type: "string", description: "practitioner_id of the chosen slot from find_slots (optional)" },
         treatment: { type: "string" },
       },
       required: ["slotStart", "treatment"],
@@ -47,6 +49,7 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
       properties: {
         appointmentId: { type: "string", description: "id of the appointment to move, from find_appointments" },
         newSlotStart: { type: "string", description: "ISO datetime of the new slot, exactly as returned by find_slots" },
+        newFinishTime: { type: "string", description: "ISO end datetime of the new slot from find_slots (optional)" },
       },
       required: ["appointmentId", "newSlotStart"],
     },
@@ -182,13 +185,29 @@ export function makeDispatch(deps: ToolDeps) {
           // Unknown caller not yet registered: force the register_patient step first.
           return JSON.stringify({ error: "Register this new patient with register_patient before booking." });
         }
-        const { appointment } = await deps.dentally.createAppointment({
+        // Real Dentally requires finish_time and practitioner_id. Prefer the exact values
+        // from the chosen slot (find_slots returns them); otherwise derive finish_time
+        // from the treatment's typical length. (appointment_type_id may ALSO be required
+        // on live Dentally — calibrate against the sandbox before enabling real writes.)
+        const start = typeof input.slotStart === "string" ? input.slotStart : "";
+        const startMs = Date.parse(start);
+        const durationMin = findTreatment(typeof input.treatment === "string" ? input.treatment : "")?.durationMinutes ?? 30;
+        const finishTime =
+          typeof input.finishTime === "string" && input.finishTime
+            ? input.finishTime
+            : Number.isNaN(startMs)
+              ? undefined
+              : new Date(startMs + durationMin * 60_000).toISOString();
+        const payload: Record<string, unknown> = {
           patient_id: patientId,
           site_id: deps.context.siteId,
-          start_time: input.slotStart,
+          start_time: start,
           treatment: input.treatment,
           booked_via_api: true,
-        });
+        };
+        if (finishTime) payload.finish_time = finishTime;
+        if (typeof input.practitionerId === "string" && input.practitionerId) payload.practitioner_id = input.practitionerId;
+        const { appointment } = await deps.dentally.createAppointment(payload);
         return JSON.stringify({ booked: true, appointmentId: appointment.id });
       }
       case "find_appointments": {
@@ -211,9 +230,9 @@ export function makeDispatch(deps: ToolDeps) {
         if (!(await ownsAppointment(appointmentId))) {
           return JSON.stringify({ error: "I could not find that appointment on your record." });
         }
-        const { appointment } = await deps.dentally.updateAppointment(appointmentId, {
-          start_time: input.newSlotStart,
-        });
+        const reschedulePatch: Record<string, unknown> = { start_time: input.newSlotStart };
+        if (typeof input.newFinishTime === "string" && input.newFinishTime) reschedulePatch.finish_time = input.newFinishTime;
+        const { appointment } = await deps.dentally.updateAppointment(appointmentId, reschedulePatch);
         return JSON.stringify({
           rescheduled: true,
           appointmentId: appointment.id,

@@ -29,6 +29,7 @@ import { getSite } from "@/lib/mock/clients";
 import { listActiveUspTexts } from "@/lib/usp/repository";
 import { AGENT_TOOLS, makeDispatch } from "@/lib/agent/tools";
 import { runAgentTurn } from "@/lib/agent/run";
+import { dentallyAgentClient } from "@/lib/dentally/write";
 import { identifyByPhone } from "@/lib/agent/identify";
 import { checkAgentReply, SAFE_HANDOVER } from "@/lib/agent/guardrail";
 import { claimInboundMessage } from "@/lib/agent/idempotency";
@@ -383,7 +384,10 @@ export async function POST(request: Request): Promise<Response> {
     }));
     const result = await runAgentTurn(history, {
       anthropic: new Anthropic(),
-      dispatch: makeDispatch({ dentally, context }),
+      // Booking writes (book/reschedule/cancel/register) go through the gated write
+      // client: default-OFF (same target as `dentally` above, i.e. the mock in the
+      // pilot), targeting a real/sandbox book only when DENTALLY_WRITE_ENABLED is set.
+      dispatch: makeDispatch({ dentally: dentallyAgentClient(), context }),
       systemPrompt: buildSystemPrompt(context),
       tools: AGENT_TOOLS,
     });
