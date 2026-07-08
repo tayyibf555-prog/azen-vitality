@@ -43,6 +43,29 @@ let suppressed = false;
 const isSuppressed = vi.fn(async (..._a: unknown[]) => suppressed);
 vi.mock("@/lib/messaging/suppression", () => ({ isSuppressed: (...a: unknown[]) => isSuppressed(...a) }));
 
+// Speed-to-lead bridge: a missed call after hours is routed into the pipeline
+// (insertLead + claim + contactLead) rather than firing a bare SMS. Defaults:
+// no existing open lead (so a new one is created + contacted), the claim wins,
+// and contactLead succeeds. Individual tests override to exercise dedup + fallback.
+let openLead: { id: string } | null = null;
+const findOpenLeadByAddress = vi.fn(async (..._a: unknown[]) => openLead);
+const insertLead = vi.fn(async (..._a: unknown[]) => ({ id: "lead-1", channel: "sms" }));
+let claimWins = true;
+const claimLeadForContact = vi.fn(async (..._a: unknown[]) => claimWins);
+const releaseLeadClaim = vi.fn(async (..._a: unknown[]) => undefined);
+vi.mock("@/lib/speed-to-lead/repository", () => ({
+  findOpenLeadByAddress: (...a: unknown[]) => findOpenLeadByAddress(...a),
+  insertLead: (...a: unknown[]) => insertLead(...a),
+  claimLeadForContact: (...a: unknown[]) => claimLeadForContact(...a),
+  releaseLeadClaim: (...a: unknown[]) => releaseLeadClaim(...a),
+}));
+
+let contactThrows = false;
+const contactLead = vi.fn(async (..._a: unknown[]) => {
+  if (contactThrows) throw new Error("contact failed");
+});
+vi.mock("@/lib/speed-to-lead/contact", () => ({ contactLead: (...a: unknown[]) => contactLead(...a) }));
+
 // No signature verification path in test (TWILIO_AUTH_TOKEN unset, not production).
 vi.mock("@/lib/messaging/signature", () => ({ verifyTwilioSignature: () => true }));
 
@@ -68,6 +91,9 @@ beforeEach(() => {
   openCapture = false;
   suppressed = false;
   identity = null;
+  openLead = null;
+  claimWins = true;
+  contactThrows = false;
 });
 
 describe("after-hours voice — capture without loss", () => {
@@ -83,15 +109,70 @@ describe("after-hours voice — capture without loss", () => {
     expect((insertCapture.mock.calls[0][0] as { channel: string }).channel).toBe("call");
   });
 
-  it("outside hours: captures AND sends a consent-aware follow-up, marks it sent", async () => {
+  it("outside hours: routes a NEW number into speed-to-lead (lead + contact), marks it sent", async () => {
     const res = await POST(callFrom("+447700900123"));
     await res.text();
 
     expect(insertCapture).toHaveBeenCalledTimes(1);
+    // Primary path now bridges into speed-to-lead: create the lead, claim it, and
+    // fire the AI-drafted first contact — NOT the bare fixed SMS.
+    expect(insertLead).toHaveBeenCalledTimes(1);
+    expect(claimLeadForContact).toHaveBeenCalledTimes(1);
+    expect(contactLead).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled(); // no bare fallback SMS on the happy path
+    expect(markFollowUpSent).toHaveBeenCalledTimes(1);
+    // The lead carries the resolved number, the sms channel, and sms consent.
+    const leadArg = insertLead.mock.calls[0][0] as {
+      phone: string;
+      channel: string;
+      source: string;
+      consent: { sms: boolean };
+    };
+    expect(leadArg.phone).toBe("+447700900123");
+    expect(leadArg.channel).toBe("sms");
+    expect(leadArg.source).toBe("missed-call");
+    expect(leadArg.consent.sms).toBe(true);
+  });
+});
+
+describe("after-hours voice — speed-to-lead bridge", () => {
+  it("passes the resolved patientId + name onto the lead for an identified caller", async () => {
+    identity = { patientId: "42", patientName: "Sarah L" };
+    await POST(callFrom("+447700900123")).then((r) => r.text());
+
+    expect(insertLead).toHaveBeenCalledTimes(1);
+    const leadArg = insertLead.mock.calls[0][0] as { dentallyPatientId: string | null; name: string };
+    expect(leadArg.dentallyPatientId).toBe("42");
+    expect(leadArg.name).toBe("Sarah L");
+  });
+
+  it("dedup: an existing open lead for this number is NOT contacted again", async () => {
+    openLead = { id: "existing-lead" }; // findOpenLeadByAddress returns a match
+    const res = await POST(callFrom("+447700900123"));
+    const body = await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1); // the call is still logged
+    expect(findOpenLeadByAddress).toHaveBeenCalledTimes(1);
+    expect(insertLead).not.toHaveBeenCalled(); // no second lead
+    expect(contactLead).not.toHaveBeenCalled(); // no double first-contact
+    expect(sendMessage).not.toHaveBeenCalled(); // no bare fallback either
+    expect(markFollowUpSent).not.toHaveBeenCalled();
+    expect(body).toContain("Vitality Dental");
+  });
+
+  it("fallback: the bridge failing falls back to the bare SMS, and marks it sent", async () => {
+    contactThrows = true; // contactLead throws -> the whole bridge rejects
+    const res = await POST(callFrom("+447700900123"));
+    await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1);
+    expect(contactLead).toHaveBeenCalledTimes(1); // bridge tried the AI contact
+    // ...and on its failure fell back to the bare fixed SMS so the missed call is
+    // never silently dropped.
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(markFollowUpSent).toHaveBeenCalledTimes(1);
     const smsBody = (sendMessage.mock.calls[0][0] as { body: string }).body;
-    // Copy compliance: no NHS/private/funding wording in the follow-up text.
+    // Copy compliance on the fallback text: no NHS/private/funding wording.
     expect(checkAgentReply(smsBody).ok).toBe(true);
     expect(smsBody.toLowerCase()).not.toContain("nhs");
   });

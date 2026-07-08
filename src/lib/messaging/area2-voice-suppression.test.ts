@@ -10,12 +10,26 @@ const sendMessage = vi.fn();
 const isSuppressed = vi.fn();
 const identifyByPhone = vi.fn();
 const markFollowUpSent = vi.fn();
+const contactLead = vi.fn();
+const findOpenLeadByAddress = vi.fn();
+const insertLead = vi.fn();
+const claimLeadForContact = vi.fn();
+const releaseLeadClaim = vi.fn();
 
 vi.mock("@/lib/messaging/signature", () => ({ verifyTwilioSignature: () => true }));
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
 vi.mock("@/lib/messaging/suppression", () => ({ isSuppressed: (...a: unknown[]) => isSuppressed(...a) }));
 vi.mock("@/lib/agent/identify", () => ({ identifyByPhone: (...a: unknown[]) => identifyByPhone(...a) }));
 vi.mock("@/lib/dentally/client", () => ({ DentallyClient: class {} }));
+// The voice route now bridges an after-hours missed call into speed-to-lead; mock it so
+// the route's transitive `import "server-only"` (in contact.ts) is not pulled into the test.
+vi.mock("@/lib/speed-to-lead/contact", () => ({ contactLead: (...a: unknown[]) => contactLead(...a) }));
+vi.mock("@/lib/speed-to-lead/repository", () => ({
+  findOpenLeadByAddress: (...a: unknown[]) => findOpenLeadByAddress(...a),
+  insertLead: (...a: unknown[]) => insertLead(...a),
+  claimLeadForContact: (...a: unknown[]) => claimLeadForContact(...a),
+  releaseLeadClaim: (...a: unknown[]) => releaseLeadClaim(...a),
+}));
 vi.mock("@/lib/after-hours/repository", () => ({
   insertCapture: vi.fn(async () => ({ id: "cap-1" })),
   markFollowUpSent: (...a: unknown[]) => markFollowUpSent(...a),
@@ -42,6 +56,10 @@ beforeEach(() => {
   isSuppressed.mockResolvedValue(false);
   identifyByPhone.mockResolvedValue(null);
   sendMessage.mockResolvedValue({ provider: "dry-run", providerMessageId: "m-1", status: "queued" });
+  findOpenLeadByAddress.mockResolvedValue(null); // no existing lead -> create + contact
+  insertLead.mockResolvedValue({ id: "lead-1", channel: "sms" });
+  claimLeadForContact.mockResolvedValue(true);
+  contactLead.mockResolvedValue(undefined);
 });
 
 describe("after-hours missed-call SMS honours suppression", () => {
@@ -50,6 +68,8 @@ describe("after-hours missed-call SMS honours suppression", () => {
     const res = await POST(call());
     expect(res.status).toBe(200);
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(contactLead).not.toHaveBeenCalled(); // suppression skips the whole bridge
+    expect(insertLead).not.toHaveBeenCalled();
     expect(markFollowUpSent).not.toHaveBeenCalled();
   });
 
@@ -68,14 +88,19 @@ describe("after-hours missed-call SMS honours suppression", () => {
     const res = await POST(call());
     expect(res.status).toBe(200);
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(contactLead).not.toHaveBeenCalled(); // suppression skips the whole bridge
+    expect(insertLead).not.toHaveBeenCalled();
     expect(markFollowUpSent).not.toHaveBeenCalled();
   });
 
-  it("control: an unsuppressed caller gets the follow-up text once", async () => {
+  it("control: an unsuppressed caller is routed into speed-to-lead and marked followed up", async () => {
     const res = await POST(call());
     expect(res.status).toBe(200);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: "sms", to: FROM }));
+    // The missed call now bridges into speed-to-lead (an AI-drafted opener via
+    // contactLead), not the bare fixed SMS; the follow-up is still marked on the capture.
+    expect(insertLead).toHaveBeenCalledTimes(1);
+    expect(contactLead).toHaveBeenCalledTimes(1);
     expect(markFollowUpSent).toHaveBeenCalledWith("cap-1");
+    expect(sendMessage).not.toHaveBeenCalled(); // the bare-SMS fallback did not fire
   });
 });

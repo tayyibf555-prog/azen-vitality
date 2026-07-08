@@ -49,7 +49,17 @@ vi.mock("@/lib/reviews/repository", () => ({
 }));
 vi.mock("@/lib/speed-to-lead/repository", () => ({
   updateAttemptStatusByMessageId: vi.fn(async () => {}),
+  // The voice route now bridges an after-hours missed call into speed-to-lead.
+  // These are unused here (isOutsideHours is mocked false) but must exist so the
+  // route's imports resolve.
+  findOpenLeadByAddress: vi.fn(async () => null),
+  insertLead: vi.fn(async () => ({ id: "lead-1", channel: "sms" })),
+  claimLeadForContact: vi.fn(async () => true),
+  releaseLeadClaim: vi.fn(async () => {}),
 }));
+// Mock the speed-to-lead contact module so the voice route's transitive import of
+// it (which does `import "server-only"`) does not pull server-only into the test.
+vi.mock("@/lib/speed-to-lead/contact", () => ({ contactLead: vi.fn(async () => {}) }));
 vi.mock("@/lib/after-hours/hours", () => ({
   isOutsideHours: vi.fn(() => false),
   getSiteById: vi.fn(() => ({ id: "site-cc" })),

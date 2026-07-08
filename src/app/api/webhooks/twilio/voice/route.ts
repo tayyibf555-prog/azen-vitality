@@ -6,6 +6,14 @@ import { identifyByPhone } from "@/lib/agent/identify";
 import { DentallyClient } from "@/lib/dentally/client";
 import { insertCapture, markFollowUpSent, hasOpenCaptureFrom } from "@/lib/after-hours/repository";
 import { isOutsideHours, getSiteById } from "@/lib/after-hours/hours";
+import { contactLead } from "@/lib/speed-to-lead/contact";
+import { insertLead, findOpenLeadByAddress, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
+import type { LeadConsent } from "@/lib/speed-to-lead/types";
+
+// Window for the speed-to-lead cross-channel dedup: an open lead created inside
+// this window at the same number is treated as the same enquiry, so a missed
+// call from someone who also filled the website form is not texted twice.
+const LEAD_DEDUP_MS = 12 * 60 * 60 * 1000;
 
 const CAPTURE_DEDUP_MS = 12 * 60 * 60 * 1000; // one capture + follow-up per number per 12h
 
@@ -152,7 +160,13 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if (outside) {
-    // Send an SMS follow-up so the caller can book by text, then record that we did.
+    // Route the missed call into Speed-to-lead so it gets the AI-drafted opener,
+    // SLA tracking, attempt logging and the SHARED cross-channel dedup — instead of
+    // a bare fixed SMS. Every safety property of the old path is preserved: the
+    // opt-out check runs BEFORE any outbound, an already-open lead is not texted
+    // twice, and if the bridge throws or times out we fall back to the bare SMS so
+    // a missed call is never silently dropped.
+    //
     // Honour the opt-out list first: a number that texted STOP must not be texted,
     // even off the back of a missed call. The call is still logged for a callback.
     // Check BOTH suppression forms: an unknown number's STOP is recorded by address,
@@ -162,28 +176,86 @@ export async function POST(request: Request): Promise<Response> {
         (await isSuppressed(siteId, "sms", from)) ||
         (patientId ? await isSuppressed(siteId, "sms", `patient:${patientId}`) : false);
       if (suppressed) {
-        // Suppressed: skip the SMS. The capture row remains for a manual callback.
+        // Suppressed: skip all outbound. The capture row remains for a manual callback.
       } else {
-        // Bound the SMS send too: an untimed provider call could otherwise stack on
-        // top of the identify time and push the response past Twilio's timeout. Only
-        // record the follow-up on a confirmed send; a timeout falls through (the call
-        // is still logged for a manual callback).
-        const sendResult = await withTimeout(
-          sendMessage({
-            channel: "sms",
-            to: from,
-            body:
-              "Hi, sorry we missed you at Vitality Dental. We're currently closed but I can help you book by text, just reply here with what you need.",
-          })
-            .then(() => "sent" as const)
-            .catch(() => "failed" as const),
-          6000,
-          "timeout" as const,
+        // Bound the WHOLE bridge (dedup check + insert + claim + first contact) so it
+        // can never stack on top of the identify time and push the response past
+        // Twilio's ~15s voice timeout. On a timeout `bridged` stays null and we fall
+        // through to the bare-SMS fallback below.
+        const bridged = await withTimeout(
+          (async (): Promise<"contacted" | "deduped"> => {
+            // DEDUP: if an open lead for this site + number already exists (e.g. the
+            // caller also filled the website form), do NOT create a second lead or
+            // first-contact again. The call is still logged for a manual callback.
+            const sinceIso = new Date(now.getTime() - LEAD_DEDUP_MS).toISOString();
+            const existing = await findOpenLeadByAddress(siteId, from, null, sinceIso);
+            if (existing) return "deduped";
+
+            // Consent is implied by dialling us back on a channel we can text; only
+            // the SMS channel applies to a missed call.
+            const consent: LeadConsent = {
+              sms: true,
+              email: false,
+              whatsapp: false,
+              marketing: false,
+            };
+            const lead = await insertLead({
+              siteId,
+              dentallyPatientId: patientId,
+              name: patientName,
+              phone: from,
+              email: null,
+              channel: "sms",
+              source: "missed-call",
+              consent,
+            });
+
+            // Claim the lead ('new' -> 'contacting') then first-contact, exactly as
+            // the intake route does: this closes the double-send race with the SLA
+            // sweep. Our claim always wins (we just created the row); a lost claim
+            // means a concurrent path already owns the contact, so we skip.
+            if (await claimLeadForContact(lead.id)) {
+              try {
+                await contactLead(lead);
+              } finally {
+                // Release a stranded claim ('contacting' -> 'new') so the sweep can
+                // retry. contactLead advances to 'contacted'/'lost' on success, so
+                // this is a no-op then; it only bites on a throw or silent early-return.
+                try { await releaseLeadClaim(lead.id); } catch { /* best effort */ }
+              }
+            }
+            return "contacted";
+          })().catch(() => null),
+          8000,
+          null,
         );
-        if (sendResult === "sent" && captureId) await markFollowUpSent(captureId);
+
+        if (bridged === "contacted" && captureId) {
+          // A brand-new lead was created and first-contacted: record the follow-up.
+          await markFollowUpSent(captureId);
+        } else if (bridged === null) {
+          // Bridge threw or timed out: fall back to the bare fixed SMS so the missed
+          // call is never silently dropped. Only record the follow-up on a confirmed
+          // send; a timeout falls through (the call is still logged for a callback).
+          const sendResult = await withTimeout(
+            sendMessage({
+              channel: "sms",
+              to: from,
+              body:
+                "Hi, sorry we missed you at Vitality Dental. We're currently closed but I can help you book by text, just reply here with what you need.",
+            })
+              .then(() => "sent" as const)
+              .catch(() => "failed" as const),
+            6000,
+            "timeout" as const,
+          );
+          if (sendResult === "sent" && captureId) await markFollowUpSent(captureId);
+        }
+        // bridged === "deduped": an open lead already owns the contact; leave the
+        // capture in place and send nothing more.
       }
     } catch {
-      // Delivery failed (no key, dry-run off, unreachable): the call is still
+      // Any failure here (no key, dry-run off, unreachable): the call is still
       // logged. Swallow so Twilio gets a clean TwiML response and does not retry.
     }
     return twiml(
