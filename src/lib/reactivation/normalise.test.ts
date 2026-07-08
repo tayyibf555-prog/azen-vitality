@@ -52,6 +52,20 @@ describe("toReactivationTarget", () => {
     ).not.toBeNull();
   });
 
+  it("skips a patient marked inactive/deactivated in Dentally (active === false)", () => {
+    expect(toReactivationTarget(base({ patient: { ...base().patient, active: false } }), NOW)).toBeNull();
+    // A missing/true active flag is treated as a live patient (unchanged behaviour).
+    expect(toReactivationTarget(base({ patient: { ...base().patient, active: true } }), NOW)).not.toBeNull();
+    expect(toReactivationTarget(base(), NOW)).not.toBeNull();
+  });
+
+  it("skips a patient last seen beyond the 3-year cap (too cold to reactivate)", () => {
+    // The 2017-era rows: excluded despite otherwise classifying as 'lapsed'.
+    expect(toReactivationTarget(base({ lastVisitAt: "2017-06-15T00:00:00Z" }), NOW)).toBeNull();
+    // Just inside the window (~2 years) still qualifies.
+    expect(toReactivationTarget(base({ lastVisitAt: "2024-06-01T00:00:00Z" }), NOW)).not.toBeNull();
+  });
+
   it("uses the baseline value when there is no plan and no historic spend", () => {
     const t = toReactivationTarget(base({ historicSpend: 0 }), NOW)!;
     expect(t.recoverableValue).toBe(80);

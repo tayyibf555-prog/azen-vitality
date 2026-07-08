@@ -2,6 +2,9 @@ import type { ReactivationReason, ReactivationTarget } from "./types";
 
 export interface ReactivationConfig {
   lapseMonths: number;
+  /** Upper bound on the lapse window: a patient last seen longer ago than this is too
+   *  cold to be worth reactivating and is excluded (default 36 months = 3 years). */
+  maxLapseMonths: number;
   recallGraceDays: number;
   staleDays: number;
   baselineValue: number;
@@ -9,6 +12,7 @@ export interface ReactivationConfig {
 
 export const DEFAULT_CONFIG: ReactivationConfig = {
   lapseMonths: 18,
+  maxLapseMonths: 36,
   recallGraceDays: 60,
   staleDays: 120,
   baselineValue: 80,
@@ -22,6 +26,8 @@ export interface ReactivationInput {
     id: string;
     first_name: string;
     last_name: string;
+    /** Dentally `active` flag. false = deactivated / left the practice (not a live patient). */
+    active?: boolean;
     use_sms?: boolean;
     use_email?: boolean;
     marketing?: number | boolean;
@@ -90,6 +96,16 @@ export function toReactivationTarget(
   // reason (or archived with no reason) is excluded outright, so a deceased patient
   // can never be texted "we miss you, come back for a check-up".
   if (i.patient.archived && i.patient.archived_reason !== "lapsed") return null;
+
+  // Inactive / deactivated in Dentally (active === false): they have left the practice,
+  // so reactivating them is wasted effort and risks contacting someone off the books.
+  // Skip regardless of reason. (undefined active => flag absent => treated as active.)
+  if (i.patient.active === false) return null;
+
+  // Too cold: last seen longer ago than the reactivation window (default 3 years).
+  // Chasing a patient gone for years is low value; the lapseMonths lower bound still
+  // applies below, so the effective window is lapseMonths .. maxLapseMonths.
+  if (i.lastVisitAt && daysBetween(i.lastVisitAt, now) > cfg.maxLapseMonths * 30) return null;
 
   const reason = deriveReason(i, now, cfg);
   if (!reason) return null;

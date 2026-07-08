@@ -101,6 +101,7 @@ function mapPatient(p: Raw, fallbackId: string): ReactivationInput["patient"] {
     id: pickString(p, "id") ?? fallbackId,
     first_name: pickString(p, "first_name", "firstName") ?? "",
     last_name: pickString(p, "last_name", "lastName") ?? "",
+    active: pickBoolean(p, "active"),
     use_sms: pickBoolean(p, "use_sms", "sms"),
     use_email: pickBoolean(p, "use_email", "email"),
     marketing: pickBoolean(p, "marketing"),
@@ -182,6 +183,7 @@ function indexOpenPlansByPatient(rawPlans: unknown[]): Map<string, OpenPlan> {
 function config(): ReactivationConfig {
   return {
     lapseMonths: Number(process.env.REACTIVATION_LAPSE_MONTHS ?? DEFAULT_CONFIG.lapseMonths),
+    maxLapseMonths: Number(process.env.REACTIVATION_MAX_LAPSE_MONTHS ?? DEFAULT_CONFIG.maxLapseMonths),
     recallGraceDays: Number(process.env.REACTIVATION_RECALL_GRACE_DAYS ?? DEFAULT_CONFIG.recallGraceDays),
     staleDays: Number(process.env.REACTIVATION_STALE_DAYS ?? DEFAULT_CONFIG.staleDays),
     baselineValue: Number(process.env.REACTIVATION_BASELINE_VALUE ?? DEFAULT_CONFIG.baselineValue),
