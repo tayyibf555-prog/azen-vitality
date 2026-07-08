@@ -11,9 +11,18 @@ import { DentallyClient } from "./client";
 // valve: real appointment writes cannot happen until DENTALLY_WRITE_ENABLED === "true"
 // AND a DENTALLY_WRITE_API_KEY is set (validate against a Dentally sandbox first).
 
-/** True only when the write path is explicitly enabled AND a dedicated write key is set. */
+/**
+ * True only when the write path is explicitly enabled AND a dedicated write key AND an
+ * explicit write base URL are all set. Requiring the base URL is deliberate: it means
+ * enabling writes can never silently default to production Dentally (api.dentally.co) if
+ * the operator forgot to point at the sandbox. All three must be provided on purpose.
+ */
 export function isDentallyWriteEnabled(): boolean {
-  return process.env.DENTALLY_WRITE_ENABLED === "true" && Boolean(process.env.DENTALLY_WRITE_API_KEY);
+  return (
+    process.env.DENTALLY_WRITE_ENABLED === "true" &&
+    Boolean(process.env.DENTALLY_WRITE_API_KEY) &&
+    Boolean(process.env.DENTALLY_WRITE_BASE_URL)
+  );
 }
 
 /**

@@ -37,6 +37,13 @@ describe("Dentally write gate (default OFF)", () => {
     expect(isDentallyWriteEnabled()).toBe(false);
   });
 
+  it("stays DISABLED when the flag + key are set but no write base URL (never silently hits production)", () => {
+    vi.stubEnv("DENTALLY_WRITE_ENABLED", "true");
+    vi.stubEnv("DENTALLY_WRITE_API_KEY", "write-key");
+    vi.stubEnv("DENTALLY_WRITE_BASE_URL", "");
+    expect(isDentallyWriteEnabled()).toBe(false);
+  });
+
   it("ENABLES only with the flag 'true' AND a write key, targeting the write instance", () => {
     vi.stubEnv("DENTALLY_WRITE_ENABLED", "true");
     vi.stubEnv("DENTALLY_WRITE_API_KEY", "write-key");
