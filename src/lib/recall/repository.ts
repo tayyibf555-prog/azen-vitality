@@ -10,7 +10,7 @@ import type {
 import type { RecallCadence, RecallStatus, RecallTarget, RecallType } from "./types";
 
 // Re-export shared sync_state helpers (DRY: identical, resource-generic).
-export { getSyncState, setSyncState } from "@/lib/coordinator/repository";
+export { getSyncState, setSyncState, getBackfillCursor, setBackfillCursor } from "@/lib/coordinator/repository";
 
 // Recall owns its touch + outbox tables (recall_touch / recall_outbox) because
 // reactivation_touch has FKs to reactivation_target/cadence and cannot hold
