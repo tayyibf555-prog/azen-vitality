@@ -549,6 +549,55 @@ export async function findTargetByAddress(
   return null;
 }
 
+/**
+ * Distinct LIVE (scheduled/confirmed, future-dated) targets among the recent
+ * outbound messages to this address. More than one means a bare YES/CANCEL reply
+ * is ambiguous — it could act on the wrong appointment — so the caller hands the
+ * conversation to the agent instead of resolving against "most recently messaged".
+ */
+export async function listActiveTargetIdsByAddress(
+  toAddress: string,
+  now: Date = new Date(),
+): Promise<string[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("noshow_outbox")
+    .select("touch_id")
+    .eq("to_address", toAddress)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  if (error) throw error;
+  const touchIds = ((data as Array<{ touch_id: string }>) ?? []).map((r) => r.touch_id);
+  if (touchIds.length === 0) return [];
+
+  const { data: touches, error: tErr } = await db
+    .from("noshow_touch")
+    .select("target_id")
+    .in("id", touchIds);
+  if (tErr) throw tErr;
+  const targetIds = [
+    ...new Set(
+      ((touches as Array<{ target_id: string | null }>) ?? [])
+        .map((t) => t.target_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (targetIds.length <= 1) return targetIds;
+
+  const { data: targets, error: gErr } = await db
+    .from("noshow_target")
+    .select("id, status, appointment_start_at")
+    .in("id", targetIds);
+  if (gErr) throw gErr;
+  return ((targets as Array<{ id: string; status: string; appointment_start_at: string }>) ?? [])
+    .filter(
+      (t) =>
+        (t.status === "scheduled" || t.status === "confirmed") &&
+        new Date(t.appointment_start_at).getTime() > now.getTime(),
+    )
+    .map((t) => t.id);
+}
+
 export async function insertInboundTouch(input: {
   targetId: string;
   cadenceId: string | null;

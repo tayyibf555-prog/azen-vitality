@@ -134,7 +134,9 @@ export async function POST(request: Request): Promise<Response> {
   // check must precede. We therefore let findOpenOfferByAddress pin the offer to
   // the site of the most-recent offer SMS actually sent to this number, so a
   // reply can never resolve or flip an offer belonging to a different site.
-  const noshow = await handleNoshowInbound({ from, body, channel, dentally });
+  // Writes (the CANCEL path) must go through the gated agent client so they use
+  // the write key when enabled — the plain read client above cannot cancel.
+  const noshow = await handleNoshowInbound({ from, body, channel, dentally: dentallyAgentClient() });
   if (noshow.handled) {
     if (noshow.reply) {
       try {

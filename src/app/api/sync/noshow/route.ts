@@ -194,8 +194,12 @@ function preserveStatus(
 ): void {
   const prev = prevById.get(t.id);
   if (!prev) return;
-  const terminal = prev.status === "cancelled" || prev.status === "attended" || prev.status === "no_show";
-  const rescheduled = !terminal && prev.appointmentStartAt !== t.appointmentStartAt;
+  // attended / no_show are genuinely immutable past events. 'cancelled' is NOT:
+  // an appointment cancelled on our side (or reconciled as cancelled while it sat
+  // outside the sync window) that reappears with a NEW start time has been
+  // re-booked, and must be re-defended rather than stay dead forever.
+  const immutable = prev.status === "attended" || prev.status === "no_show";
+  const rescheduled = !immutable && prev.appointmentStartAt !== t.appointmentStartAt;
   if (rescheduled) {
     t.status = "scheduled";
     reanchorIds.add(t.id);

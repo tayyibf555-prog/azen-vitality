@@ -41,6 +41,9 @@ vi.mock("./repository", () => ({
   setWaitlistStatus: vi.fn(async (wid: string, status: string) => { store.waitlistStatus.set(wid, status); }),
   // Appointment-confirmation path.
   findTargetByAddress: vi.fn(async () => (store.target ? { targetId: store.target.id, siteId: store.target.siteId } : null)),
+  // One live appointment by default (unambiguous); tests override for the
+  // multiple-appointments case.
+  listActiveTargetIdsByAddress: vi.fn(async () => (store.target ? [store.target.id] : [])),
   getTarget: vi.fn(async () => store.target),
   getCadenceByTarget: vi.fn(async () => store.cadence),
   insertInboundTouch: vi.fn(async () => {}),
@@ -136,15 +139,88 @@ describe("#1: conversational 'no ...' never cancels a real appointment", () => {
     });
   }
 
-  it("an explicit 'No' (bare) DOES still cancel", async () => {
+  it("an explicit 'No' (bare) DOES still cancel when writes are enabled", async () => {
     seedTarget();
     const res = await handleNoshowInbound({
       from: "+447700900001", body: "No", channel: "sms", dentally: fakeDentally(),
+      writesEnabled: true,
       now: new Date("2026-07-08T09:00:00Z"),
     });
     expect(store.cancelAppointment).toHaveBeenCalledTimes(1);
     expect(store.targetStatus.get("target-1")).toBe("cancelled");
-    expect(res.reply).toMatch(/cancelled/i);
+    expect(res.reply).toMatch(/that is cancelled/i);
+    // A REAL cancel frees the slot for the waitlist.
+    expect(store.reoffered).toEqual(["appt-77"]);
+  });
+
+  it("with writes DISABLED, the patient is never told 'cancelled' and no slot is offered", async () => {
+    seedTarget();
+    const res = await handleNoshowInbound({
+      from: "+447700900001", body: "No", channel: "sms", dentally: fakeDentally(),
+      writesEnabled: false,
+      now: new Date("2026-07-08T09:00:00Z"),
+    });
+    // No Dentally write was attempted, so the appointment still exists there.
+    expect(store.cancelAppointment).not.toHaveBeenCalled();
+    // Reminders stop (the patient told us they are not coming)...
+    expect(store.targetStatus.get("target-1")).toBe("cancelled");
+    // ...but the reply hands off to reception instead of claiming it is done,
+    // and the not-actually-freed slot is NOT offered to the waitlist.
+    expect(res.reply).toMatch(/reception/i);
+    expect(res.reply).not.toMatch(/that is cancelled/i);
+    expect(store.reoffered).toHaveLength(0);
+  });
+
+  it("a FAILED Dentally cancel is never reported as 'cancelled' and never frees the slot", async () => {
+    seedTarget();
+    store.cancelAppointment.mockRejectedValueOnce(new Error("403 read-only key"));
+    const res = await handleNoshowInbound({
+      from: "+447700900001", body: "No", channel: "sms", dentally: fakeDentally(),
+      writesEnabled: true,
+      now: new Date("2026-07-08T09:00:00Z"),
+    });
+    expect(store.cancelAppointment).toHaveBeenCalledTimes(1);
+    expect(res.reply).toMatch(/reception/i);
+    expect(res.reply).not.toMatch(/that is cancelled/i);
+    expect(store.reoffered).toHaveLength(0);
+  });
+
+  it("'Can't wait!' is NEVER read as a cancel (defers to the agent)", async () => {
+    seedTarget();
+    const res = await handleNoshowInbound({
+      from: "+447700900001", body: "Can't wait!", channel: "sms", dentally: fakeDentally(),
+      writesEnabled: true,
+      now: new Date("2026-07-08T09:00:00Z"),
+    });
+    expect(store.cancelAppointment).not.toHaveBeenCalled();
+    expect(store.targetStatus.get("target-1")).not.toBe("cancelled");
+    expect(res.handled).toBe(false);
+  });
+
+  it("'can't make it' IS a cancel", async () => {
+    seedTarget();
+    const res = await handleNoshowInbound({
+      from: "+447700900001", body: "Sorry, can't make it", channel: "sms", dentally: fakeDentally(),
+      writesEnabled: true,
+      now: new Date("2026-07-08T09:00:00Z"),
+    });
+    expect(store.cancelAppointment).toHaveBeenCalledTimes(1);
+    expect(store.targetStatus.get("target-1")).toBe("cancelled");
+  });
+
+  it("a YES/NO from a patient with TWO live appointments defers to the agent (never acts on the wrong one)", async () => {
+    seedTarget();
+    const repo = await import("./repository");
+    vi.mocked(repo.listActiveTargetIdsByAddress).mockResolvedValueOnce(["target-1", "target-2"]);
+    const res = await handleNoshowInbound({
+      from: "+447700900001", body: "No", channel: "sms", dentally: fakeDentally(),
+      writesEnabled: true,
+      now: new Date("2026-07-08T09:00:00Z"),
+    });
+    expect(store.cancelAppointment).not.toHaveBeenCalled();
+    expect(store.targetStatus.get("target-1")).not.toBe("cancelled");
+    expect(res.handled).toBe(false); // the agent lists appointments and asks which
+    expect(store.cadencePatch).toContainEqual({ id: "cad-1", patch: { status: "paused" } });
   });
 
   it("'No thanks' still declines a waitlist offer (re-offers to the next person)", async () => {
@@ -173,14 +249,14 @@ describe("#8: YES to an already-started slot is not booked", () => {
     expect(res.reply).toMatch(/passed/i);
   });
 
-  it("a YES to a still-future slot books as normal", async () => {
+  it("a YES to a still-future slot claims it for reception to confirm (no direct Dentally write)", async () => {
     const offer = seedOffer({ freedStartAt: "2026-07-10T09:30:00.000Z" });
     const res = await handleNoshowInbound({
       from: "+447700900001", body: "YES", channel: "sms", dentally: fakeDentally(),
       now: new Date("2026-07-08T09:00:00Z"), // before the slot
     });
-    expect(store.createAppointment).toHaveBeenCalledTimes(1);
-    expect(offer.status).toBe("filled");
-    expect(res.reply).toMatch(/booked in/i);
+    expect(store.createAppointment).not.toHaveBeenCalled();
+    expect(offer.status).toBe("accepted");
+    expect(res.reply).toMatch(/reception will confirm/i);
   });
 });

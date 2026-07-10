@@ -1,16 +1,17 @@
 // No-show inbound handling: structured replies to a confirmation/reminder
-// (YES = confirm, CANCEL = free the slot + offer the waitlist) and to a waitlist
-// slot offer (YES = claim + book, NO = decline + re-offer). Called early from the
-// shared Twilio inbound webhook; returns handled:false to fall through to the agent.
+// (YES = confirm, CANCEL = cancel + offer the slot) and to a waitlist slot offer
+// (YES = claim, NO = decline + re-offer). Called early from the shared Twilio
+// inbound webhook; returns handled:false to fall through to the agent.
 
 import { DentallyClient } from "@/lib/dentally/client";
+import { isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { isStopKeyword } from "@/lib/messaging/suppression";
 import type { MessageChannel } from "@/lib/messaging/types";
-import type { FreedSlot } from "./types";
 import {
   claimOffer,
   findOpenOfferByAddress,
   findTargetByAddress,
+  listActiveTargetIdsByAddress,
   getCadenceByTarget,
   getTarget,
   insertInboundTouch,
@@ -27,13 +28,12 @@ function isYes(body: string): boolean {
   return /^\s*(yes|y|confirm|confirmed|ok|okay|yep|yeah|👍)\b/i.test(body);
 }
 // Only an EXPLICIT cancel/decline intent. A bare "no" (optionally punctuated) or
-// "no thanks" counts; conversational phrases that merely begin with "no" ("no
-// problem, see you then", "no worries, will be there") must NOT read as a cancel,
-// or we would cancel the appointment of a patient who just confirmed. Anything
-// ambiguous falls through to the agent, which is far safer than a destructive
-// cancel + waitlist re-offer on a false positive.
+// "no thanks" counts, and "can't/cannot/unable/won't" count ONLY when followed by
+// attendance words ("can't make it", "cannot attend") — a cheerful "Can't wait!"
+// must never cancel a real appointment. Anything ambiguous falls through to the
+// agent, which is far safer than a destructive cancel on a false positive.
 function isCancel(body: string): boolean {
-  return /^\s*(cancel\b|can'?t\b|cannot\b|unable\b|no\s*[.,!]?\s*$|no\s+(thanks|thank you|thankyou)\b)/i.test(
+  return /^\s*(sorry[,!.\s]+)?((i|we)\s+)?(cancel\b|(need|have)\s+to\s+cancel\b|(can'?t|cannot|won'?t|unable\s+to)\s+(make|come|attend|do|be\s+there)\b|no\s*[.,!]?\s*$|no\s+(thanks|thank you|thankyou)\b)/i.test(
     body,
   );
 }
@@ -53,9 +53,13 @@ export async function handleNoshowInbound(input: {
   // resolving against a live offer on a DIFFERENT site. Optional: when unknown,
   // findOpenOfferByAddress pins to the most-recent offer's own site instead.
   siteId?: string;
+  // Whether real Dentally writes are permitted. Defaults to the deployment gate;
+  // injectable so tests can exercise both paths without touching process.env.
+  writesEnabled?: boolean;
   now?: Date;
 }): Promise<NoshowInboundResult> {
   const now = input.now ?? new Date();
+  const writesEnabled = input.writesEnabled ?? isDentallyWriteEnabled();
 
   // A carrier-standard opt-out keyword (STOP/END/QUIT/UNSUBSCRIBE/CANCEL) must
   // always reach the suppression path, never be read as an appointment cancel or
@@ -86,36 +90,17 @@ export async function handleNoshowInbound(input: {
       if (!claimed || (await slotIsFilled(offer.freedAppointmentId))) {
         return { handled: true, reply: taken };
       }
-      try {
-        await input.dentally.createAppointment({
-          patient_id: offer.dentallyPatientId,
-          start_time: offer.freedStartAt,
-          duration: offer.durationMin,
-          site_id: offer.siteId,
-          ...(offer.practitioner ? { practitioner: offer.practitioner } : {}),
-          reason: "Waitlist fill",
-          booked_via_api: true,
-        });
-      } catch {
-        // Booking failed: release this claim and pass the slot to the next person
-        // rather than freezing it until the offer's TTL.
-        await setOfferStatus(offer.id, "declined", now.toISOString());
-        await setWaitlistStatus(offer.waitlistId, "waiting");
-        await offerSlotToNextCandidate(
-          {
-            appointmentId: offer.freedAppointmentId,
-            siteId: offer.siteId,
-            startAt: offer.freedStartAt,
-            durationMin: offer.durationMin,
-            practitioner: offer.practitioner,
-          },
-          now,
-        );
-        return { handled: true, reply: taken };
-      }
-      await setOfferStatus(offer.id, "filled", now.toISOString());
+      // The slot is theirs on OUR side; reception makes the Dentally booking.
+      // We deliberately do NOT createAppointment here: the offer only carries a
+      // practitioner NAME (real Dentally requires practitioner_id + finish_time),
+      // and the diary may have been refilled at the desk since the slot freed —
+      // an unverified automatic write risks a double-booking. The accepted offer
+      // is the staff work item; the copy promises confirmation, not a done deal.
       await setWaitlistStatus(offer.waitlistId, "booked");
-      return { handled: true, reply: "Brilliant, you are booked in. We look forward to seeing you." };
+      return {
+        handled: true,
+        reply: "Lovely, that time is yours. Reception will confirm your booking shortly.",
+      };
     }
     if (isCancel(input.body)) {
       await setOfferStatus(offer.id, "declined", now.toISOString());
@@ -149,32 +134,62 @@ export async function handleNoshowInbound(input: {
       body: input.body,
     });
 
+    // A YES/CANCEL from a patient with MORE THAN ONE live defended appointment is
+    // ambiguous: resolving against "most recently messaged" can confirm — or worse,
+    // cancel — the WRONG appointment. Hand these to the agent, which lists the
+    // patient's appointments and confirms exactly which one they mean.
+    if (isYes(input.body) || isCancel(input.body)) {
+      const active = await listActiveTargetIdsByAddress(input.from);
+      if (active.length > 1) {
+        if (cadence && cadence.status === "active") {
+          await updateCadence(cadence.id, { status: "paused" });
+        }
+        return { handled: false };
+      }
+    }
+
     if (isYes(input.body)) {
       await setTargetStatus(t.targetId, "confirmed");
       if (cadence) await updateCadence(cadence.id, { status: "confirmed", endedAt: now.toISOString() });
       return { handled: true, reply: "Thanks for confirming, we look forward to seeing you." };
     }
     if (isCancel(input.body)) {
-      if (target) {
+      // Stop reminders either way: the patient has told us they are not coming.
+      await setTargetStatus(t.targetId, "cancelled");
+      if (cadence) await updateCadence(cadence.id, { status: "cancelled", endedAt: now.toISOString() });
+
+      // Only claim the appointment is cancelled if Dentally ACTUALLY cancelled it.
+      // Telling a patient "that is cancelled" while the diary still expects them
+      // (writes disabled, wrong key, transient error) strands them as a recorded
+      // no-show — and offering the "freed" slot to the waitlist double-books it.
+      let dentallyCancelled = false;
+      if (target && writesEnabled) {
         try {
           await input.dentally.cancelAppointment(target.appointmentId);
+          dentallyCancelled = true;
         } catch {
-          /* best effort: still record our side so the slot can be reused */
+          // Fall through to the reception handoff reply below.
         }
-        await setTargetStatus(t.targetId, "cancelled");
-        if (cadence) await updateCadence(cadence.id, { status: "cancelled", endedAt: now.toISOString() });
-        const slot: FreedSlot = {
-          appointmentId: target.appointmentId,
-          siteId: target.siteId,
-          startAt: target.appointmentStartAt,
-          durationMin: target.durationMin || 30,
-          practitioner: target.practitioner,
+      }
+      if (target && dentallyCancelled) {
+        await offerSlotToNextCandidate(
+          {
+            appointmentId: target.appointmentId,
+            siteId: target.siteId,
+            startAt: target.appointmentStartAt,
+            durationMin: target.durationMin || 30,
+            practitioner: target.practitioner,
+          },
+          now,
+        );
+        return {
+          handled: true,
+          reply: "That is cancelled for you. If you would like to rebook, just let me know a day that suits and I will find a time.",
         };
-        await offerSlotToNextCandidate(slot, now);
       }
       return {
         handled: true,
-        reply: "That is cancelled for you. If you would like to rebook, just let me know a day that suits and I will find a time.",
+        reply: "Thanks for letting us know. I have passed your cancellation to reception and they will confirm it shortly. If you would like to rebook, just let me know a day that suits.",
       };
     }
 

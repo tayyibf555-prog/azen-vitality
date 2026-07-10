@@ -1,11 +1,12 @@
 // AREA 9 (no-show defence): inbound reply handling for waitlist slot offers.
 //
-// The critical safety property: a freed slot can NEVER be double-booked. Two YES
-// replies racing to the same offer must resolve to exactly one booking; the loser
-// gets the "slot taken" reply. We drive handleNoshowInbound against an in-memory
-// repository fake whose claimOffer reproduces the real conditional-update
-// (offered -> accepted only if still open), so the atomic-claim guard is exercised
-// rather than mocked away. A failed Dentally booking must release + re-offer.
+// The critical safety property: a freed slot can NEVER be double-claimed, and the
+// handler NEVER writes an appointment into Dentally itself (the offer carries only
+// a practitioner NAME, and the desk may have refilled the diary — reception makes
+// the real booking). Two YES replies racing to the same offer must resolve to
+// exactly one claim; the loser gets the "slot taken" reply. We drive
+// handleNoshowInbound against an in-memory repository fake whose claimOffer
+// reproduces the real conditional-update (offered -> accepted only if still open).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SlotOffer } from "./types";
 
@@ -40,6 +41,7 @@ vi.mock("./repository", () => ({
   setWaitlistStatus: vi.fn(async (wid: string, status: string) => { store.waitlistStatus.set(wid, status); }),
   // Unused-in-offer-path repo fns still imported by inbound.ts:
   findTargetByAddress: vi.fn(async () => null),
+  listActiveTargetIdsByAddress: vi.fn(async () => []),
   getTarget: vi.fn(async () => null),
   getCadenceByTarget: vi.fn(async () => null),
   insertInboundTouch: vi.fn(async () => {}),
@@ -97,36 +99,38 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("waitlist offer: YES books the slot", () => {
-  it("a single YES claims the offer, books via Dentally, and marks it filled", async () => {
+describe("waitlist offer: YES claims the slot for reception to confirm", () => {
+  it("a single YES claims the offer, never writes to Dentally, and promises reception confirmation", async () => {
     const offer = seedOffer();
     const res = await handleNoshowInbound({
       from: "+447700900001", body: "YES", channel: "sms", dentally: fakeDentally(),
       now: new Date("2026-07-01T09:00:00Z"),
     });
     expect(res.handled).toBe(true);
-    expect(res.reply).toMatch(/booked in/i);
-    expect(store.createAppointment).toHaveBeenCalledTimes(1);
-    expect(offer.status).toBe("filled");
+    expect(res.reply).toMatch(/reception will confirm/i);
+    // The handler must NEVER book into Dentally itself: the offer has no
+    // practitioner id and the desk may have refilled the slot.
+    expect(store.createAppointment).not.toHaveBeenCalled();
+    expect(offer.status).toBe("accepted");
     expect(store.waitlistStatus.get(offer.waitlistId)).toBe("booked");
   });
 });
 
-describe("waitlist offer: two YES replies can never both book the same slot", () => {
-  it("the second YES loses the atomic claim and gets the 'slot taken' reply (no second booking)", async () => {
+describe("waitlist offer: two YES replies can never both claim the same slot", () => {
+  it("the second YES loses the atomic claim (no double-claim, no Dentally write)", async () => {
     const offer = seedOffer();
     const dentally = fakeDentally();
 
     const first = await handleNoshowInbound({ from: "+447700900001", body: "yes please", channel: "sms", dentally, now: new Date("2026-07-01T09:00:00Z") });
-    expect(first.reply).toMatch(/booked in/i);
-    expect(offer.status).toBe("filled");
+    expect(first.reply).toMatch(/reception will confirm/i);
+    expect(offer.status).toBe("accepted");
 
     // The second reply arrives; findOpenOfferByAddress now returns null (no open
     // offer), so the handler falls through — but even if it saw the offer, the
-    // claim is no longer 'offered'. Prove no second booking happened.
+    // claim is no longer 'offered'. Prove no Dentally write ever happened.
     const second = await handleNoshowInbound({ from: "+447700900001", body: "YES", channel: "sms", dentally, now: new Date("2026-07-01T09:01:00Z") });
-    expect(store.createAppointment).toHaveBeenCalledTimes(1); // still ONE booking
-    expect(second.handled).toBe(false); // fell through to the agent, no double-book
+    expect(store.createAppointment).not.toHaveBeenCalled();
+    expect(second.handled).toBe(false); // fell through to the agent, no double-claim
   });
 
   it("if the claim is lost mid-flight (already accepted), the reply is 'slot taken' and no booking is made", async () => {
@@ -142,19 +146,15 @@ describe("waitlist offer: two YES replies can never both book the same slot", ()
   });
 });
 
-describe("waitlist offer: booking failure releases and re-offers", () => {
-  it("a Dentally createAppointment throw releases the claim and passes the slot to the next candidate", async () => {
+describe("waitlist offer: a slot already filled on our side is never claimed", () => {
+  it("YES against a slot marked filled gets the 'slot taken' reply and no waitlist flip", async () => {
+    // Another offer for the same freed appointment already completed.
+    seedOffer({ id: "offer-done", status: "filled" });
     const offer = seedOffer();
-    store.createAppointment.mockRejectedValueOnce(new Error("Dentally 500"));
-
     const res = await handleNoshowInbound({ from: "+447700900001", body: "yes", channel: "sms", dentally: fakeDentally(), now: new Date("2026-07-01T09:00:00Z") });
     expect(res.reply).toMatch(/just been taken/i);
-    // The offer was released (declined) and the waitlist entry returned to waiting.
-    expect(offer.status).toBe("declined");
-    expect(store.waitlistStatus.get(offer.waitlistId)).toBe("waiting");
-    // The freed slot was re-offered to the next person, not frozen until TTL.
-    expect(offerSlotToNextCandidate).toHaveBeenCalledTimes(1);
-    expect(store.reoffered).toEqual(["freed-1"]);
+    expect(store.createAppointment).not.toHaveBeenCalled();
+    expect(store.waitlistStatus.get(offer.waitlistId)).toBeUndefined();
   });
 });
 
