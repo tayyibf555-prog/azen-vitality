@@ -312,13 +312,14 @@ export interface QueuedOutbox {
   channel: TouchChannel;
   toRef: string;
   body: string;
+  createdAt: string;
 }
 
 export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[]> {
   const db = serviceClient();
   const { data, error } = await db
     .from("review_outbox")
-    .select("id, touch_id, site_id, channel, to_ref, body")
+    .select("id, touch_id, site_id, channel, to_ref, body, created_at")
     .in("site_id", siteIds)
     .eq("status", "queued")
     .order("created_at", { ascending: true })
@@ -327,9 +328,9 @@ export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[
     .limit(100);
   if (error) throw error;
   return (data as Array<{
-    id: string; touch_id: string; site_id: string; channel: string; to_ref: string; body: string;
+    id: string; touch_id: string; site_id: string; channel: string; to_ref: string; body: string; created_at: string;
   }>).map((r) => ({
-    id: r.id, touchId: r.touch_id, siteId: r.site_id, channel: r.channel as TouchChannel, toRef: r.to_ref, body: r.body,
+    id: r.id, touchId: r.touch_id, siteId: r.site_id, channel: r.channel as TouchChannel, toRef: r.to_ref, body: r.body, createdAt: r.created_at,
   }));
 }
 

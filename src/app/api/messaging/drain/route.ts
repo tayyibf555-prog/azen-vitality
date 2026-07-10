@@ -73,7 +73,16 @@ interface QueuedRow {
   channel: string;
   toRef: string;
   body: string;
+  /** When the row was queued; rows older than MAX_ROW_AGE_MS are retired unsent. */
+  createdAt?: string;
 }
+
+// Staleness guard: a row queued while a system was switched off (or during a
+// long outage) must NOT fire days later as if nothing happened — "see you at
+// your appointment tomorrow" sent three days late is wrong and confusing. Any
+// queued row older than this is retired as failed instead of sent; the sweeps
+// re-draft current messages on their own schedule.
+const MAX_ROW_AGE_MS = 48 * 3_600_000;
 
 // Reactivation and recall each have their own outbox, but the send pipeline
 // (resolve recipient, suppression check, dispatch, record) is identical.
@@ -130,6 +139,15 @@ async function drainSource(
       break;
     }
     examined += 1;
+
+    // Retire stale rows unsent (see MAX_ROW_AGE_MS above).
+    if (row.createdAt && Date.now() - Date.parse(row.createdAt) > MAX_ROW_AGE_MS) {
+      await source.markFailed(row.id);
+      failed += 1;
+      console.warn(`[drain] ${source.name}: outbox ${row.id} queued ${row.createdAt} is stale; retired unsent`);
+      continue;
+    }
+
     let to: string | null;
     try {
       to = await resolveRecipient(row.toRef, channel, client);
