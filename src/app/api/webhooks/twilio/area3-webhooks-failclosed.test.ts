@@ -73,7 +73,10 @@ vi.mock("@anthropic-ai/sdk", () => ({ default: class Anthropic {} }));
 vi.mock("@/lib/dentally/client", () => ({ DentallyClient: class DentallyClient {} }));
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: vi.fn(async () => {}) }));
 vi.mock("@/lib/agent/prompt", () => ({ buildSystemPrompt: vi.fn(() => "sys") }));
-vi.mock("@/lib/mock/clients", () => ({ getSite: vi.fn(() => ({ clientId: "client-1" })) }));
+vi.mock("@/lib/mock/clients", () => ({
+  getSite: vi.fn(() => ({ clientId: "client-1" })),
+  getSites: vi.fn(() => [{ id: "site-cc" }]),
+}));
 vi.mock("@/lib/usp/repository", () => ({ listActiveUspTexts: vi.fn(async () => []) }));
 vi.mock("@/lib/agent/tools", () => ({ AGENT_TOOLS: [], makeDispatch: vi.fn(() => vi.fn()) }));
 vi.mock("@/lib/agent/run", () => ({
@@ -341,6 +344,8 @@ describe("inbound STOP handling", () => {
     const res = await inboundPOST(signed(INBOUND_URL, { From: "+447700900123", Body: "STOP" }));
     expect(res.status).toBe(200);
     expect(addSuppression).toHaveBeenCalledWith("site-cc", "sms", "+447700900123", "stop");
+    // One STOP covers BOTH phone channels: the same number receives SMS and WhatsApp.
+    expect(addSuppression).toHaveBeenCalledWith("site-cc", "whatsapp", "+447700900123", "stop");
     expect(sendMessage).not.toHaveBeenCalled();
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
@@ -352,6 +357,9 @@ describe("inbound STOP handling", () => {
     } as never);
     await inboundPOST(signed(INBOUND_URL, { From: "+447700900456", Body: "stop" }));
     expect(addSuppression).toHaveBeenCalledWith("site-a", "sms", "patient:789", "stop");
+    // The ADDRESS is suppressed too, so the same person arriving later through a
+    // public form (no patient id on the lead) is still blocked.
+    expect(addSuppression).toHaveBeenCalledWith("site-a", "sms", "+447700900456", "stop");
   });
 
   it("uses the whatsapp channel when the STOP arrives via WhatsApp", async () => {

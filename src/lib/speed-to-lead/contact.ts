@@ -98,7 +98,12 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
   const convChannel: LeadChannel = lead.channel === "email" ? "sms" : lead.channel;
   const conversation = await findOrCreateConversation({
     siteId: lead.siteId,
-    dentallyPatientId: `lead:${lead.phone ?? lead.email ?? lead.id}`,
+    // A Dentally-KNOWN patient must be threaded under their PATIENT id: the
+    // inbound webhook resolves their reply by phone to that same id, so keying
+    // this conversation `lead:<phone>` would FORK the thread — the agent would
+    // answer with no enquiry context and the lead's timeline would never show
+    // the reply. Unknown leads keep the `lead:` key the webhook uses for them.
+    dentallyPatientId: lead.dentallyPatientId ?? `lead:${lead.phone ?? lead.email ?? lead.id}`,
     patientName: lead.name,
     channel: convChannel,
     treatment: lead.treatmentInterest,

@@ -34,6 +34,8 @@ vi.mock("@/lib/smile-assessment/repository", () => ({
 vi.mock("@/lib/speed-to-lead/repository", () => ({
   insertLead: h.insertLead,
   findOpenLeadByAddress: h.findOpenLeadByAddress,
+  claimLeadForContact: vi.fn(async () => true),
+  releaseLeadClaim: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/speed-to-lead/contact", () => ({ contactLead: h.contactLead }));
 vi.mock("@/lib/smile-assessment/campaign-repository", () => ({

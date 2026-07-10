@@ -54,7 +54,10 @@ vi.mock("@/lib/after-hours/repository", () => ({
 }));
 vi.mock("@/lib/agent/identify", () => ({ identifyByPhone: (...a: unknown[]) => identifyByPhone(...a) }));
 vi.mock("@/lib/agent/prompt", () => ({ buildSystemPrompt: () => "system" }));
-vi.mock("@/lib/mock/clients", () => ({ getSite: () => ({ id: "site-cc", clientId: "vitality" }) }));
+vi.mock("@/lib/mock/clients", () => ({
+  getSite: () => ({ id: "site-cc", clientId: "vitality" }),
+  getSites: () => [{ id: "site-cc" }],
+}));
 vi.mock("@/lib/usp/repository", () => ({ listActiveUspTexts: vi.fn(async () => []) }));
 vi.mock("@/lib/agent/tools", () => ({ AGENT_TOOLS: [], makeDispatch: () => vi.fn() }));
 vi.mock("@/lib/agent/run", () => ({ runAgentTurn: (...a: unknown[]) => runAgentTurn(...a) }));
@@ -125,7 +128,8 @@ describe("inbound STOP updates suppression", () => {
 
   it("treats UNSUBSCRIBE the same as STOP", async () => {
     await POST(inbound("UNSUBSCRIBE"));
-    expect(addSuppression).toHaveBeenCalledTimes(1);
+    // One opt-out writes BOTH phone channels (sms + whatsapp) for the site.
+    expect(addSuppression).toHaveBeenCalledTimes(2);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });

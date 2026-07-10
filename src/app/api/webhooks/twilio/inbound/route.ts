@@ -25,7 +25,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
-import { getSite } from "@/lib/mock/clients";
+import { getSite, getSites } from "@/lib/mock/clients";
 import { listActiveUspTexts } from "@/lib/usp/repository";
 import { AGENT_TOOLS, makeDispatch } from "@/lib/agent/tools";
 import { runAgentTurn } from "@/lib/agent/run";
@@ -253,16 +253,36 @@ export async function POST(request: Request): Promise<Response> {
     // the opt-out even if this write failed; the next STOP (or the status
     // webhook) will re-attempt it. Swallow and still return a clean 2xx TwiML.
     try {
-      if (target) {
-        await addSuppression(target.siteId, channel, `patient:${target.targetId.split(":")[1]}`, "stop");
-      } else if (recallTarget) {
-        await addSuppression(recallTarget.siteId, channel, `patient:${recallTarget.targetId.split(":")[1]}`, "stop");
-      } else if (identity) {
-        await addSuppression(siteId, channel, `patient:${identity.patientId}`, "stop");
-      } else {
-        // Unrecognised number (e.g. a speed-to-lead lead): suppress by address so
-        // the opt-out is honoured on the channel they actually used.
-        await addSuppression(siteId, channel, from, "stop");
+      // One STOP means STOP EVERYWHERE. Record it by ADDRESS and (when known) by
+      // patient ref, on BOTH phone channels (the same number receives SMS and
+      // WhatsApp), for EVERY site of the practice — every downstream check is
+      // keyed to its own row's site/channel/ref, and a narrower write left gaps:
+      // a patient-ref-only record missed the same person arriving later as a
+      // public-form lead; an SMS-only record let WhatsApp keep sending; a
+      // single-site record let another site's cadence text the opted-out number.
+      const patientRef = target
+        ? `patient:${target.targetId.split(":")[1]}`
+        : recallTarget
+          ? `patient:${recallTarget.targetId.split(":")[1]}`
+          : identity
+            ? `patient:${identity.patientId}`
+            : null;
+      // This webhook only ever receives phone channels; the same number gets both.
+      const channels: MessageChannel[] = ["sms", "whatsapp"];
+      const clientId = getSite(siteId)?.clientId ?? "vitality";
+      const suppressSites = new Set<string>(getSites(clientId).map((s) => s.id));
+      // Belt and braces: always include the resolved site and any matched target's
+      // own site, so the opt-out covers them even if the site list is incomplete.
+      suppressSites.add(siteId);
+      if (target) suppressSites.add(target.siteId);
+      if (recallTarget) suppressSites.add(recallTarget.siteId);
+      const refs = patientRef ? [from, patientRef] : [from];
+      for (const sid of suppressSites) {
+        for (const ch of channels) {
+          for (const ref of refs) {
+            await addSuppression(sid, ch, ref, "stop");
+          }
+        }
       }
     } catch (err) {
       console.error(`[inbound] STOP suppression write failed for ${from}; opt-out logged as an inbound touch, will retry`, err);

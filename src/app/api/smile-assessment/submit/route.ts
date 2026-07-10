@@ -4,7 +4,7 @@ import { QUIZ_QUESTION_IDS, Q_TREATMENT, questionById } from "@/lib/smile-assess
 import { countRecent, insertResponse, setResponseLead } from "@/lib/smile-assessment/repository";
 import type { AssessmentChannel } from "@/lib/smile-assessment/types";
 import { contactLead } from "@/lib/speed-to-lead/contact";
-import { insertLead, findOpenLeadByAddress } from "@/lib/speed-to-lead/repository";
+import { insertLead, findOpenLeadByAddress, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
@@ -258,18 +258,30 @@ export async function POST(request: Request): Promise<Response> {
         });
         await setResponseLead(response.id, lead.id);
         leadCreated = true;
-        // Fire first contact in-request so the patient hears back instantly. For a
-        // campaign, pass its goal + ideal customer so the opener is tailored (never
-        // quote internal targeting/funding terms — contactLead/draft enforce that).
-        try {
-          await contactLead(
-            lead,
-            campaign
-              ? { goal: goalLabel(campaign.goal), idealCustomer: campaign.idealCustomer }
-              : undefined,
-          );
-        } catch {
-          // The SLA sweep on the speed-to-lead side will retry; the lead is recorded.
+        // Fire first contact in-request so the patient hears back instantly — but
+        // CLAIM the lead first (mirrors the intake route): without the atomic
+        // 'new' -> 'contacting' flip, the SLA sweep can pick the same brand-new
+        // lead mid-request and the patient gets texted TWICE.
+        if (await claimLeadForContact(lead.id)) {
+          try {
+            await contactLead(
+              lead,
+              campaign
+                ? { goal: goalLabel(campaign.goal), idealCustomer: campaign.idealCustomer }
+                : undefined,
+            );
+          } catch {
+            // The SLA sweep on the speed-to-lead side will retry; the lead is recorded.
+          } finally {
+            // Release a stranded claim ('contacting' -> 'new') so the sweep can retry.
+            // contactLead advances to 'contacted'/'lost' on success, so this is a
+            // no-op then; it only matters on a throw or a silent early-return.
+            try {
+              await releaseLeadClaim(lead.id);
+            } catch {
+              /* best effort */
+            }
+          }
         }
       } catch {
         // Bridging failed (e.g. DB hiccup). The assessment is already recorded;

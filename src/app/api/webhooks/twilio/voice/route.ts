@@ -159,6 +159,10 @@ export async function POST(request: Request): Promise<Response> {
     // Persistence failed: still answer the caller so the line never errors out.
   }
 
+  // Whether the caller was ACTUALLY texted (or already had been), so the spoken
+  // line never promises a text that was suppressed, failed, or timed out.
+  let textPromised = false;
+
   if (outside) {
     // Route the missed call into Speed-to-lead so it gets the AI-drafted opener,
     // SLA tracking, attempt logging and the SHARED cross-channel dedup — instead of
@@ -180,10 +184,16 @@ export async function POST(request: Request): Promise<Response> {
       } else {
         // Bound the WHOLE bridge (dedup check + insert + claim + first contact) so it
         // can never stack on top of the identify time and push the response past
-        // Twilio's ~15s voice timeout. On a timeout `bridged` stays null and we fall
-        // through to the bare-SMS fallback below.
+        // Twilio's ~15s voice timeout. The timeout is COOPERATIVE: on expiry the
+        // bridge is told to stand down, and it checks that flag immediately before
+        // its send — so the timed-out bridge and the bare-SMS fallback can never
+        // BOTH text the caller (the old double-message bug).
+        // sending  = the bridge began its outbound send (contactLead was entered)
+        // settled  = the bridge finished (returned or self-caught), i.e. NOT still
+        //            running. A send is only "in flight" when sending && !settled.
+        const bridgeState = { timedOut: false, sending: false, settled: false };
         const bridged = await withTimeout(
-          (async (): Promise<"contacted" | "deduped"> => {
+          (async (): Promise<"contacted" | "deduped" | "aborted"> => {
             // DEDUP: if an open lead for this site + number already exists (e.g. the
             // caller also filled the website form), do NOT create a second lead or
             // first-contact again. The call is still logged for a manual callback.
@@ -210,10 +220,15 @@ export async function POST(request: Request): Promise<Response> {
               consent,
             });
 
+            // Stand down if the fallback path has already taken over: sending now
+            // would double-message the caller. The lead stays 'new' for the sweep.
+            if (bridgeState.timedOut) return "aborted";
+
             // Claim the lead ('new' -> 'contacting') then first-contact, exactly as
             // the intake route does: this closes the double-send race with the SLA
             // sweep. Our claim always wins (we just created the row); a lost claim
             // means a concurrent path already owns the contact, so we skip.
+            bridgeState.sending = true;
             if (await claimLeadForContact(lead.id)) {
               try {
                 await contactLead(lead);
@@ -225,18 +240,27 @@ export async function POST(request: Request): Promise<Response> {
               }
             }
             return "contacted";
-          })().catch(() => null),
+          })()
+            .catch(() => null)
+            .finally(() => {
+              bridgeState.settled = true;
+            }),
           8000,
           null,
         );
 
-        if (bridged === "contacted" && captureId) {
+        if (bridged === "contacted") {
+          textPromised = true;
           // A brand-new lead was created and first-contacted: record the follow-up.
-          await markFollowUpSent(captureId);
-        } else if (bridged === null) {
-          // Bridge threw or timed out: fall back to the bare fixed SMS so the missed
-          // call is never silently dropped. Only record the follow-up on a confirmed
-          // send; a timeout falls through (the call is still logged for a callback).
+          if (captureId) await markFollowUpSent(captureId);
+        } else if (bridged === "deduped") {
+          // An earlier text already went to this number for the same enquiry.
+          textPromised = true;
+        } else if (bridged === null && !(bridgeState.sending && !bridgeState.settled)) {
+          // Bridge failed and no send is still in flight (it threw, or timed out
+          // before reaching its send). Tell it to stand down and fall back to the
+          // bare fixed SMS so the missed call is never silently dropped.
+          bridgeState.timedOut = true;
           const sendResult = await withTimeout(
             sendMessage({
               channel: "sms",
@@ -249,17 +273,27 @@ export async function POST(request: Request): Promise<Response> {
             6000,
             "timeout" as const,
           );
-          if (sendResult === "sent" && captureId) await markFollowUpSent(captureId);
+          if (sendResult === "sent") {
+            textPromised = true;
+            if (captureId) await markFollowUpSent(captureId);
+          }
+        } else if (bridged === null) {
+          // A send is genuinely still in flight past the timeout: its text is very
+          // likely going out, so promise it and send nothing more (no double-text).
+          textPromised = true;
         }
-        // bridged === "deduped": an open lead already owns the contact; leave the
-        // capture in place and send nothing more.
       }
     } catch {
       // Any failure here (no key, dry-run off, unreachable): the call is still
       // logged. Swallow so Twilio gets a clean TwiML response and does not retry.
     }
+    // Only promise a text when one was actually sent (or already had been). A
+    // suppressed number, a failed send, or a dry timeout must not be told "we've
+    // just sent you a text" — nothing is coming.
     return twiml(
-      "Thanks for calling Vitality Dental. We're currently closed. We've just sent you a text so we can help you book.",
+      textPromised
+        ? "Thanks for calling Vitality Dental. We're currently closed. We've just sent you a text so we can help you book."
+        : "Thanks for calling Vitality Dental. We're currently closed. Please call back during our opening hours and we will be happy to help.",
     );
   }
 
