@@ -309,7 +309,15 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
       });
       if (!res.ok) throw new Error("save failed");
     } catch {
-      setChecked((c) => ({ ...c, [key]: !next })); // revert
+      // Re-sync from the server rather than blind-reverting: overlapping toggles
+      // (or the other owner saving concurrently) make a blind !next wrong.
+      try {
+        const r = await fetch(`/api/getting-started?client=${encodeURIComponent(clientSlug)}`);
+        const j = (await r.json()) as { ok?: boolean; state?: Record<string, boolean> };
+        if (j.ok) setChecked(j.state ?? {});
+      } catch {
+        setChecked((c) => ({ ...c, [key]: !next })); // last resort: local revert
+      }
     }
   }
 

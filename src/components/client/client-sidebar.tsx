@@ -33,7 +33,7 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
   const router = useRouter();
   const { user, logout } = useAuth();
   const modKey = useModKey();
-  const { open: navOpen, setOpen: setNavOpen } = useMobileNav();
+  const { open: navOpen, setOpen: setNavOpen, hiddenFromA11y } = useMobileNav();
 
   const clientSlug = params.client;
   const client = getClient(clientSlug);
@@ -103,6 +103,9 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
         />
       ) : null}
       <aside
+        // Off-canvas on mobile: not keyboard/screen-reader reachable while closed.
+        inert={hiddenFromA11y || undefined}
+        aria-hidden={hiddenFromA11y || undefined}
         className={cn(
           "chrome-nav fixed left-0 top-0 z-50 flex h-screen w-[296px] max-w-[85vw] shrink-0 flex-col self-start border-r border-navy-line transition-transform duration-200 ease-out",
           "lg:sticky lg:z-auto lg:max-w-none lg:translate-x-0",
@@ -190,6 +193,9 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
                           // Plain left-click only (not cmd/ctrl/shift = open in new tab).
                           if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
                             setPendingHref(href);
+                            // Close the drawer even when tapping the CURRENT page's
+                            // link (no pathname change to auto-close it).
+                            setNavOpen(false);
                           }
                         }}
                         className={cn(

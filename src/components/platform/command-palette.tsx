@@ -58,6 +58,32 @@ export function CommandPalette({
     return () => clearTimeout(t);
   }, [open, clientSlug]);
 
+  // The initial list is the BOUNDED fast segment (~300 of a 51k live base), so
+  // filtering it client-side gives false "no results". Once the user has typed a
+  // couple of characters, run the server-side search across the WHOLE base
+  // (debounced; latest response wins).
+  useEffect(() => {
+    if (!open) return;
+    const q = query.trim();
+    if (q.length < 2) return;
+    let stale = false;
+    const t = setTimeout(() => {
+      fetch(
+        `/api/dentally/patients?client=${encodeURIComponent(clientSlug)}&search=${encodeURIComponent(q)}`,
+        { cache: "no-store" },
+      )
+        .then((r) => r.json())
+        .then((d: { patients?: Patient[] }) => {
+          if (!stale) setPatients(d.patients ?? []);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [open, clientSlug, query]);
+
   useEffect(() => setActive(0), [query]);
 
   const hrefFor = (slug: string) =>

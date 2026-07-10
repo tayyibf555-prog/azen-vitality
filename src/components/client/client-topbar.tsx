@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Building2, Check, ChevronDown, Menu } from "lucide-react";
@@ -20,6 +20,18 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
 
   const [selected, setSelected] = useState<string>(initialSelected);
   const [open, setOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click/tap. onBlur alone misses Safari, where buttons do not
+  // take focus on click, so the menu never blurred and could not be dismissed.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
 
   const selectedLabel =
     selected === ALL_SITES ? "All sites" : sites.find((s) => s.id === selected)?.name ?? "All sites";
@@ -46,7 +58,7 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
           <Menu size={18} />
         </button>
         {/* Site switcher */}
-        <div className="relative">
+        <div className="relative" ref={switcherRef}>
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
