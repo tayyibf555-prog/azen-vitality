@@ -6,12 +6,14 @@ const sendMessage = vi.fn();
 const isSuppressed = vi.fn();
 const logCopilotAction = vi.fn();
 const listPatients = vi.fn();
+const searchPatients = vi.fn();
 
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
 vi.mock("@/lib/messaging/suppression", () => ({ isSuppressed: (...a: unknown[]) => isSuppressed(...a) }));
 vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: (...a: unknown[]) => logCopilotAction(...a) }));
 vi.mock("@/lib/dentally/read", () => ({
   listPatients: (...a: unknown[]) => listPatients(...a),
+  searchPatients: (...a: unknown[]) => searchPatients(...a),
   listAppointments: vi.fn(),
   listOutstanding: vi.fn(),
   getPatientDetail: vi.fn(),
@@ -37,6 +39,15 @@ const dispatch = makeCopilotDispatch(["site-cc"], "vitality", "tester");
 beforeEach(() => {
   vi.clearAllMocks();
   listPatients.mockResolvedValue(PATIENTS);
+  // Faithful stand-in for Dentally's server-side `query=` search: match name/phone/
+  // email, and (like the real one) return nothing for a query under 2 chars.
+  searchPatients.mockImplementation(async (_siteIds: string[], q: string) => {
+    const ql = String(q).trim().toLowerCase();
+    if (ql.length < 2) return [];
+    return PATIENTS.filter(
+      (p) => p.name.toLowerCase().includes(ql) || (p.phone ?? "").includes(String(q)) || (p.email ?? "").toLowerCase().includes(ql),
+    );
+  });
   isSuppressed.mockResolvedValue(false);
   sendMessage.mockResolvedValue({ providerMessageId: "dry-sms-1", provider: "dry-run", status: "dry_run" });
 });
@@ -75,7 +86,9 @@ describe("send_sms", () => {
   });
 
   it("asks which patient when the name matches more than one", async () => {
-    const out = JSON.parse(await dispatch("send_sms", { patient: "n", message: "Hi" }));
+    // "co" is a real (>=2 char) query that both "Cora Consented" and
+    // "Niall NoConsent" contain, so the server-side search returns both.
+    const out = JSON.parse(await dispatch("send_sms", { patient: "co", message: "Hi" }));
     expect(out.sent).toBe(false);
     expect(out.multiple).toBe(true);
     expect(out.matches.length).toBe(2);

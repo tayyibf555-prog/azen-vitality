@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/primitives";
-import { getClient, getSites, NOW } from "@/lib/mock/clients";
+import { getClient, getSites } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { listAppointments, type AppointmentRecord } from "@/lib/dentally/read";
 import { CalendarBoard } from "./calendar-board";
@@ -21,10 +21,14 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
   const siteIds = scope.siteIds;
   const sites = getSites(client.id).filter((s) => siteIds.includes(s.id));
 
-  // Load a window around now; the board navigates within it.
-  const from = new Date(NOW);
+  // Load a window around now; the board navigates within it. Use the REAL current
+  // time, never the frozen mock clock: on live Dentally a hardcoded date would open
+  // the diary on the wrong day and, once the real date passed the frozen window,
+  // stop including today's appointments entirely.
+  const now = new Date();
+  const from = new Date(now);
   from.setUTCDate(from.getUTCDate() - 14);
-  const to = new Date(NOW);
+  const to = new Date(now);
   to.setUTCDate(to.getUTCDate() + 45);
 
   let appointments: AppointmentRecord[] = [];
@@ -43,7 +47,7 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
       <CalendarBoard
         appointments={appointments}
         sites={sites.map((s) => ({ id: s.id, name: s.name }))}
-        nowIso={NOW.toISOString()}
+        nowIso={now.toISOString()}
         initialSiteFilter={scope.isAllSites ? "all" : scope.selection}
       />
     </>

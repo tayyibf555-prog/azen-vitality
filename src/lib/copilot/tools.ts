@@ -3,6 +3,7 @@ import { getSite } from "@/lib/mock";
 import { londonDayKey } from "@/lib/time/london";
 import {
   listPatients,
+  searchPatients,
   listAppointments,
   listOutstanding,
   getPatientDetail,
@@ -123,20 +124,19 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
     try {
       switch (name) {
         case "search_patients": {
-          const q = String(input.query ?? "").toLowerCase().trim();
-          const patients = await listPatients(siteIds);
-          const matches = q
-            ? patients.filter((p) => p.name.toLowerCase().includes(q) || (p.phone ?? "").includes(q))
-            : patients;
+          const q = String(input.query ?? "").trim();
+          // Server-side search (Dentally `query=`), never a full-book scan: the scan is
+          // bounded to ~10k rows/site, so a patient past that would be invisible to the
+          // owner co-pilot. An empty query returns a bounded first-page sample.
+          const matches = q.length >= 2 ? await searchPatients(siteIds, q) : await listPatients(siteIds, { maxPages: 3 });
           return JSON.stringify({ count: matches.length, patients: matches.slice(0, 25).map(patientSummary) });
         }
 
         case "patient_record": {
-          const q = String(input.query ?? "").toLowerCase().trim();
-          const patients = await listPatients(siteIds);
-          const matches = patients.filter(
-            (p) => p.name.toLowerCase().includes(q) || (p.phone ?? "").includes(q),
-          );
+          const q = String(input.query ?? "").trim();
+          // Server-side search so a patient who sorts past the ~10k full-scan bound is
+          // still found (otherwise the co-pilot wrongly reports they do not exist).
+          const matches = await searchPatients(siteIds, q);
           if (matches.length === 0) return JSON.stringify({ found: false, message: "No patient matches that." });
           if (matches.length > 1) {
             return JSON.stringify({ multiple: true, matches: matches.slice(0, 10).map(patientSummary) });
@@ -241,7 +241,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
         case "send_sms":
         case "send_email": {
           const channel: MessageChannel = name === "send_sms" ? "sms" : "email";
-          const q = String(input.patient ?? "").toLowerCase().trim();
+          const q = String(input.patient ?? "").trim();
           const message = String(input.message ?? "").trim();
           const subject = String(input.subject ?? "").trim();
           if (!q || !message) {
@@ -251,10 +251,10 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             return JSON.stringify({ sent: false, error: "An email needs a subject." });
           }
 
-          const patients = await listPatients(siteIds);
-          const matches = patients.filter(
-            (p) => p.name.toLowerCase().includes(q) || (p.phone ?? "").includes(q) || (p.email ?? "").toLowerCase().includes(q),
-          );
+          // Resolve the recipient by server-side search, not a truncatable full scan:
+          // a real patient past the ~10k scan bound must never read as "no patient
+          // matches" (which would silently drop an owner-directed send).
+          const matches = await searchPatients(siteIds, q);
           if (matches.length === 0) return JSON.stringify({ sent: false, error: "No patient matches that." });
           if (matches.length > 1) {
             return JSON.stringify({

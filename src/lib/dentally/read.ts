@@ -139,7 +139,10 @@ const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad ups
 // may ignore site_id here and return the whole group per site, so the scan dedupes by
 // invoice id and stops early once a later site adds nothing new. Bounded so a large
 // practice's invoice history cannot loop unbounded on the page path.
-const OUTSTANDING_MAX_PAGES = 25;
+// With the server-side `paid=false` filter the unpaid set is small, so the scan
+// terminates on a short page well before this cap; the cap only bounds the fallback
+// case where a source ignores the filter and returns the whole (mostly-paid) index.
+const OUTSTANDING_MAX_PAGES = 40;
 
 async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: number = MAX_PAGES): Promise<T[]> {
   const out: T[] = [];
@@ -478,9 +481,13 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
   for (let s = 0; s < siteIds.length; s += 1) {
     const siteId = siteIds[s];
     let ignoredFilter = false;
+    // Truncation guard: assume truncated until we terminate cleanly on a short page or
+    // the ignored-filter signature. If a site exhausts the page cap on full pages the
+    // total may be understated, so we log it rather than presenting a silent partial.
+    let sawShortPage = false;
     try {
       for (let page = 1; page <= OUTSTANDING_MAX_PAGES; page += 1) {
-        const res = await client.listInvoices({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE });
+        const res = await client.listInvoices({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE, paid: false });
         const invoices = res.invoices ?? [];
         let newInPage = 0;
         for (const inv of invoices) {
@@ -508,9 +515,16 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
         // scan, or a per-site-filtering source would silently drop a later site.
         if (s > 0 && invoices.length > 0 && newInPage === 0) {
           ignoredFilter = true;
+          sawShortPage = true; // covered the whole group; not a truncation
           break;
         }
-        if (invoices.length < PER_PAGE) break;
+        if (invoices.length < PER_PAGE) { sawShortPage = true; break; }
+      }
+      if (!sawShortPage) {
+        console.warn(
+          `[dentally] listOutstanding: site ${siteId} hit the ${OUTSTANDING_MAX_PAGES}-page cap without a short page; ` +
+            `the outstanding total may be understated (raise OUTSTANDING_MAX_PAGES or confirm the paid=false filter is honoured).`,
+        );
       }
     } catch (err) {
       console.error(`[dentally] listInvoices failed for site ${siteId}; skipping this site`, err);
@@ -525,18 +539,27 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
   //    Invoices are attributed by the patient's site and DROP any whose patient is not
   //    in the requested Vitality sites — this keeps the other four practices' balances
   //    on the shared group index from leaking into this client's view.
+  //    The bounded full-book scan caps at ~10k rows/site, so a debtor sorting past that
+  //    bound would be MISSING from it and their balance silently dropped. Resolve any
+  //    such miss by a direct id read so no live debt is omitted from the total.
   const patients = await listPatients(siteIds);
-  const nameById = new Map(patients.map((p) => [p.id, p.name]));
-  const siteByPatient = new Map(patients.map((p) => [p.id, p.siteId]));
+  const byId = new Map(patients.map((p) => [p.id, p]));
   const allow = new Set(siteIds);
   const out: OutstandingRecord[] = [];
   for (const [patientId, agg] of byPatient) {
-    const site = siteByPatient.get(patientId);
-    if (!site || !allow.has(site)) continue;
+    let patient = byId.get(patientId);
+    if (!patient) {
+      const resolved = await getPatientById(patientId);
+      if (resolved) patient = resolved;
+    }
+    // Attribute by the patient's real site; drop any whose patient is not in the
+    // requested Vitality sites, or that we could not resolve at all (better a small
+    // omission than a mis-attributed balance).
+    if (!patient || !allow.has(patient.siteId)) continue;
     out.push({
       patientId,
-      patientName: nameById.get(patientId) ?? "Patient",
-      siteId: site,
+      patientName: patient.name,
+      siteId: patient.siteId,
       planName: agg.count === 1 ? "Outstanding invoice" : `${agg.count} outstanding invoices`,
       planned: agg.invoiced,
       outstanding: agg.outstanding,

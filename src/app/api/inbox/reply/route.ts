@@ -1,6 +1,6 @@
 import { getClient, getSites } from "@/lib/mock";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
-import { listPatients } from "@/lib/dentally/read";
+import { getPatientById } from "@/lib/dentally/read";
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import type { MessageChannel } from "@/lib/messaging/types";
@@ -68,9 +68,12 @@ export async function POST(request: Request): Promise<Response> {
   if (contactRef.startsWith("patient:")) {
     const id = contactRef.slice("patient:".length);
     dentallyPatientId = id;
-    const patients = await listPatients(siteIds).catch(() => []);
-    const patient = patients.find((p) => p.id === id);
-    if (!patient) {
+    // Resolve the ONE patient by id directly (GET /v1/patients/:id), never by paging
+    // the whole book: with 50k+ real patients a full-list scan is bounded at ~10k rows
+    // and would 404 a genuine patient who sorts past that. Still enforce site scope so
+    // a coordinator cannot reply to a patient outside their accessible sites.
+    const patient = await getPatientById(id).catch(() => null);
+    if (!patient || !siteIds.includes(patient.siteId)) {
       return Response.json({ ok: false, error: "Patient not found in your sites." }, { status: 404 });
     }
     siteId = patient.siteId || siteId;

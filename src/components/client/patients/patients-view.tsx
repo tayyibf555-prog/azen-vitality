@@ -1,6 +1,6 @@
 import { PageHeader, StatCard } from "@/components/primitives";
 import { Users, UserCheck, UserX, CalendarClock } from "lucide-react";
-import { getClient, NOW } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { listPatients, type PatientRecord } from "@/lib/dentally/read";
 import { PatientsTable } from "./patients-table";
@@ -22,7 +22,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
     patients = [];
   }
 
-  const nowIso = NOW.toISOString();
+  const nowIso = new Date().toISOString();
   // Counts below are over the bounded slice, NOT the whole book, so they'd be
   // misleading as headline totals — hence the caption under the grid and the
   // Patients card's honest "First 300 shown, search for any patient" hint.

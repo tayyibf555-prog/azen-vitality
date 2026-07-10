@@ -1,7 +1,7 @@
 import { HeartPulse, PoundSterling, ListChecks, CheckCircle2, Clock } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/coordinator/worklist";
-import { getClient, NOW } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
@@ -38,6 +38,9 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
   const siteIds = await getViewSiteIds(client.id);
   const opportunities = await loadOpportunities(siteIds);
 
+  // Real current time, never the frozen mock clock: "days stalled" must count from
+  // today, not a hardcoded date, once this reads live data.
+  const now = new Date();
   const open = opportunities.filter((o) => o.status !== "completed");
   const completed = opportunities.filter((o) => o.status === "completed");
   const stalled = opportunities.filter((o) => o.status === "stalled");
@@ -47,7 +50,7 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
   const avgDaysStalled =
     stalled.length > 0
       ? Math.round(
-          stalled.reduce((sum, o) => sum + daysStalled(o.acceptedAt, NOW), 0) / stalled.length,
+          stalled.reduce((sum, o) => sum + daysStalled(o.acceptedAt, now), 0) / stalled.length,
         )
       : 0;
 
@@ -93,7 +96,7 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
           description="Run the Dentally sync to pull accepted but incomplete treatment plans into this worklist. This view is mock safe, so it stays empty until real data lands."
         />
       ) : (
-        <Worklist opportunities={opportunities} nowIso={NOW.toISOString()} />
+        <Worklist opportunities={opportunities} nowIso={now.toISOString()} />
       )}
     </>
   );

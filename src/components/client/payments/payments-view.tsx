@@ -7,7 +7,7 @@ import {
   type Column,
 } from "@/components/primitives";
 import { PoundSterling, ReceiptText, Users } from "lucide-react";
-import { getClient, NOW } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { getSite } from "@/lib/mock";
 import { gbp, relativeTime } from "@/lib/utils";
@@ -20,7 +20,7 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
   }
 
   const siteIds = await getViewSiteIds(client.id);
-  const now = NOW;
+  const now = new Date();
 
   let rows: OutstandingRecord[] = [];
   try {

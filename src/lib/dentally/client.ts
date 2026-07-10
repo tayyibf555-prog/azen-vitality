@@ -164,9 +164,15 @@ export class DentallyClient {
    * Dentally may return group-wide (like treatment_plans) regardless of site_id.
    * The balance is derived from each invoice's gross/total vs paid.
    */
-  listInvoices(a: { patientId?: string; siteId?: string; page?: number; perPage?: number }) {
+  listInvoices(a: { patientId?: string; siteId?: string; page?: number; perPage?: number; paid?: boolean }) {
     return this.get<{ invoices: unknown[] }>("/v1/invoices", {
       patient_id: a.patientId, site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+      // Filter to UNPAID invoices server-side when asked. The invoices index is dominated
+      // by settled rows; without this filter the bounded page scan spends its budget on
+      // paid invoices and understates the outstanding total. Sent as a string; a source
+      // that ignores the param returns the same rows we then filter by balance anyway,
+      // so this can only tighten the scan, never regress it.
+      paid: a.paid === undefined ? undefined : String(a.paid),
     });
   }
   getPatientNotes(patientId: string) {

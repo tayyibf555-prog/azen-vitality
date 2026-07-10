@@ -1,7 +1,7 @@
 import { CalendarClock, Clock, AlertTriangle, Send, CheckCircle2 } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/recall/worklist";
-import { getClient, NOW } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listTargets, listCadences } from "@/lib/recall/repository";
 import type { RecallCadence, RecallTarget } from "@/lib/recall/types";
@@ -59,7 +59,7 @@ export async function RecallView({ clientSlug }: { clientSlug: string }) {
           description="Run the recall sync to pull due and overdue recall dates from Dentally into this worklist. This view is mock safe, so it stays empty until data lands."
         />
       ) : (
-        <Worklist targets={targets} cadences={cadences} nowIso={NOW.toISOString()} />
+        <Worklist targets={targets} cadences={cadences} nowIso={new Date().toISOString()} />
       )}
     </>
   );

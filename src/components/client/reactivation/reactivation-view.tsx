@@ -2,7 +2,7 @@ import { RotateCcw, PoundSterling, Users, CheckCircle2, Send } from "lucide-reac
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/reactivation/worklist";
 import { DailyLimitCard } from "@/components/client/reactivation/daily-limit-card";
-import { getClient, NOW } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listTargets, listCadences } from "@/lib/reactivation/repository";
 import type { ReactivationCadence, ReactivationTarget } from "@/lib/reactivation/types";
@@ -62,7 +62,7 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
           description="Run the reactivation sync to pull lapsed patients, overdue recalls and stalled plans into this worklist. This view is mock safe, so it stays empty until real data lands."
         />
       ) : (
-        <Worklist targets={targets} cadences={cadences} nowIso={NOW.toISOString()} />
+        <Worklist targets={targets} cadences={cadences} nowIso={new Date().toISOString()} />
       )}
     </>
   );

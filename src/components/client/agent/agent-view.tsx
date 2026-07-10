@@ -7,7 +7,7 @@ import {
   type AgentAnalytics,
   type DashboardConversation,
 } from "@/lib/agent/repository";
-import { getClient, NOW } from "@/lib/mock/clients";
+import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { AgentControls } from "./agent-controls";
 
@@ -75,7 +75,7 @@ export async function AgentView({ clientSlug, channel }: { clientSlug: string; c
         siteIds={siteIds}
         initialEnabled={allEnabled}
         conversations={conversations}
-        nowIso={NOW.toISOString()}
+        nowIso={new Date().toISOString()}
       />
     </>
   );
