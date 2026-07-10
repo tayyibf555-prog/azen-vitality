@@ -25,6 +25,61 @@ export function isDentallyWriteEnabled(): boolean {
   );
 }
 
+// The `reason` values real Dentally accepts on POST /v1/appointments (calibrated
+// against developer.dentally.co). Anything else is rejected with a 422.
+const BOOKING_REASONS = new Set([
+  "Exam",
+  "Scale & Polish",
+  "Exam + Scale & Polish",
+  "Continuing Treatment",
+  "Emergency",
+  "Review",
+  "Other",
+]);
+
+/**
+ * Whitelisted payload for a manual dashboard booking (recall / reactivation /
+ * coordinator "book" actions). NEVER forwards the raw request body to Dentally —
+ * a caller could smuggle arbitrary fields or another patient's id. patient_id
+ * always comes from OUR record of the target; the time/practitioner fields are
+ * validated against what real Dentally requires so an invalid write is refused
+ * here with a clear message instead of a Dentally 422.
+ */
+export function buildManualBookingPayload(
+  body: Record<string, unknown>,
+  patientId: string,
+): { payload: Record<string, unknown> } | { error: string } {
+  const start =
+    typeof body.start_time === "string" && body.start_time
+      ? body.start_time
+      : typeof body.start === "string"
+        ? body.start
+        : "";
+  const finish = typeof body.finish_time === "string" ? body.finish_time : "";
+  const practitionerId =
+    typeof body.practitioner_id === "number" || (typeof body.practitioner_id === "string" && body.practitioner_id)
+      ? body.practitioner_id
+      : "";
+  if (!start) return { error: "start (ISO time) is required" };
+  if (!finish) return { error: "finish_time is required (Dentally rejects a booking without an end time)" };
+  if (!practitionerId) {
+    return { error: "practitioner_id is required (Dentally rejects a booking without a practitioner)" };
+  }
+  const reason = typeof body.reason === "string" && BOOKING_REASONS.has(body.reason) ? body.reason : "Other";
+  const notes = typeof body.notes === "string" && body.notes ? body.notes : "Booked via dashboard";
+  return {
+    payload: {
+      patient_id: patientId,
+      start_time: start,
+      finish_time: finish,
+      practitioner_id: practitionerId,
+      reason,
+      notes,
+      booked_via_api: true,
+    },
+  };
+}
+
 /**
  * The Dentally client the agent uses for find_slots + book/reschedule/cancel/register.
  * Enabled: targets the dedicated write instance (sandbox or real) via DENTALLY_WRITE_*.

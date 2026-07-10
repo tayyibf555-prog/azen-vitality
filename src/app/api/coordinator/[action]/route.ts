@@ -1,4 +1,5 @@
-import { DentallyClient, DentallyError } from "@/lib/dentally/client";
+import { DentallyError } from "@/lib/dentally/client";
+import { isDentallyWriteEnabled, dentallyAgentClient, buildManualBookingPayload } from "@/lib/dentally/write";
 import { draftOutreach } from "@/lib/coordinator/draft";
 import {
   approveTouch,
@@ -212,9 +213,13 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
     return badRequest("start is required");
   }
 
-  const apiKey = process.env.DENTALLY_API_KEY;
-  if (!apiKey) {
-    return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
+  // Manual bookings go through the SAME gate as the agent's writes: no real
+  // appointment can be created until the write path is deliberately enabled.
+  if (!isDentallyWriteEnabled()) {
+    return Response.json(
+      { error: "Booking into Dentally is not switched on yet. Ask your administrator to enable it." },
+      { status: 503 },
+    );
   }
 
   const opportunity = await getOpportunity(opportunityId);
@@ -222,19 +227,12 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
     return Response.json({ error: "Opportunity not found" }, { status: 404 });
   }
 
-  const client = new DentallyClient({
-    apiKey,
-    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
-  });
-
-  // Forward every caller-supplied field except our routing key, then stamp
-  // booked_via_api so Dentally records the booking source.
-  const { opportunityId: _omit, ...rest } = body;
-  void _omit;
-  const payload: Record<string, unknown> = { ...rest, booked_via_api: true };
+  // Whitelisted payload: patient_id comes from OUR opportunity record, never the body.
+  const built = buildManualBookingPayload(body, opportunity.dentallyPatientId);
+  if ("error" in built) return badRequest(built.error);
 
   try {
-    const { appointment } = await client.createAppointment(payload);
+    const { appointment } = await dentallyAgentClient().createAppointment(built.payload);
     await insertTouch({
       opportunityId: opportunity.id,
       siteId: opportunity.siteId,
