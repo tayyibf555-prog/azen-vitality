@@ -55,7 +55,14 @@ describe("runAgentTurn", () => {
     const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ booked: true, appointmentId: "appt-1" }));
     const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
 
-    const r = await runAgentTurn([{ role: "user", content: "yes please, book it" }], deps);
+    const r = await runAgentTurn(
+      [
+        // The gate requires a read-back: the affirmative must answer a concrete proposal.
+        { role: "assistant", content: "I can do Monday 22 June at 9:00am with Dr Khan. Shall I book that in?" },
+        { role: "user", content: "yes please, book it" },
+      ],
+      deps,
+    );
     expect(dispatch).toHaveBeenCalledWith("book", expect.objectContaining({ slotStart: "2026-06-22T09:00:00Z" }));
     expect(r.replyText).toContain("Booked");
   });

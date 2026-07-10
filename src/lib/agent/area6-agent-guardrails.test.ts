@@ -221,7 +221,13 @@ describe("failure handling: runAgentTurn degrades safely", () => {
       .mockResolvedValueOnce(textMessage("Sorry, I couldn't finish that. A colleague will be in touch shortly."));
     const dispatch = vi.fn().mockRejectedValue(new Error("Dentally 500"));
     const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "s", tools: [] };
-    const r = await runAgentTurn([{ role: "user", content: "book it" }], deps);
+    const r = await runAgentTurn(
+      [
+        { role: "assistant", content: "I can do Monday at 9:00am. Shall I book that in?" },
+        { role: "user", content: "book it" },
+      ],
+      deps,
+    );
     expect(r.escalated).toBe(true);
     expect(dispatch).toHaveBeenCalledTimes(1);
   });

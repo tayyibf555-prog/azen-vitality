@@ -33,6 +33,7 @@ import { dentallyAgentClient } from "@/lib/dentally/write";
 import { identifyByPhone } from "@/lib/agent/identify";
 import { checkAgentReply, SAFE_HANDOVER } from "@/lib/agent/guardrail";
 import { claimInboundMessage } from "@/lib/agent/idempotency";
+import { tryAcquireLease, releaseCronLock } from "@/lib/cron-lock";
 import { consumeBudget } from "@/lib/rate-budget";
 import {
   findOrCreateConversation,
@@ -377,7 +378,24 @@ export async function POST(request: Request): Promise<Response> {
     usps,
   };
 
+  // Serialize agent turns per conversation: two rapid inbounds (distinct
+  // MessageSids, so SID idempotency does not catch them) otherwise run two
+  // concurrent turns over the same history — interleaved replies and, worst
+  // case, a double booking. The inbound is already recorded above, so if the
+  // lease cannot be won after a short wait we simply skip this turn: the
+  // message sits in the history the patient's next turn (or a human) reads.
+  // Fail OPEN if the lock table is unreachable ("error"): an unserialised turn
+  // beats silently dropping a patient's message on a DB blip.
+  const turnLock = `agent-turn:${conversation.id}`;
+  let lease = await tryAcquireLease(turnLock, 120);
+  for (let attempt = 0; lease === "held" && attempt < 4; attempt += 1) {
+    await new Promise((r) => setTimeout(r, 1500));
+    lease = await tryAcquireLease(turnLock, 120);
+  }
+  if (lease === "held") return twiml();
+
   let replyText = "";
+  try {
   try {
     const prior = await listMessages(conversation.id);
     const history = prior.map((m) => ({
@@ -427,6 +445,9 @@ export async function POST(request: Request): Promise<Response> {
     // 200 and Twilio does not retry the webhook and double-run the agent. Leave the
     // conversation active so the agent keeps responding; delivery state is tracked
     // separately by the Twilio status webhook.
+  }
+  } finally {
+    await releaseCronLock(turnLock);
   }
   return twiml();
 }

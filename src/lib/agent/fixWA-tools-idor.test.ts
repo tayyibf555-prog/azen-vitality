@@ -17,7 +17,9 @@ function dentallyWithOwn(ownId: string) {
     getAvailability: vi.fn(),
     createAppointment: vi.fn(),
     getPatientAppointments: vi.fn().mockResolvedValue({
-      appointments: [{ id: ownId, start_time: "2026-08-01T09:00:00Z", state: "scheduled" }],
+      appointments: [
+        { id: ownId, start_time: "2026-08-01T09:00:00Z", finish_time: "2026-08-01T09:30:00Z", state: "scheduled" },
+      ],
     }),
     updateAppointment: vi.fn().mockResolvedValue({ appointment: { id: ownId, start_time: "x" } }),
     cancelAppointment: vi.fn().mockResolvedValue({ appointment: { id: ownId, state: "cancelled" } }),
@@ -47,8 +49,11 @@ describe("IDOR: reschedule enforces ownership server-side", () => {
       newSlotStart: "2026-07-01T10:00:00Z",
     });
     expect(out).toContain("rescheduled");
+    // finish_time is derived from the appointment's own 30-minute duration, so a
+    // reschedule can never patch start_time alone (corrupted appointment).
     expect(dentally.updateAppointment).toHaveBeenCalledWith("appt-MINE", {
       start_time: "2026-07-01T10:00:00Z",
+      finish_time: "2026-07-01T10:30:00.000Z",
     });
   });
 });

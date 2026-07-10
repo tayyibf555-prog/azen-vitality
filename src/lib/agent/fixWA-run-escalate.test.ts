@@ -47,7 +47,14 @@ describe("run: escalate + mutating tool in one round", () => {
     const dispatch = vi.fn().mockResolvedValue("{}");
     const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "s", tools: [] };
 
-    await runAgentTurn([{ role: "user", content: "book me in" }], deps);
+    await runAgentTurn(
+      [
+        // The confirmation gate requires the affirmative to answer a read-back.
+        { role: "assistant", content: "I can do Wednesday 1 July at 9:00am. Shall I book that in?" },
+        { role: "user", content: "yes, book me in" },
+      ],
+      deps,
+    );
     expect(dispatch.mock.calls.map((c) => c[0])).toContain("book");
   });
 });

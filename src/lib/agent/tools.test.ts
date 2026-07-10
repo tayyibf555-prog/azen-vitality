@@ -27,7 +27,10 @@ describe("makeDispatch", () => {
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
     const out = await dispatch("find_slots", { treatment: "Invisalign" });
-    expect(dentally.getAvailability).toHaveBeenCalledWith(expect.objectContaining({ siteId: "site-cc" }));
+    // The internal id is mapped to Dentally's own site UUID before the API call.
+    expect(dentally.getAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: "3286d822-68c5-48ff-b1a2-065780dfcd15" }),
+    );
     expect(out).toContain("2026-06-22T09:00:00Z");
   });
 
@@ -104,13 +107,21 @@ describe("makeDispatch", () => {
     const dentally = {
       getAvailability: vi.fn(), createAppointment: vi.fn(),
       // Ownership check re-derives the caller's appointments; appt-9 is theirs.
-      getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [{ id: "appt-9", state: "booked" }] }),
+      getPatientAppointments: vi.fn().mockResolvedValue({
+        appointments: [
+          { id: "appt-9", state: "booked", start_time: "2026-06-25T09:00:00Z", finish_time: "2026-06-25T09:30:00Z" },
+        ],
+      }),
       updateAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-9", start_time: "2026-07-01T10:00:00Z" } }),
       cancelAppointment: vi.fn(),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
     const out = await dispatch("reschedule", { appointmentId: "appt-9", newSlotStart: "2026-07-01T10:00:00Z" });
-    expect(dentally.updateAppointment).toHaveBeenCalledWith("appt-9", { start_time: "2026-07-01T10:00:00Z" });
+    // finish_time is derived from the appointment's own duration (30 min here).
+    expect(dentally.updateAppointment).toHaveBeenCalledWith("appt-9", {
+      start_time: "2026-07-01T10:00:00Z",
+      finish_time: "2026-07-01T10:30:00.000Z",
+    });
     expect(out).toContain("rescheduled");
     expect(out).toContain("appt-9");
   });

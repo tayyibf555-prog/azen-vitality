@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { DentallyClient } from "@/lib/dentally/client";
 import { findTreatment } from "@/lib/treatments/catalog";
-import { getSite, getClient } from "@/lib/mock/clients";
+import { getSite, getClient, dentallySiteId } from "@/lib/mock/clients";
 import type { AgentContext } from "./types";
 
 // Real Dentally requires the appointment `reason` to be one of a fixed set (calibrated
@@ -152,16 +152,20 @@ export function makeDispatch(deps: ToolDeps) {
   // not in it. This closes the IDOR where a crafted message supplies another
   // patient's appointment id. Matches the trust model of `book`, which injects
   // context.patientId itself rather than trusting a model-supplied id.
-  async function ownsAppointment(appointmentId: string): Promise<boolean> {
+  async function findOwnedAppointment(appointmentId: string): Promise<Record<string, unknown> | null> {
     const patientId = registeredPatientId ?? deps.context.patientId;
     // A lead not yet registered has no appointments of their own to act on.
-    if (!appointmentId || patientId.startsWith("lead:")) return false;
+    if (!appointmentId || patientId.startsWith("lead:")) return null;
     const res = await deps.dentally.getPatientAppointments(patientId);
     const raw = Array.isArray(res.appointments) ? res.appointments : [];
-    return raw.some((a) => {
+    for (const a of raw) {
       const row = a && typeof a === "object" ? (a as Record<string, unknown>) : {};
-      return String(row.id) === String(appointmentId);
-    });
+      if (String(row.id) === String(appointmentId)) return row;
+    }
+    return null;
+  }
+  async function ownsAppointment(appointmentId: string): Promise<boolean> {
+    return (await findOwnedAppointment(appointmentId)) !== null;
   }
 
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
@@ -169,7 +173,8 @@ export function makeDispatch(deps: ToolDeps) {
       case "find_slots": {
         const treatment = typeof input.treatment === "string" ? findTreatment(input.treatment) : null;
         const res = await deps.dentally.getAvailability({
-          siteId: deps.context.siteId,
+          // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
+          siteId: dentallySiteId(deps.context.siteId),
           fromDate: typeof input.fromDate === "string" ? input.fromDate : undefined,
           toDate: typeof input.toDate === "string" ? input.toDate : undefined,
           duration: treatment?.durationMinutes,
@@ -247,11 +252,26 @@ export function makeDispatch(deps: ToolDeps) {
       }
       case "reschedule": {
         const appointmentId = String(input.appointmentId);
-        if (!(await ownsAppointment(appointmentId))) {
+        const owned = await findOwnedAppointment(appointmentId);
+        if (!owned) {
           return JSON.stringify({ error: "I could not find that appointment on your record." });
         }
-        const reschedulePatch: Record<string, unknown> = { start_time: input.newSlotStart };
-        if (typeof input.newFinishTime === "string" && input.newFinishTime) reschedulePatch.finish_time = input.newFinishTime;
+        // Patching start_time alone leaves the OLD finish_time behind — a corrupted
+        // (or rejected) reschedule. If the model omitted newFinishTime, derive it from
+        // the appointment's own duration; refuse rather than send a start-only patch.
+        let finish = typeof input.newFinishTime === "string" && input.newFinishTime ? input.newFinishTime : "";
+        if (!finish && typeof input.newSlotStart === "string") {
+          const prevStart = Date.parse(String(owned.start_time ?? ""));
+          const prevFinish = Date.parse(String(owned.finish_time ?? ""));
+          const durationMs = prevFinish - prevStart;
+          if (Number.isFinite(durationMs) && durationMs > 0) {
+            finish = new Date(Date.parse(input.newSlotStart) + durationMs).toISOString();
+          }
+        }
+        if (!finish) {
+          return JSON.stringify({ error: "Provide newFinishTime for the new slot before rescheduling." });
+        }
+        const reschedulePatch: Record<string, unknown> = { start_time: input.newSlotStart, finish_time: finish };
         const { appointment } = await deps.dentally.updateAppointment(appointmentId, reschedulePatch);
         return JSON.stringify({
           rescheduled: true,
@@ -273,7 +293,8 @@ export function makeDispatch(deps: ToolDeps) {
           last_name: input.lastName,
           email_address: typeof input.email === "string" ? input.email : undefined,
           mobile_phone: deps.context.phone ?? undefined,
-          site_id: deps.context.siteId,
+          // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
+          site_id: dentallySiteId(deps.context.siteId),
           use_sms: true,
           use_email: true,
         });

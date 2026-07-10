@@ -56,6 +56,36 @@ function latestPatientText(history: MessageParam[]): string {
   return "";
 }
 
+// An affirmative only counts as CONFIRMATION when it answers a read-back: the
+// assistant's preceding message must have proposed something concrete (a time, a
+// day, or an explicit "shall I book / does that suit" question). Without this, a
+// cold "ok, book me" satisfied the gate with zero read-back and the very first
+// model round could write an appointment nobody had spelled out.
+const PROPOSAL =
+  /\b\d{1,2}[:.]\d{2}\b|\b\d{1,2}\s*(am|pm)\b|\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|shall i (book|go ahead|cancel|move)|would you like me to|book (that|this|you) in|does that (work|suit)|(can|may) i confirm|to confirm/i;
+
+/** Text of the assistant message immediately before the final patient message. */
+function assistantTextBeforeLatestPatient(history: MessageParam[]): string {
+  let lastUser = -1;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].role === "user") {
+      lastUser = i;
+      break;
+    }
+  }
+  for (let i = lastUser - 1; i >= 0; i -= 1) {
+    const m = history[i];
+    if (m.role !== "assistant") continue;
+    if (typeof m.content === "string") return m.content;
+    const text = m.content
+      .filter((b): b is TextBlock => (b as { type?: string }).type === "text")
+      .map((b) => b.text)
+      .join(" ");
+    if (text) return text;
+  }
+  return "";
+}
+
 export async function runAgentTurn(
   history: MessageParam[],
   deps: AgentRunDeps,
@@ -63,9 +93,12 @@ export async function runAgentTurn(
   const messages: MessageParam[] = [...history];
   const toolCalls: { name: string; input: Record<string, unknown> }[] = [];
   let escalated = false;
-  // Fixed for the whole turn: whether the single inbound that triggered this turn is a
-  // clear affirmative. Appointment writes (book/reschedule/cancel) are gated on it below.
-  const patientConfirmed = looksAffirmative(latestPatientText(history));
+  // Fixed for the whole turn: the patient's latest inbound is a clear affirmative
+  // AND it answers a concrete proposal the agent just made (read-back). Appointment
+  // writes (book/reschedule/cancel) are gated on BOTH below.
+  const patientConfirmed =
+    looksAffirmative(latestPatientText(history)) &&
+    PROPOSAL.test(assistantTextBeforeLatestPatient(history));
 
   const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
   for (let round = 0; round < maxRounds; round++) {
