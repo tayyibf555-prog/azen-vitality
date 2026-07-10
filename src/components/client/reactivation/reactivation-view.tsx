@@ -1,6 +1,7 @@
 import { RotateCcw, PoundSterling, Users, CheckCircle2, Send } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/reactivation/worklist";
+import { DailyLimitCard } from "@/components/client/reactivation/daily-limit-card";
 import { getClient, NOW } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listTargets, listCadences } from "@/lib/reactivation/repository";
@@ -51,6 +52,8 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
         <StatCard label="In cadence" value={inCadence.length} icon={Send} hint="Active outreach sequences" />
         <StatCard label="Re-engaged" value={converted.length} icon={CheckCircle2} hint="Booked back in" />
       </div>
+
+      <DailyLimitCard clientSlug={clientSlug} />
 
       {targets.length === 0 ? (
         <EmptyState

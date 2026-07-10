@@ -12,6 +12,7 @@ import {
   setTargetStatus,
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
+import { getDailyContactLimit, countContactedToday } from "@/lib/reactivation/settings";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -56,11 +57,19 @@ export async function POST(request: Request) {
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
+  // Owner-set daily contact cap: at most this many automated reactivation messages
+  // are queued per Europe/London day. Every queued message counts toward the total
+  // (auto or human-approved), so manual sends tighten the automated budget rather
+  // than bypassing it. Capped cadences stay due and continue tomorrow.
+  const dailyLimit = await getDailyContactLimit("vitality");
+  const usedToday = await countContactedToday(now);
+
   let drafted = 0;
   let queued = 0;
   let awaitingApproval = 0;
   let exhausted = 0;
   let paused = 0;
+  let capped = 0;
 
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
@@ -109,6 +118,17 @@ export async function POST(request: Request) {
       continue;
     }
 
+    // Enforce the daily cap on the AUTOMATED path only, and BEFORE drafting (a
+    // capped draft would count as a pending touch and freeze the cadence at the
+    // hasPending guard above). The cadence simply stays due, so tomorrow's sweep
+    // continues where today stopped. High-value drafts still go to a human for
+    // approval — they send nothing by themselves.
+    const willAutoQueue = target.recoverableValue < autoSendThreshold();
+    if (willAutoQueue && usedToday + queued >= dailyLimit) {
+      capped += 1;
+      continue;
+    }
+
     const { body } = await draftReactivation(target, step.channel, step);
     const touch = await insertTouch({
       targetId: target.id,
@@ -122,7 +142,7 @@ export async function POST(request: Request) {
     });
     drafted += 1;
 
-    if (target.recoverableValue < autoSendThreshold()) {
+    if (willAutoQueue) {
       // Low value: auto approve + queue. Do NOT markTouchSent here; leaving the
       // outbox row 'queued' lets the shared drain deliver it and write to_address
       // (the only thing inbound reply correlation matches on). Stubbing it here
@@ -164,6 +184,9 @@ export async function POST(request: Request) {
     awaitingApproval,
     paused,
     exhausted,
+    capped,
+    dailyLimit,
+    usedToday,
   });
   } finally {
     await releaseCronLock("sweep-reactivation");
