@@ -12,6 +12,8 @@ import {
   setOpportunityStatus,
   getSyncState,
   setSyncState,
+  getBackfillCursor,
+  setBackfillCursor,
 } from "@/lib/coordinator/repository";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
@@ -28,6 +30,12 @@ const PER_PAGE = 100;
 // function limit. The high-water mark only advances past fully-processed records,
 // so the next cron tick resumes where this one stopped.
 const MAX_PATIENTS_PER_RUN = 300;
+// Bound on the step-1 treatment-plans scan (100 pages = 10,000 plans). The retire
+// step below depends on plansById being COMPLETE — if the scan is ever truncated,
+// every opportunity whose plan fell outside the scanned window would be wrongly
+// retired as 'completed'. When the cap is hit without a short page, the retire
+// step is SKIPPED for the run (a late retire is recoverable; a wrong one is not).
+const MAX_PLAN_PAGES = 100;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -109,16 +117,41 @@ function vitalitySiteIds(): string[] {
 async function syncSite(
   client: DentallyClient,
   siteId: string,
-): Promise<{ siteId: string; pulled: number; upserted: number; retired: number; processed: number; remaining: number }> {
-  const state = await getSyncState(siteId, RESOURCE);
-  const updatedAfter = state?.highWaterMark ?? undefined;
+): Promise<{
+  siteId: string;
+  pulled: number;
+  upserted: number;
+  retired: number;
+  excludedSettled: number;
+  processed: number;
+  remaining: number;
+  mode: string;
+  backfillPage: number | null;
+}> {
   const now = new Date();
+
+  // Backfill vs incremental (mirrors the recall/reactivation syncs, which hit the
+  // exact same trap): Dentally's /v1/patients has NO sort control, so an
+  // updated_after high-water mark + a per-run cap STRANDS almost the whole base on
+  // a from-scratch pass — the first run's mark jumps to the newest updated_at among
+  // its 300 patients and every older-updated patient is filtered out forever.
+  // Until the one-time full pass finishes we page EVERY patient by page number
+  // (cursor in sync_state.backfill_page/backfill_done); after that we switch to
+  // the updated_after mark, which then only ever sees the small changed set.
+  const cursor = await getBackfillCursor(siteId, RESOURCE);
+  const backfilling = !cursor.done;
+  const startPage = backfilling && cursor.page ? cursor.page + 1 : 1;
+  const mainState = backfilling ? null : await getSyncState(siteId, RESOURCE);
+  const updatedAfter = backfilling ? undefined : (mainState?.highWaterMark ?? undefined);
 
   // 1. Index the site's plans by patient id (the open one) and by plan id (the
   //    full current set, used below to retire opportunities whose plan is now paid).
+  //    BOUNDED: `plansComplete` is true only when the scan terminated on a short
+  //    page; a capped (truncated) scan must never feed the retire step.
   const plansByPatient = new Map<string, PlanInput>();
   const plansById = new Map<string, PlanInput>();
-  for (let pp = 1; ; pp++) {
+  let plansComplete = false;
+  for (let pp = 1; pp <= MAX_PLAN_PAGES; pp++) {
     const res = await client.listTreatmentPlans({ siteId, page: pp, perPage: PER_PAGE });
     const rawPlans = Array.isArray(res.treatment_plans) ? res.treatment_plans : [];
     for (const raw of rawPlans) {
@@ -134,11 +167,16 @@ async function syncSite(
         plansByPatient.set(patientId, plan);
       }
     }
-    if (rawPlans.length < PER_PAGE) break;
+    if (rawPlans.length < PER_PAGE) {
+      plansComplete = true;
+      break;
+    }
   }
 
   // 2. Page patients, join to their open plan, and map each accepted-but-incomplete
-  //    plan into an opportunity.
+  //    plan into an opportunity. BACKFILL takes WHOLE pages (the resume unit is a
+  //    page; processing is pure in-memory, so a fetched page is always fully
+  //    processed); INCREMENTAL caps mid-page with the careful mark-advance below.
   const opportunities = [];
   // Only advance the mark once at least one record actually contributed a parsed
   // updatedAt; never fall back to `now` (that would skip records on an early exit).
@@ -146,10 +184,15 @@ async function syncSite(
   let pulled = 0;
   let processed = 0;
   let remaining = 0;
-  let capped = false;
-  let page = 1;
+  let lastCompletedPage = startPage - 1;
+  let reachedEnd = false;
+  // Inactive / archived in Dentally (deceased, moved away, left the practice):
+  // NEVER an opportunity — chasing a deceased patient's unpaid plan is the worst
+  // message this system could send. Collected so any PREVIOUSLY-stored open
+  // opportunity for them is settled below.
+  const excludedPatientIds = new Set<string>();
 
-  outer: for (;;) {
+  for (let page = startPage; ; page += 1) {
     const res = await client.listPatients({ siteId: dentallySiteId(siteId), updatedAfter, page, perPage: PER_PAGE });
     const rawPatients = Array.isArray(res.patients) ? res.patients : [];
     pulled += rawPatients.length;
@@ -159,19 +202,23 @@ async function syncSite(
       const patient = mapPatient(p, "");
       if (!patient.id) continue;
 
-      // Cap reached: stop before processing this patient and leave the mark at the
-      // last fully-processed record so the next tick resumes from here.
-      if (processed >= MAX_PATIENTS_PER_RUN) {
+      // Incremental cap reached: stop before processing this patient and leave the
+      // mark at the last fully-processed record so the next tick resumes from here.
+      if (!backfilling && processed >= MAX_PATIENTS_PER_RUN) {
         remaining += 1;
-        capped = true;
         continue;
       }
 
-      const plan = plansByPatient.get(patient.id);
-      if (plan) {
-        const input: CoordinatorInput = { siteId, patient, plan, lastTouchAt: null };
-        const opportunity = toTreatmentOpportunity(input, now);
-        if (opportunity) opportunities.push(opportunity);
+      const excluded = p.active === false || p.archived === true;
+      if (excluded) {
+        excludedPatientIds.add(patient.id);
+      } else {
+        const plan = plansByPatient.get(patient.id);
+        if (plan) {
+          const input: CoordinatorInput = { siteId, patient, plan, lastTouchAt: null };
+          const opportunity = toTreatmentOpportunity(input, now);
+          if (opportunity) opportunities.push(opportunity);
+        }
       }
 
       // Advance the mark only after this record is fully processed.
@@ -180,41 +227,90 @@ async function syncSite(
       processed += 1;
     }
 
-    if (capped) break outer;
-    if (rawPatients.length < PER_PAGE) break;
-    page += 1;
+    lastCompletedPage = page;
+    if (rawPatients.length < PER_PAGE) {
+      reachedEnd = true;
+      break;
+    }
+    if (processed >= MAX_PATIENTS_PER_RUN) break; // resume from this boundary next run
   }
 
   const ranked = rankOpportunities(opportunities, now);
   await upsertOpportunities(ranked);
+
+  const stored = await listOpportunities({
+    siteIds: [siteId],
+    statuses: ["accepted", "in_progress", "stalled"],
+  });
+
+  // Settle open opportunities for inactive/archived patients seen this run: the
+  // exclusion is patient-flag based, so it is safe even when the plans scan was
+  // truncated. Same terminal status the retire step uses.
+  let excludedSettled = 0;
+  for (const opp of stored) {
+    if (excludedPatientIds.has(opp.dentallyPatientId)) {
+      await setOpportunityStatus(opp.id, "completed");
+      excludedSettled += 1;
+    }
+  }
 
   // Retire stale opportunities: the incremental patient window misses patients
   // whose record didn't change, so an opportunity for a plan that has since been
   // paid (outstanding 0), gone, or marked terminal would keep being messaged.
   // Re-check every stored OPEN opportunity against the full current plan list and
   // mark the settled ones 'completed' so the sweep stops targeting them.
+  // ONLY when the plans scan completed on a short page: a truncated plansById would
+  // wrongly retire every opportunity whose plan fell outside the scanned window.
   const TERMINAL = ["completed", "declined", "rejected", "cancelled"];
-  const stored = await listOpportunities({
-    siteIds: [siteId],
-    statuses: ["accepted", "in_progress", "stalled"],
-  });
   let retired = 0;
-  for (const opp of stored) {
-    const plan = plansById.get(opp.dentallyPlanId);
-    const stillOpen =
-      plan !== undefined &&
-      plan.amountOutstanding > 0 &&
-      !TERMINAL.includes((plan.status ?? "").toLowerCase());
-    if (!stillOpen) {
-      await setOpportunityStatus(opp.id, "completed");
-      retired += 1;
+  if (plansComplete) {
+    for (const opp of stored) {
+      if (excludedPatientIds.has(opp.dentallyPatientId)) continue; // settled above
+      const plan = plansById.get(opp.dentallyPlanId);
+      const stillOpen =
+        plan !== undefined &&
+        plan.amountOutstanding > 0 &&
+        !TERMINAL.includes((plan.status ?? "").toLowerCase());
+      if (!stillOpen) {
+        await setOpportunityStatus(opp.id, "completed");
+        retired += 1;
+      }
     }
+  } else {
+    console.warn(
+      `[sync-coordinator] plans scan for site ${siteId} hit the ${MAX_PLAN_PAGES}-page cap without a short page; ` +
+        `skipping the retire step this run (a truncated plan index would wrongly retire live opportunities).`,
+    );
   }
 
-  // Leave the prior mark UNCHANGED when no record contributed one, so the next run
-  // re-fetches rather than skipping. Only persist when we actually advanced it.
-  if (highWaterMark) await setSyncState(siteId, RESOURCE, highWaterMark);
-  return { siteId, pulled, upserted: ranked.length, retired, processed, remaining };
+  // 3. Persist the cursor. Backfill advances past WHOLE completed pages only, and
+  //    completes when the final (short) page was reached — done and the incremental
+  //    watermark are set in ONE atomic upsert. Incremental leaves the prior mark
+  //    UNCHANGED when no record contributed one, so the next run re-fetches rather
+  //    than skipping; it only persists when the mark actually advanced.
+  const backfillComplete = backfilling && reachedEnd;
+  if (backfilling) {
+    if (backfillComplete) {
+      await setBackfillCursor(siteId, RESOURCE, { page: lastCompletedPage, done: true, highWaterMark: now.toISOString() });
+    } else {
+      await setBackfillCursor(siteId, RESOURCE, { page: lastCompletedPage, done: false });
+    }
+  } else if (highWaterMark && highWaterMark !== (updatedAfter ?? null)) {
+    await setSyncState(siteId, RESOURCE, highWaterMark);
+  }
+
+  const mode = backfilling ? (backfillComplete ? "backfill-done" : "backfill") : "incremental";
+  return {
+    siteId,
+    pulled,
+    upserted: ranked.length,
+    retired,
+    excludedSettled,
+    processed,
+    remaining,
+    mode,
+    backfillPage: backfilling ? lastCompletedPage : null,
+  };
 }
 
 export async function POST(request: Request) {

@@ -159,7 +159,7 @@ async function syncSite(
   //    takes WHOLE pages (the resume unit is a page); INCREMENTAL caps mid-page.
   //    Both bound the run (collection ≈ cap + one page), so failures during
   //    enrichment can never turn the run into an unbounded Dentally-quota burn.
-  const pending: Array<{ p: Raw; patient: RecallInput["patient"]; page: number }> = [];
+  const pending: Array<{ p: Raw; patient: RecallInput["patient"]; page: number; excluded: boolean }> = [];
   let pulled = 0;
   let processed = 0;
   let remaining = 0;
@@ -179,7 +179,12 @@ async function syncSite(
         remaining += 1;
         continue;
       }
-      pending.push({ p, patient, page });
+      // Inactive / archived in Dentally (deceased, moved away, left the practice):
+      // NEVER a recall candidate — a check-up reminder to a deceased patient's
+      // phone is the worst message this system could send. Kept in `pending` (not
+      // dropped) so any PREVIOUSLY-classified open rows for them are settled below.
+      const excluded = p.active === false || p.archived === true;
+      pending.push({ p, patient, page, excluded });
       processed += 1;
     }
 
@@ -195,7 +200,13 @@ async function syncSite(
   //    read leaves the patient un-enriched: skipped below and RETRIED next run —
   //    never classified on unread data, never silently dropped.
   const enriched = new Map<string, { lastVisitAt: string | null; futureBookingExists: boolean }>();
-  await mapWithConcurrency(pending, 8, async ({ patient }) => {
+  await mapWithConcurrency(pending, 8, async ({ patient, excluded }) => {
+    // Excluded patients need no appointment read (they are settled, not classified):
+    // record a placeholder so they count as fully processed, never as a failure.
+    if (excluded) {
+      enriched.set(patient.id, { lastVisitAt: null, futureBookingExists: false });
+      return;
+    }
     try {
       // Page the patient's appointments: a single unpaged call caps at ~100 rows, so
       // a long-standing patient's FUTURE booking could sit on page 2 and be missed —
@@ -233,11 +244,29 @@ async function syncSite(
   const targets = [];
   let highWaterMark = updatedAfter ?? null;
   let minFailedUpdated: string | null = null;
-  for (const { p, patient } of pending) {
+  for (const { p, patient, excluded } of pending) {
     const updated = patientUpdatedAt(p);
     const data = enriched.get(patient.id);
     if (!data) {
       if (updated && (!minFailedUpdated || updated < minFailedUpdated)) minFailedUpdated = updated;
+      continue;
+    }
+
+    // Inactive / archived: settle any open recall rows so an earlier classification
+    // stops being chased the moment the flag lands in Dentally, and never classify.
+    // 'exhausted' (not 'converted' — they did not book; not 'graduated' — they must
+    // not be handed to reactivation, whose own filter also excludes them).
+    if (excluded) {
+      for (const open of openByPatient.get(patient.id) ?? []) {
+        if (open.status === "in_cadence") {
+          const cad = await getCadenceByTarget(open.id);
+          if (cad && (cad.status === "active" || cad.status === "paused")) {
+            await updateCadence(cad.id, { status: "exhausted", endedAt: now.toISOString() });
+          }
+        }
+        await setTargetStatus(open.id, "exhausted");
+      }
+      if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
       continue;
     }
 
