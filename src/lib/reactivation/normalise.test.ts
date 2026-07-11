@@ -12,7 +12,8 @@ function base(p: Partial<ReactivationInput> = {}): ReactivationInput {
       archived: false, archived_reason: null,
       dentist_recall_date: null, hygienist_recall_date: null,
     },
-    lastVisitAt: "2024-06-01T00:00:00Z",
+    // ~10 months before NOW: inside the lapsed window (lapseMonths=9 .. maxLapseMonths=12).
+    lastVisitAt: "2025-08-15T00:00:00Z",
     futureBookingExists: false,
     plan: null,
     amountOutstanding: 0,
@@ -59,11 +60,21 @@ describe("toReactivationTarget", () => {
     expect(toReactivationTarget(base(), NOW)).not.toBeNull();
   });
 
-  it("skips a patient last seen beyond the 3-year cap (too cold to reactivate)", () => {
-    // The 2017-era rows: excluded despite otherwise classifying as 'lapsed'.
+  it("skips a patient last seen beyond the 1-year cap (too cold to reactivate)", () => {
+    // Long-gone rows: excluded despite otherwise classifying as 'lapsed'.
     expect(toReactivationTarget(base({ lastVisitAt: "2017-06-15T00:00:00Z" }), NOW)).toBeNull();
-    // Just inside the window (~2 years) still qualifies.
-    expect(toReactivationTarget(base({ lastVisitAt: "2024-06-01T00:00:00Z" }), NOW)).not.toBeNull();
+    // Just over a year (~13.5 months) is over the hard maximum too.
+    expect(toReactivationTarget(base({ lastVisitAt: "2025-05-01T00:00:00Z" }), NOW)).toBeNull();
+    // Inside the window (~10 months) still qualifies.
+    expect(toReactivationTarget(base({ lastVisitAt: "2025-08-15T00:00:00Z" }), NOW)).not.toBeNull();
+  });
+
+  it("fails closed on an unknown last visit: no provable recent relationship, no text", () => {
+    // No recorded visit cannot be proven inside the 1-year window, so exclude —
+    // even though 'no recent visit' would otherwise classify as lapsed.
+    expect(toReactivationTarget(base({ lastVisitAt: null }), NOW)).toBeNull();
+    // An unparseable date is equally unprovable.
+    expect(toReactivationTarget(base({ lastVisitAt: "not-a-date" }), NOW)).toBeNull();
   });
 
   it("uses the baseline value when there is no plan and no historic spend", () => {

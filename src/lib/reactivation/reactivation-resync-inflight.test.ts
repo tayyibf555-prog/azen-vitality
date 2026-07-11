@@ -131,7 +131,7 @@ function lapsedInput(): ReactivationInput {
       use_email: true,
       marketing: true,
     },
-    lastVisitAt: "2024-06-01T00:00:00.000Z", // lapsed: > 18 months before NOW, within the 3-year cap
+    lastVisitAt: "2025-08-15T00:00:00.000Z", // lapsed: > 9 months before NOW, within the 1-year cap
     futureBookingExists: false,
     plan: null,
     amountOutstanding: 0,

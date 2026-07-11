@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
-import { getClient, getSites } from "@/lib/mock";
+import { getClient } from "@/lib/mock";
+import { getViewScope } from "@/lib/site-view";
 import { runAgentTurn } from "@/lib/agent/run";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "@/lib/copilot/tools";
 import { buildCopilotSystemPrompt } from "@/lib/copilot/prompt";
@@ -52,7 +53,12 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: "The co-pilot is available to the practice owner." }, { status: 403 });
   }
 
-  const siteIds = client ? getSites(client.id).map((s) => s.id) : [];
+  // Honour the top-bar site switcher: this route is called from the browser WITH
+  // the user's cookie, so the co-pilot's tools query only the selected site (the
+  // default view is N15). "All sites" restores whole-group access; the system
+  // prompt tells the model which scope it is answering for.
+  const scope = await getViewScope(client.id);
+  const siteIds = scope.siteIds;
 
   try {
     const actor = auth?.id ?? "owner";
@@ -60,7 +66,7 @@ export async function POST(request: Request): Promise<Response> {
     const result = await runAgentTurn(history, {
       anthropic: new Anthropic(),
       dispatch: makeCopilotDispatch(siteIds, client?.id ?? "", actor),
-      systemPrompt: buildCopilotSystemPrompt(),
+      systemPrompt: buildCopilotSystemPrompt({ label: scope.label, isAllSites: scope.isAllSites }),
       tools: COPILOT_TOOLS,
       maxRounds: 6,
       // Sonnet 5's tokenizer runs ~30% larger than 4.6, so give the co-pilot's

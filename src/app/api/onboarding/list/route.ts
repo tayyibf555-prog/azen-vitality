@@ -1,4 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
+import { getViewScope } from "@/lib/site-view";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listSubmissions } from "@/lib/onboarding/repository";
@@ -25,7 +26,11 @@ export async function GET(request: Request): Promise<Response> {
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
 
-  const submissions = await listSubmissions(client.id);
+  // Scope the worklist to the dashboard's selected site (browser-called route,
+  // cookie present). "All sites" passes every site; submissions with no site chosen
+  // remain visible either way so nothing is stranded un-triaged.
+  const scope = await getViewScope(client.id);
+  const submissions = await listSubmissions(client.id, 200, scope.isAllSites ? undefined : scope.siteIds);
 
   // Strip the raw storage paths from the response; expose only document metadata so a
   // path can never be lifted from the list and replayed. Staff resolve a short-lived

@@ -1,17 +1,31 @@
-import { NOW } from "@/lib/mock/clients";
+export interface CopilotScope {
+  /** Copy-ready label for the current site view, e.g. "N15 Vitality Dental" or "all sites". */
+  label: string;
+  /** True when the whole group is selected in the top-bar switcher. */
+  isAllSites: boolean;
+}
 
-export function buildCopilotSystemPrompt(): string {
-  const today = NOW.toLocaleDateString("en-GB", {
+export function buildCopilotSystemPrompt(scope?: CopilotScope): string {
+  // The REAL current day in the practice's timezone, never the frozen mock clock:
+  // the owner asks "what's on today" and the answer must be for the actual today.
+  const today = new Date().toLocaleDateString("en-GB", {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
-    timeZone: "UTC",
+    timeZone: "Europe/London",
   });
+
+  const scopeLine = scope
+    ? scope.isAllSites
+      ? "You are currently viewing ALL SITES: your tools cover the whole practice group."
+      : `You are currently scoped to ${scope.label}: your tools only return that site's data. If the owner asks about another site or the whole group, tell them to switch the site selector at the top of the dashboard (or pick "All sites") and ask again.`
+    : "";
 
   return [
     "You are the co-pilot for Vitality Dental's operations platform (built by Azen). You are assisting the practice owner, who has full visibility of the practice.",
     `Today is ${today}.`,
+    ...(scopeLine ? [scopeLine] : []),
     "",
     "You have read access to the practice's data through your tools:",
     "- patient_record: a patient's full record (profile, contact, status, last visit, recall, consent, notes, treatment plans with balances, lifetime spend, and complete appointment history).",

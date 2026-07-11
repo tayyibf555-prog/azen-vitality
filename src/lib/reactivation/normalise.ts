@@ -3,7 +3,8 @@ import type { ReactivationReason, ReactivationTarget } from "./types";
 export interface ReactivationConfig {
   lapseMonths: number;
   /** Upper bound on the lapse window: a patient last seen longer ago than this is too
-   *  cold to be worth reactivating and is excluded (default 36 months = 3 years). */
+   *  cold to be worth reactivating and is excluded (default 12 months = 1 year, the
+   *  practice's hard maximum — nobody lapsed longer than a year is auto-contacted). */
   maxLapseMonths: number;
   recallGraceDays: number;
   staleDays: number;
@@ -11,8 +12,10 @@ export interface ReactivationConfig {
 }
 
 export const DEFAULT_CONFIG: ReactivationConfig = {
-  lapseMonths: 18,
-  maxLapseMonths: 36,
+  // Lapsed-detection threshold. Must sit BELOW maxLapseMonths or the lapsed window
+  // is empty (9..12 months: recall's 60-day seam hands over well before 9 months).
+  lapseMonths: 9,
+  maxLapseMonths: 12,
   recallGraceDays: 60,
   staleDays: 120,
   baselineValue: 80,
@@ -102,10 +105,14 @@ export function toReactivationTarget(
   // Skip regardless of reason. (undefined active => flag absent => treated as active.)
   if (i.patient.active === false) return null;
 
-  // Too cold: last seen longer ago than the reactivation window (default 3 years).
-  // Chasing a patient gone for years is low value; the lapseMonths lower bound still
-  // applies below, so the effective window is lapseMonths .. maxLapseMonths.
-  if (i.lastVisitAt && daysBetween(i.lastVisitAt, now) > cfg.maxLapseMonths * 30) return null;
+  // Hard lapse ceiling (default 1 year): a patient we cannot PROVE was seen inside
+  // the window is excluded — that covers a last visit older than maxLapseMonths, NO
+  // recorded visit at all, and an unparseable date. Fail closed: "we miss you" must
+  // never go to someone whose relationship with the practice can't be verified as
+  // recent. (Stalled treatment plans for such patients still surface in the
+  // Treatment Coordinator worklist; they just don't get reactivation texts.)
+  const sinceVisit = i.lastVisitAt ? daysBetween(i.lastVisitAt, now) : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(sinceVisit) || sinceVisit > cfg.maxLapseMonths * 30) return null;
 
   const reason = deriveReason(i, now, cfg);
   if (!reason) return null;

@@ -133,18 +133,24 @@ export async function setStatus(
 // Reads.
 // ---------------------------------------------------------------------------
 
-/** All submissions for a client, newest first (staff worklist). */
+/** All submissions for a client, newest first (staff worklist). Pass `siteIds` to
+ *  scope to the dashboard's selected site(s); rows with NO site (the generic
+ *  /onboard/<client> flow, where the patient chose no site) are always included so
+ *  they can be triaged from any site's view rather than silently disappearing. */
 export async function listSubmissions(
   clientId: string,
   limit = 200,
+  siteIds?: string[],
 ): Promise<OnboardingSubmission[]> {
   const db = serviceClient();
-  const { data, error } = await db
+  let q = db
     .from("onboarding_submission")
     .select("*")
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .eq("client_id", clientId);
+  if (siteIds && siteIds.length > 0) {
+    q = q.or(`site_id.in.(${siteIds.join(",")}),site_id.is.null`);
+  }
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
   if (error) throw error;
   return (data as SubmissionRow[]).map(rowToSubmission);
 }

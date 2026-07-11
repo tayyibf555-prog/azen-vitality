@@ -357,7 +357,7 @@ async function syncSite(
     // open recall row exists (due / in_cadence) reactivation must not chase the
     // SAME patient for ANY reason, not just overdue_recall: a long-interval
     // recall only lightly overdue can independently trip the `lapsed` rule
-    // (last real visit > 18 months) and, without this, the patient would be
+    // (last real visit past the lapse threshold) and, without this, the patient would be
     // contacted by both modules at once. Recall hands off (graduated) past the
     // grace boundary, at which point the key leaves openRecall and reactivation
     // legitimately adopts the patient. Also never (re-)enrol a patient with a

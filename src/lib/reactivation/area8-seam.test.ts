@@ -170,7 +170,7 @@ describe("seam: lapsed reactivation target for a recall-owned patient is deduped
 
     const react = toReactivationTarget(
       reactBase({
-        lastVisitAt: isoDaysAgo(760), // > 18 months
+        lastVisitAt: isoDaysAgo(300), // > 9 months, inside the 1-year cap
         patient: { ...reactBase().patient, dentist_recall_date: isoDaysAgo(30) },
       }),
       NOW,
