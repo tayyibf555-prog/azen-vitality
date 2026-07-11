@@ -79,6 +79,18 @@ export class DentallyClient {
   }
   getPatient(id: string) { return this.get<{ patient: unknown }>(`/v1/patients/${id}`); }
 
+  /** Exact patient count for a site straight from the index metadata: real Dentally
+   *  returns `meta.total` on /v1/patients, so one 1-row page answers "how many
+   *  patients does this site have" without scanning the book. Returns null when the
+   *  source exposes no total (the local mock). */
+  async countPatients(siteId: string): Promise<number | null> {
+    const res = await this.get<{ patients: unknown[]; meta?: { total?: number } }>("/v1/patients", {
+      site_id: siteId, page: 1, per_page: 1,
+    });
+    const total = res.meta?.total;
+    return typeof total === "number" && Number.isFinite(total) ? total : null;
+  }
+
   /** Register a new patient (onboarding). */
   async createPatient(payload: Record<string, unknown>) {
     const url = this.buildUrl("/v1/patients");

@@ -252,6 +252,31 @@ async function _searchPatientsUncached(siteIds: string[], query: string): Promis
   return perSite.flat().sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Exact patient count across the given sites, straight from Dentally's index
+ *  metadata (`meta.total` — one 1-row call per site, no book scan). Cached for
+ *  5 minutes: it is a headline number, not an operational feed. Returns null when
+ *  NO site exposed a total (the local mock has no meta), so callers can fall back
+ *  to counting whatever slice they fetched. */
+export function countPatients(siteIds: string[]): Promise<number | null> {
+  const key = `patcount:${[...siteIds].sort().join("|")}`;
+  return cachedRead(key, () => _countPatientsUncached(siteIds), 300_000);
+}
+async function _countPatientsUncached(siteIds: string[]): Promise<number | null> {
+  const client = dentallyFromEnv();
+  const totals = await Promise.all(
+    siteIds.map(async (siteId) => {
+      try {
+        return await client.countPatients(dentallySiteId(siteId));
+      } catch (err) {
+        console.error(`[dentally] countPatients failed for site ${siteId}`, err);
+        return null;
+      }
+    }),
+  );
+  if (totals.every((t) => t === null)) return null;
+  return totals.reduce<number>((sum, t) => sum + (t ?? 0), 0);
+}
+
 /** One patient by id via the direct Dentally read (`GET /v1/patients/:id`), NOT a
  *  full-list scan. Returns null if the patient is not found or the read errors — so a
  *  caller resolving a single patient (e.g. reviews attend) never has to page the whole

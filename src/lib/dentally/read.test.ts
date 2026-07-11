@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   listAppointments: (_a: unknown): Promise<unknown> => Promise.resolve({ appointments: [] }),
   listTreatmentPlans: (_a: unknown): Promise<unknown> => Promise.resolve({ treatment_plans: [] }),
   listInvoices: (_a: unknown): Promise<unknown> => Promise.resolve({ invoices: [] }),
+  countPatients: (_s: unknown): Promise<number | null> => Promise.resolve(null),
 }));
 
 vi.mock("./client", () => ({
@@ -38,10 +39,11 @@ vi.mock("./client", () => ({
     listAppointments(a: unknown) { return state.listAppointments(a); }
     listTreatmentPlans(a: unknown) { return state.listTreatmentPlans(a); }
     listInvoices(a: unknown) { return state.listInvoices(a); }
+    countPatients(s: unknown) { return state.countPatients(s); }
   },
 }));
 
-import { listPatients, listAppointments, listOutstanding, dentallyReadKey } from "./read";
+import { listPatients, listAppointments, listOutstanding, countPatients, dentallyReadKey } from "./read";
 
 beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "k");
@@ -209,5 +211,27 @@ describe("listOutstanding", () => {
     const out = await listOutstanding(["site-1", "site-2", "site-3"]);
     expect(out).toEqual([]);
     expect(spy).not.toHaveBeenCalled(); // patient scan skipped on the no-outstanding path
+  });
+});
+
+describe("countPatients (exact site totals from meta.total)", () => {
+  it("sums the per-site totals from the index metadata", async () => {
+    state.countPatients = async (siteId: unknown) =>
+      siteId === "count-a" ? 27_531 : siteId === "count-b" ? 6_400 : null;
+    // Distinct site ids per test: the 5-minute cache keys on the site list.
+    expect(await countPatients(["count-a", "count-b"])).toBe(33_931);
+  });
+
+  it("returns null when NO site exposes a total (the local mock), so callers fall back", async () => {
+    state.countPatients = async () => null;
+    expect(await countPatients(["count-c"])).toBeNull();
+  });
+
+  it("a single failing site contributes 0 but the rest still count", async () => {
+    state.countPatients = async (siteId: unknown) => {
+      if (siteId === "count-err") throw new Error("dentally 500");
+      return 1_200;
+    };
+    expect(await countPatients(["count-d", "count-err"])).toBe(1_200);
   });
 });
