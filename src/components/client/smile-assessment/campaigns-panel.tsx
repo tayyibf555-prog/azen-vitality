@@ -258,7 +258,7 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <label htmlFor="ca-name" className={labelClass}>
-                  Name <span className="text-danger">*</span>
+                  Name (where will this link be used?) <span className="text-danger">*</span>
                 </label>
                 <input
                   id="ca-name"
@@ -266,9 +266,13 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
                   required
                   value={form.name}
                   onChange={(e) => set("name", e.target.value)}
-                  placeholder="Spring Invisalign push"
+                  placeholder="Website, Instagram bio, Google profile, Spring Invisalign ads..."
                   className={inputClass}
                 />
+                <p className="mt-1 text-[11px] text-muted">
+                  This becomes the source label on every lead it brings in, so name it after the
+                  place the link or embed will live.
+                </p>
               </div>
 
               <div>
