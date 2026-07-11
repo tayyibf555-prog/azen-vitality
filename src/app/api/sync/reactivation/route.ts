@@ -180,14 +180,41 @@ function indexOpenPlansByPatient(rawPlans: unknown[]): Map<string, OpenPlan> {
 // END CALIBRATION block.
 // ===========================================================================
 
+/** A numeric env override, or the default when unset/malformed. Number('') is 0 and
+ *  Number('12m') is NaN — both would silently break a window check (a NaN ceiling is
+ *  never exceeded, a 0 lapse marks everyone lapsed), so anything non-finite or <= 0
+ *  logs and falls back rather than being trusted. */
+function envNum(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.error(`[reactivation] invalid ${name}=${JSON.stringify(raw)}; using default ${fallback}`);
+    return fallback;
+  }
+  return n;
+}
+
 function config(): ReactivationConfig {
-  return {
-    lapseMonths: Number(process.env.REACTIVATION_LAPSE_MONTHS ?? DEFAULT_CONFIG.lapseMonths),
-    maxLapseMonths: Number(process.env.REACTIVATION_MAX_LAPSE_MONTHS ?? DEFAULT_CONFIG.maxLapseMonths),
-    recallGraceDays: Number(process.env.REACTIVATION_RECALL_GRACE_DAYS ?? DEFAULT_CONFIG.recallGraceDays),
-    staleDays: Number(process.env.REACTIVATION_STALE_DAYS ?? DEFAULT_CONFIG.staleDays),
-    baselineValue: Number(process.env.REACTIVATION_BASELINE_VALUE ?? DEFAULT_CONFIG.baselineValue),
+  const cfg: ReactivationConfig = {
+    lapseMonths: envNum("REACTIVATION_LAPSE_MONTHS", DEFAULT_CONFIG.lapseMonths),
+    maxLapseMonths: envNum("REACTIVATION_MAX_LAPSE_MONTHS", DEFAULT_CONFIG.maxLapseMonths),
+    recallGraceDays: envNum("REACTIVATION_RECALL_GRACE_DAYS", DEFAULT_CONFIG.recallGraceDays),
+    staleDays: envNum("REACTIVATION_STALE_DAYS", DEFAULT_CONFIG.staleDays),
+    baselineValue: envNum("REACTIVATION_BASELINE_VALUE", DEFAULT_CONFIG.baselineValue),
   };
+  // The lapsed window is lapseMonths..maxLapseMonths; lapse >= max empties it
+  // silently (the ceiling excludes everyone before the lapse test runs). A
+  // misordered override reverts BOTH to the code defaults so the module keeps
+  // its intended behaviour, loudly.
+  if (cfg.lapseMonths >= cfg.maxLapseMonths) {
+    console.error(
+      `[reactivation] REACTIVATION_LAPSE_MONTHS (${cfg.lapseMonths}) >= max (${cfg.maxLapseMonths}); reverting both to defaults ${DEFAULT_CONFIG.lapseMonths}/${DEFAULT_CONFIG.maxLapseMonths}`,
+    );
+    cfg.lapseMonths = DEFAULT_CONFIG.lapseMonths;
+    cfg.maxLapseMonths = DEFAULT_CONFIG.maxLapseMonths;
+  }
+  return cfg;
 }
 
 function vitalitySiteIds(): string[] {
@@ -337,20 +364,22 @@ async function syncSite(
 
     const target = toReactivationTarget(input, now, cfg);
 
-    // Stop chasing a patient who has self-served: if they now have a future booking
-    // (rebooked directly with the practice) or no longer qualify at all, and they are
-    // mid-cadence, END the cadence and mark the target 'converted'. Without this the
-    // active cadence keeps firing reactivation messages at a patient who already
-    // booked — the exact "why are you still texting me, I've got an appointment" case.
+    // Stop chasing a patient who has self-served or no longer qualifies, if they are
+    // mid-cadence: END the cadence. The LABEL must say why: a future booking is a
+    // genuine re-engagement ('converted' — staff read that stat as "booked back in"),
+    // while aging past the lapse ceiling / otherwise dropping out is a retirement
+    // ('exhausted'). Lumping both under 'converted' inflated the re-engaged number
+    // with patients who never booked anything.
     const stoppedQualifying = input.futureBookingExists || !target;
     const targetId = `${siteId}:${patient.id}`;
     if (stoppedQualifying && inCadenceIds.has(targetId)) {
+      const settledAs = input.futureBookingExists ? "converted" : "exhausted";
       const cad = await getCadenceByTarget(targetId);
       if (cad && (cad.status === "active" || cad.status === "paused")) {
-        await updateCadence(cad.id, { status: "converted", endedAt: now.toISOString() });
+        await updateCadence(cad.id, { status: settledAs, endedAt: now.toISOString() });
       }
-      await setTargetStatus(targetId, "converted");
-      converted += 1;
+      await setTargetStatus(targetId, settledAs);
+      if (settledAs === "converted") converted += 1;
     }
 
     // Recall owns a patient from due-soon through the grace boundary. While an

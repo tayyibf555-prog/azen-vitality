@@ -15,6 +15,7 @@ import {
   setTargetStatus,
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
+import { withinLapseWindow } from "@/lib/reactivation/normalise";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -48,6 +49,16 @@ async function handleEnrol(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
+  // Hard lapse ceiling (1 year): stored rows age while the sync only re-pulls
+  // patients Dentally marks updated, so a stale worklist row can sit past the
+  // window. Manual enrolment must not start a cadence for such a patient.
+  if (!withinLapseWindow(target.lastVisitAt, new Date())) {
+    return Response.json(
+      { error: "This patient's last visit is outside the reactivation window (1 year maximum), so they can't be enrolled." },
+      { status: 409 },
+    );
+  }
+
   let cadence = await getCadenceByTarget(targetId);
   if (!cadence) {
     cadence = await createCadence({
@@ -68,6 +79,15 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
 
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
+
+  // Same hard ceiling as enrolment: this path can auto-queue a real message for a
+  // dormant target without ever enrolling it, so it must re-check the window too.
+  if (!withinLapseWindow(target.lastVisitAt, new Date())) {
+    return Response.json(
+      { error: "This patient's last visit is outside the reactivation window (1 year maximum), so a message can't be drafted." },
+      { status: 409 },
+    );
+  }
 
   const cadence = await getCadenceByTarget(targetId);
   const stepNumber = (cadence?.currentStep ?? 0) + 1;

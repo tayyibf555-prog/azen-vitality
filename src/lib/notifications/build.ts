@@ -154,8 +154,9 @@ async function noshowNotifications(ctx: BuildNotificationsContext): Promise<Noti
  */
 async function onboardingNotifications(ctx: BuildNotificationsContext): Promise<NotificationItem[]> {
   // Head-count roll-up: never pull full submission rows (each carries the answers
-  // jsonb) just to count and date the badge.
-  const { count, newestAt } = await countNewSubmissions(ctx.clientId);
+  // jsonb) just to count and date the badge. Scoped to the view's sites so the
+  // badge count matches the (scoped) worklist the notification links to.
+  const { count, newestAt } = await countNewSubmissions(ctx.clientId, ctx.siteIds);
   if (count === 0 || !newestAt) return [];
   return [
     {

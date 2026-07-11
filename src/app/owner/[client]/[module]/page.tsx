@@ -1,4 +1,6 @@
 import { notFound, redirect } from "next/navigation";
+import { getClient } from "@/lib/mock/clients";
+import { getViewScope } from "@/lib/site-view";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { TreatmentCoordinatorView } from "@/components/client/coordinator/treatment-coordinator-view";
 import { ReactivationView } from "@/components/client/reactivation/reactivation-view";
@@ -46,6 +48,14 @@ export default async function OwnerModulePage({
   await requireModuleAccess(module);
 
   if (module === "overview") {
+    // Honour the top-bar site switcher like the owner home page: without siteIds the
+    // dashboard falls back to every site and labels itself a cross-site view even
+    // when a single site is selected.
+    const clientRecord = getClient(client);
+    if (clientRecord) {
+      const scope = await getViewScope(clientRecord.id);
+      return <OverviewDashboard siteIds={scope.siteIds} />;
+    }
     return <OverviewDashboard />;
   }
 

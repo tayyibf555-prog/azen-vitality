@@ -60,7 +60,7 @@ export function CopilotConversation({
             <img src="/copilot-logo.png" alt="Vitality Dental" className="h-20 w-20 object-contain" />
             <h2 className="mt-4 text-lg font-extrabold text-navy">How can I help?</h2>
             <p className="mt-1 max-w-sm text-sm text-muted">
-              I can see the whole practice. Ask about a patient, today&apos;s diary, outstanding balances, or how things are going.
+              I can see everything for the site you have selected. Ask about a patient, today&apos;s diary, outstanding balances, or how things are going.
             </p>
           </div>
         ) : (

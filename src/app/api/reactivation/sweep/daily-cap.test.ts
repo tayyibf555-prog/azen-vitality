@@ -40,6 +40,7 @@ import {
   insertTouch,
   enqueueOutbox,
   updateCadence,
+  setTargetStatus,
 } from "@/lib/reactivation/repository";
 import { getDailyContactLimit, countContactedToday } from "@/lib/reactivation/settings";
 
@@ -66,7 +67,10 @@ function target(i: number, recoverableValue: number): ReactivationTarget {
     dentallyPlanId: null,
     treatment: null,
     recoverableValue,
-    lastVisitAt: "2024-06-01T00:00:00.000Z",
+    // Relative (~10 months ago): the sweep re-checks the 1-year lapse ceiling at
+    // send time against the REAL clock, so a fixed date would age out of the
+    // window and every target here would be exhausted instead of queued.
+    lastVisitAt: new Date(Date.now() - 300 * 86_400_000).toISOString(),
     recallDueAt: null,
     priorAttempts: 0,
     status: "in_cadence",
@@ -147,5 +151,35 @@ describe("reactivation sweep daily contact limit", () => {
     expect(out.awaitingApproval).toBe(1);
     expect(out.queued).toBe(0);
     expect(vi.mocked(enqueueOutbox)).not.toHaveBeenCalled();
+  });
+});
+
+describe("reactivation sweep 1-year lapse ceiling (send-time re-check)", () => {
+  it("exhausts a due cadence whose target aged past the window instead of messaging it", async () => {
+    arrange(2, 100, 25, 0);
+    // Age the FIRST target past the 1-year ceiling; the second stays in-window.
+    const overWindow = {
+      ...target(1, 100),
+      lastVisitAt: new Date(Date.now() - 400 * 86_400_000).toISOString(),
+    };
+    vi.mocked(getTarget).mockImplementation(async (id: string) =>
+      (id === "site-cc:1" ? overWindow : { ...target(2, 100) }) as never,
+    );
+    const out = await sweep();
+    // The aged-out target is retired without a draft or a send; the other queues.
+    expect(out.queued).toBe(1);
+    expect(vi.mocked(enqueueOutbox)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setTargetStatus)).toHaveBeenCalledWith("site-cc:1", "exhausted");
+    expect(vi.mocked(updateCadence)).toHaveBeenCalledWith("c-1", expect.objectContaining({ status: "exhausted" }));
+  });
+
+  it("exhausts a due cadence whose target has NO provable last visit (fail closed)", async () => {
+    arrange(1, 100, 25, 0);
+    vi.mocked(getTarget).mockResolvedValue({ ...target(1, 100), lastVisitAt: null } as never);
+    const out = await sweep();
+    expect(out.queued).toBe(0);
+    expect(vi.mocked(insertTouch)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueOutbox)).not.toHaveBeenCalled();
+    expect(vi.mocked(setTargetStatus)).toHaveBeenCalledWith("site-cc:1", "exhausted");
   });
 });

@@ -162,15 +162,20 @@ export async function listSubmissions(
  */
 export async function countNewSubmissions(
   clientId: string,
+  siteIds?: string[],
 ): Promise<{ count: number; newestAt: string | null }> {
   const db = serviceClient();
-  const { data, count, error } = await db
+  let q = db
     .from("onboarding_submission")
     .select("created_at", { count: "exact" })
     .eq("client_id", clientId)
-    .eq("status", "new")
-    .order("created_at", { ascending: false })
-    .limit(1);
+    .eq("status", "new");
+  // Same scoping rule as listSubmissions, so the badge count always matches the
+  // worklist it links to (null-site rows stay visible from every site's view).
+  if (siteIds && siteIds.length > 0) {
+    q = q.or(`site_id.in.(${siteIds.join(",")}),site_id.is.null`);
+  }
+  const { data, count, error } = await q.order("created_at", { ascending: false }).limit(1);
   if (error) throw error;
   const rows = (data as { created_at: string }[] | null) ?? [];
   return { count: count ?? rows.length, newestAt: rows[0]?.created_at ?? null };

@@ -12,6 +12,7 @@ import {
   setTargetStatus,
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
+import { withinLapseWindow } from "@/lib/reactivation/normalise";
 import { getDailyContactLimit, countContactedToday } from "@/lib/reactivation/settings";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -74,6 +75,17 @@ export async function POST(request: Request) {
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
     if (!target) continue;
+
+    // Hard lapse ceiling re-check at SEND time: enrolled targets age in place (the
+    // hourly sync only re-pulls patients Dentally marks updated, so pure aging never
+    // re-evaluates them). A cadence coming due for a patient now lapsed past the
+    // 1-year maximum (or with no provable visit) is retired, never messaged.
+    if (!withinLapseWindow(target.lastVisitAt, now)) {
+      await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
+      await setTargetStatus(target.id, "exhausted");
+      exhausted += 1;
+      continue;
+    }
 
     // Skip if an outbound touch is already pending (approved-but-unsent etc.):
     // the manual approve→send flow enqueues at approve and only advances the

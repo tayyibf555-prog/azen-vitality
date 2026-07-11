@@ -56,6 +56,39 @@ function daysBetween(fromIso: string, now: Date): number {
   return (now.getTime() - t) / DAY;
 }
 
+/** The effective hard lapse ceiling in months: the env override when it is a valid
+ *  positive number, else the code default. A malformed override must degrade to the
+ *  default, never to NaN — `x > NaN * 30` is always false, which would silently
+ *  DELETE the ceiling and let years-lapsed patients be texted. */
+export function effectiveMaxLapseMonths(): number {
+  const raw = process.env.REACTIVATION_MAX_LAPSE_MONTHS;
+  if (raw === undefined) return DEFAULT_CONFIG.maxLapseMonths;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.error(
+      `[reactivation] invalid REACTIVATION_MAX_LAPSE_MONTHS ${JSON.stringify(raw)}; using default ${DEFAULT_CONFIG.maxLapseMonths}`,
+    );
+    return DEFAULT_CONFIG.maxLapseMonths;
+  }
+  return n;
+}
+
+/** True when a stored last visit PROVABLY sits inside the hard lapse ceiling.
+ *  Fail closed: no visit, an unparseable date, and over-window all return false.
+ *  Shared by every choke point that can start or continue contact for an EXISTING
+ *  target row (manual enrol, manual draft, the sweep) — stored rows age while the
+ *  sync only re-pulls patients Dentally marks updated, so the window must be
+ *  re-checked wherever a message could actually be produced. */
+export function withinLapseWindow(
+  lastVisitAt: string | null,
+  now: Date,
+  maxLapseMonths: number = effectiveMaxLapseMonths(),
+): boolean {
+  if (!lastVisitAt) return false;
+  const days = daysBetween(lastVisitAt, now);
+  return Number.isFinite(days) && days <= maxLapseMonths * 30;
+}
+
 /** The recall date that is most overdue (earliest past date among the two set). */
 function overdueRecallDate(i: ReactivationInput, now: Date, graceDays: number): string | null {
   const candidates = [i.patient.dentist_recall_date, i.patient.hygienist_recall_date]
