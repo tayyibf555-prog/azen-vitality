@@ -116,6 +116,46 @@ describe("submit — SMS-relay fail-closed on untrusted public traffic", () => {
     expect(h.insertLead).toHaveBeenCalledTimes(1);
     expect(h.contactLead).toHaveBeenCalledTimes(1);
   });
+
+  it("DOES bridge + contact with a valid page token (the public funnel / website embed path)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.SMILE_ASSESSMENT_SUBMIT_KEY = "s3cret";
+    const { mintSubmitToken } = await import("@/lib/smile-assessment/embed-token");
+    const pageToken = mintSubmitToken(GOOD.clientSlug, new Date(), "s3cret");
+    const res = await POST(req({ ...GOOD, pageToken }));
+    const j = (await res.json()) as { leadCreated: boolean };
+    expect(j.leadCreated).toBe(true);
+    expect(h.contactLead).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a forged/stale page token (records, never bridges)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.SMILE_ASSESSMENT_SUBMIT_KEY = "s3cret";
+    const res = await POST(req({ ...GOOD, pageToken: "f".repeat(64) }));
+    expect(res.status).toBe(202);
+    expect(h.insertResponse).toHaveBeenCalledTimes(1);
+    expect(h.insertLead).not.toHaveBeenCalled();
+    expect(h.contactLead).not.toHaveBeenCalled();
+  });
+
+  it("a page token minted for ANOTHER client does not trust this one", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.SMILE_ASSESSMENT_SUBMIT_KEY = "s3cret";
+    const { mintSubmitToken } = await import("@/lib/smile-assessment/embed-token");
+    const pageToken = mintSubmitToken("some-other-practice", new Date(), "s3cret");
+    await POST(req({ ...GOOD, pageToken }));
+    expect(h.insertLead).not.toHaveBeenCalled();
+  });
+});
+
+describe("submit — first-contact channel (demo: SMS)", () => {
+  it("coerces a WhatsApp preference to SMS while the WhatsApp sender is not connected", async () => {
+    vi.stubEnv("NODE_ENV", "test"); // trusted
+    await POST(req({ ...GOOD, channel: "whatsapp" }));
+    expect(h.insertLead).toHaveBeenCalledTimes(1);
+    const arg = h.insertLead.mock.calls[0]![0] as { channel: string };
+    expect(arg.channel).toBe("sms");
+  });
 });
 
 describe("submit — input validation", () => {

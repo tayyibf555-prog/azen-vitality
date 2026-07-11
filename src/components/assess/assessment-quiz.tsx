@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   ChevronRight,
   MessageSquare,
-  MessageCircle,
   Mail,
   Sparkles,
   type LucideIcon,
@@ -255,6 +254,16 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     setBusy(true);
     setError(null);
     try {
+      // Short-lived page token: marks this submission as coming from the real
+      // funnel (our pages or the practice-website iframe embed), which unlocks
+      // the instant first-contact text. Best effort — a failed fetch still
+      // records the assessment, the team just contacts the patient manually.
+      const pageToken = await fetch(
+        `/api/smile-assessment/token?client=${encodeURIComponent(clientSlug)}`,
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { token?: string | null } | null) => j?.token ?? undefined)
+        .catch(() => undefined);
       const res = await fetch("/api/smile-assessment/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -266,6 +275,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
           phone: phone.trim() || undefined,
           email: email.trim() || undefined,
           responses: answers,
+          pageToken,
         }),
       });
       const data = (await res.json().catch(() => null)) as
@@ -551,9 +561,11 @@ function ContactStep({
   onSubmit: (e: React.FormEvent) => void;
   onBack: () => void;
 }) {
+  // WhatsApp is hidden until the practice's WhatsApp sender is connected (Meta
+  // login pending): offering it would promise a channel we cannot yet send on.
+  // First contact goes by text; re-add the option when WhatsApp goes live.
   const channels: { key: Channel; label: string; icon: LucideIcon }[] = [
     { key: "sms", label: "Text", icon: MessageSquare },
-    { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
     { key: "email", label: "Email", icon: Mail },
   ];
 

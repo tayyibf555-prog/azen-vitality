@@ -8,6 +8,7 @@ import { insertLead, findOpenLeadByAddress, claimLeadForContact, releaseLeadClai
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
+import { verifySubmitToken } from "@/lib/smile-assessment/embed-token";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -101,11 +102,13 @@ export async function POST(request: Request): Promise<Response> {
   // auto-contact path to anonymous web traffic; tracked separately.
   const requiredKey = process.env.SMILE_ASSESSMENT_SUBMIT_KEY;
   const providedKey = request.headers.get("x-intake-key") ?? str(body.intakeKey);
-  // "Trusted" submits may auto-send a real SMS. With a key configured, require it.
-  // With NO key configured: trusted only outside production. In production an unset
-  // key fails closed (record + score, never auto-SMS) so an un-gated deploy can
-  // never be used as an open SMS relay.
-  const trusted = requiredKey
+  // "Trusted" submits may auto-send a real SMS. Two ways in with a key configured:
+  // the raw key itself (server-to-server integrations), or the short-lived page
+  // token our public funnel/embeds fetch from /api/smile-assessment/token (see
+  // embed-token.ts for the threat model) — checked below once the client slug is
+  // parsed. With NO key configured: trusted only outside production, so an
+  // un-gated deploy can never be used as an open SMS relay.
+  const keyTrusted = requiredKey
     ? providedKey === requiredKey
     : process.env.NODE_ENV !== "production";
 
@@ -144,6 +147,12 @@ export async function POST(request: Request): Promise<Response> {
     const client = clientSlug ? getClient(clientSlug) : undefined;
     const campaign =
       client && campaignSlug ? await getActiveCampaignBySlug(client.id, campaignSlug) : null;
+
+    // Trust resolution, part 2: the page token our own funnel (and the website
+    // iframe embed) fetched just before submitting. Valid token = trusted, so a
+    // qualified patient is contacted instantly without ever shipping the raw
+    // submit key to a browser.
+    const trusted = keyTrusted || verifySubmitToken(str(body.pageToken), clientSlug ?? "");
 
     // Resolve the site: the campaign's site wins; otherwise the site MUST belong to
     // the resolved client. Never trust a free-floating siteId on this public write,
@@ -221,13 +230,19 @@ export async function POST(request: Request): Promise<Response> {
     let leadCreated = false;
     const hasContact = Boolean(phone || email);
     if (band === "high" && hasContact && trusted && smileEnabled) {
+      // DEMO DECISION (owner): first contact goes by SMS whenever a phone exists.
+      // A "whatsapp" preference never reaches here (it is not in VALID_CHANNELS,
+      // so it parses to undefined and falls through to SMS) — the WhatsApp sender
+      // is not live yet (practice's Meta login pending). Revisit when connected.
+      const requestedChannel: "sms" | "email" | undefined =
+        channel === "whatsapp" ? "sms" : channel;
       const leadChannel: LeadChannel =
-        channel ?? (phone ? "sms" : "email");
+        requestedChannel ?? (phone ? "sms" : "email");
       // Guard: the chosen/derived channel must have its address, else fall back.
       const safeChannel: LeadChannel =
         leadChannel === "email" && !email
           ? "sms"
-          : (leadChannel === "sms" || leadChannel === "whatsapp") && !phone
+          : leadChannel === "sms" && !phone
             ? "email"
             : leadChannel;
       const consent: LeadConsent = {

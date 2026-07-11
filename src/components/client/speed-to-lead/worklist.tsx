@@ -5,6 +5,7 @@ import { Filter } from "lucide-react";
 import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 import type { Lead, LeadStage } from "@/lib/types";
+import { sourceLabel } from "@/lib/speed-to-lead/source-label";
 import { LeadDrawer } from "./lead-drawer";
 
 const STAGE_TONE: Record<LeadStage, Tone> = {
@@ -92,7 +93,17 @@ export function Worklist({ leads, nowIso }: { leads: Lead[]; nowIso: string }) {
       header: "Interest",
       cell: (l) => <span className="text-ink">{l.treatmentInterest || "General enquiry"}</span>,
     },
-    { key: "source", header: "Source", cell: (l) => <span className="text-muted capitalize">{l.source}</span> },
+    { key: "source", header: "Source", cell: (l) => <span className="text-muted">{sourceLabel(l.source)}</span> },
+    {
+      key: "score",
+      header: "Score",
+      cell: (l) =>
+        l.assessmentScore !== null ? (
+          <span className="font-semibold tabular-nums text-ink">{l.assessmentScore}</span>
+        ) : (
+          <span className="text-muted">Direct enquiry</span>
+        ),
+    },
     {
       key: "channel",
       header: "Channel",

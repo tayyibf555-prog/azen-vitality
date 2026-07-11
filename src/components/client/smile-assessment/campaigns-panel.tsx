@@ -58,12 +58,12 @@ const inputClass =
 const labelClass = "block text-xs font-semibold text-navy";
 
 /** Copy-to-clipboard button with a transient "Copied" confirmation. */
-function CopyLink({ url }: { url: string }) {
+function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -78,8 +78,37 @@ function CopyLink({ url }: { url: string }) {
       className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-2.5 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
     >
       {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-      {copied ? "Copied" : "Copy link"}
+      {copied ? "Copied" : label}
     </button>
+  );
+}
+
+function CopyLink({ url }: { url: string }) {
+  return <CopyButton text={url} label="Copy link" />;
+}
+
+/** The iframe snippet a web developer pastes into the practice's own website to
+ *  embed this assessment where it stands. One line; the quiz page is public and
+ *  designed to render inside a frame. */
+function embedSnippet(url: string): string {
+  return `<iframe src="${url}" style="width:100%;min-height:680px;border:0;border-radius:12px;" title="Smile Assessment" loading="lazy"></iframe>`;
+}
+
+/** "Embed on your website" row: shows the one-line iframe snippet with a copy button. */
+function EmbedRow({ url }: { url: string }) {
+  return (
+    <div className="border-t border-line pt-1.5">
+      <dt className="text-muted">Embed on your website</dt>
+      <dd className="mt-1 space-y-1.5">
+        <code className="block max-h-20 overflow-y-auto whitespace-pre-wrap break-all rounded-lg border border-line bg-card-muted px-2 py-1.5 text-[11px] leading-relaxed text-ink">
+          {embedSnippet(url)}
+        </code>
+        <div className="flex items-center gap-2">
+          <CopyButton text={embedSnippet(url)} label="Copy embed code" />
+          <span className="text-[11px] text-muted">Paste into any page; the assessment appears right there.</span>
+        </div>
+      </dd>
+    </div>
   );
 }
 
@@ -377,7 +406,10 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
               </p>
               <p className="mt-0.5 truncate text-xs text-ink">{createdUrl}</p>
             </div>
-            <CopyLink url={createdUrl} />
+            <div className="flex items-center gap-2">
+              <CopyLink url={createdUrl} />
+              <CopyButton text={embedSnippet(createdUrl)} label="Copy embed code" />
+            </div>
           </div>
         ) : null}
 
@@ -520,6 +552,7 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
                       <CopyLink url={selected.url} />
                     </dd>
                   </div>
+                  <EmbedRow url={selected.url} />
                 </dl>
               </div>
             ) : null}

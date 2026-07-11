@@ -142,10 +142,10 @@ export const CLIENT_NAV: NavGroup[] = [
       },
       {
         slug: "speed-to-lead",
-        label: "Speed-to-lead",
+        label: "Leads",
         icon: Zap,
         status: "live",
-        note: "Contact a new enquiry within ~30 seconds across SMS, email and WhatsApp. Instrument first-response time (5+ min delay correlates with ~9x lower conversion).",
+        note: "Every enquiry in one place with its source (Smile Assessment campaign, website, missed call), tabbed by qualification: qualified leads are texted within seconds; close-to-qualified and not-qualified assessments are listed for the team to nurture. First-response time instrumented (5+ min delay correlates with ~9x lower conversion).",
       },
       {
         slug: "onboarding",
