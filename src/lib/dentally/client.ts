@@ -128,12 +128,15 @@ export class DentallyClient {
   }
 
   /**
-   * Find patients by mobile phone number. Used to recognise an inbound SMS from
-   * any number, not just reactivation targets. The exact filter param is to be
-   * calibrated against the live sandbox; the local mock accepts `mobile_phone`.
+   * Find patients by mobile phone number. Used to recognise an inbound SMS caller
+   * and to reuse an existing patient on the public booking page. CALIBRATED live
+   * 2026-07-11: Dentally IGNORES a `mobile_phone=` filter (returns an unfiltered
+   * page), but its `query=` name/contact search matches a phone number exactly in
+   * any common format. Callers must still exact-match the returned rows' own
+   * mobile numbers (identify.ts does; never trust list[0]).
    */
   findPatientsByPhone(phone: string) {
-    return this.get<{ patients: unknown[] }>("/v1/patients", { mobile_phone: phone });
+    return this.get<{ patients: unknown[] }>("/v1/patients", { query: phone });
   }
   getAccountOutstanding(patientId: string) {
     return this.get<{ payment_plans: unknown[] }>("/v1/payment_plans", { patient_id: patientId });

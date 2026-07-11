@@ -171,7 +171,11 @@ export async function POST(request: Request): Promise<Response> {
         if (!r || typeof r !== "object") continue;
         const p = r as Record<string, unknown>;
         const id = typeof p.id === "string" || typeof p.id === "number" ? String(p.id) : "";
-        if (id && p.mobile_phone === phone) {
+        // Normalise BOTH sides: Dentally stores numbers in national format
+        // ("07834...") while ours is already E.164 ("+447834..."), so a raw
+        // string compare never matches and would duplicate every patient.
+        const rowMobile = typeof p.mobile_phone === "string" ? toE164(p.mobile_phone) : null;
+        if (id && rowMobile && rowMobile === phone) {
           patientId = id;
           break;
         }
