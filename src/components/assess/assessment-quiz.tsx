@@ -381,9 +381,14 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         </div>
       </div>
 
-      <p className="mt-5 text-center text-[0.7rem] text-muted">
-        Your answers help us point you to the right next step. Nothing here is medical advice.
-      </p>
+      {/* GDC/ASA-safe trust + the required suitability line. Never testimonials. */}
+      <div className="mt-5 space-y-1 text-center text-[0.7rem] text-muted">
+        <p>Your answers help us point you to the right next step. Nothing here is medical advice.</p>
+        <p>
+          Our dentists are GDC registered. Treatment suitability always depends on a clinical
+          assessment.
+        </p>
+      </div>
     </main>
   );
 }
@@ -451,16 +456,20 @@ function QuestionStep({
         ) : (
           <span />
         )}
+        {/* Honest momentum: the funnel is adaptive (no fixed total), so instead of a
+            question count that could read as endless, the chip signals closeness. */}
         <span className="rounded-full bg-card-muted px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-wide text-muted">
-          Question {step}
+          {step >= 3 ? `Question ${step} · nearly there` : `Question ${step}`}
         </span>
       </div>
 
       {isFirst ? (
         <div className="mb-4 space-y-1">
           {headline ? <p className="text-sm font-semibold text-navy">{headline}</p> : null}
+          {/* The 5-second hook: outcome + time expectation before the first tap. */}
           <p className="text-sm text-muted">
-            {intro || "A few quick questions, tailored as you go. There are no wrong answers."}
+            {intro ||
+              "Find the right next step for your smile. A few quick questions, tailored as you go, in about 30 seconds. There are no wrong answers."}
           </p>
         </div>
       ) : transition ? (
@@ -472,8 +481,10 @@ function QuestionStep({
 
       <fieldset disabled={thinking}>
         {/* The question is the hero on every screen. */}
-        <legend className="mb-4 text-[1.4rem] font-bold leading-snug text-navy">{question.prompt}</legend>
-        <div className="grid gap-2.5">
+        <legend className="mb-4 text-[1.4rem] font-bold leading-snug text-navy [text-wrap:balance]">
+          {question.prompt}
+        </legend>
+        <div className="grid gap-3">
           {question.options.map((o) => {
             const checked = selected === o.value;
             const Icon = iconFor(o.value);
@@ -522,9 +533,17 @@ function QuestionStep({
         </div>
       </fieldset>
 
-      {/* No visible loading message: the chosen option shows an inline spinner
-          while the next question loads. An sr-only live region keeps screen
-          readers informed. */}
+      {/* While the next question resolves, sell that it is COMING: a light
+          skeleton of the next step under the answered options, so the wait reads
+          as progress rather than a stall. Purely decorative (aria-hidden); the
+          sr-only live region below carries the accessible announcement. */}
+      {thinking ? (
+        <div aria-hidden className="mt-5 space-y-2.5 motion-safe:animate-pulse">
+          <div className="h-4 w-2/3 rounded-md bg-card-muted" />
+          <div className="h-11 rounded-xl border border-line bg-card-muted/60" />
+          <div className="h-11 rounded-xl border border-line bg-card-muted/40" />
+        </div>
+      ) : null}
       <span className="sr-only" role="status" aria-live="polite">
         {thinking ? "Loading the next question" : ""}
       </span>
@@ -591,13 +610,23 @@ function ContactStep({
         Back
       </button>
 
+      {/* Results-teaser framing: the details unlock a promised, personal outcome
+          (peak-curiosity gate), never a bare "give us your details". */}
       <div className="flex items-start gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-dark/10 text-blue-dark">
           <CheckCircle2 size={20} />
         </span>
         <div className="space-y-1">
-          <h2 className="text-xl leading-tight text-navy">Where should we send your next step?</h2>
-          <p className="text-xs text-muted">We'll only use this to follow up about your enquiry.</p>
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.15em] text-blue-deep">
+            Your assessment is ready
+          </p>
+          <h2 className="text-xl leading-tight text-navy [text-wrap:balance]">
+            Where should we send your tailored next step?
+          </h2>
+          <p className="text-xs text-muted">
+            You'll get a recommendation for your goal and the soonest time we can see you. We'll only
+            use this to follow up about your enquiry.
+          </p>
         </div>
       </div>
 
@@ -608,7 +637,7 @@ function ContactStep({
           autoComplete="given-name"
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
-          className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+          className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-3 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
         />
       </label>
 
@@ -650,7 +679,7 @@ function ContactStep({
             autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+            className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-3 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
           />
         </label>
       ) : (
@@ -661,7 +690,7 @@ function ContactStep({
             autoComplete="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="w-full rounded-lg border border-line-strong bg-card px-3 py-2.5 text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+            className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-3 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
           />
         </label>
       )}

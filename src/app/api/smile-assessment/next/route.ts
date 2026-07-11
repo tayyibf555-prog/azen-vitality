@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { SONNET, NO_THINKING } from "@/lib/ai/models";
+import { HAIKU, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock/clients";
 import { questionById, type QuizQuestion } from "@/lib/smile-assessment/quiz";
 import { candidateQuestions, deterministicNext, shouldFinish, answeredCount } from "@/lib/smile-assessment/funnel";
@@ -112,9 +112,13 @@ async function pickNext(
     const anthropic = new Anthropic({ maxRetries: 0 });
     const msg = await anthropic.messages.create(
       // Small output budget: the reply is just an id + a one-line transition, so a
-      // low cap keeps generation (and the patient's wait) fast.
-      { model: SONNET, thinking: NO_THINKING, max_tokens: 160, system, messages: [{ role: "user", content: user }] },
-      { timeout: 9000 },
+      // low cap keeps generation (and the patient's wait) fast. HAIKU on purpose
+      // (owner decision): the pick is fully constrained to the candidate list, so
+      // the fast tier loses nothing and the funnel's feel-instant budget wins.
+      // Tight timeout for the same reason: a slow pick falls straight through to
+      // the deterministic fallback question rather than making the patient wait.
+      { model: HAIKU, thinking: NO_THINKING, max_tokens: 160, system, messages: [{ role: "user", content: user }] },
+      { timeout: 4000 },
     );
     const text = msg.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

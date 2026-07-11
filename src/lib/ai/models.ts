@@ -12,9 +12,13 @@ export const SONNET = "claude-sonnet-5";
 /** Thinking config for every SONNET (Sonnet 5) call. See the SONNET note. */
 export const NO_THINKING = { type: "disabled" } as const;
 
-// NOTE: the whole product runs on Sonnet 5. (Claude Fable 5 is the internal
-// build/dev model, not used at runtime.) A HAIKU fast-tier constant used to
-// live here for latency-sensitive calls (the smile-funnel next-question picker
-// and the internal report/compliance/meta-ads generators); it was removed when
-// those moved to Sonnet 5. Re-introduce a fast tier here if a hot path ever
-// needs Haiku 4.5 again.
+// NOTE: the product's default is Sonnet 5. (Claude Fable 5 is the internal
+// build/dev model, not used at runtime.)
+
+/** HAIKU is the fast tier for latency-critical, tightly-constrained hot paths
+ *  ONLY — today that is exactly one call: the smile-funnel next-question picker
+ *  (owner decision 2026-07-12: the funnel must feel instant, and that endpoint
+ *  can only choose from a fixed question bank + write a one-line transition, so
+ *  the small model loses nothing). Everything patient-facing that DRAFTS free
+ *  text stays on SONNET. */
+export const HAIKU = "claude-haiku-4-5-20251001";
