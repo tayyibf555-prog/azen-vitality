@@ -36,6 +36,45 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     );
   }
 
+  // What the enquirer told us in their smile assessment: real context for a
+  // relevant conversation, with hard rules so it is never parroted back.
+  if (ctx.assessmentAnswers && ctx.assessmentAnswers.length > 0) {
+    lines.push(
+      "",
+      "WHAT THEY TOLD US when they enquired (their smile assessment answers):",
+      ...ctx.assessmentAnswers.map((l) => `- ${l}`),
+      "Use this to be relevant, for example matching their timeline and how ready they are to book. Do not recite these answers back to them, do not mention the questionnaire unless they bring it up, and never repeat anything about money or how they would pay.",
+    );
+  }
+
+  // Location routing for new enquiries: one number serves the whole group, so the
+  // agent asks where they are based and points them at the nearest practice.
+  const sites = ctx.practiceSites ?? [];
+  if (!known && sites.length > 1) {
+    const currentName = sites.find((s) => s.id === ctx.siteId)?.name;
+    const linkLines = sites
+      .filter((s) => s.bookingUrl)
+      .map((s) => `- ${s.name}: ${s.bookingUrl}`);
+    lines.push(
+      "",
+      "PRACTICE LOCATIONS:",
+      `The group has these practices: ${sites.map((s) => s.name).join(", ")}.`,
+      "Early in the conversation, ask where they are based (their town or area) so you can point them at the most convenient practice. If their assessment says which region they are in, acknowledge it naturally rather than asking again from scratch.",
+      currentName
+        ? `You can only search and book appointments at ${currentName}.`
+        : "You can only search and book appointments at your own practice.",
+      ...(linkLines.length > 0
+        ? [
+            "If another practice clearly suits them better, share that practice's online booking link from this list and reassure them the team there will look after them:",
+            ...linkLines,
+          ]
+        : [
+            "If another practice clearly suits them better, tell them warmly that the team there will be in touch, then call escalate_to_human.",
+          ]),
+      "Never guess travel times or distances.",
+    );
+  }
+
   lines.push(
     "",
     "STAY ON TOPIC.",

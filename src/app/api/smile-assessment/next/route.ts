@@ -1,8 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { HAIKU, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock/clients";
-import { questionById, type QuizQuestion } from "@/lib/smile-assessment/quiz";
-import { candidateQuestions, deterministicNext, shouldFinish, answeredCount } from "@/lib/smile-assessment/funnel";
+import { questionById, Q_LOCATION, type QuizQuestion } from "@/lib/smile-assessment/quiz";
+import {
+  candidateQuestions,
+  deterministicNext,
+  shouldFinish,
+  answeredCount,
+  MAX_QUESTIONS,
+} from "@/lib/smile-assessment/funnel";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
 import { consumeBudget } from "@/lib/rate-budget";
@@ -94,7 +100,7 @@ async function pickNext(
     const system = [
       "You run an adaptive smile-assessment quiz for a UK dental practice.",
       "Pick the single best NEXT question to ask, ONLY from the candidate list, to qualify the enquiry (how ready they are to proceed, and how good a fit) in as few questions as possible.",
-      "Make sure their timeline and how they would fund treatment both get covered before the quiz ends.",
+      "Make sure their timeline, how they would fund treatment, and where they are based all get covered before the quiz ends.",
       campaignGoal
         ? `This enquiry came in through a campaign about ${campaignGoal}, so favour questions that best qualify for that.`
         : "",
@@ -163,8 +169,18 @@ export async function POST(request: Request): Promise<Response> {
 
   // Enough gathered (or no eligible questions left): finish.
   if (shouldFinish(answers)) return Response.json({ ok: true, done: true });
-  const candidates = candidateQuestions(answers);
+  let candidates = candidateQuestions(answers);
   if (candidates.length === 0) return Response.json({ ok: true, done: true });
+
+  // The LAST slot before the question cap is reserved for the region question
+  // when it is still unanswered: finishing requires it, so letting the model
+  // spend the final pick on anything else would end the quiz region-less via
+  // the cap. Constraining the candidate list binds the AI path, not just the
+  // deterministic fallback.
+  if (!answers[Q_LOCATION] && answeredCount(answers) >= MAX_QUESTIONS - 1) {
+    const region = candidates.find((q) => q.id === Q_LOCATION);
+    if (region) candidates = [region];
+  }
 
   // Campaign goal biases the selection (never shown to the patient).
   const clientSlug = typeof body.clientSlug === "string" ? body.clientSlug.trim() : "";

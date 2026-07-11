@@ -48,6 +48,7 @@ export function buildFirstContactPrompt(
   client?: Client,
   campaign?: CampaignContext,
   usps?: string[],
+  assessment?: string[],
 ) {
   const practice = client?.name ?? "our dental practice";
   const interest = sanitiseInterest(lead.treatmentInterest);
@@ -68,6 +69,9 @@ export function buildFirstContactPrompt(
     campaign?.idealCustomer
       ? `- INTERNAL audience note (never quote this back to them, use it only to pitch the tone): ${campaign.idealCustomer}`
       : null,
+    assessment && assessment.length > 0
+      ? "- Their smile assessment answers are provided as context. Use them ONLY to pitch tone and urgency (for example how soon they want to start). Never recite their answers back, never mention the questionnaire mechanics, and never reference money or how they would pay."
+      : null,
     "- Under 60 words. Friendly, brief, never pushy.",
     "- Any money figure is in GBP using the £ symbol.",
     "- Use no em-dash characters anywhere. Use commas or full stops.",
@@ -83,6 +87,9 @@ export function buildFirstContactPrompt(
     `Name: ${firstName(lead.name)}`,
     `Treatment interest: ${interest ?? "not specified"}`,
     `Enquiry source: ${lead.source}`,
+    ...(assessment && assessment.length > 0
+      ? ["Smile assessment context (their own answers):", ...assessment.map((l) => `- ${l}`)]
+      : []),
   ].join("\n");
 
   return { system, user };
@@ -97,10 +104,11 @@ export async function draftFirstContact(
   channel: LeadChannel,
   client?: Client,
   campaign?: CampaignContext,
+  assessment?: string[],
   anthropic: Anthropic = new Anthropic(),
 ): Promise<FirstContactResult> {
   const usps = await listActiveUspTexts(getSite(lead.siteId)?.clientId ?? "");
-  const { system, user } = buildFirstContactPrompt(lead, channel, client, campaign, usps);
+  const { system, user } = buildFirstContactPrompt(lead, channel, client, campaign, usps, assessment);
   const msg = await anthropic.messages.create({
     model: SONNET,
     thinking: NO_THINKING,

@@ -44,6 +44,17 @@ export interface AgentContext {
   isKnownPatient?: boolean;
   /** The practice's active USP texts, woven into the prompt for conversion. */
   usps?: string[];
+  /**
+   * "Question => answer" lines from the smile assessment, when this conversation
+   * is with a lead who completed one. Grounds the agent in what they told us.
+   */
+  assessmentAnswers?: string[];
+  /**
+   * The group's practices (+ public booking link where online booking is on), so
+   * the agent can ask a new enquiry where they are based and point them at the
+   * most convenient practice. It can only search/book at its own siteId.
+   */
+  practiceSites?: { id: string; name: string; bookingUrl?: string }[];
 }
 
 /** A patient resolved from an inbound phone number. */

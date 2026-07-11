@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { candidateQuestions, shouldFinish, deterministicNext, answeredCount, MAX_QUESTIONS } from "./funnel";
-import { Q_TREATMENT, Q_TIMELINE, Q_BUDGET } from "./quiz";
+import { Q_TREATMENT, Q_TIMELINE, Q_BUDGET, Q_LOCATION } from "./quiz";
 
 describe("candidateQuestions", () => {
   it("excludes answered questions", () => {
@@ -34,9 +34,20 @@ describe("shouldFinish", () => {
   it("is false right after the first answer", () => {
     expect(shouldFinish({ [Q_TREATMENT]: "implants" })).toBe(false);
   });
-  it("is true once the core triad plus a depth answer are gathered", () => {
+  it("keeps going without the region answer, even with core triad + depth", () => {
     expect(
       shouldFinish({ [Q_TREATMENT]: "implants", [Q_TIMELINE]: "asap", [Q_BUDGET]: "ready", readiness: "book_now" }),
+    ).toBe(false);
+  });
+  it("is true once the core triad, a depth answer and the region are gathered", () => {
+    expect(
+      shouldFinish({
+        [Q_TREATMENT]: "implants",
+        [Q_TIMELINE]: "asap",
+        [Q_BUDGET]: "ready",
+        readiness: "book_now",
+        [Q_LOCATION]: "england",
+      }),
     ).toBe(true);
   });
   it("keeps going if the core triad is done but no depth answer yet", () => {
@@ -61,9 +72,20 @@ describe("deterministicNext", () => {
     const next = deterministicNext({ [Q_TREATMENT]: "implants" });
     expect([Q_TIMELINE, Q_BUDGET]).toContain(next);
   });
-  it("returns null when the funnel should finish", () => {
+  it("asks the region question once only it blocks finishing", () => {
     expect(
       deterministicNext({ [Q_TREATMENT]: "implants", [Q_TIMELINE]: "asap", [Q_BUDGET]: "ready", readiness: "book_now" }),
+    ).toBe(Q_LOCATION);
+  });
+  it("returns null when the funnel should finish", () => {
+    expect(
+      deterministicNext({
+        [Q_TREATMENT]: "implants",
+        [Q_TIMELINE]: "asap",
+        [Q_BUDGET]: "ready",
+        readiness: "book_now",
+        [Q_LOCATION]: "england",
+      }),
     ).toBeNull();
   });
 });

@@ -63,3 +63,59 @@ describe("buildSystemPrompt", () => {
     expect(s).not.toContain("—");
   });
 });
+
+describe("buildSystemPrompt lead context", () => {
+  it("grounds a lead conversation in their smile-assessment answers with never-recite rules", () => {
+    const prompt = buildSystemPrompt({
+      patientId: "lead:+447700900000",
+      siteId: "site-cc",
+      patientName: "there",
+      treatment: "Whitening my teeth",
+      fundingType: null,
+      isKnownPatient: false,
+      assessmentAnswers: [
+        "How soon would you like to get started? => As soon as possible",
+        "Where are you based? => England",
+      ],
+    });
+    expect(prompt).toContain("WHAT THEY TOLD US");
+    expect(prompt).toContain("As soon as possible");
+    expect(prompt).toContain("Do not recite these answers back");
+    expect(prompt).toContain("never repeat anything about money");
+  });
+
+  it("tells the agent to ask a new enquiry where they are based and lists booking links", () => {
+    const prompt = buildSystemPrompt({
+      patientId: "lead:+447700900000",
+      siteId: "site-cc",
+      patientName: "there",
+      treatment: null,
+      fundingType: null,
+      isKnownPatient: false,
+      practiceSites: [
+        { id: "site-cc", name: "N15 Vitality Dental", bookingUrl: "https://x.example/book/vitality?site=site-cc" },
+        { id: "site-rv", name: "N17 Dental", bookingUrl: "https://x.example/book/vitality?site=site-rv" },
+      ],
+    });
+    expect(prompt).toContain("PRACTICE LOCATIONS:");
+    expect(prompt).toContain("ask where they are based");
+    expect(prompt).toContain("You can only search and book appointments at N15 Vitality Dental.");
+    expect(prompt).toContain("N17 Dental: https://x.example/book/vitality?site=site-rv");
+  });
+
+  it("never shows the location-routing block to a known patient", () => {
+    const prompt = buildSystemPrompt({
+      patientId: "p1",
+      siteId: "site-cc",
+      patientName: "Amira Khan",
+      treatment: null,
+      fundingType: null,
+      isKnownPatient: true,
+      practiceSites: [
+        { id: "site-cc", name: "N15 Vitality Dental" },
+        { id: "site-rv", name: "N17 Dental" },
+      ],
+    });
+    expect(prompt).not.toContain("PRACTICE LOCATIONS:");
+  });
+});

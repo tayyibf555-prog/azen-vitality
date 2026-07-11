@@ -1,7 +1,7 @@
 import {
   Smile,
   Puzzle,
-  Sparkles,
+  Gem,
   Sun,
   Brush,
   MoreHorizontal,
@@ -43,16 +43,15 @@ import {
 // - Prefer a real-world OBJECT or gesture the patient instantly recognises over an
 //   abstract UI glyph (a wallet, a calendar, a map pin - never alignment bars).
 // - Within a question the icons stay distinct WHERE THE CONCEPT DIFFERS; for the
-//   practice-location options the LABEL carries the meaning, so every practice gets
-//   the same map pin (the standard "a place" affordance) rather than a forced pun
-//   per site.
+//   region options the LABEL carries the meaning, so every region gets the same
+//   map pin (the standard "a place" affordance) rather than a forced pun each.
 // - Scalar answers (one/few/many, slight/noticeable/significant) use a same-shaped
 //   trio that visibly escalates.
 export const OPTION_ICONS: Record<string, LucideIcon> = {
   // treatment
   invisalign: Smile, // a straighter smile - not an abstract alignment glyph
   implants: Puzzle, // filling the missing piece
-  veneers: Sparkles,
+  veneers: Gem, // a polished cosmetic finish - never the generic "AI sparkle"
   whitening: Sun,
   hygiene: Brush,
   other: MoreHorizontal,
@@ -78,7 +77,7 @@ export const OPTION_ICONS: Record<string, LucideIcon> = {
   // experience
   consulted_deciding: ClipboardCheck,
   comparing: Scale,
-  first_time: Flag, // starting out - distinct from the veneers sparkle
+  first_time: Flag, // starting out
   // implant scope (an escalating one -> cluster -> grid trio)
   one: CircleDot,
   few: Grip,
@@ -91,12 +90,11 @@ export const OPTION_ICONS: Record<string, LucideIcon> = {
   brighter: Sun,
   shape: PencilRuler,
   makeover: Wand2,
-  // location: the label names the practice, so the icon is the universal
-  // "a place" pin for every site (no puns), and a map for "any of them".
-  "site-cc": MapPin,
-  "site-rv": MapPin,
-  "site-ng": MapPin,
-  any: Map,
+  // location: coarse region only; the booking conversation pins down the exact
+  // practice. Uniform "a place" pin per region, a map for "somewhere else".
+  england: MapPin,
+  scotland: MapPin,
+  elsewhere: Map,
 };
 
 export function iconFor(value: string): LucideIcon {

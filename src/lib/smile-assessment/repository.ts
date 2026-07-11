@@ -141,3 +141,28 @@ export async function countRecent(contactKeyOrIp: string, sinceIso: string): Pro
   if (byEmail.error) throw byEmail.error;
   return (byPhone.count ?? 0) + (byEmail.count ?? 0);
 }
+
+/**
+ * The newest RECENT assessment linked to a Speed-to-lead lead, or null. Powers
+ * outreach context (the first-contact draft and the booking agent read its
+ * `responses`). Bounded to the last 90 days on purpose: a conversation thread is
+ * durable, and a patient texting to cancel a hygiene visit next year must not be
+ * pitched urgency from a long-stale cosmetic enquiry (purpose limitation).
+ */
+export async function latestResponseByLead(
+  leadId: string,
+  withinDays = 90,
+): Promise<AssessmentResponse | null> {
+  const db = serviceClient();
+  const sinceIso = new Date(Date.now() - withinDays * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await db
+    .from("smile_assessment_response")
+    .select("*")
+    .eq("lead_id", leadId)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToResponse(data as ResponseRow) : null;
+}

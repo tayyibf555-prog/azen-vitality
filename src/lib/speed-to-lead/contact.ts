@@ -4,6 +4,8 @@ import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import { getClient, getSite } from "@/lib/mock/clients";
+import { latestResponseByLead } from "@/lib/smile-assessment/repository";
+import { answerLines } from "@/lib/smile-assessment/summary";
 import { draftFirstContact, type CampaignContext } from "./draft";
 import {
   insertAttempt,
@@ -90,7 +92,21 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
   }
 
   const client = getClient(getSite(lead.siteId)?.clientId ?? "");
-  const { body } = await draftFirstContact(lead, lead.channel, client, campaign);
+
+  // Ground the draft in the lead's own smile-assessment answers when they have
+  // one (timeline, readiness, region). Looked up here, not passed in, so EVERY
+  // first-contact path gets it: the submit bridge, the intake route, and the SLA
+  // sweep. Best-effort: a failed lookup just means a more generic first text.
+  let assessment: string[] | undefined;
+  try {
+    const response = await latestResponseByLead(lead.id);
+    const lines = answerLines(response?.responses);
+    if (lines.length > 0) assessment = lines;
+  } catch {
+    /* context only; never block the first contact */
+  }
+
+  const { body } = await draftFirstContact(lead, lead.channel, client, campaign, assessment);
 
   // Thread an agent conversation keyed `lead:<phone>` so a reply on Twilio's
   // inbound webhook (which keys unknown numbers `lead:${from}`) routes here.

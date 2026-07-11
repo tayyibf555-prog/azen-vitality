@@ -8,7 +8,6 @@ import {
   ChevronRight,
   MessageSquare,
   Mail,
-  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -473,10 +472,9 @@ function QuestionStep({
           </p>
         </div>
       ) : transition ? (
-        <p className="mb-3 flex items-start gap-2 text-[0.8rem] leading-snug text-blue-deep">
-          <Sparkles size={14} className="mt-0.5 shrink-0" />
-          <span>{transition}</span>
-        </p>
+        // No icon on purpose: the sparkle glyph reads as "generic AI", which is
+        // exactly the wrong note for a warm human acknowledgment line.
+        <p className="mb-3 text-[0.8rem] font-medium leading-snug text-blue-deep">{transition}</p>
       ) : null}
 
       <fieldset disabled={thinking}>

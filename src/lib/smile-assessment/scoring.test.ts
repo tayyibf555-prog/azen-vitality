@@ -24,7 +24,7 @@ describe("scoreAssessment", () => {
       [Q_TREATMENT]: "invisalign", // 20
       [Q_TIMELINE]: "asap", // 30
       [Q_BUDGET]: "ready", // 30
-      [Q_LOCATION]: "site-cc", // 10
+      [Q_LOCATION]: "england", // 8
     });
     expect(rawScore).toBe(100);
     expect(band).toBe("high");
@@ -35,10 +35,10 @@ describe("scoreAssessment", () => {
       [Q_TREATMENT]: "other", // 6
       [Q_TIMELINE]: "researching", // 2
       [Q_BUDGET]: "unsure", // 4
-      [Q_LOCATION]: "any", // 8
+      [Q_LOCATION]: "elsewhere", // 8
     });
-    // 20 / 90 = 22
-    expect(rawScore).toBe(22);
+    // 20 / 88 = 23 (location max is 8 now regions weigh equal)
+    expect(rawScore).toBe(23);
     expect(band).toBe("low");
   });
 
@@ -47,10 +47,10 @@ describe("scoreAssessment", () => {
       [Q_TREATMENT]: "hygiene", // 8
       [Q_TIMELINE]: "3_6_months", // 12
       [Q_BUDGET]: "covered", // 8
-      [Q_LOCATION]: "site-cc", // 10
+      [Q_LOCATION]: "england", // 8
     });
-    // 38 / 90 = 42
-    expect(rawScore).toBe(42);
+    // 36 / 88 = 41
+    expect(rawScore).toBe(41);
     expect(band).toBe("medium");
   });
 
@@ -106,7 +106,7 @@ describe("scoreAssessment", () => {
       [Q_TREATMENT]: "whitening", // 12
       [Q_TIMELINE]: "asap", // 30
       [Q_BUDGET]: "finance", // 24
-      [Q_LOCATION]: "any", // 8
+      [Q_LOCATION]: "elsewhere", // 8
     });
     // 74 / 90 = 82
     expect(band).toBe("high");

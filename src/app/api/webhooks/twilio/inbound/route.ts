@@ -25,7 +25,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
-import { getSite, getSites } from "@/lib/mock/clients";
+import { getSite, getSites, getClient } from "@/lib/mock/clients";
+import { findLeadByConversation } from "@/lib/speed-to-lead/repository";
+import { latestResponseByLead } from "@/lib/smile-assessment/repository";
+import { answerLines } from "@/lib/smile-assessment/summary";
 import { listActiveUspTexts } from "@/lib/usp/repository";
 import { AGENT_TOOLS, makeDispatch } from "@/lib/agent/tools";
 import { runAgentTurn } from "@/lib/agent/run";
@@ -385,6 +388,41 @@ export async function POST(request: Request): Promise<Response> {
     return twiml();
   }
 
+  // A lead conversation carries the enquirer's smile-assessment answers (when
+  // they completed one), so the agent's replies are grounded in what they told
+  // us. Best-effort context: a lookup failure never blocks the turn.
+  let assessmentAnswers: string[] | undefined;
+  try {
+    const lead = await findLeadByConversation(conversation.id);
+    if (lead) {
+      const response = await latestResponseByLead(lead.id);
+      const lines = answerLines(response?.responses);
+      if (lines.length > 0) assessmentAnswers = lines;
+    }
+  } catch {
+    /* context only */
+  }
+
+  // The group's practices (+ public booking links when online booking is on), so
+  // the agent can ask a new enquiry where they are based and route them to the
+  // most convenient practice. Links only on a real https deployment.
+  let practiceSites: AgentContext["practiceSites"];
+  try {
+    const agentClient = uspClientId ? getClient(uspClientId) : undefined;
+    if (agentClient) {
+      const bookingOn = await isSystemEnabled(agentClient.id, "online-booking");
+      const base = process.env.PUBLIC_BASE_URL ?? "";
+      const withLinks = bookingOn && base.startsWith("https://");
+      practiceSites = getSites(agentClient.id).map((s) => ({
+        id: s.id,
+        name: s.name,
+        bookingUrl: withLinks ? `${base}/book/${agentClient.slug}?site=${s.id}` : undefined,
+      }));
+    }
+  } catch {
+    /* context only */
+  }
+
   const context: AgentContext = {
     patientId,
     siteId,
@@ -396,6 +434,8 @@ export async function POST(request: Request): Promise<Response> {
     recallDueAt: identity?.recallDueAt ?? null,
     isKnownPatient: knownPatient,
     usps,
+    assessmentAnswers,
+    practiceSites,
   };
 
   // Serialize agent turns per conversation: two rapid inbounds (distinct

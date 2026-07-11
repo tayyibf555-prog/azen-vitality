@@ -457,3 +457,22 @@ export async function listAttempts(leadId: string): Promise<SpeedToLeadAttempt[]
   if (error) throw error;
   return (data as AttemptRow[]).map(rowToAttempt);
 }
+
+/**
+ * The lead whose first-contact threaded a given agent conversation, or null.
+ * conversation_id is stamped by recordFirstResponse after the first outbound
+ * sends, so any lead who has REPLIED resolves here. Newest wins if a number
+ * re-enquired and two leads share the thread.
+ */
+export async function findLeadByConversation(conversationId: string): Promise<SpeedToLeadLead | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToLead(data as LeadRow) : null;
+}

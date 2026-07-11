@@ -156,16 +156,17 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
   },
   {
     id: Q_LOCATION,
-    prompt: "Which of our practices is easiest for you?",
+    prompt: "Where are you based?",
     dimension: "location",
-    // Labels are the REAL practice names (kept in step with SITES in
-    // src/lib/mock/clients.ts) — a patient must recognise their practice, so
-    // never placeholder area names here.
+    // Coarse region ONLY, on purpose (owner decision): a new enquiry should never
+    // be asked to pick between practices they have not heard of. The booking
+    // agent asks for their town or area in conversation and points them at the
+    // most convenient practice. Equal weights on purpose: region is routing
+    // information, not a fit signal, so no region scores hotter than another.
     options: [
-      { value: "site-cc", label: "N15 Vitality Dental", weight: 10 },
-      { value: "site-rv", label: "N17 Dental", weight: 10 },
-      { value: "site-ng", label: "Romford Road", weight: 10 },
-      { value: "any", label: "Any of them works", weight: 8 },
+      { value: "england", label: "England", weight: 8 },
+      { value: "scotland", label: "Scotland", weight: 8 },
+      { value: "elsewhere", label: "Somewhere else", weight: 8 },
     ],
   },
 ];

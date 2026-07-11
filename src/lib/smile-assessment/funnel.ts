@@ -10,6 +10,7 @@ import {
   Q_TREATMENT,
   Q_TIMELINE,
   Q_BUDGET,
+  Q_LOCATION,
   type QuizQuestion,
   type QuizDimension,
 } from "./quiz";
@@ -56,8 +57,10 @@ export function candidateQuestions(answers: Record<string, string>): QuizQuestio
 
 /**
  * Whether enough has been gathered to finish: the hard cap is hit, OR there are no
- * eligible questions left, OR the core triad plus at least one depth question are
- * answered (a qualified-enough lead, kept short so the funnel feels quick).
+ * eligible questions left, OR the core triad plus at least one depth question plus
+ * the region question are answered (a qualified-enough lead, kept short so the
+ * funnel feels quick). Region is required because the booking conversation routes
+ * the lead to the most convenient practice from it.
  */
 export function shouldFinish(answers: Record<string, string>): boolean {
   if (answeredCount(answers) >= MAX_QUESTIONS) return true;
@@ -66,17 +69,29 @@ export function shouldFinish(answers: Record<string, string>): boolean {
   const depthDone = QUIZ_QUESTIONS.some(
     (q) => DEPTH_DIMENSIONS.includes(q.dimension) && answers[q.id] !== undefined && answers[q.id] !== "",
   );
-  return coreDone && depthDone;
+  const regionDone = answers[Q_LOCATION] !== undefined && answers[Q_LOCATION] !== "";
+  return coreDone && depthDone && regionDone;
 }
 
 /**
  * Deterministic next-question id (the safety net when the AI call fails), or null
  * to finish. Prefers an unanswered core question (so timeline + funding always get
- * covered), else the highest-priority candidate.
+ * covered); once only the region question blocks finishing, asks it directly so
+ * the cap can never squeeze it out; else the highest-priority candidate.
  */
 export function deterministicNext(answers: Record<string, string>): string | null {
   if (shouldFinish(answers)) return null;
   const cands = candidateQuestions(answers);
   const core = cands.find((q) => CORE_IDS.includes(q.id));
-  return (core ?? cands[0])?.id ?? null;
+  if (core) return core.id;
+  // One answer away from the cap, or nothing but region left to require: make
+  // sure the region question is the next ask rather than another depth question.
+  const region = cands.find((q) => q.id === Q_LOCATION);
+  if (region && answeredCount(answers) >= MAX_QUESTIONS - 1) return region.id;
+  const nonRegion = cands.find((q) => q.id !== Q_LOCATION);
+  const depthDone = QUIZ_QUESTIONS.some(
+    (q) => DEPTH_DIMENSIONS.includes(q.dimension) && answers[q.id] !== undefined && answers[q.id] !== "",
+  );
+  if (region && depthDone) return region.id;
+  return (nonRegion ?? region ?? cands[0])?.id ?? null;
 }
