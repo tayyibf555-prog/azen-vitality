@@ -308,7 +308,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
   const name = practiceName?.trim() || "Smile Assessment";
 
   return (
-    <main className="relative mx-auto flex min-h-screen max-w-xl flex-col justify-center px-5 py-10">
+    <main className="relative mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-4 py-4 sm:px-5 sm:py-8">
       <style>{ENTER_KEYFRAMES}</style>
 
       {/* Soft brand glow behind the card. */}
@@ -317,22 +317,22 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,rgba(91,196,247,0.20),transparent_72%)]"
       />
 
-      <header className="mb-6 flex flex-col items-center gap-3 text-center">
-        <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-card shadow-[0_4px_16px_rgba(10,14,26,0.10)]">
+      {/* Compact horizontal brand lockup: every vertical pixel saved here keeps
+          the whole funnel on one phone screen. The question stays the hero. */}
+      <header className="mb-3 flex items-center justify-center gap-2.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line bg-card shadow-[0_2px_10px_rgba(10,14,26,0.08)]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/copilot-logo.png" alt={`${name} logo`} width={44} height={44} className="h-11 w-11 object-contain" />
+          <img src="/copilot-logo.png" alt={`${name} logo`} width={26} height={26} className="h-[26px] w-[26px] object-contain" />
         </span>
-        <div className="space-y-0.5">
-          {/* Quiet brand chrome: the practice name sits as an anchor, the in-card
-              question owns the visual weight. */}
-          <p className="text-lg font-bold tracking-tight text-navy">{name}</p>
-          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-blue-deep">Smile Assessment</p>
+        <div className="leading-tight">
+          <p className="text-sm font-bold tracking-tight text-navy">{name}</p>
+          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-blue-deep">Smile Assessment</p>
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-[1.4rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
+      <div className="overflow-hidden rounded-[1.25rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
         {/* Progress track — grows as steps complete, full at contact/thanks. */}
-        <div className="h-1.5 w-full bg-card-muted" aria-hidden>
+        <div className="h-1 w-full bg-card-muted" aria-hidden>
           <div
             className={[
               "h-full rounded-r-full bg-blue-dark transition-[width] duration-300 ease-out",
@@ -342,7 +342,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
           />
         </div>
 
-        <div className="p-6 sm:p-8">
+        <div className="p-5 sm:p-6">
           {phase === "thanks" && result ? (
             <ThankYou result={result} />
           ) : phase === "contact" ? (
@@ -381,14 +381,14 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         </div>
       </div>
 
-      {/* GDC/ASA-safe trust + the required suitability line. Never testimonials. */}
-      <div className="mt-5 space-y-1 text-center text-[0.7rem] text-muted">
-        <p>Your answers help us point you to the right next step. Nothing here is medical advice.</p>
-        <p>
-          Our dentists are GDC registered. Treatment suitability always depends on a clinical
-          assessment.
-        </p>
-      </div>
+      {/* GDC/ASA-safe trust + the required suitability line. Never testimonials.
+          text-ink (not text-muted) on purpose: --muted misses AA contrast on the
+          cream page background at this small size. */}
+      <p className="mt-3 px-2 text-center text-[0.65rem] leading-relaxed text-ink">
+        Your answers help us point you to the right next step; nothing here is medical advice. Our
+        dentists are GDC registered and treatment suitability always depends on a clinical
+        assessment.
+      </p>
     </main>
   );
 }
@@ -442,13 +442,13 @@ function QuestionStep({
       tabIndex={-1}
       className="outline-none motion-safe:[animation:assessEnter_240ms_ease-out]"
     >
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         {canGoBack ? (
           <button
             type="button"
             onClick={onBack}
             disabled={thinking}
-            className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
+            className="-mx-2 -my-2.5 inline-flex min-h-11 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
           >
             <ArrowLeft size={14} />
             Back
@@ -458,33 +458,35 @@ function QuestionStep({
         )}
         {/* Honest momentum: the funnel is adaptive (no fixed total), so instead of a
             question count that could read as endless, the chip signals closeness. */}
-        <span className="rounded-full bg-card-muted px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-wide text-muted">
+        <span className="rounded-full bg-card-muted px-2.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-ink">
           {step >= 3 ? `Question ${step} · nearly there` : `Question ${step}`}
         </span>
       </div>
 
       {isFirst ? (
-        <div className="mb-4 space-y-1">
-          {headline ? <p className="text-sm font-semibold text-navy">{headline}</p> : null}
+        <div className="mb-3 space-y-1">
+          {headline ? <p className="text-[0.8rem] font-semibold text-navy">{headline}</p> : null}
           {/* The 5-second hook: outcome + time expectation before the first tap. */}
-          <p className="text-sm text-muted">
+          <p className="text-[0.8rem] leading-snug text-muted">
             {intro ||
-              "Find the right next step for your smile. A few quick questions, tailored as you go, in about 30 seconds. There are no wrong answers."}
+              "Find the right next step for your smile. About 30 seconds, no wrong answers."}
           </p>
         </div>
       ) : transition ? (
-        <p className="mb-4 flex items-start gap-2 text-sm text-blue-deep">
-          <Sparkles size={15} className="mt-0.5 shrink-0" />
+        <p className="mb-3 flex items-start gap-2 text-[0.8rem] leading-snug text-blue-deep">
+          <Sparkles size={14} className="mt-0.5 shrink-0" />
           <span>{transition}</span>
         </p>
       ) : null}
 
       <fieldset disabled={thinking}>
         {/* The question is the hero on every screen. */}
-        <legend className="mb-4 text-[1.4rem] font-bold leading-snug text-navy [text-wrap:balance]">
+        <legend className="mb-3 text-lg font-bold leading-snug text-navy [text-wrap:balance] sm:text-xl">
           {question.prompt}
         </legend>
-        <div className="grid gap-3">
+        {/* Option-heavy questions split into two columns on wider screens so the
+            card stays short; on phones a single column keeps rows tappable. */}
+        <div className={["grid gap-2", question.options.length > 3 ? "sm:grid-cols-2" : ""].join(" ")}>
           {question.options.map((o) => {
             const checked = selected === o.value;
             const Icon = iconFor(o.value);
@@ -496,7 +498,7 @@ function QuestionStep({
                 onClick={() => onChoose(o.value)}
                 disabled={thinking}
                 className={[
-                  "group flex items-center gap-3.5 rounded-xl border px-3.5 py-3 text-left transition duration-150 ease-out",
+                  "group flex min-h-12 items-center gap-3 rounded-xl border px-3 py-2 text-left transition duration-150 ease-out",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
                   checked
                     ? "border-blue-dark bg-blue-dark/[0.08] shadow-[0_3px_14px_rgba(43,138,192,0.14)]"
@@ -506,25 +508,25 @@ function QuestionStep({
               >
                 <span
                   className={[
-                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors",
                     checked
                       ? "bg-blue-dark text-white"
                       : "bg-blue-dark/10 text-blue-dark group-hover:bg-blue-dark/15",
                   ].join(" ")}
                   aria-hidden
                 >
-                  <Icon size={18} strokeWidth={2} />
+                  <Icon size={16} strokeWidth={2} />
                 </span>
-                <span className={["flex-1 text-sm font-medium", checked ? "text-navy" : "text-ink"].join(" ")}>
+                <span className={["flex-1 text-sm font-medium leading-snug", checked ? "text-navy" : "text-ink"].join(" ")}>
                   {o.label}
                 </span>
                 <span className="shrink-0" aria-hidden>
                   {checked && thinking ? (
-                    <Loader2 size={18} className="text-blue-dark motion-safe:animate-spin" />
+                    <Loader2 size={16} className="text-blue-dark motion-safe:animate-spin" />
                   ) : checked ? (
-                    <CheckCircle2 size={18} className="text-blue-dark" />
+                    <CheckCircle2 size={16} className="text-blue-dark" />
                   ) : (
-                    <ChevronRight size={16} className="text-muted/70 transition-colors group-hover:text-blue-dark" />
+                    <ChevronRight size={15} className="text-muted/70 transition-colors group-hover:text-blue-dark" />
                   )}
                 </span>
               </button>
@@ -538,10 +540,10 @@ function QuestionStep({
           as progress rather than a stall. Purely decorative (aria-hidden); the
           sr-only live region below carries the accessible announcement. */}
       {thinking ? (
-        <div aria-hidden className="mt-5 space-y-2.5 motion-safe:animate-pulse">
+        <div aria-hidden className="mt-4 space-y-2 motion-safe:animate-pulse">
           <div className="h-4 w-2/3 rounded-md bg-card-muted" />
-          <div className="h-11 rounded-xl border border-line bg-card-muted/60" />
-          <div className="h-11 rounded-xl border border-line bg-card-muted/40" />
+          <div className="h-10 rounded-xl border border-line bg-card-muted/60" />
+          <div className="h-10 rounded-xl border border-line bg-card-muted/40" />
         </div>
       ) : null}
       <span className="sr-only" role="status" aria-live="polite">
@@ -594,17 +596,28 @@ function ContactStep({
     { key: "email", label: "Email", icon: Mail },
   ];
 
+  // The question fieldset disables itself while the last answer resolves, which
+  // drops keyboard focus to <body> when this screen swaps in. Focus the form (it
+  // is labelled by the heading) so the change is announced and Tab continues here.
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    formRef.current?.focus();
+  }, []);
+
   return (
     <form
       key={animKey}
+      ref={formRef}
+      tabIndex={-1}
+      aria-labelledby="assess-contact-heading"
       onSubmit={onSubmit}
-      className="space-y-5 motion-safe:[animation:assessEnter_240ms_ease-out]"
+      className="space-y-3 outline-none motion-safe:[animation:assessEnter_240ms_ease-out]"
     >
       <button
         type="button"
         onClick={onBack}
         disabled={busy}
-        className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
+        className="-mx-2 -my-2.5 inline-flex min-h-11 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
       >
         <ArrowLeft size={14} />
         Back
@@ -613,39 +626,43 @@ function ContactStep({
       {/* Results-teaser framing: the details unlock a promised, personal outcome
           (peak-curiosity gate), never a bare "give us your details". */}
       <div className="flex items-start gap-3">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-dark/10 text-blue-dark">
-          <CheckCircle2 size={20} />
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-dark/10 text-blue-dark">
+          <CheckCircle2 size={18} />
         </span>
-        <div className="space-y-1">
-          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.15em] text-blue-deep">
+        <div className="space-y-0.5">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-blue-deep">
             Your assessment is ready
           </p>
-          <h2 className="text-xl leading-tight text-navy [text-wrap:balance]">
+          <h2 id="assess-contact-heading" className="text-lg leading-tight text-navy [text-wrap:balance]">
             Where should we send your tailored next step?
           </h2>
-          <p className="text-xs text-muted">
-            You'll get a recommendation for your goal and the soonest time we can see you. We'll only
-            use this to follow up about your enquiry.
+          <p className="text-xs leading-snug text-muted">
+            You&apos;ll get a recommendation for your goal and the soonest time we can see you.
+            We&apos;ll only use this to follow up about your enquiry.
           </p>
         </div>
       </div>
 
       <label className="block">
-        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">First name</span>
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">First name</span>
         <input
           type="text"
           autoComplete="given-name"
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
-          className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-3 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+          className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-2.5 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
         />
       </label>
 
-      <div>
-        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
+      {/* fieldset/legend so screen readers announce the group question with each
+          channel toggle (mirrors the question step). */}
+      <fieldset>
+        <legend className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
           How would you like us to reply?
-        </span>
-        <div className="grid grid-cols-3 gap-2">
+        </legend>
+        {/* Columns match the live channel count so the row always fills the card
+            evenly (WhatsApp rejoins this list once the sender is connected). */}
+        <div className={["grid gap-2", channels.length === 3 ? "grid-cols-3" : "grid-cols-2"].join(" ")}>
           {channels.map((c) => {
             const active = channel === c.key;
             const Icon = c.icon;
@@ -656,41 +673,41 @@ function ContactStep({
                 onClick={() => setChannel(c.key)}
                 aria-pressed={active}
                 className={[
-                  "flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-semibold transition duration-150 ease-out",
+                  "flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 py-2 text-xs font-semibold transition duration-150 ease-out",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
                   active
                     ? "border-blue-dark bg-blue-dark/[0.08] text-blue-deep shadow-[0_3px_14px_rgba(43,138,192,0.12)]"
                     : "border-line bg-card text-muted hover:border-blue-dark/40 hover:bg-card-muted motion-safe:hover:-translate-y-0.5",
                 ].join(" ")}
               >
-                <Icon size={18} />
+                <Icon size={16} />
                 {c.label}
               </button>
             );
           })}
         </div>
-      </div>
+      </fieldset>
 
       {channel === "email" ? (
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">Email</span>
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Email</span>
           <input
             type="email"
             autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-3 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+            className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-2.5 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
           />
         </label>
       ) : (
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">Mobile number</span>
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Mobile number</span>
           <input
             type="tel"
             autoComplete="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-3 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
+            className="w-full rounded-lg border border-line-strong bg-card px-3.5 py-2.5 text-base sm:text-sm text-ink focus-visible:border-blue-dark/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
           />
         </label>
       )}
@@ -699,11 +716,11 @@ function ContactStep({
         <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-[#b3261e]">{error}</p>
       ) : null}
 
-      <Button type="submit" variant="primary" className="w-full" disabled={!canSubmit || busy}>
+      <Button type="submit" variant="primary" className="min-h-12 w-full" disabled={!canSubmit || busy}>
         {busy ? <Loader2 size={16} className="motion-safe:animate-spin" /> : null}
         See my next step
       </Button>
-      <p className="text-center text-xs text-muted">
+      <p className="text-center text-[0.7rem] leading-snug text-muted">
         By sending this you agree we can contact you about your enquiry.
       </p>
     </form>
@@ -716,11 +733,11 @@ function ContactStep({
 
 function ThankYou({ result }: { result: SubmitResult }) {
   return (
-    <div className="flex flex-col items-center gap-4 py-6 text-center motion-safe:[animation:assessEnter_240ms_ease-out]">
-      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-success/10 text-success">
-        <CheckCircle2 size={28} />
+    <div className="flex flex-col items-center gap-3 py-4 text-center motion-safe:[animation:assessEnter_240ms_ease-out]">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-success/10 text-success">
+        <CheckCircle2 size={24} />
       </span>
-      <h1 className="text-2xl text-navy">Thank you</h1>
+      <h1 className="text-xl text-navy">Thank you</h1>
       <p className="max-w-sm text-sm text-muted">{result.message}</p>
       {result.bookingUrl ? (
         <Button asChild variant="primary" className="w-full sm:w-auto">

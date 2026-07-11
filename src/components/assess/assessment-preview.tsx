@@ -11,7 +11,8 @@ import { iconFor } from "./option-icons";
 // the funnel's icon mapping so the two never drift. Every later question is chosen
 // by AI from the lead's answers, which the caption notes.
 
-const DEFAULT_INTRO = "A few quick questions, tailored as you go. There are no wrong answers.";
+// Kept in step with the live funnel's fallback intro in assessment-quiz.tsx.
+const DEFAULT_INTRO = "Find the right next step for your smile. About 30 seconds, no wrong answers.";
 
 export function AssessmentPreview({
   practiceName,
@@ -39,13 +40,13 @@ export function AssessmentPreview({
             className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[radial-gradient(60%_70%_at_50%_0%,rgba(91,196,247,0.22),transparent_72%)]"
           />
 
-          {/* Branded header. */}
-          <div className="relative mb-3 flex flex-col items-center gap-1.5 text-center">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-card shadow-[0_2px_10px_rgba(10,14,26,0.10)]">
+          {/* Branded header — the same compact horizontal lockup as the live funnel. */}
+          <div className="relative mb-2.5 flex items-center justify-center gap-2">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-line bg-card shadow-[0_2px_10px_rgba(10,14,26,0.10)]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/copilot-logo.png" alt="" width={26} height={26} className="h-[26px] w-[26px] object-contain" />
+              <img src="/copilot-logo.png" alt="" width={20} height={20} className="h-5 w-5 object-contain" />
             </span>
-            <div>
+            <div className="leading-tight">
               <p className="text-xs font-bold tracking-tight text-navy">{name}</p>
               <p className="text-[0.55rem] font-semibold uppercase tracking-[0.18em] text-blue-deep">
                 Smile Assessment
