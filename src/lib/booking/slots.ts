@@ -39,14 +39,33 @@ export interface BookingDay {
   slots: BookingSlot[];
 }
 
-/** Minimal structural view of DentallyClient so tests can pass a plain stub. */
+/** Minimal structural view of DentallyClient so tests can pass a plain stub.
+ *  Live Dentally availability is PER PRACTITIONER (start_time/finish_time ISO
+ *  datetimes + practitioner_ids[]), so the reader also lists the site's
+ *  practitioners; calibrated against the live API 2026-07-11. */
 export interface AvailabilityReader {
+  listPractitioners(siteId: string): Promise<{ practitioners: unknown[] }>;
   getAvailability(a: {
-    siteId: string;
-    fromDate?: string;
-    toDate?: string;
+    practitionerIds: Array<string | number>;
+    startTime: string;
+    finishTime: string;
     duration?: number;
   }): Promise<{ availability: unknown[] }>;
+}
+
+/** Active practitioner ids for a Dentally site UUID (live row shape:
+ *  {id, active, site_id, ...}). Defensive: malformed rows are dropped. */
+export function parsePractitionerIds(rows: unknown[], dentallySiteUuid: string): string[] {
+  const ids: string[] = [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    if (r.active !== true) continue;
+    if (typeof r.site_id === "string" && r.site_id !== dentallySiteUuid) continue;
+    const id = r.id;
+    if (typeof id === "string" || typeof id === "number") ids.push(String(id));
+  }
+  return ids;
 }
 
 /**
@@ -124,10 +143,21 @@ export async function fetchAvailabilityDays(
   toDate: string,
   now: Date = new Date(),
 ): Promise<BookingDay[]> {
+  const siteUuid = dentallySiteId(internalSiteId);
+  // 1. The site's active practitioners: availability is queried per practitioner.
+  const pr = await dentally.listPractitioners(siteUuid);
+  const practitionerIds = parsePractitionerIds(Array.isArray(pr.practitioners) ? pr.practitioners : [], siteUuid);
+  if (practitionerIds.length === 0) return [];
+
+  // 2. One availability call covering every practitioner. start_time must be a
+  //    real datetime and must not sit in the past, so clamp to now.
+  const fromMs = Date.parse(`${fromDate}T00:00:00.000Z`);
+  const startIso = new Date(Math.max(Number.isNaN(fromMs) ? now.getTime() : fromMs, now.getTime())).toISOString();
+  const finishIso = new Date(`${toDate}T23:59:59.999Z`).toISOString();
   const res = await dentally.getAvailability({
-    siteId: dentallySiteId(internalSiteId),
-    fromDate,
-    toDate,
+    practitionerIds,
+    startTime: startIso,
+    finishTime: finishIso,
     duration: BOOKING_SLOT_DURATION_MIN,
   });
   const rows = Array.isArray(res.availability) ? res.availability : [];

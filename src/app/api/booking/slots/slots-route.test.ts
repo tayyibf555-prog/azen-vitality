@@ -7,13 +7,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   getAvailability: vi.fn(async (..._a: unknown[]) => ({ availability: [] as unknown[] })),
+  // Two active practitioners by default (availability is per practitioner on live Dentally).
+  listPractitioners: vi.fn(async (siteId: string) => ({
+    practitioners: [
+      { id: 7, active: true, site_id: siteId },
+      { id: 8, active: true, site_id: siteId },
+    ],
+  })),
 }));
 
 vi.mock("@/lib/dentally/write", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
-    dentallyAgentClient: () => ({ getAvailability: h.getAvailability }),
+    dentallyAgentClient: () => ({ getAvailability: h.getAvailability, listPractitioners: h.listPractitioners }),
   };
 });
 
@@ -57,8 +64,11 @@ describe("GET /api/booking/slots", () => {
     expect(j.ok).toBe(true);
     expect(j.days).toHaveLength(1);
     expect(j.days[0]!.slots).toEqual([{ start, finish, practitionerId: "7" }]);
+    // Practitioners are listed for the site's Dentally UUID; availability then
+    // covers all active ids with datetimes at the booking duration.
+    expect(h.listPractitioners).toHaveBeenCalledWith("3286d822-68c5-48ff-b1a2-065780dfcd15");
     const arg = h.getAvailability.mock.calls[0]![0] as Record<string, unknown>;
-    expect(arg.siteId).toBe("3286d822-68c5-48ff-b1a2-065780dfcd15");
+    expect(arg.practitionerIds).toEqual(["7", "8"]);
     expect(arg.duration).toBe(30);
   });
 
@@ -66,9 +76,10 @@ describe("GET /api/booking/slots", () => {
     const from = ymd(3);
     const res = await get({ client: "vitality", site: "site-rv", from, to: ymd(40) });
     expect(res.status).toBe(200);
-    const arg = h.getAvailability.mock.calls[0]![0] as { fromDate: string; toDate: string };
-    expect(arg.fromDate).toBe(from);
-    expect(Date.parse(arg.toDate) - Date.parse(arg.fromDate)).toBe(13 * DAY_MS);
+    const arg = h.getAvailability.mock.calls[0]![0] as { startTime: string; finishTime: string };
+    expect(arg.startTime.slice(0, 10)).toBe(from);
+    // finish = from + 13 days, end of day.
+    expect(arg.finishTime.slice(0, 10)).toBe(ymd(3 + 13));
   });
 
   it("rejects malformed dates cleanly", async () => {

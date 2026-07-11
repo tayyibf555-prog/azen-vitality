@@ -30,7 +30,16 @@ function shiftDay(ymd: string | undefined, days: number): string | undefined {
 
 export interface ListPlansArgs { siteId: string; patientId?: string; updatedAfter?: string; page?: number; perPage?: number; }
 export interface ListPatientsArgs { siteId: string; updatedAfter?: string; query?: string; page?: number; perPage?: number; }
-export interface AvailabilityArgs { siteId: string; fromDate?: string; toDate?: string; duration?: number; }
+/** Availability is PER PRACTITIONER on live Dentally: /v1/appointments/availability
+ *  takes start_time/finish_time (ISO datetimes, NOT dates) + practitioner_ids[] and
+ *  each returned row carries its practitioner_id. Calibrated against the live API
+ *  2026-07-11 (the earlier site_id/start_date shape 400s with "start_time is missing"). */
+export interface AvailabilityArgs {
+  practitionerIds: Array<string | number>;
+  startTime: string;  // ISO datetime
+  finishTime: string; // ISO datetime
+  duration?: number;  // minutes
+}
 
 export class DentallyClient {
   private fetchImpl: FetchImpl;
@@ -50,9 +59,14 @@ export class DentallyClient {
     return new URL(this.opts.baseUrl.replace(/\/+$/, "") + path);
   }
 
-  private async get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
+  private async get<T>(path: string, query: Record<string, string | number | Array<string | number> | undefined> = {}): Promise<T> {
     const url = this.buildUrl(path);
-    for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined) continue;
+      // Rails-style repeated params (e.g. practitioner_ids[]=1&practitioner_ids[]=2).
+      if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, String(item));
+      else url.searchParams.set(k, String(v));
+    }
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -193,7 +207,18 @@ export class DentallyClient {
 
   getAvailability(a: AvailabilityArgs) {
     return this.get<{ availability: unknown[] }>("/v1/appointments/availability", {
-      site_id: a.siteId, start_date: a.fromDate, finish_date: a.toDate, duration: a.duration,
+      start_time: a.startTime,
+      finish_time: a.finishTime,
+      duration: a.duration,
+      "practitioner_ids[]": a.practitionerIds,
+    });
+  }
+
+  /** A site's practitioners (live shape: {id, active, site_id, user:{...}}). Used to
+   *  drive availability, which is queried per practitioner id. */
+  listPractitioners(siteId: string) {
+    return this.get<{ practitioners: unknown[] }>("/v1/practitioners", {
+      site_id: siteId, per_page: 100,
     });
   }
 

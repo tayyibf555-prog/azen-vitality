@@ -101,25 +101,55 @@ describe("groupSlotsIntoLondonDays", () => {
 });
 
 describe("fetchAvailabilityDays", () => {
-  it("queries Dentally with the mapped site UUID and the 30-minute booking duration", async () => {
-    const getAvailability = vi.fn(async () => ({
+  const N15_UUID = "3286d822-68c5-48ff-b1a2-065780dfcd15";
+
+  it("lists the site's ACTIVE practitioners then queries one availability window for all of them", async () => {
+    const listPractitioners = vi.fn(async () => ({
+      practitioners: [
+        { id: 5, active: true, site_id: N15_UUID },
+        { id: 7, active: true, site_id: N15_UUID },
+        { id: 9, active: false, site_id: N15_UUID }, // inactive: never queried
+        { id: 11, active: true, site_id: "some-other-site" }, // foreign: never queried
+      ],
+    }));
+    const getAvailability = vi.fn(async (_a: unknown) => ({
       availability: [row("2026-06-26T09:00:00Z", "2026-06-26T09:30:00Z", 5)],
     }));
     const days = await fetchAvailabilityDays(
-      { getAvailability },
+      { listPractitioners, getAvailability },
       "site-cc",
       "2026-06-25",
       "2026-06-28",
       NOW,
     );
-    expect(getAvailability).toHaveBeenCalledWith({
-      // site-cc is N15 Vitality Dental; Dentally only knows its own UUID.
-      siteId: "3286d822-68c5-48ff-b1a2-065780dfcd15",
-      fromDate: "2026-06-25",
-      toDate: "2026-06-28",
-      duration: BOOKING_SLOT_DURATION_MIN,
-    });
+    // site-cc is N15 Vitality Dental; Dentally only knows its own UUID.
+    expect(listPractitioners).toHaveBeenCalledWith(N15_UUID);
+    const arg = getAvailability.mock.calls[0]![0] as unknown as {
+      practitionerIds: string[];
+      startTime: string;
+      finishTime: string;
+      duration: number;
+    };
+    expect(arg.practitionerIds).toEqual(["5", "7"]);
+    expect(arg.duration).toBe(BOOKING_SLOT_DURATION_MIN);
+    // start clamps to NOW (the range began in the past relative to NOW).
+    expect(Date.parse(arg.startTime)).toBeGreaterThanOrEqual(NOW.getTime());
+    expect(arg.finishTime.startsWith("2026-06-28T23:59:59")).toBe(true);
     expect(days[0]!.slots[0]!.practitionerId).toBe("5");
+  });
+
+  it("returns no days (and never queries availability) when the site has no active practitioners", async () => {
+    const listPractitioners = vi.fn(async () => ({ practitioners: [{ id: 9, active: false }] }));
+    const getAvailability = vi.fn(async () => ({ availability: [] as unknown[] }));
+    const days = await fetchAvailabilityDays(
+      { listPractitioners, getAvailability },
+      "site-cc",
+      "2026-06-25",
+      "2026-06-28",
+      NOW,
+    );
+    expect(days).toEqual([]);
+    expect(getAvailability).not.toHaveBeenCalled();
   });
 });
 

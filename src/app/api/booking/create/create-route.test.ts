@@ -19,6 +19,11 @@ const h = vi.hoisted(() => ({
   isSystemEnabled: vi.fn(async (..._a: unknown[]) => true),
   isDentallyWriteEnabled: vi.fn(() => true),
   getAvailability: vi.fn(async (..._a: unknown[]) => ({ availability: [] as unknown[] })),
+  // Availability is per practitioner on live Dentally: the revalidation flow lists
+  // the site's practitioners first. One active practitioner (101) matches LIVE_ROW.
+  listPractitioners: vi.fn(async (siteId: string) => ({
+    practitioners: [{ id: 101, active: true, site_id: siteId }],
+  })),
   findPatientsByPhone: vi.fn(async (..._a: unknown[]) => ({ patients: [] as unknown[] })),
   createPatient: vi.fn(async (..._a: unknown[]) => ({ patient: { id: "pat-new" } })),
   createAppointment: vi.fn(async (..._a: unknown[]) => ({ appointment: { id: "appt-1" } })),
@@ -32,6 +37,7 @@ vi.mock("@/lib/dentally/write", async (orig) => {
     isDentallyWriteEnabled: h.isDentallyWriteEnabled,
     dentallyAgentClient: () => ({
       getAvailability: h.getAvailability,
+      listPractitioners: h.listPractitioners,
       findPatientsByPhone: h.findPatientsByPhone,
       createPatient: h.createPatient,
       createAppointment: h.createAppointment,

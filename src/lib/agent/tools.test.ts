@@ -20,16 +20,24 @@ describe("AGENT_TOOLS", () => {
 describe("makeDispatch", () => {
   const context = { patientId: "pat-010", siteId: "site-cc", patientName: "Harold", treatment: "Invisalign", fundingType: "private" as const };
 
-  it("find_slots returns the diary slots from Dentally", async () => {
+  it("find_slots lists the site's active practitioners then queries their availability", async () => {
     const dentally = {
+      listPractitioners: vi.fn().mockResolvedValue({
+        practitioners: [
+          { id: 10383, active: true, site_id: "3286d822-68c5-48ff-b1a2-065780dfcd15" },
+          { id: 999, active: false, site_id: "3286d822-68c5-48ff-b1a2-065780dfcd15" }, // inactive: excluded
+        ],
+      }),
       getAvailability: vi.fn().mockResolvedValue({ availability: [{ start_time: "2026-06-22T09:00:00Z" }] }),
       createAppointment: vi.fn(),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
     const out = await dispatch("find_slots", { treatment: "Invisalign" });
-    // The internal id is mapped to Dentally's own site UUID before the API call.
+    // The internal id is mapped to Dentally's own site UUID before the API call,
+    // and availability is queried per practitioner with datetimes (live contract).
+    expect(dentally.listPractitioners).toHaveBeenCalledWith("3286d822-68c5-48ff-b1a2-065780dfcd15");
     expect(dentally.getAvailability).toHaveBeenCalledWith(
-      expect.objectContaining({ siteId: "3286d822-68c5-48ff-b1a2-065780dfcd15" }),
+      expect.objectContaining({ practitionerIds: ["10383"] }),
     );
     expect(out).toContain("2026-06-22T09:00:00Z");
   });

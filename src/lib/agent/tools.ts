@@ -132,6 +132,7 @@ export interface ToolDeps {
   dentally: Pick<
     DentallyClient,
     | "getAvailability"
+    | "listPractitioners"
     | "createAppointment"
     | "createPatient"
     | "getPatientAppointments"
@@ -172,11 +173,33 @@ export function makeDispatch(deps: ToolDeps) {
     switch (name) {
       case "find_slots": {
         const treatment = typeof input.treatment === "string" ? findTreatment(input.treatment) : null;
+        // Live Dentally availability is PER PRACTITIONER (start_time/finish_time ISO
+        // datetimes + practitioner_ids[]; each row carries its practitioner_id) —
+        // calibrated against the live API 2026-07-11. So: the site's active
+        // practitioners first, then one availability call covering all of them.
+        // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
+        const siteUuid = dentallySiteId(deps.context.siteId);
+        const pr = await deps.dentally.listPractitioners(siteUuid);
+        const practitionerIds: string[] = [];
+        for (const raw of Array.isArray(pr.practitioners) ? pr.practitioners : []) {
+          const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+          if (row.active !== true) continue;
+          if (typeof row.site_id === "string" && row.site_id !== siteUuid) continue;
+          if (typeof row.id === "string" || typeof row.id === "number") practitionerIds.push(String(row.id));
+        }
+        if (practitionerIds.length === 0) return JSON.stringify({ slots: [] });
+        const now = new Date();
+        const fromMs =
+          typeof input.fromDate === "string" ? Date.parse(`${input.fromDate}T00:00:00.000Z`) : Number.NaN;
+        const startTime = new Date(Math.max(Number.isNaN(fromMs) ? now.getTime() : fromMs, now.getTime())).toISOString();
+        const finishTime =
+          typeof input.toDate === "string" && !Number.isNaN(Date.parse(`${input.toDate}T23:59:59.999Z`))
+            ? new Date(`${input.toDate}T23:59:59.999Z`).toISOString()
+            : new Date(now.getTime() + 14 * 86_400_000).toISOString();
         const res = await deps.dentally.getAvailability({
-          // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
-          siteId: dentallySiteId(deps.context.siteId),
-          fromDate: typeof input.fromDate === "string" ? input.fromDate : undefined,
-          toDate: typeof input.toDate === "string" ? input.toDate : undefined,
+          practitionerIds,
+          startTime,
+          finishTime,
           duration: treatment?.durationMinutes,
         });
         const slots = Array.isArray(res.availability) ? res.availability : [];
