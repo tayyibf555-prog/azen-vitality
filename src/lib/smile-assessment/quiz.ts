@@ -158,10 +158,13 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     id: Q_LOCATION,
     prompt: "Which of our practices is easiest for you?",
     dimension: "location",
+    // Labels are the REAL practice names (kept in step with SITES in
+    // src/lib/mock/clients.ts) — a patient must recognise their practice, so
+    // never placeholder area names here.
     options: [
-      { value: "site-cc", label: "City Centre", weight: 10 },
-      { value: "site-rv", label: "Riverside", weight: 10 },
-      { value: "site-ng", label: "Northgate", weight: 10 },
+      { value: "site-cc", label: "N15 Vitality Dental", weight: 10 },
+      { value: "site-rv", label: "N17 Dental", weight: 10 },
+      { value: "site-ng", label: "Romford Road", weight: 10 },
       { value: "any", label: "Any of them works", weight: 8 },
     ],
   },
