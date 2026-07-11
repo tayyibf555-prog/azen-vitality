@@ -160,6 +160,17 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
+  // Hard lapse ceiling at APPROVE time too: a high-value draft is created while the
+  // patient is in-window but can sit awaiting approval; if they cross the 1-year
+  // boundary in the meantime, approving it must not text them. This was the one
+  // path that could still enqueue for an over-window patient.
+  if (!withinLapseWindow(target.lastVisitAt, new Date())) {
+    return Response.json(
+      { error: "This patient's last visit is now outside the reactivation window (1 year maximum), so this draft can't be sent." },
+      { status: 409 },
+    );
+  }
+
   // Verify the touch belongs to THIS target before approving, so a stray/foreign
   // touchId can never be approved and enqueued to this target's patient.
   const touches = await listTouches(target.id);
