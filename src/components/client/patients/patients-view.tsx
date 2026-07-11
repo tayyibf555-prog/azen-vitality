@@ -1,8 +1,9 @@
 import { PageHeader, StatCard } from "@/components/primitives";
-import { Users, UserCheck, UserX, CalendarClock } from "lucide-react";
+import { Users, UserCheck, CalendarClock } from "lucide-react";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { listPatients, countPatients, type PatientRecord } from "@/lib/dentally/read";
+import { getPatientCounts } from "@/lib/patient-count/repository";
 import { PatientsTable } from "./patients-table";
 
 export async function PatientsView({ clientSlug }: { clientSlug: string }) {
@@ -20,21 +21,30 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
   // the size of the slice we happened to fetch.
   let patients: PatientRecord[] = [];
   let exactTotal: number | null = null;
+  let exactActive: number | null = null;
   try {
-    [patients, exactTotal] = await Promise.all([
+    const [slice, metaTotal, counts] = await Promise.all([
       listPatients(scope.siteIds, { maxPages: 3 }),
       countPatients(scope.siteIds),
+      getPatientCounts(scope.siteIds).catch(() => []),
     ]);
+    patients = slice;
+    exactTotal = metaTotal;
+    // The nightly book scan gives the EXACT active number (Dentally's live
+    // meta.total ignores active/archived filters). Only trust it when every
+    // in-scope site has been counted, so a half-covered "All sites" view never
+    // shows a confidently wrong number.
+    if (counts.length === scope.siteIds.length && counts.length > 0) {
+      exactActive = counts.reduce((s, c) => s + c.active, 0);
+    }
   } catch {
     patients = [];
   }
 
   const nowIso = new Date().toISOString();
-  // Counts below are over the bounded slice, NOT the whole book, so they'd be
-  // misleading as headline totals — hence the caption under the grid and the
-  // Patients card's honest "First 300 shown, search for any patient" hint.
-  const active = patients.filter((p) => p.active).length;
-  const lapsed = patients.filter((p) => !p.active).length;
+  // Recall count below is over the bounded slice, NOT the whole book — hence the
+  // caption under the grid.
+  const activeInSlice = patients.filter((p) => p.active).length;
   const dueRecall = patients.filter((p) => p.recallDueAt && p.recallDueAt <= nowIso).length;
 
   return (
@@ -44,23 +54,29 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
         description="Your patient database, live from Dentally, searchable by name or contact with recall and last visit at a glance."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
-          label="Patients"
-          value={(exactTotal ?? patients.length).toLocaleString("en-GB")}
-          icon={Users}
+          label="Active patients"
+          value={(exactActive ?? activeInSlice).toLocaleString("en-GB")}
+          icon={UserCheck}
           hint={
-            exactTotal !== null
-              ? `${scope.isAllSites ? "Total across all sites" : `Total at ${scope.siteName}`}; first ${Math.min(patients.length, 300)} listed below`
-              : "First 300 shown, search for any patient"
+            exactActive !== null
+              ? scope.isAllSites
+                ? "Across all sites, counted nightly"
+                : `At ${scope.siteName}, counted nightly`
+              : "Among the patients listed below"
           }
         />
-        <StatCard label="Active" value={active} icon={UserCheck} hint="Currently active" />
-        <StatCard label="Lapsed" value={lapsed} icon={UserX} hint="Archived or inactive" />
-        <StatCard label="Due a recall" value={dueRecall} icon={CalendarClock} hint="Recall date passed" />
+        <StatCard
+          label="On record"
+          value={exactTotal !== null ? exactTotal.toLocaleString("en-GB") : "—"}
+          icon={Users}
+          hint="Whole book including archived records"
+        />
+        <StatCard label="Due a recall" value={dueRecall} icon={CalendarClock} hint="Among the patients listed below" />
       </div>
       <p className="-mt-1 text-xs text-muted">
-        Active, lapsed and recall counts reflect the patients listed below. Search to find any patient.
+        The list shows active patients (first {Math.min(patients.length, 300)}); search reaches everyone, including archived records.
       </p>
 
       <PatientsTable
