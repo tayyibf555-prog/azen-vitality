@@ -8,11 +8,23 @@ import {
 } from "./catalog";
 import { CLIENT_NAV } from "@/lib/nav";
 
+// Headless systems: they DO server-side work (a public surface) but have no
+// dashboard page, so no CLIENT_NAV slug exists for them. The systems control
+// panel renders from SYSTEMS directly, so they still get an owner switch.
+const HEADLESS_SYSTEM_SLUGS = new Set(["online-booking"]);
+
 describe("systems catalog", () => {
-  it("every system slug is a real CLIENT_NAV module", () => {
+  it("every non-headless system slug is a real CLIENT_NAV module", () => {
     const navSlugs = new Set(CLIENT_NAV.flatMap((g) => g.items.map((i) => i.slug)));
     for (const s of SYSTEMS) {
+      if (HEADLESS_SYSTEM_SLUGS.has(s.slug)) continue;
       expect(navSlugs.has(s.slug), `${s.slug} is not a known module slug`).toBe(true);
+    }
+  });
+
+  it("every headless system slug exists in the catalog (no stale exemptions)", () => {
+    for (const slug of HEADLESS_SYSTEM_SLUGS) {
+      expect(isControllableSystem(slug), `${slug} exempted but not in SYSTEMS`).toBe(true);
     }
   });
 

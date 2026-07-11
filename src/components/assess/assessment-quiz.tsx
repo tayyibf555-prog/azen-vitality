@@ -58,6 +58,8 @@ interface NextResponse {
 interface SubmitResult {
   band: "high" | "medium" | "low";
   message: string;
+  /** When set, the thank-you screen offers a direct link to the booking page. */
+  bookingUrl?: string;
 }
 
 interface Props {
@@ -279,7 +281,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; band?: string; message?: string; error?: string }
+        | { ok?: boolean; band?: string; message?: string; error?: string; bookingUrl?: unknown }
         | null;
       if (!res.ok || !data?.ok || !data.band || !data.message) {
         setError(
@@ -291,7 +293,11 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         setBusy(false);
         return;
       }
-      setResult({ band: data.band as SubmitResult["band"], message: data.message });
+      setResult({
+        band: data.band as SubmitResult["band"],
+        message: data.message,
+        bookingUrl: typeof data.bookingUrl === "string" && data.bookingUrl ? data.bookingUrl : undefined,
+      });
       setPhase("thanks");
     } catch {
       setError("Sorry, something went wrong. Please try again in a moment.");
@@ -687,6 +693,11 @@ function ThankYou({ result }: { result: SubmitResult }) {
       </span>
       <h1 className="text-2xl text-navy">Thank you</h1>
       <p className="max-w-sm text-sm text-muted">{result.message}</p>
+      {result.bookingUrl ? (
+        <Button asChild variant="primary" className="w-full sm:w-auto">
+          <a href={result.bookingUrl}>Book your appointment now</a>
+        </Button>
+      ) : null}
     </div>
   );
 }

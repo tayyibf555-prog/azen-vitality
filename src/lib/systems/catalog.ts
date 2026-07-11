@@ -14,8 +14,9 @@
 // conversations inbox) and owner tools (co-pilot, USPs, ROI, reports, settings)
 // are NOT listed: there is nothing to "halt", so there is no switch for them.
 //
-// Slugs match CLIENT_NAV (src/lib/nav.ts). Grouping mirrors how an owner thinks,
-// not the sidebar categories exactly.
+// Slugs match CLIENT_NAV (src/lib/nav.ts), except the documented headless
+// systems (public surfaces with no dashboard page, e.g. online-booking).
+// Grouping mirrors how an owner thinks, not the sidebar categories exactly.
 
 export interface SystemDef {
   /** CLIENT_NAV slug. */
@@ -84,6 +85,15 @@ export const SYSTEMS: SystemDef[] = [
     label: "Onboarding",
     group: "Acquisition",
     halts: "The public new-patient onboarding form goes offline.",
+  },
+  {
+    // Headless system: no dashboard page of its own (the switch lives in the
+    // systems control panel, which renders from SYSTEMS directly). Controls the
+    // PUBLIC /book page's ability to create real Dentally appointments.
+    slug: "online-booking",
+    label: "Online booking",
+    group: "Acquisition",
+    halts: "The public booking page stops taking appointments (availability stays viewable).",
   },
   // --- Conversational agents (inbound auto-reply) ---
   {

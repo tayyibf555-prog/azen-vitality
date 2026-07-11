@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   getActiveCampaignBySlug: vi.fn(async (..._a: unknown[]) => null as unknown),
   // Force a HIGH band so the bridge path is exercised whenever trust allows.
   scoreAssessment: vi.fn((..._a: unknown[]) => ({ rawScore: 95, band: "high" as const })),
+  // Default: every system on (matches the real fail-open default in tests).
+  isSystemEnabled: vi.fn(async (..._a: unknown[]) => true),
 }));
 
 vi.mock("@/lib/smile-assessment/repository", () => ({
@@ -45,6 +47,7 @@ vi.mock("@/lib/smile-assessment/scoring", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return { ...actual, scoreAssessment: h.scoreAssessment };
 });
+vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: h.isSystemEnabled }));
 
 import { POST } from "./route";
 
@@ -79,6 +82,7 @@ beforeEach(() => {
   h.countRecent.mockResolvedValue(0);
   h.findOpenLeadByAddress.mockResolvedValue(null);
   h.scoreAssessment.mockReturnValue({ rawScore: 95, band: "high" });
+  h.isSystemEnabled.mockImplementation(async () => true);
   vi.unstubAllEnvs();
   if (ORIG_KEY === undefined) delete process.env.SMILE_ASSESSMENT_SUBMIT_KEY;
   else process.env.SMILE_ASSESSMENT_SUBMIT_KEY = ORIG_KEY;
@@ -155,6 +159,23 @@ describe("submit — first-contact channel (demo: SMS)", () => {
     expect(h.insertLead).toHaveBeenCalledTimes(1);
     const arg = h.insertLead.mock.calls[0]![0] as { channel: string };
     expect(arg.channel).toBe("sms");
+  });
+});
+
+describe("submit — online-booking link-up", () => {
+  it("includes bookingUrl on success when online booking is on, omits it when off", async () => {
+    vi.stubEnv("NODE_ENV", "test"); // trusted
+    // ON (default mock): the success payload carries the public booking URL.
+    const on = await POST(req(GOOD));
+    expect(on.status).toBe(202);
+    const jOn = (await on.json()) as { bookingUrl?: string };
+    expect(jOn.bookingUrl).toBe("/book/vitality?site=site-cc");
+    // OFF for online-booking only (smile-assessment stays on): omitted entirely.
+    h.isSystemEnabled.mockImplementation(async (..._a: unknown[]) => _a[1] !== "online-booking");
+    const off = await POST(req(GOOD));
+    expect(off.status).toBe(202);
+    const jOff = (await off.json()) as { bookingUrl?: string };
+    expect(jOff.bookingUrl).toBeUndefined();
   });
 });
 

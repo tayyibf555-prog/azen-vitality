@@ -52,8 +52,11 @@ function clientIp(request: Request): string {
   return request.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
-function ok(band: string, message: string, leadCreated: boolean): Response {
-  return Response.json({ ok: true, band, message, leadCreated }, { status: 202 });
+function ok(band: string, message: string, leadCreated: boolean, bookingUrl?: string): Response {
+  return Response.json(
+    { ok: true, band, message, leadCreated, ...(bookingUrl ? { bookingUrl } : {}) },
+    { status: 202 },
+  );
 }
 
 function bad(message: string, status = 400): Response {
@@ -223,6 +226,13 @@ export async function POST(request: Request): Promise<Response> {
     // benign shape a skipped-bridge submission produces (never reveal it is off).
     const smileEnabled = await isSystemEnabled(client?.id ?? "", "smile-assessment");
 
+    // Online-booking link-up: EVERY band may book (finishing the assessment is
+    // the invitation), so the success response carries the public booking page
+    // URL whenever the client+site resolved and the online-booking system is on.
+    const bookingEnabled = client ? await isSystemEnabled(client.id, "online-booking") : false;
+    const bookingUrl =
+      client && bookingEnabled ? `/book/${client.slug}?site=${siteId}` : undefined;
+
     // BRIDGE: a high score with a reachable contact becomes a Speed-to-lead lead
     // and is contacted instantly. Consent is implied by submitting the quiz; the
     // chosen channel must have a deliverable address. If neither phone nor email
@@ -258,7 +268,7 @@ export async function POST(request: Request): Promise<Response> {
         const existing = await findOpenLeadByAddress(siteId, phone, email, sinceIso);
         if (existing) {
           await setResponseLead(response.id, existing.id);
-          return ok(band, BAND_MESSAGE[band], true);
+          return ok(band, BAND_MESSAGE[band], true, bookingUrl);
         }
         const lead = await insertLead({
           siteId,
@@ -307,7 +317,7 @@ export async function POST(request: Request): Promise<Response> {
     // A high scorer we didn't auto-contact (untrusted submit) gets the softer
     // "a team member will reach out" message, not "in moments".
     const message = band === "high" && !leadCreated ? BAND_MESSAGE.medium : BAND_MESSAGE[band];
-    return ok(band, message, leadCreated);
+    return ok(band, message, leadCreated, bookingUrl);
   } catch {
     // Never throw to the client.
     return bad("could not record your assessment", 500);
