@@ -22,6 +22,11 @@ export interface AgentRunDeps {
 }
 
 const DEFAULT_MAX_ROUNDS = 4;
+
+// Signatures of tool-call markup written into the TEXT channel (a rare model slip:
+// the call belongs in a tool_use block, never in prose a user will read). Matched
+// against the model's reply only, where XML of any kind is never legitimate copy.
+const LEAKED_TOOL_MARKUP = /<(?:antml:)?invoke\b|<function_calls|<tool_use\b|<parameter\b/i;
 const DEFAULT_MAX_TOKENS = 700;
 const MODEL = SONNET;
 
@@ -121,6 +126,24 @@ export async function runAgentTurn(
         .map((b) => b.text)
         .join("")
         .trim();
+      // Leaked tool-markup guard: rarely the model WRITES its tool call as plain
+      // text instead of emitting a real tool_use block, and that raw XML would
+      // otherwise be shown to the user verbatim. With rounds left, hand the slip
+      // back so the model re-issues the call through the tools interface; on the
+      // last round return empty so the caller's safe fallback copy is used.
+      if (LEAKED_TOOL_MARKUP.test(replyText)) {
+        console.warn("[agent] model wrote tool markup as plain text; retrying the round");
+        if (round < maxRounds - 1) {
+          messages.push({ role: "assistant", content: replyText });
+          messages.push({
+            role: "user",
+            content:
+              "SYSTEM NOTE: your previous message wrote a tool call as plain text, which the user must never see. Make the call through the tools interface for real, or answer in plain English with no tool markup.",
+          });
+          continue;
+        }
+        return { replyText: "", toolCalls, escalated };
+      }
       return { replyText, toolCalls, escalated };
     }
 
