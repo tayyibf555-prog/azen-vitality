@@ -30,6 +30,8 @@ vi.mock("@/lib/recall/repository", () => ({
   insertTouch: (...a: unknown[]) => insertTouch(...a),
   approveTouch: (...a: unknown[]) => approveTouch(...a),
   enqueueOutbox: (...a: unknown[]) => enqueueOutbox(...a),
+  // Daily-cap counter: 0 used, so the default limit never blocks these consent tests.
+  countContactedToday: async () => 0,
 }));
 vi.mock("@/lib/recall/draft", () => ({ draftRecall: (...a: unknown[]) => draftRecall(...a) }));
 vi.mock("@/lib/cron-lock", () => ({

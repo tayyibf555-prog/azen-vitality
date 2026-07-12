@@ -309,9 +309,11 @@ export async function POST(request: Request): Promise<Response> {
     // "today" for the cross-module frequency cap (a run cannot straddle local midnight).
     const today = londonDayKey(new Date());
     // Owner kill switch: a disabled system's outbox must not send. Fetch the
-    // disabled set once (fail-open: an error here returns an empty set, so a
-    // toggle-table blip never halts delivery — see systems/repository). Single
-    // client in the pilot, matching vitalitySiteIds().
+    // disabled set once. The ForSend variant FAILS CLOSED when messaging is live:
+    // a toggle-read error returns EVERY slug as disabled, so the whole tick skips
+    // rather than sending for a system the owner may have switched off. It behaves
+    // fail-open only under dry-run. Single client in the pilot, matching
+    // vitalitySiteIds().
     const disabledSlugs = await getDisabledSlugsForSend("vitality");
     let drained = 0, sent = 0, failed = 0, blocked = 0;
     const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};

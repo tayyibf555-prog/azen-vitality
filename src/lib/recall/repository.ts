@@ -1,4 +1,5 @@
 import { serviceClient } from "@/lib/supabase/server";
+import { londonDayKey } from "@/lib/time/london";
 import type {
   CadenceStatus,
   DraftedBy,
@@ -361,6 +362,55 @@ function rowToOutbox(r: OutboxRow): ReactivationOutboxItem {
     createdAt: r.created_at,
     sentAt: r.sent_at,
   };
+}
+
+/**
+ * The UTC instant of today's Europe/London midnight, as ISO. DST-correct: tries
+ * both possible UK offsets and keeps the one that renders as 00:00 on today's
+ * London date. Mirrors reactivation's settings.londonDayStartIso so the two daily
+ * caps bucket "today" by exactly the same London-day definition.
+ */
+function londonDayStartIso(now: Date): string {
+  const day = londonDayKey(now);
+  for (const offset of ["+01:00", "+00:00"]) {
+    const candidate = new Date(`${day}T00:00:00${offset}`);
+    const rendered = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/London",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hour12: false,
+    }).formatToParts(candidate);
+    const d = `${rendered.find((p) => p.type === "year")?.value}-${rendered.find((p) => p.type === "month")?.value}-${rendered.find((p) => p.type === "day")?.value}`;
+    const h = rendered.find((p) => p.type === "hour")?.value;
+    if (d === day && (h === "00" || h === "24")) return candidate.toISOString();
+  }
+  // Unreachable for the UK, but never throw over a date computation.
+  return new Date(`${day}T00:00:00Z`).toISOString();
+}
+
+/**
+ * How many recall messages have been queued so far today (Europe/London): counts
+ * recall_outbox rows created since London midnight. recall_outbox rows carry no
+ * origin marker and the sweep is the only automated writer, so counting ALL of
+ * today's inserts is the conservative measure — a manual/coordinator send tightens
+ * the remaining automated budget rather than bypassing it. On error returns 0 (the
+ * cap still applies from zero; a read blip never blocks the sweep). Mirrors
+ * reactivation.countContactedToday.
+ */
+export async function countContactedToday(now: Date): Promise<number> {
+  try {
+    const { count, error } = await serviceClient()
+      .from("recall_outbox")
+      .select("id", { count: "exact", head: true })
+      .gte("created_at", londonDayStartIso(now));
+    if (error) throw error;
+    return count ?? 0;
+  } catch (err) {
+    console.error("[recall] countContactedToday failed; assuming 0 used (cap still applies)", err);
+    return 0;
+  }
 }
 
 export async function insertTouch(input: {

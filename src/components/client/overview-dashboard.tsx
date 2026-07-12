@@ -237,6 +237,10 @@ export function OverviewDashboard({
   const revenueShare = allSites || clientRevenue <= 0 ? 1 : totalRevenue / clientRevenue;
   const trend = (metrics?.trend ?? []).map((t) => ({ ...t, value: Math.round(t.value * revenueShare) }));
 
+  // True only while the mock fixture stands in (live fetch still loading, empty,
+  // or errored): liveLeads is never set to an empty array, so null is the tell.
+  // Gates the sample-data caveat so invented enquiries never read as genuine.
+  const usingMockLeads = liveLeads === null;
   const leads = [...(liveLeads ?? LEADS)].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
@@ -361,7 +365,20 @@ export function OverviewDashboard({
             {
               key: "enquiries",
               label: "Recent enquiries",
-              content: (
+              content: usingMockLeads ? (
+                // Live speed-to-lead fetch returned nothing, so the mock fixture
+                // stands in; carry the same sample caption as the By site tab so
+                // fabricated enquiries never present as genuine.
+                <div className="space-y-3">
+                  <SampleNote>Sample data, not yet from your live sources.</SampleNote>
+                  <DataTable
+                    columns={ENQUIRY_COLUMNS}
+                    rows={leads}
+                    getRowKey={(l) => l.id}
+                    maxRows={6}
+                  />
+                </div>
+              ) : (
                 <DataTable
                   columns={ENQUIRY_COLUMNS}
                   rows={leads}
@@ -374,8 +391,9 @@ export function OverviewDashboard({
               key: "site",
               label: "By site",
               content: (
-                // The by-site table is all sample; the sibling "Recent enquiries"
-                // tab is LIVE, so the caption is scoped to this tab only.
+                // The by-site table is always sample, so its caption is scoped to
+                // this tab; the sibling "Recent enquiries" tab labels itself only
+                // when its own mock fallback is in use.
                 <div className="space-y-3">
                   <SampleNote>Sample data, not yet from your live sources.</SampleNote>
                   <DataTable

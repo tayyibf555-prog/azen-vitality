@@ -12,7 +12,7 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Azen x Vitality",
+  title: "Vitality Dental",
   description: "AI operations layer for the Vitality Dental Network, built on Dentally.",
 };
 

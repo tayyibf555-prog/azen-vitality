@@ -346,9 +346,9 @@ export async function POST(request: Request): Promise<Response> {
   // switched independently. When the relevant one is off, hand to a human with no
   // auto-reply. The inbound is already recorded above, and STOP/opt-out was
   // handled earlier, so turning the agent off never blocks opt-out.
-  const agentClientId = getSite(siteId)?.clientId;
+  const agentClientId = getSite(siteId)?.clientId ?? "vitality";
   const agentSystem = channel === "whatsapp" ? "whatsapp" : "booking-agent";
-  if (agentClientId && !(await isSystemEnabledForSend(agentClientId, agentSystem))) {
+  if (!(await isSystemEnabledForSend(agentClientId, agentSystem))) {
     await setConversationStatus(conversation.id, "needs_human");
     return twiml();
   }

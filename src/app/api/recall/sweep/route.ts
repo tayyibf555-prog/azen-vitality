@@ -13,6 +13,7 @@ import {
   insertTouch,
   approveTouch,
   enqueueOutbox,
+  countContactedToday,
 } from "@/lib/recall/repository";
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
@@ -31,6 +32,32 @@ function authorized(request: Request): boolean {
 
 function graceDays(): number {
   return Number(process.env.RECALL_GRACE_DAYS ?? 60);
+}
+
+// Conservative default for a 51k-patient base: enabling recall can never blast the
+// whole due cohort in a day. The owner can raise it later; no UI in this task.
+const RECALL_DEFAULT_DAILY_CONTACT_LIMIT = 25;
+
+/**
+ * The daily automated-contact cap (env RECALL_DAILY_CONTACT_LIMIT). Hardened like
+ * reactivation's fail-safe: an empty, non-numeric or negative value reverts to the
+ * default LOUDLY (console.error) so a misconfiguration is caught, never silently
+ * "unlimited". 0 is a valid "paused" value that queues nothing. Unset simply uses
+ * the default (the normal, non-configured case, no noise).
+ */
+function dailyContactLimit(): number {
+  const raw = process.env.RECALL_DAILY_CONTACT_LIMIT;
+  if (raw === undefined) return RECALL_DEFAULT_DAILY_CONTACT_LIMIT;
+  const trimmed = raw.trim();
+  const n = Number(trimmed);
+  // Number("") is 0, so the empty check must precede the numeric check.
+  if (trimmed === "" || !Number.isFinite(n) || n < 0) {
+    console.error(
+      `[recall] RECALL_DAILY_CONTACT_LIMIT="${raw}" is invalid; using default ${RECALL_DEFAULT_DAILY_CONTACT_LIMIT}`,
+    );
+    return RECALL_DEFAULT_DAILY_CONTACT_LIMIT;
+  }
+  return Math.floor(n);
 }
 
 function channelConsented(t: RecallTarget, channel: TouchChannel): boolean {
@@ -73,11 +100,21 @@ export async function POST(request: Request) {
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
+  // Daily automated-contact cap: at most this many recall messages are queued per
+  // Europe/London day, so enabling recall against the 51k-patient base can never
+  // blast the whole due cohort in a day. Every queued recall message counts toward
+  // the total, so a manual/coordinator send tightens the automated budget rather
+  // than bypassing it. Capped cadences stay due and continue tomorrow. Mirrors the
+  // reactivation sweep's cap.
+  const dailyLimit = dailyContactLimit();
+  const usedToday = await countContactedToday(now);
+
   let drafted = 0;
   let queued = 0;
   let exhausted = 0;
   let graduated = 0;
   let paused = 0;
+  let capped = 0;
 
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
@@ -116,6 +153,16 @@ export async function POST(request: Request) {
       await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
       await settleExhausted(target, now);
       paused += 1;
+      continue;
+    }
+
+    // Enforce the daily cap BEFORE drafting (a capped draft would count as a
+    // pending touch and freeze the cadence at the hasPending guard above; it would
+    // also cost an Anthropic call for nothing). Once the day's budget is spent the
+    // cadence simply stays due, so tomorrow's sweep continues where today stopped.
+    // Recall auto-sends every step, so this gate covers all its automated sends.
+    if (usedToday + queued >= dailyLimit) {
+      capped += 1;
       continue;
     }
 
@@ -170,6 +217,9 @@ export async function POST(request: Request) {
     paused,
     exhausted,
     graduated,
+    capped,
+    dailyLimit,
+    usedToday,
   });
   } finally {
     await releaseCronLock("sweep-recall");
