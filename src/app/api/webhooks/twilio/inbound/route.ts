@@ -35,6 +35,7 @@ import { runAgentTurn } from "@/lib/agent/run";
 import { dentallyAgentClient } from "@/lib/dentally/write";
 import { identifyByPhone } from "@/lib/agent/identify";
 import { checkAgentReply, SAFE_HANDOVER } from "@/lib/agent/guardrail";
+import { alertStaffHandover, type HandoverReason } from "@/lib/agent/alerts";
 import { claimInboundMessage } from "@/lib/agent/idempotency";
 import { tryAcquireLease, releaseCronLock } from "@/lib/cron-lock";
 import { consumeBudget } from "@/lib/rate-budget";
@@ -393,6 +394,7 @@ export async function POST(request: Request): Promise<Response> {
     } catch {
       // Reply logged; swallow delivery errors so Twilio does not retry.
     }
+    await alertStaffHandover({ patientName: displayName, reason: "throttled" });
     return twiml();
   }
 
@@ -463,6 +465,9 @@ export async function POST(request: Request): Promise<Response> {
   if (lease === "held") return twiml();
 
   let replyText = "";
+  // Set at the moment a handover happens, so staff can be pinged AFTER the
+  // patient-facing reply has gone out (the ping must never delay or break it).
+  let handoverReason: HandoverReason | null = null;
   try {
   try {
     const prior = await listMessages(conversation.id);
@@ -491,16 +496,19 @@ export async function POST(request: Request): Promise<Response> {
     if (!guard.ok) {
       replyText = SAFE_HANDOVER;
       await setConversationStatus(conversation.id, "needs_human");
+      handoverReason = "guardrail";
     } else {
       const booked = result.toolCalls.some((t) => t.name === "book");
       if (result.escalated || !replyText) {
         await setConversationStatus(conversation.id, "needs_human");
+        handoverReason = result.escalated ? "escalated" : "no_reply";
       } else if (booked) {
         await setConversationStatus(conversation.id, "booked");
       }
     }
   } catch {
     await setConversationStatus(conversation.id, "needs_human");
+    handoverReason = "agent_error";
   }
 
   const outbound = replyText || "Thanks, a member of our team will be in touch shortly.";
@@ -513,6 +521,11 @@ export async function POST(request: Request): Promise<Response> {
     // 200 and Twilio does not retry the webhook and double-run the agent. Leave the
     // conversation active so the agent keeps responding; delivery state is tracked
     // separately by the Twilio status webhook.
+  }
+  if (handoverReason) {
+    // AFTER the patient reply: ping the practice's alert number so a human picks
+    // the thread up. No-op until STAFF_ALERT_PHONE is set; never throws.
+    await alertStaffHandover({ patientName: displayName, reason: handoverReason });
   }
   } finally {
     await releaseCronLock(turnLock);
