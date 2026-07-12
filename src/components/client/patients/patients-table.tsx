@@ -188,7 +188,10 @@ export function PatientsTable({
   // Precedence: an active search overrides the filter; otherwise the selected segment
   // (server-rendered slice for the initial segment, fetched rows for the rest).
   const rows = searchActive ? serverResults ?? [] : loadedRows;
-  const loading = searchActive ? searching : filterLoading;
+  // serverResults === null counts as loading too: `searching` only flips true when
+  // the effect runs AFTER the first post-keystroke paint, so without it the table
+  // flashes "No patients match" for a frame before the spinner appears.
+  const loading = searchActive ? searching || serverResults === null : filterLoading;
 
   // The selected patient may live in the current rows OR the current search results.
   const selected =

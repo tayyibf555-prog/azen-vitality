@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
-import { Search, CornerDownLeft, Bot, User } from "lucide-react";
+import { Search, CornerDownLeft, Bot, User, Loader2 } from "lucide-react";
 import { CLIENT_NAV, navForRole } from "@/lib/nav";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { useModKey } from "@/components/platform/sidebar-shortcuts";
@@ -44,12 +44,18 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [patients, setPatients] = useState<Patient[]>([]);
+  // The query the current `patients` actually answer ("" = the initial bounded
+  // slice). Deriving "still searching" from this at render time means the very
+  // first paint after a keystroke already shows the searching state, with no
+  // effect-timing gap where a false "No results" can flash.
+  const [resultsFor, setResultsFor] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setQuery("");
     setActive(0);
+    setResultsFor("");
     const t = setTimeout(() => inputRef.current?.focus(), 0);
     fetch(`/api/dentally/patients?client=${encodeURIComponent(clientSlug)}`, { cache: "no-store" })
       .then((r) => r.json())
@@ -74,9 +80,15 @@ export function CommandPalette({
       )
         .then((r) => r.json())
         .then((d: { patients?: Patient[] }) => {
-          if (!stale) setPatients(d.patients ?? []);
+          if (!stale) {
+            setPatients(d.patients ?? []);
+            setResultsFor(q);
+          }
         })
-        .catch(() => {});
+        .catch(() => {
+          // A failed search settles to "No results" rather than a stuck spinner.
+          if (!stale) setResultsFor(q);
+        });
     }, 250);
     return () => {
       stale = true;
@@ -151,6 +163,9 @@ export function CommandPalette({
   if (!open) return null;
 
   const groups = Array.from(new Set(items.map((i) => i.group)));
+  // True from the first keystroke of a server-side search until ITS results land:
+  // the whole 51k base is being queried, which can take seconds on live Dentally.
+  const searchPending = query.trim().length >= 2 && resultsFor !== query.trim();
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") {
@@ -188,7 +203,7 @@ export function CommandPalette({
         </div>
 
         <div className="flex-1 overflow-y-auto py-2">
-          {items.length === 0 ? (
+          {items.length === 0 && !searchPending ? (
             <p className="px-4 py-8 text-center text-sm text-muted">No results.</p>
           ) : (
             groups.map((g) => (
@@ -220,6 +235,12 @@ export function CommandPalette({
               </div>
             ))
           )}
+          {searchPending ? (
+            <p className="flex items-center justify-center gap-2 px-4 py-3 text-xs text-muted">
+              <Loader2 size={13} className="animate-spin" />
+              Searching your patient database…
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
