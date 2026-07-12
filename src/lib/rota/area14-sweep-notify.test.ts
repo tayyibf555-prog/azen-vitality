@@ -24,6 +24,18 @@ const markNotified = vi.fn<(...a: unknown[]) => unknown>();
 const sendMessage = vi.fn<(...a: unknown[]) => unknown>();
 const generateShifts = vi.fn<(...a: unknown[]) => unknown>();
 
+// The routes under test consult the kill switch on every send path (fail-closed
+// once messaging is live); these tests exercise behaviour with everything ON.
+vi.mock("@/lib/messaging/suppression", () => ({
+  isSuppressed: async () => false,
+}));
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
+
 vi.mock("@/lib/rota/repository", () => ({
   listStaff: (...a: unknown[]) => listStaff(...a),
   getConfig: (...a: unknown[]) => getConfig(...a),

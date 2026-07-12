@@ -5,6 +5,8 @@ import { isSuppressed } from "@/lib/messaging/suppression";
 import { identifyByPhone } from "@/lib/agent/identify";
 import { DentallyClient } from "@/lib/dentally/client";
 import { insertCapture, markFollowUpSent, hasOpenCaptureFrom } from "@/lib/after-hours/repository";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
 import { isOutsideHours, getSiteById } from "@/lib/after-hours/hours";
 import { contactLead } from "@/lib/speed-to-lead/contact";
 import { insertLead, findOpenLeadByAddress, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
@@ -176,11 +178,20 @@ export async function POST(request: Request): Promise<Response> {
     // Check BOTH suppression forms: an unknown number's STOP is recorded by address,
     // but an identified patient's STOP is recorded as patient:<id>.
     try {
+      // Owner kill switch: with After-hours OFF the missed call is still captured
+      // for the worklist (above), but NOTHING is texted — neither the
+      // speed-to-lead bridge nor the bare fallback SMS. Fail-closed once
+      // messaging is live.
+      const afterHoursOn = await isSystemEnabledForSend(
+        getSite(siteId)?.clientId ?? "vitality",
+        "after-hours",
+      );
       const suppressed =
         (await isSuppressed(siteId, "sms", from)) ||
         (patientId ? await isSuppressed(siteId, "sms", `patient:${patientId}`) : false);
-      if (suppressed) {
-        // Suppressed: skip all outbound. The capture row remains for a manual callback.
+      if (suppressed || !afterHoursOn) {
+        // Suppressed or switched off: skip all outbound. The capture row remains
+        // for a manual callback.
       } else {
         // Bound the WHOLE bridge (dedup check + insert + claim + first contact) so it
         // can never stack on top of the identify time and push the response past

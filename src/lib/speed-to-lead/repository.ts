@@ -259,15 +259,22 @@ export async function recordFirstResponse(
 /**
  * Leads still uncontacted (stage 'new', no first response) older than the cutoff.
  * The SLA sweep picks these up when the in-request contact did not fire in time.
+ * Bounded to the last 48 hours (mirrors the drain's staleness guard): a lead
+ * stranded at 'new' for days — e.g. from before the system was switched on —
+ * must not get a "we just got your enquiry" text the moment the toggle flips.
  */
+const MAX_UNCONTACTED_AGE_MS = 48 * 60 * 60 * 1000;
+
 export async function listUncontacted(olderThanIso: string): Promise<SpeedToLeadLead[]> {
   const db = serviceClient();
+  const freshestIso = new Date(Date.now() - MAX_UNCONTACTED_AGE_MS).toISOString();
   const { data, error } = await db
     .from("speed_to_lead_lead")
     .select("*")
     .eq("stage", "new")
     .is("first_response_at", null)
     .lt("created_at", olderThanIso)
+    .gte("created_at", freshestIso)
     .order("created_at", { ascending: true });
   if (error) throw error;
   return (data as LeadRow[]).map(rowToLead);

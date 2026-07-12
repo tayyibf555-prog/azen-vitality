@@ -25,6 +25,15 @@ const CLIENTS: Record<string, { id: string; slug: string }> = {
   rival: { id: "rival", slug: "rival" },
 };
 
+// The routes under test consult the kill switch on every send path (fail-closed
+// once messaging is live); these tests exercise behaviour with everything ON.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
+
 vi.mock("@/lib/mock/clients", () => ({
   getSite: (id: string) => SITES[id],
   getSites: (clientId: string) => Object.values(SITES).filter((s) => s.clientId === clientId),

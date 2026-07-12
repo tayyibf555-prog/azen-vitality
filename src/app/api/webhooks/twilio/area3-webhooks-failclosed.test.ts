@@ -10,6 +10,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { computeTwilioSignature } from "@/lib/messaging/signature";
 
 // ---- module mocks (every DB/network seam the routes touch) ----
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
 vi.mock("@/lib/messaging/suppression", () => {
   const STOP = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit"]);
   return {

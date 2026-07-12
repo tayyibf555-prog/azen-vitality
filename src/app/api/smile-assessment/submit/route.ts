@@ -10,7 +10,7 @@ import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-reposit
 import { goalLabel } from "@/lib/smile-assessment/campaign";
 import { verifySubmitToken } from "@/lib/smile-assessment/embed-token";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabled, isSystemEnabledForSend } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -224,7 +224,7 @@ export async function POST(request: Request): Promise<Response> {
     // Owner kill-switch: if the smile-assessment system is off, still record the
     // response above but skip the outbound Speed-to-lead bridge, returning the same
     // benign shape a skipped-bridge submission produces (never reveal it is off).
-    const smileEnabled = await isSystemEnabled(client?.id ?? "", "smile-assessment");
+    const smileEnabled = await isSystemEnabledForSend(client?.id ?? "", "smile-assessment");
 
     // Online-booking link-up: EVERY band may book (finishing the assessment is
     // the invitation), so the success response carries the public booking page

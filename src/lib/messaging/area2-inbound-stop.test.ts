@@ -14,6 +14,15 @@ const findOrCreateConversation = vi.fn();
 const setConversationStatus = vi.fn();
 const runAgentTurn = vi.fn();
 
+// The routes under test consult the kill switch on every send path (fail-closed
+// once messaging is live); these tests exercise behaviour with everything ON.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
+
 vi.mock("@/lib/messaging/signature", () => ({ verifyTwilioSignature: () => true }));
 vi.mock("@/lib/messaging/suppression", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/messaging/suppression")>();

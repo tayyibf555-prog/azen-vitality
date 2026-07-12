@@ -43,7 +43,7 @@ import {
   markOutboxBlocked as markReviewsBlocked,
 } from "@/lib/reviews/repository";
 import { SITES } from "@/lib/mock/clients";
-import { getDisabledSlugs } from "@/lib/systems/repository";
+import { getDisabledSlugsForSend } from "@/lib/systems/repository";
 import { DRAIN_SOURCE_TO_SLUG } from "@/lib/systems/catalog";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
@@ -312,7 +312,7 @@ export async function POST(request: Request): Promise<Response> {
     // disabled set once (fail-open: an error here returns an empty set, so a
     // toggle-table blip never halts delivery — see systems/repository). Single
     // client in the pilot, matching vitalitySiteIds().
-    const disabledSlugs = await getDisabledSlugs("vitality");
+    const disabledSlugs = await getDisabledSlugsForSend("vitality");
     let drained = 0, sent = 0, failed = 0, blocked = 0;
     const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};
     const sourceErrors: string[] = [];

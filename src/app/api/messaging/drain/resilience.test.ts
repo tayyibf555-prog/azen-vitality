@@ -23,6 +23,12 @@ function row(id: string): Row {
 
 // Each module repo mock exposes the four functions the drain uses, under the
 // module's own export names.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
 vi.mock("@/lib/reactivation/repository", () => ({
   listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
   claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),

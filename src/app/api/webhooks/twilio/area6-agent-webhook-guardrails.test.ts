@@ -12,6 +12,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { computeTwilioSignature } from "@/lib/messaging/signature";
 
+// The routes under test consult the kill switch on every send path (fail-closed
+// once messaging is live); these tests exercise behaviour with everything ON.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
+
 vi.mock("@/lib/messaging/suppression", () => {
   const STOP = new Set(["stop", "stopall", "unsubscribe", "end", "quit"]);
   return {

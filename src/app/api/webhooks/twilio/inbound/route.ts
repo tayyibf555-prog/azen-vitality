@@ -48,7 +48,7 @@ import {
   isAgentEnabled,
 } from "@/lib/agent/repository";
 import type { AgentContext, PhoneIdentity } from "@/lib/agent/types";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabled, isSystemEnabledForSend } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -140,7 +140,15 @@ export async function POST(request: Request): Promise<Response> {
   // reply can never resolve or flip an offer belonging to a different site.
   // Writes (the CANCEL path) must go through the gated agent client so they use
   // the write key when enabled — the plain read client above cannot cancel.
-  const noshow = await handleNoshowInbound({ from, body, channel, dentally: dentallyAgentClient() });
+  // Owner kill switch: with No-show defence OFF, structured YES/CANCEL replies
+  // are NOT auto-answered — no reply SMS and no Dentally cancel. The inbound
+  // still falls through to the normal flow below, so it is recorded on the
+  // conversation for a human to answer. Single-tenant deployment, so the gate is
+  // client-level (matches the drain). Fail-closed once messaging is live.
+  let noshow: Awaited<ReturnType<typeof handleNoshowInbound>> = { handled: false };
+  if (await isSystemEnabledForSend("vitality", "no-show-defence")) {
+    noshow = await handleNoshowInbound({ from, body, channel, dentally: dentallyAgentClient() });
+  }
   if (noshow.handled) {
     if (noshow.reply) {
       try {
@@ -339,7 +347,7 @@ export async function POST(request: Request): Promise<Response> {
   // handled earlier, so turning the agent off never blocks opt-out.
   const agentClientId = getSite(siteId)?.clientId;
   const agentSystem = channel === "whatsapp" ? "whatsapp" : "booking-agent";
-  if (agentClientId && !(await isSystemEnabled(agentClientId, agentSystem))) {
+  if (agentClientId && !(await isSystemEnabledForSend(agentClientId, agentSystem))) {
     await setConversationStatus(conversation.id, "needs_human");
     return twiml();
   }

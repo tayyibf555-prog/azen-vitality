@@ -47,7 +47,7 @@ vi.mock("@/lib/smile-assessment/scoring", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return { ...actual, scoreAssessment: h.scoreAssessment };
 });
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: h.isSystemEnabled }));
+vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: h.isSystemEnabled, isSystemEnabledForSend: h.isSystemEnabled }));
 
 import { POST } from "./route";
 

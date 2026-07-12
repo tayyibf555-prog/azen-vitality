@@ -19,6 +19,15 @@ const markFollowUpSent = vi.fn(async (..._a: unknown[]) => undefined);
 let openCapture = false;
 const hasOpenCaptureFrom = vi.fn(async (..._a: unknown[]) => openCapture);
 
+// The routes under test consult the kill switch on every send path (fail-closed
+// once messaging is live); these tests exercise behaviour with everything ON.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
+
 vi.mock("@/lib/after-hours/repository", () => ({
   insertCapture: (...a: unknown[]) => insertCapture(...a),
   markFollowUpSent: (...a: unknown[]) => markFollowUpSent(...a),

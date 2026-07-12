@@ -1,5 +1,6 @@
 import { serviceClient } from "@/lib/supabase/server";
-import { SYSTEMS } from "./catalog";
+import { isDryRun } from "@/lib/messaging/types";
+import { SYSTEMS, SYSTEM_SLUGS } from "./catalog";
 
 // Persistence for the per-system kill switch (table system_toggle, migration 0034).
 //
@@ -54,6 +55,64 @@ export async function getDisabledSlugs(clientId: string): Promise<Set<string>> {
   } catch (err) {
     console.error(`[systems] getDisabledSlugs(${clientId}) failed; defaulting to none disabled`, err);
     return new Set();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SEND-PATH variants — FAIL CLOSED once messaging is live.
+//
+// Once MESSAGING_DRY_RUN is off, the kill switch is the ONLY barrier between the
+// 24/7 crons/webhooks and a real Twilio send. The fail-open default above is
+// right for DISPLAY surfaces (a toggle-table blip must not blank the nav), but at
+// a send choke point the same blip would silently re-arm every disabled system.
+// So: while dry-run is on these behave exactly like the fail-open versions; once
+// messaging is LIVE, a failed toggle read counts as DISABLED (skip the send —
+// a skipped tick self-heals, a ghost send does not).
+// ---------------------------------------------------------------------------
+
+/** isSystemEnabled for send choke points: fail-open in dry-run, CLOSED when live. */
+export async function isSystemEnabledForSend(clientId: string, slug: string): Promise<boolean> {
+  try {
+    const { data, error } = await serviceClient()
+      .from(TABLE)
+      .select("enabled")
+      .eq("client_id", clientId)
+      .eq("module_slug", slug)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? Boolean(data.enabled) : true; // no row => enabled
+  } catch (err) {
+    const failOpen = isDryRun();
+    console.error(
+      `[systems] isSystemEnabledForSend(${clientId}, ${slug}) failed; ` +
+        (failOpen ? "dry-run so defaulting to enabled" : "messaging is LIVE so failing CLOSED (disabled)"),
+      err,
+    );
+    return failOpen;
+  }
+}
+
+/**
+ * getDisabledSlugs for the drain: fail-open in dry-run; when messaging is LIVE a
+ * failed read returns EVERY slug as disabled, so the drain skips the whole tick.
+ */
+export async function getDisabledSlugsForSend(clientId: string): Promise<Set<string>> {
+  try {
+    const { data, error } = await serviceClient()
+      .from(TABLE)
+      .select("module_slug")
+      .eq("client_id", clientId)
+      .eq("enabled", false);
+    if (error) throw error;
+    return new Set((data ?? []).map((r) => String((r as { module_slug: string }).module_slug)));
+  } catch (err) {
+    const failOpen = isDryRun();
+    console.error(
+      `[systems] getDisabledSlugsForSend(${clientId}) failed; ` +
+        (failOpen ? "dry-run so defaulting to none disabled" : "messaging is LIVE so failing CLOSED (all disabled)"),
+      err,
+    );
+    return failOpen ? new Set() : new Set(SYSTEM_SLUGS);
   }
 }
 

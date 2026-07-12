@@ -1,6 +1,7 @@
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { sendMessage } from "@/lib/messaging/send";
+import { isSuppressed } from "@/lib/messaging/suppression";
 import { CLIENTS, getSites, getSite } from "@/lib/mock/clients";
 import { generateShifts, upcomingWeekStarts } from "@/lib/rota/generate";
 import { londonDayKey } from "@/lib/time/london";
@@ -15,7 +16,7 @@ import {
 } from "@/lib/rota/repository";
 import type { OpeningHours } from "@/lib/types";
 import type { RotaShift, RotaStaff, RotaSite } from "@/lib/rota/types";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +91,7 @@ export async function POST(request: Request): Promise<Response> {
 
     for (const client of CLIENTS) {
       // Owner kill switch: skip this client's rota entirely when disabled.
-      if (!(await isSystemEnabled(client.id, "rota"))) continue;
+      if (!(await isSystemEnabledForSend(client.id, "rota"))) continue;
 
       const config = await getConfig(client.id);
 
@@ -122,6 +123,22 @@ export async function POST(request: Request): Promise<Response> {
         // No phone on file -> cannot text; leave the shifts unnotified so a later run
         // picks them up once a number is added. (No consent gate: staff are employees.)
         if (!person || !person.phone) {
+          skippedNoPhone += 1;
+          continue;
+        }
+
+        // Honour an opt-out even for staff: a number that texted STOP must not
+        // keep receiving rota texts. Shifts stay unnotified (visible on the rota
+        // page); remove the number from the rota to silence permanently. A failed
+        // read counts as suppressed (fail closed): the skip self-heals next run,
+        // a wrong send does not.
+        let staffSuppressed = true;
+        try {
+          staffSuppressed = await isSuppressed(staffShifts[0]?.siteId ?? "", "sms", person.phone);
+        } catch {
+          staffSuppressed = true;
+        }
+        if (staffSuppressed) {
           skippedNoPhone += 1;
           continue;
         }

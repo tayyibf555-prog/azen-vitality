@@ -29,6 +29,15 @@ function emptyOutbox() {
   };
 }
 
+// The routes under test consult the kill switch on every send path (fail-closed
+// once messaging is live); these tests exercise behaviour with everything ON.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+}));
+
 vi.mock("@/lib/dentally/client", () => ({ DentallyClient: class {} }));
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
 vi.mock("@/lib/messaging/resolve", () => ({ resolveRecipient: (...a: unknown[]) => resolveRecipient(...a) }));

@@ -108,6 +108,7 @@ vi.mock("@/lib/mock/clients", () => ({
 // Owner kill switch: the drain reads the disabled set once per run.
 vi.mock("@/lib/systems/repository", () => ({
   getDisabledSlugs: async () => new Set(fakes.disabledSlugs),
+  getDisabledSlugsForSend: async () => new Set(fakes.disabledSlugs),
 }));
 
 // The cross-module daily frequency cap is exercised in its own test; here it must
