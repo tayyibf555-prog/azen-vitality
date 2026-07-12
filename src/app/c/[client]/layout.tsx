@@ -16,18 +16,21 @@ export default async function ClientLayout({
   params: Promise<{ client: string }>;
 }) {
   const { client } = await params;
-  await guardPage({
-    roles: ["agency_admin", "client_owner", "client_coordinator"],
-    clientSlug: client,
-  });
-  // Systems the owner switched off are hidden from the sidebar. Resolved here
-  // (server-side) so every role gets the filtered nav without calling the
-  // owner-only systems API. Fail-open: getDisabledSlugs never throws.
   const clientRecord = getClient(client);
-  const disabledSlugs = clientRecord ? [...(await getDisabledSlugs(clientRecord.id))] : [];
-  // The switcher opens on the current selection (default N15) so its label matches
-  // the site the dashboard is actually showing.
-  const selectedSite = clientRecord ? await getViewSiteSelection(clientRecord.id) : undefined;
+  // The three loads are independent, so they run CONCURRENTLY: the guard (auth,
+  // 2 sequential Supabase hops), the sidebar's switched-off systems (1 hop,
+  // fail-open display read - never throws), and the site-switcher cookie (free).
+  // Serialising them added a needless hop to every entry into the client area;
+  // a guard redirect still wins because Promise.all rejects with it.
+  const [, disabled, selectedSite] = await Promise.all([
+    guardPage({
+      roles: ["agency_admin", "client_owner", "client_coordinator"],
+      clientSlug: client,
+    }),
+    clientRecord ? getDisabledSlugs(clientRecord.id) : Promise.resolve(new Set<string>()),
+    clientRecord ? getViewSiteSelection(clientRecord.id) : Promise.resolve(undefined),
+  ]);
+  const disabledSlugs = [...disabled];
   return (
     <div className="flex min-h-screen bg-cream">
       <ClientSidebar disabledSlugs={disabledSlugs} />

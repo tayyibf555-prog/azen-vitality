@@ -107,11 +107,12 @@ async function buildNoshowSection(ctx: BriefContext): Promise<BriefSection> {
 
 async function buildArrivingValueSection(ctx: BriefContext): Promise<BriefSection> {
   const today = dayKey(ctx.now);
-  const appts = await safe(() => listAppointments(ctx.siteIds, { from: today, to: today }), []);
-  const opps = await safe(
-    () => listOpportunities({ siteIds: ctx.siteIds, statuses: ["accepted", "in_progress"] }),
-    [],
-  );
+  // Independent reads, fetched concurrently (the appointments call is usually a
+  // request-memo hit, but a cold one must not serialise in front of the plans).
+  const [appts, opps] = await Promise.all([
+    safe(() => listAppointments(ctx.siteIds, { from: today, to: today }), []),
+    safe(() => listOpportunities({ siteIds: ctx.siteIds, statuses: ["accepted", "in_progress"] }), []),
+  ]);
 
   // Cross-reference: patients with an open opportunity who have an appointment
   // today. Match on the patient name present on both records (the diary read
@@ -151,18 +152,16 @@ async function buildArrivingValueSection(ctx: BriefContext): Promise<BriefSectio
 }
 
 async function buildChaseSection(ctx: BriefContext): Promise<BriefSection> {
-  const recall = await safe(
-    () => listRecallTargets({ siteIds: ctx.siteIds, statuses: ["due", "in_cadence"] }),
-    [],
-  );
-  const reactivation = await safe(
-    () => listReactivationTargets({ siteIds: ctx.siteIds, statuses: ["dormant", "in_cadence"] }),
-    [],
-  );
-  const opps = await safe(
-    () => listOpportunities({ siteIds: ctx.siteIds, statuses: ["accepted", "in_progress"] }),
-    [],
-  );
+  // Three independent reads, fetched concurrently: serialising them put two
+  // needless round trips on the Home page's critical path.
+  const [recall, reactivation, opps] = await Promise.all([
+    safe(() => listRecallTargets({ siteIds: ctx.siteIds, statuses: ["due", "in_cadence"] }), []),
+    safe(
+      () => listReactivationTargets({ siteIds: ctx.siteIds, statuses: ["dormant", "in_cadence"] }),
+      [],
+    ),
+    safe(() => listOpportunities({ siteIds: ctx.siteIds, statuses: ["accepted", "in_progress"] }), []),
+  ]);
 
   const items: BriefLine[] = [];
   if (recall.length > 0) {

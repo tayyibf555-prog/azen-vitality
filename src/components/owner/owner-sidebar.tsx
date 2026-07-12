@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { NavProgressBar } from "@/components/platform/nav-progress";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { Gauge, Wand2, BrainCircuit, LogOut, Search } from "lucide-react";
@@ -142,6 +143,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
 
   return (
     <>
+      <NavProgressBar active={pendingHref !== null} />
       {navOpen ? (
         <div
           onClick={() => setNavOpen(false)}
@@ -235,6 +237,10 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
                         href={e.href}
                         title={e.label}
                         aria-current={active ? "page" : undefined}
+                        // Hover/focus intent starts the full dynamic prefetch (the
+                        // default does nothing for dynamic routes with no loading.tsx).
+                        onMouseEnter={() => router.prefetch(e.href)}
+                        onFocus={() => router.prefetch(e.href)}
                         onClick={markPending(e.href)}
                         className={cn(
                           "group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",

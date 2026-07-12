@@ -54,21 +54,17 @@ export async function getTodayDiary(
   const siteName = new Map(sites.map((s) => [s.id, s.name]));
   const today = londonDayKey(now);
 
-  // Both reads are best-effort: a Dentally or DB hiccup renders an empty rail,
-  // never a broken Home page.
-  let appts: Awaited<ReturnType<typeof listAppointments>> = [];
-  try {
-    appts = await listAppointments(siteIds, { from: today, to: today });
-  } catch {
-    appts = [];
-  }
-  let riskApptIds = new Set<string>();
-  try {
-    const targets = await listTargets({ siteIds, statuses: ["scheduled"], riskBands: ["high"] });
-    riskApptIds = new Set(targets.map((t) => t.appointmentId));
-  } catch {
-    riskApptIds = new Set();
-  }
+  // Both reads are best-effort (a Dentally or DB hiccup renders an empty rail,
+  // never a broken Home page) and independent, so they run concurrently rather
+  // than stacking two round trips on the Home page's critical path.
+  const [appts, riskApptIds] = await Promise.all([
+    listAppointments(siteIds, { from: today, to: today }).catch(
+      () => [] as Awaited<ReturnType<typeof listAppointments>>,
+    ),
+    listTargets({ siteIds, statuses: ["scheduled"], riskBands: ["high"] })
+      .then((targets) => new Set(targets.map((t) => t.appointmentId)))
+      .catch(() => new Set<string>()),
+  ]);
 
   // Keep only today's rows (defensive against an upstream range quirk), sorted.
   const rows = appts

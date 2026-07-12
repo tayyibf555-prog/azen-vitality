@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { NavProgressBar } from "@/components/platform/nav-progress";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { LogOut, Search } from "lucide-react";
 import { categoriesForRole } from "@/lib/nav";
@@ -95,6 +96,7 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
 
   return (
     <>
+      <NavProgressBar active={pendingHref !== null} />
       {navOpen ? (
         <div
           onClick={() => setNavOpen(false)}
@@ -189,6 +191,12 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
                         href={href}
                         title={item.label}
                         aria-current={active ? "page" : undefined}
+                        // Hover/focus intent starts the full dynamic prefetch, so by
+                        // the time the click lands the page is often already cached
+                        // (default prefetch does nothing for dynamic routes with no
+                        // loading.tsx). Production-only by Next's design.
+                        onMouseEnter={() => router.prefetch(href)}
+                        onFocus={() => router.prefetch(href)}
                         onClick={(e) => {
                           // Plain left-click only (not cmd/ctrl/shift = open in new tab).
                           if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {

@@ -16,14 +16,17 @@ export default async function OwnerLayout({
   params: Promise<{ client: string }>;
 }) {
   const { client } = await params;
-  await guardPage({ roles: ["agency_admin", "client_owner"], clientSlug: client });
-  // Switched-off systems drop out of the owner sidebar too (System controls is
-  // never a controllable system, so it stays visible to switch them back on).
   const clientRecord = getClient(client);
-  const disabledSlugs = clientRecord ? [...(await getDisabledSlugs(clientRecord.id))] : [];
-  // The switcher opens on the current selection (default N15) so its label matches
-  // the site the owner pages are actually showing.
-  const selectedSite = clientRecord ? await getViewSiteSelection(clientRecord.id) : undefined;
+  // Independent loads run CONCURRENTLY (see c/[client]/layout.tsx): guard, the
+  // owner sidebar's switched-off systems (System controls itself is never a
+  // controllable system, so it stays visible to switch them back on), and the
+  // site-switcher cookie. A guard redirect still wins via Promise.all rejection.
+  const [, disabled, selectedSite] = await Promise.all([
+    guardPage({ roles: ["agency_admin", "client_owner"], clientSlug: client }),
+    clientRecord ? getDisabledSlugs(clientRecord.id) : Promise.resolve(new Set<string>()),
+    clientRecord ? getViewSiteSelection(clientRecord.id) : Promise.resolve(undefined),
+  ]);
+  const disabledSlugs = [...disabled];
   return (
     <div className="flex min-h-screen bg-cream">
       <OwnerSidebar disabledSlugs={disabledSlugs} />
