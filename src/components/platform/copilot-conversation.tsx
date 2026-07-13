@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Send, Loader2, CalendarDays, PoundSterling, AlertTriangle, TrendingUp, type LucideIcon } from "lucide-react";
+import { Send, Loader2, Bot, X, CalendarDays, PoundSterling, AlertTriangle, TrendingUp, type LucideIcon } from "lucide-react";
 
 interface Msg {
   role: "user" | "assistant";
@@ -43,9 +43,11 @@ const SUGGESTIONS: { label: string; prompt: string; icon: LucideIcon; tint: stri
 export function CopilotConversation({
   clientSlug,
   autoFocus = true,
+  onClose,
 }: {
   clientSlug: string;
   autoFocus?: boolean;
+  onClose?: () => void;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -82,18 +84,64 @@ export function CopilotConversation({
     }
   }
 
+  const hasThread = messages.length > 0 || busy;
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className={cn("flex-1 space-y-3 px-1 py-1", messages.length ? "overflow-y-auto" : "overflow-hidden")}>
-        {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-2 text-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/copilot-logo.png" alt="Vitality Dental" className="h-16 w-16 object-contain" />
-            <h2 className="mt-4 text-lg font-extrabold text-navy">How can I help?</h2>
-            <p className="mt-1 max-w-md text-sm text-muted">
-              I can see everything for the site you have selected. Ask about a patient, today&apos;s diary, outstanding balances, or how things are going.
-            </p>
-            <div className="mt-5 grid w-full max-w-lg grid-cols-1 gap-2 sm:grid-cols-2">
+    // Bottom-docked: a floating card (identity + starter prompts, or the growing
+    // conversation) sits directly above a slim ask-bar. Nothing fills the screen.
+    <div className="flex flex-col gap-2">
+      <div className="overflow-hidden rounded-2xl border border-line bg-card shadow-[0_20px_55px_rgba(11,32,73,0.30)]">
+        <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-royal text-white">
+              <Bot size={15} />
+            </span>
+            <div className="leading-tight">
+              <p className="text-[13px] font-extrabold text-navy">Co-pilot</p>
+              <p className="text-[10px] text-muted">Full visibility of your practice</p>
+            </div>
+          </div>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-card-muted hover:text-navy"
+            >
+              <X size={16} />
+            </button>
+          ) : null}
+        </header>
+
+        {hasThread ? (
+          <div className="max-h-[48vh] space-y-3 overflow-y-auto px-4 py-4">
+            {messages.map((m, i) => (
+              <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+                <div
+                  className={cn(
+                    "max-w-[88%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+                    m.role === "user"
+                      ? "rounded-br-sm bg-blue-dark text-white"
+                      : "rounded-bl-sm border border-line bg-card-muted text-ink",
+                  )}
+                >
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {busy ? (
+              <div className="flex justify-start">
+                <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-line bg-card-muted px-3.5 py-2.5 text-xs text-muted">
+                  <Loader2 size={14} className="animate-spin" /> Looking that up…
+                </div>
+              </div>
+            ) : null}
+            <div ref={endRef} />
+          </div>
+        ) : (
+          <div className="px-3 py-3">
+            <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">Try asking</p>
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
               {SUGGESTIONS.map((s) => {
                 const Icon = s.icon;
                 return (
@@ -102,7 +150,7 @@ export function CopilotConversation({
                     type="button"
                     onClick={() => send(s.prompt)}
                     disabled={busy}
-                    className="group flex items-center gap-3 rounded-xl border border-line bg-card px-3 py-2.5 text-left transition-all hover:-translate-y-0.5 hover:border-line-strong hover:shadow-[0_6px_16px_rgba(20,45,95,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="group flex items-center gap-3 rounded-xl border border-line bg-card-muted/40 px-3 py-2.5 text-left transition-all hover:-translate-y-0.5 hover:border-line-strong hover:bg-card hover:shadow-[0_6px_16px_rgba(20,45,95,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", s.tint)}>
                       <Icon size={16} />
@@ -113,57 +161,32 @@ export function CopilotConversation({
               })}
             </div>
           </div>
-        ) : (
-          messages.map((m, i) => (
-            <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
-              <div
-                className={cn(
-                  "max-w-[88%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
-                  m.role === "user"
-                    ? "rounded-br-sm bg-blue-dark text-white"
-                    : "rounded-bl-sm border border-line bg-card-muted text-ink",
-                )}
-              >
-                {m.content}
-              </div>
-            </div>
-          ))
         )}
-        {busy ? (
-          <div className="flex justify-start">
-            <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-line bg-card-muted px-3.5 py-2.5 text-xs text-muted">
-              <Loader2 size={14} className="animate-spin" /> Looking that up…
-            </div>
-          </div>
-        ) : null}
-        <div ref={endRef} />
       </div>
 
-      <div className="pt-3">
-        <div className="flex items-center gap-2 rounded-xl border border-line-strong bg-card px-3 py-2">
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send(input);
-              }
-            }}
-            placeholder="Ask the co-pilot anything"
-            className="w-full bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={() => send(input)}
-            disabled={busy || !input.trim()}
-            aria-label="Send"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-dark text-white transition-opacity disabled:opacity-40"
-          >
-            <Send size={15} />
-          </button>
-        </div>
+      <div className="flex items-center gap-2 rounded-2xl border border-line-strong bg-card px-3 py-2.5 shadow-[0_20px_55px_rgba(11,32,73,0.30)]">
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send(input);
+            }
+          }}
+          placeholder="Ask the co-pilot anything"
+          className="w-full bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => send(input)}
+          disabled={busy || !input.trim()}
+          aria-label="Send"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-dark text-white transition-opacity disabled:opacity-40"
+        >
+          <Send size={15} />
+        </button>
       </div>
     </div>
   );
