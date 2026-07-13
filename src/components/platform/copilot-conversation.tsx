@@ -2,12 +2,43 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, CalendarDays, PoundSterling, AlertTriangle, TrendingUp, type LucideIcon } from "lucide-react";
 
 interface Msg {
   role: "user" | "assistant";
   content: string;
 }
+
+// Starter prompts shown on the empty state. Each maps to a real co-pilot tool
+// (appointments / outstanding_balances / no-show risk / practice_overview) so a
+// click returns live data rather than a dead end. Clicking one sends it straight
+// away, so a first-time user never faces a blank box.
+const SUGGESTIONS: { label: string; prompt: string; icon: LucideIcon; tint: string }[] = [
+  {
+    label: "What's in today's diary?",
+    prompt: "What's in today's diary?",
+    icon: CalendarDays,
+    tint: "bg-blue-dark/10 text-blue-dark",
+  },
+  {
+    label: "Who has an outstanding balance?",
+    prompt: "Which patients have an outstanding balance?",
+    icon: PoundSterling,
+    tint: "bg-emerald-500/10 text-emerald-600",
+  },
+  {
+    label: "Any high no-show risks today?",
+    prompt: "Are there any high no-show risks in today's diary?",
+    icon: AlertTriangle,
+    tint: "bg-amber-500/10 text-amber-600",
+  },
+  {
+    label: "How is the practice doing this week?",
+    prompt: "How is the practice doing this week?",
+    icon: TrendingUp,
+    tint: "bg-violet-500/10 text-violet-600",
+  },
+];
 
 export function CopilotConversation({
   clientSlug,
@@ -53,15 +84,34 @@ export function CopilotConversation({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 space-y-3 overflow-y-auto px-1 py-1">
+      <div className={cn("flex-1 space-y-3 px-1 py-1", messages.length ? "overflow-y-auto" : "overflow-hidden")}>
         {messages.length === 0 ? (
-          <div className="flex min-h-full flex-col items-center justify-center px-2 py-6 text-center">
+          <div className="flex h-full flex-col items-center justify-center px-2 text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/copilot-logo.png" alt="Vitality Dental" className="h-20 w-20 object-contain" />
+            <img src="/copilot-logo.png" alt="Vitality Dental" className="h-16 w-16 object-contain" />
             <h2 className="mt-4 text-lg font-extrabold text-navy">How can I help?</h2>
-            <p className="mt-1 max-w-sm text-sm text-muted">
+            <p className="mt-1 max-w-md text-sm text-muted">
               I can see everything for the site you have selected. Ask about a patient, today&apos;s diary, outstanding balances, or how things are going.
             </p>
+            <div className="mt-5 grid w-full max-w-lg grid-cols-1 gap-2 sm:grid-cols-2">
+              {SUGGESTIONS.map((s) => {
+                const Icon = s.icon;
+                return (
+                  <button
+                    key={s.label}
+                    type="button"
+                    onClick={() => send(s.prompt)}
+                    disabled={busy}
+                    className="group flex items-center gap-3 rounded-xl border border-line bg-card px-3 py-2.5 text-left transition-all hover:-translate-y-0.5 hover:border-line-strong hover:shadow-[0_6px_16px_rgba(20,45,95,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", s.tint)}>
+                      <Icon size={16} />
+                    </span>
+                    <span className="text-[13px] font-semibold leading-snug text-navy">{s.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : (
           messages.map((m, i) => (

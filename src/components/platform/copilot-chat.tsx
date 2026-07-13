@@ -17,13 +17,20 @@ export function CopilotChat({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[60]">
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-navy/40 backdrop-blur-[1px]" />
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[440px] flex-col border-l border-line bg-card shadow-2xl">
+    // Centred command-centre panel (was a right-hand drawer): the co-pilot now
+    // opens over the page like the command palette, so the shortcut lands it in
+    // the middle of the screen with its starter prompts front and centre.
+    <div className="fixed inset-0 z-[60] flex items-start justify-center p-4 pt-[8vh]">
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-navy/45 backdrop-blur-[2px]" />
+      <div
+        role="dialog"
+        aria-label="Co-pilot"
+        className="relative z-10 flex h-[600px] max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-[0_24px_70px_rgba(11,32,73,0.35)]"
+      >
         <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-dark/10 text-blue-dark">
-              <Bot size={16} />
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-royal text-white shadow-sm">
+              <Bot size={18} />
             </span>
             <div>
               <p className="text-sm font-extrabold text-navy">Co-pilot</p>
@@ -42,7 +49,7 @@ export function CopilotChat({
         <div className="min-h-0 flex-1 px-4 py-4">
           <CopilotConversation clientSlug={clientSlug} />
         </div>
-      </aside>
+      </div>
     </div>
   );
 }
