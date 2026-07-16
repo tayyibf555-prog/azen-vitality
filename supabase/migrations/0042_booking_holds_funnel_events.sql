@@ -57,7 +57,7 @@ alter table booking_hold enable row level security;
 create table if not exists funnel_event (
   id uuid primary key default gen_random_uuid(),
   client_id text not null,
-  surface text not null,                      -- assessment | booking
+  surface text not null,                      -- assessment | booking | landing (no CHECK: validated in app)
   campaign_id uuid,                           -- reserved; null for now
   session_id text not null,                   -- client-generated random, NO PII
   step text not null,                         -- started | question_answered | ...
