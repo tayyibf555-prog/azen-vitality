@@ -138,6 +138,7 @@ const fakes = vi.hoisted(() => {
       noshow: makeModule(),
       coordinator: makeModule(),
       reviews: makeModule(),
+      outreach: makeModule(),
     },
     resolveRecipient: vi.fn(),
     sendMessage: vi.fn(),
@@ -161,6 +162,7 @@ vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
+vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
 vi.mock("@/lib/dentally/client", () => ({
   DentallyClient: class DentallyClient {
     constructor(_opts: unknown) {}
@@ -197,7 +199,7 @@ vi.mock("@/lib/messaging/frequency", () => ({
 import { addSuppression } from "@/lib/messaging/suppression";
 import { POST } from "./route";
 
-const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews"] as const;
+const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
 type Source = (typeof ALL_SOURCES)[number];
 
 const SITE = "site-stop";

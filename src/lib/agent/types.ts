@@ -55,6 +55,17 @@ export interface AgentContext {
    * most convenient practice. It can only search/book at its own siteId.
    */
   practiceSites?: { id: string; name: string; bookingUrl?: string }[];
+  /**
+   * Present when this conversation is a reply to a segment-outreach invite. It
+   * primes the agent to offer the invited clinician's slots first (find_slots
+   * defaults to this practitioner when set) and to frame the visit around the
+   * campaign's treatment angle. `treatmentAngle` is patient-facing safe wording.
+   */
+  outreachInvite?: {
+    treatmentAngle: string;
+    practitionerName: string | null;
+    practitionerId: string | null;
+  };
 }
 
 /** A patient resolved from an inbound phone number. */

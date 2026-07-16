@@ -38,7 +38,7 @@ const fakes = vi.hoisted(() => {
     makeModule,
     modules: {
       reactivation: makeModule(), recall: makeModule(), noshow: makeModule(),
-      coordinator: makeModule(), reviews: makeModule(),
+      coordinator: makeModule(), reviews: makeModule(), outreach: makeModule(),
     },
     resolveRecipient: vi.fn(),
     // In-memory stand-in for message_daily_log: the drain's real cap logic runs against it.
@@ -63,6 +63,7 @@ vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
+vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
 vi.mock("@/lib/dentally/client", () => ({
   DentallyClient: class DentallyClient { constructor(_o: unknown) {} },
   DentallyError: class DentallyError extends Error { constructor(public status: number, m: string) { super(m); } },
@@ -88,7 +89,7 @@ vi.mock("@/lib/messaging/frequency", () => ({
 
 import { POST } from "./route";
 
-const ALL = ["reactivation", "recall", "noshow", "coordinator", "reviews"] as const;
+const ALL = ["reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
 const fetchSpy = vi.fn(async () => { throw new Error("no network in test"); });
 
 function seed(module: (typeof ALL)[number], overrides: Partial<FakeRow> = {}): FakeRow {

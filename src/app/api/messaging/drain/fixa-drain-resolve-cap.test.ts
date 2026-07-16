@@ -41,6 +41,7 @@ const fakes = vi.hoisted(() => {
       noshow: makeModule(),
       coordinator: makeModule(),
       reviews: makeModule(),
+      outreach: makeModule(),
     },
     resolveRecipient: vi.fn(),
   };
@@ -61,6 +62,7 @@ vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
+vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
 vi.mock("@/lib/dentally/client", () => ({
   DentallyClient: class DentallyClient { constructor(_opts: unknown) {} },
   // Mirror the real error class so the drain's permanent-vs-transient check
@@ -87,7 +89,7 @@ vi.mock("@/lib/messaging/frequency", () => ({
 
 import { POST } from "./route";
 
-const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews"] as const;
+const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
 const fetchSpy = vi.fn(async () => { throw new Error("network egress attempted in test"); });
 
 function seed(module: (typeof ALL_SOURCES)[number]): FakeRow {

@@ -47,6 +47,23 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     );
   }
 
+  // Segment-outreach invite: this conversation is a reply to a campaign that invited
+  // the patient back for a specific reason, ideally with a specific clinician. Prime
+  // the agent to offer that clinician's slots first and frame the visit around the
+  // invitation, while keeping every other rule intact.
+  if (ctx.outreachInvite) {
+    const inv = ctx.outreachInvite;
+    lines.push(
+      "",
+      "WHY THEY ARE MESSAGING:",
+      `We recently invited this patient back for ${inv.treatmentAngle}.`,
+      inv.practitionerName
+        ? `They were invited to see ${inv.practitionerName}. When you call find_slots, offer ${inv.practitionerName}'s availability first; find_slots already prefers that clinician. Only if the patient asks to see someone else or wants more options, call find_slots again with practitionerId set to "any" to show every clinician.`
+        : "Help them book the visit they were invited for.",
+      "Be warm and make it easy to book. Do not describe this as marketing, and never mention how their care is funded.",
+    );
+  }
+
   // Location routing for new enquiries: one number serves the whole group, so the
   // agent asks where they are based and points them at the nearest practice.
   const sites = ctx.practiceSites ?? [];

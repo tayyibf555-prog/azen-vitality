@@ -11,7 +11,9 @@ import { CLIENT_NAV } from "@/lib/nav";
 // Headless systems: they DO server-side work (a public surface) but have no
 // dashboard page, so no CLIENT_NAV slug exists for them. The systems control
 // panel renders from SYSTEMS directly, so they still get an owner switch.
-const HEADLESS_SYSTEM_SLUGS = new Set(["online-booking"]);
+// "outreach" is headless too: the segment outreach engine ships before its UI
+// workstream, so it has no CLIENT_NAV page yet but still needs an owner kill switch.
+const HEADLESS_SYSTEM_SLUGS = new Set(["online-booking", "outreach"]);
 
 describe("systems catalog", () => {
   it("every non-headless system slug is a real CLIENT_NAV module", () => {
@@ -44,9 +46,9 @@ describe("systems catalog", () => {
     for (const [source, slug] of Object.entries(DRAIN_SOURCE_TO_SLUG)) {
       expect(isControllableSystem(slug), `${source} -> ${slug} not controllable`).toBe(true);
     }
-    // The drain has exactly these five outbox sources.
+    // The drain has exactly these six outbox sources.
     expect(Object.keys(DRAIN_SOURCE_TO_SLUG).sort()).toEqual(
-      ["coordinator", "noshow", "reactivation", "recall", "reviews"].sort(),
+      ["coordinator", "noshow", "outreach", "reactivation", "recall", "reviews"].sort(),
     );
     // The tricky remaps are correct.
     expect(DRAIN_SOURCE_TO_SLUG.noshow).toBe("no-show-defence");

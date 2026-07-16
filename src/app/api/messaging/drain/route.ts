@@ -42,6 +42,13 @@ import {
   markOutboxFailed as markReviewsFailed,
   markOutboxBlocked as markReviewsBlocked,
 } from "@/lib/reviews/repository";
+import {
+  listQueuedOutbox as listOutreachQueued,
+  claimOutbox as claimOutreach,
+  recordOutboxSent as recordOutreachSent,
+  markOutboxFailed as markOutreachFailed,
+  markOutboxBlocked as markOutreachBlocked,
+} from "@/lib/outreach/repository";
 import { SITES } from "@/lib/mock/clients";
 import { getDisabledSlugsForSend } from "@/lib/systems/repository";
 import { DRAIN_SOURCE_TO_SLUG } from "@/lib/systems/catalog";
@@ -110,6 +117,10 @@ const SOURCES: OutboxSource[] = [
   { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
   { name: "coordinator", list: listCoordinatorQueued, claim: claimCoordinator, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },
   { name: "reviews", list: listReviewsQueued, claim: claimReviews, recordSent: recordReviewsSent, markFailed: markReviewsFailed, markBlocked: markReviewsBlocked },
+  // Segment outreach drains LAST: it is a deliberate campaign, so it yields its
+  // once-per-day slot to every automatic lifecycle message (recall/reactivation/
+  // coordinator/reviews) already established for a recipient.
+  { name: "outreach", list: listOutreachQueued, claim: claimOutreach, recordSent: recordOutreachSent, markFailed: markOutreachFailed, markBlocked: markOutreachBlocked },
 ];
 
 async function drainSource(

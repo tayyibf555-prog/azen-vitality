@@ -1,0 +1,220 @@
+import { draftOutreach } from "@/lib/outreach/draft";
+import { stepDef, advanceAfter, OUTREACH_CADENCE } from "@/lib/outreach/cadence";
+import {
+  listRunningCampaigns,
+  listDueTargets,
+  getTarget,
+  listTouches,
+  insertTouch,
+  approveTouch,
+  enqueueOutbox,
+  advanceTarget,
+  countContactedToday,
+} from "@/lib/outreach/repository";
+import type { OutreachCampaign, OutreachTarget } from "@/lib/outreach/types";
+import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
+// Single-client pilot; every outreach campaign belongs to Vitality. The kill switch
+// and drain are keyed at the client level to match the rest of the platform.
+const CLIENT_ID = "vitality";
+
+function authorized(request: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return process.env.NODE_ENV !== "production"; // fail-closed in production
+  return request.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+function patientToRef(t: OutreachTarget): string {
+  return `patient:${t.patientId}`;
+}
+
+/** The outreach cadence is SMS-only, so a target must have SMS consent to be messaged. */
+function consented(t: OutreachTarget): boolean {
+  return t.consent.sms;
+}
+
+interface CampaignResult {
+  id: string;
+  dailyLimit: number;
+  usedToday: number;
+  queued: number;
+  drafted: number;
+  capped: number;
+  paused: number;
+  exhausted: number;
+  excluded: number;
+}
+
+async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<CampaignResult> {
+  const r: CampaignResult = {
+    id: campaign.id,
+    dailyLimit: campaign.dailyCap,
+    usedToday: await countContactedToday(campaign.id, now),
+    queued: 0,
+    drafted: 0,
+    capped: 0,
+    paused: 0,
+    exhausted: 0,
+    excluded: 0,
+  };
+
+  const due = await listDueTargets(campaign.id, now.toISOString());
+  for (const stale of due) {
+    // Re-read the target so concurrent state (an inbound reply flipping it to
+    // 'replied') is respected even within a single run.
+    const target = await getTarget(stale.id);
+    if (!target) continue;
+    if (target.status !== "pending" && target.status !== "contacted") continue;
+
+    // Skip if an outbound touch is already pending (approved-but-unsent): without
+    // this the next sweep would draft a SECOND message for the same step and the
+    // drain would send both. Mirrors the recall sweep predicate exactly.
+    const touches = await listTouches(target.id);
+    const hasPending = touches.some(
+      (t) => t.direction !== "inbound" && t.status !== "sent" && t.status !== "failed",
+    );
+    if (hasPending) {
+      r.paused += 1;
+      continue;
+    }
+
+    const step = stepDef(target.currentStep + 1, OUTREACH_CADENCE);
+    if (!step) {
+      // Cadence complete: settle exhausted so the target leaves the due set.
+      await advanceTarget(target.id, {
+        currentStep: target.currentStep,
+        status: "exhausted",
+        nextDueAt: null,
+        endedAt: now.toISOString(),
+      });
+      r.exhausted += 1;
+      continue;
+    }
+
+    // No consent for the SMS cadence: settle 'excluded' rather than pausing forever,
+    // so the target is not stuck in limbo. Consent is acted on at send time (here),
+    // not at build time, per the campaign contract.
+    if (!consented(target)) {
+      await advanceTarget(target.id, {
+        currentStep: target.currentStep,
+        status: "excluded",
+        nextDueAt: null,
+        endedAt: now.toISOString(),
+      });
+      r.excluded += 1;
+      continue;
+    }
+
+    // Enforce the per-campaign daily cap BEFORE drafting: a capped draft would count
+    // as a pending touch and freeze the target at the hasPending guard above, and
+    // would cost an Anthropic call for nothing. Once the day's budget is spent the
+    // target simply stays due, so tomorrow's sweep continues where today stopped.
+    if (r.usedToday + r.queued >= r.dailyLimit) {
+      r.capped += 1;
+      continue;
+    }
+
+    // Draft (guardrail-checked inside draftOutreach, with a safe fallback), approve,
+    // advance, then queue. Advancing BEFORE the enqueue means a kill between here and
+    // the enqueue skips this step next run rather than re-sending it (a skipped
+    // message beats a double-send). Mirrors the recall sweep ordering.
+    const { body } = await draftOutreach(target, campaign, step.channel, step);
+    const touch = await insertTouch({
+      targetId: target.id,
+      campaignId: campaign.id,
+      siteId: target.siteId,
+      step: step.step,
+      channel: step.channel,
+      body,
+      draftedBy: "claude",
+      status: "draft",
+    });
+    r.drafted += 1;
+
+    await approveTouch(touch.id, "auto");
+
+    const adv = advanceAfter(step.step, now, OUTREACH_CADENCE);
+    await advanceTarget(target.id, {
+      currentStep: adv.currentStep,
+      status: adv.status === "exhausted" ? "exhausted" : "contacted",
+      nextDueAt: adv.nextDueAt,
+      endedAt: adv.endedAt,
+    });
+
+    // Leave the outbox row 'queued' so the shared drain delivers it via Twilio and
+    // writes to_address (what inbound reply correlation matches on). The drain also
+    // applies consent-independent suppression + the cross-module one-per-day cap.
+    await enqueueOutbox({
+      touchId: touch.id,
+      siteId: target.siteId,
+      channel: step.channel,
+      toRef: patientToRef(target),
+      body,
+    });
+    r.queued += 1;
+  }
+
+  return r;
+}
+
+export async function POST(request: Request): Promise<Response> {
+  if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  // Owner kill switch, fail-closed on the send path: with outreach OFF (its default),
+  // nothing is drafted or queued. This is the primary gate on a system that seeds
+  // disabled and only runs during a supervised client test.
+  if (!(await isSystemEnabledForSend(CLIENT_ID, "outreach"))) {
+    return Response.json({ ok: true, skipped: "system off" });
+  }
+
+  // Never overlap with another outreach sweep: two runs would both see the same due
+  // targets and draft+queue duplicates. Lease OUTLIVES maxDuration (300s) so a slow
+  // run cannot be lapped; a crashed run self-heals ~10s after the platform kills it.
+  if (!(await acquireCronLock("sweep-outreach", 310))) {
+    return Response.json({ ok: true, skipped: "another run in progress" });
+  }
+
+  try {
+    const now = new Date();
+    const campaigns = await listRunningCampaigns();
+    const results: CampaignResult[] = [];
+    let drafted = 0, queued = 0, paused = 0, capped = 0, exhausted = 0, excluded = 0, swept = 0;
+    for (const campaign of campaigns) {
+      // Isolate each campaign: one campaign's failure (a DB blip on its targets)
+      // must not abort the others' sends for this tick.
+      try {
+        const res = await sweepCampaign(campaign, now);
+        results.push(res);
+        drafted += res.drafted; queued += res.queued; paused += res.paused;
+        capped += res.capped; exhausted += res.exhausted; excluded += res.excluded;
+        swept += res.queued + res.capped + res.paused + res.exhausted + res.excluded;
+      } catch (err) {
+        console.error(`[outreach] sweep failed for campaign ${campaign.id}; skipping`, err);
+      }
+    }
+    return Response.json({
+      ok: true,
+      campaigns: campaigns.length,
+      swept,
+      drafted,
+      queued,
+      paused,
+      capped,
+      exhausted,
+      excluded,
+      // Convenience for a single-campaign run (and the daily-cap test): surface the
+      // one campaign's budget at the top level.
+      ...(results.length === 1 ? { dailyLimit: results[0].dailyLimit, usedToday: results[0].usedToday } : {}),
+      detail: results,
+    });
+  } finally {
+    await releaseCronLock("sweep-outreach");
+  }
+}
+
+// Vercel Cron triggers with GET; reuse the same handler.
+export const GET = POST;

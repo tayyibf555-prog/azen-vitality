@@ -14,6 +14,13 @@ import {
   updateCadence as updateRecallCadence,
   insertInboundTouch as insertRecallInboundTouch,
 } from "@/lib/recall/repository";
+import {
+  findTargetByAddress as findOutreachTargetByAddress,
+  insertInboundTouch as insertOutreachInboundTouch,
+  setTargetStatus as setOutreachTargetStatus,
+  getCampaignIdForTarget as getOutreachCampaignIdForTarget,
+  getCampaign as getOutreachCampaign,
+} from "@/lib/outreach/repository";
 import { handleNoshowInbound } from "@/lib/noshow/inbound";
 import {
   findTargetByAddress as findCoordinatorTargetByAddress,
@@ -257,6 +264,45 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
+  // Segment-outreach reply linkage. A reply from an outreach target pauses its
+  // cadence (status 'replied') so the sweep stops texting once the patient engages,
+  // and carries a campaign HINT into the agent context below so the booking agent
+  // offers the campaign's clinician first. Correlated by the resolved to_address of
+  // the last send (exactly the recall pattern), not the raw phone, so it matches the
+  // precise address messaged. Best-effort: any lookup failure must never break the
+  // webhook, so the whole block is guarded.
+  let outreachInvite: AgentContext["outreachInvite"] | undefined;
+  try {
+    const outreachTarget = await findOutreachTargetByAddress(from);
+    if (outreachTarget) {
+      const campaignId = await getOutreachCampaignIdForTarget(outreachTarget.targetId);
+      await insertOutreachInboundTouch({
+        targetId: outreachTarget.targetId,
+        campaignId,
+        siteId: outreachTarget.siteId,
+        channel,
+        body,
+      });
+      // Pause: 'replied' is excluded from the sweep's due set and clears next_due_at.
+      await setOutreachTargetStatus(outreachTarget.targetId, "replied", {
+        nextDueAt: null,
+        endedAt: new Date().toISOString(),
+      });
+      if (campaignId) {
+        const campaign = await getOutreachCampaign(campaignId);
+        if (campaign) {
+          outreachInvite = {
+            treatmentAngle: campaign.messageAngle ?? "an appointment",
+            practitionerName: campaign.practitionerName,
+            practitionerId: campaign.practitionerId,
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[inbound] outreach reply linkage failed; continuing", err);
+  }
+
   // STOP keyword: suppress the right ref and do not reply.
   if (isStopKeyword(body)) {
     // A failed suppression WRITE must not surface a 500: Twilio would retry the
@@ -446,6 +492,7 @@ export async function POST(request: Request): Promise<Response> {
     usps,
     assessmentAnswers,
     practiceSites,
+    outreachInvite,
   };
 
   // Serialize agent turns per conversation: two rapid inbounds (distinct
