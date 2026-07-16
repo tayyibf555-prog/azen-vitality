@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
+import { StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, gbp, num, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
@@ -201,23 +201,33 @@ export function PatientsTable({
 
   const emptyCopy = FILTER_EMPTY[filter];
 
+  // py-3.5 on every cell gives the unboxed table a more generous vertical rhythm
+  // than the shared default without touching the primitive.
   const columns: Column<PatientRecord>[] = [
-    { key: "name", header: "Patient", cell: (p) => <span className="font-semibold text-navy">{p.name}</span> },
+    {
+      key: "name",
+      header: "Patient",
+      cell: (p) => <span className="font-semibold text-navy">{p.name}</span>,
+      className: "py-3.5",
+    },
     {
       key: "contact",
       header: "Contact",
       cell: (p) => <span className="text-muted">{p.phone ?? p.email ?? "No contact"}</span>,
+      className: "py-3.5",
     },
     {
       key: "site",
       header: "Site",
       cell: (p) => <span className="text-muted">{getSite(p.siteId)?.name ?? p.siteId}</span>,
+      className: "py-3.5",
     },
     {
       key: "last",
       header: "Last visit",
       cell: (p) => <span className="text-muted">{p.lastVisitAt ? relativeTime(p.lastVisitAt, now) : "No record"}</span>,
       align: "right",
+      className: "py-3.5",
     },
     {
       key: "recall",
@@ -229,6 +239,7 @@ export function PatientsTable({
           <span className="text-muted">Not set</span>
         ),
       align: "right",
+      className: "py-3.5",
     },
     {
       key: "status",
@@ -238,17 +249,27 @@ export function PatientsTable({
         return <StatusPill tone={s.tone}>{s.label}</StatusPill>;
       },
       align: "right",
+      className: "py-3.5",
     },
   ];
 
   return (
     <>
-      <SectionCard
-        title="All patients"
-        description="Click a patient to open their record."
-        actions={
+      {/* Unboxed list (aesthetic-shell): a hairline section header carrying the
+          title, the segment pills and the search field; the table itself sits on
+          hairline dividers and whitespace rather than inside a card. */}
+      <section>
+        <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line pb-3">
+          <div className="space-y-1">
+            <h3 className="text-title text-navy">All patients</h3>
+            <p className="text-caption text-muted">Click a patient to open their record.</p>
+          </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
-            <div className="inline-flex flex-wrap gap-1 rounded-full border border-line-strong bg-card p-1" role="group" aria-label="Filter patients">
+            <div
+              className="inline-flex flex-wrap gap-1 rounded-full border border-line bg-card p-1 shadow-chip"
+              role="group"
+              aria-label="Filter patients"
+            >
               {FILTERS.map(({ key, label }) => {
                 const active = filter === key;
                 return (
@@ -258,8 +279,8 @@ export function PatientsTable({
                     aria-pressed={active}
                     onClick={() => setFilter(key)}
                     className={cn(
-                      "rounded-full px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
-                      active ? "bg-blue-dark text-white shadow-sm" : "text-muted hover:text-ink",
+                      "pressable rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
+                      active ? "bg-navy text-on-navy shadow-sm" : "text-muted hover:text-ink",
                     )}
                   >
                     {label}
@@ -268,22 +289,21 @@ export function PatientsTable({
               })}
             </div>
             <div className="relative">
-              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search name, phone or email"
-                className="w-64 rounded-full border border-line-strong bg-card py-1.5 pl-9 pr-9 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+                className="w-64 rounded-full border border-line bg-card py-2 pl-9 pr-9 text-sm text-ink shadow-chip placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
               />
               {searching ? (
                 <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted" />
               ) : null}
             </div>
           </div>
-        }
-        bodyClassName="p-0"
-      >
-        <p className="flex items-center gap-2 border-b border-line px-5 py-2.5 text-xs text-muted">
+        </header>
+
+        <p className="flex items-center gap-2 border-b border-line px-3 py-2.5 text-caption text-muted">
           {searchActive ? "Search results" : FILTER_CAPTION[filter]}
           {loading ? <Loader2 size={12} className="animate-spin" /> : null}
         </p>
@@ -292,7 +312,7 @@ export function PatientsTable({
           rows={rows}
           getRowKey={(p) => p.id}
           onRowClick={(p) => setSelectedId(p.id)}
-          className="px-2 py-1"
+          className="pt-1"
           empty={
             <EmptyState
               title={loading ? "Loading…" : searchActive ? "No patients match" : emptyCopy.title}
@@ -303,11 +323,11 @@ export function PatientsTable({
                     ? "Try a different search."
                     : emptyCopy.description
               }
-              className="m-4"
+              className="mt-4"
             />
           }
         />
-      </SectionCard>
+      </section>
 
       {selected ? <PatientDrawer patient={selected} now={now} onClose={() => setSelectedId(null)} /> : null}
     </>

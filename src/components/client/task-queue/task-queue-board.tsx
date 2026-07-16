@@ -37,12 +37,15 @@ export function TaskQueueBoard({
   maxRows,
   title = "Worklist",
   description = "The next thing to do, ranked. Working from the top keeps the practice ahead of every lead, recall and plan.",
+  plain,
 }: {
   clientSlug: string;
   /** Cap the visible rows (Home embed). A "View all" link appears when truncated. */
   maxRows?: number;
   title?: string;
   description?: string;
+  /** Render as a plain hairline section instead of a boxed card (Home). */
+  plain?: boolean;
 }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,6 +174,7 @@ export function TaskQueueBoard({
 
   return (
     <SectionCard
+      plain={plain}
       title={title}
       description={description}
       actions={
@@ -178,7 +182,7 @@ export function TaskQueueBoard({
           type="button"
           onClick={() => setMineOnly((v) => !v)}
           className={cn(
-            "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+            "pressable rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
             mineOnly
               ? "border-navy bg-navy text-on-navy"
               : "border-line-strong bg-card text-muted hover:bg-card-muted",
@@ -195,7 +199,7 @@ export function TaskQueueBoard({
             type="button"
             onClick={() => setKindFilter(null)}
             className={cn(
-              "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+              "pressable rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
               kindFilter === null
                 ? "border-navy bg-navy text-on-navy"
                 : "border-line-strong bg-card text-muted hover:bg-card-muted",
@@ -209,7 +213,7 @@ export function TaskQueueBoard({
               type="button"
               onClick={() => setKindFilter((k) => (k === kind ? null : kind))}
               className={cn(
-                "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+                "pressable rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
                 kindFilter === kind
                   ? "border-navy bg-navy text-on-navy"
                   : "border-line-strong bg-card text-muted hover:bg-card-muted",
@@ -245,14 +249,13 @@ export function TaskQueueBoard({
             }
           />
         ) : (
-          <ul className="space-y-2.5">
+          // Hairline list rows (Apple-style restraint) instead of boxed row cards:
+          // dividers + vertical rhythm carry the separation.
+          <ul className="divide-y divide-line">
             {shown.map((task) => {
               const busy = busyKey?.key === task.key;
               return (
-                <li
-                  key={task.key}
-                  className="rounded-xl border border-line bg-card px-4 py-3 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
-                >
+                <li key={task.key} className="px-1 py-3.5 first:pt-1">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -362,12 +365,12 @@ export function TaskQueueBoard({
               );
             })}
             {truncated > 0 ? (
-              <li>
+              <li className="px-1 py-3">
                 <a
                   href={`/c/${clientSlug}/task-queue`}
-                  className="flex min-h-[40px] items-center justify-center rounded-xl border border-dashed border-line-strong px-4 text-xs font-semibold text-blue-dark transition-colors hover:bg-card-muted"
+                  className="text-caption font-semibold text-blue-dark hover:underline"
                 >
-                  View all {visible.length} tasks
+                  View all {visible.length} tasks →
                 </a>
               </li>
             ) : null}

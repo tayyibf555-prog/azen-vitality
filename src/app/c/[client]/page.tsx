@@ -1,14 +1,9 @@
-import {
-  CalendarDays,
-  PhoneMissed,
-  PoundSterling,
-  ShieldAlert,
-  Clock,
-  Sparkles,
-} from "lucide-react";
-import { PageHeader, StatCard } from "@/components/primitives";
+import { Clock, Sparkles } from "lucide-react";
+import { PageHeader } from "@/components/primitives";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
-import { DiaryRail } from "@/components/client/home/diary-rail";
+import { DiaryTimeline } from "@/components/client/home/diary-timeline";
+import { MiniMonth } from "@/components/client/home/mini-month";
+import { NeedsAttention } from "@/components/client/home/needs-attention";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
@@ -22,11 +17,11 @@ import { gbp } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-// "One Front Door": the landing page IS the working page. The old Today page and
-// the Daily brief's day summary fold in here; the live task queue is the centre.
-// A receptionist gets "what now" in one glance and the list refreshes as she
-// works it; the owner additionally gets the proof-of-value band below (server-
-// gated — coordinators never receive that markup).
+// "One Front Door": the landing page IS the working page, arranged to the
+// approved aesthetic study. The diary timeline is the hero, a rail carries the
+// month at a glance and what needs attention, and the day's numbers, worklist
+// and owner band follow as hairline-separated sections. Nothing shown to the
+// client before this layout has been removed; it has been repositioned.
 
 function longDate(now: Date): string {
   return now.toLocaleDateString("en-GB", {
@@ -35,6 +30,25 @@ function longDate(now: Date): string {
     month: "long",
     timeZone: "Europe/London",
   });
+}
+
+/** A quiet big-numeral text stat (the aesthetic-shell replacement for stat cards). */
+function NumberStat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string | number;
+  hint: string;
+}) {
+  return (
+    <div>
+      <p className="text-label text-muted">{label}</p>
+      <p className="mt-1 text-display tabular-nums text-navy">{value}</p>
+      <p className="mt-0.5 text-caption text-muted">{hint}</p>
+    </div>
+  );
 }
 
 export default async function ClientHomePage({
@@ -64,7 +78,7 @@ export default async function ClientHomePage({
 
   // Both data loads are best-effort: a failed read renders an empty section, never
   // a broken landing page.
-  // The two loads run CONCURRENTLY: the diary rail no longer waits behind the whole
+  // The two loads run CONCURRENTLY: the diary no longer waits behind the whole
   // brief (nor behind the brief's slowest builder). Each has its own fallback so a
   // failed read renders empty, never a broken page. They share ONE underlying
   // today-appointments fetch (listAppointments is request-memoized), so running them
@@ -92,11 +106,12 @@ export default async function ClientHomePage({
     })),
   ]);
 
-  // Day stats, computed the same way the Daily brief page computes them.
+  // Day figures, computed the same way the Daily brief page computes them.
   const noshowLine = brief.sections.find((s) => s.key === "noshow")?.items[0];
   const overnightLine = brief.sections.find((s) => s.key === "overnight")?.items[0];
   const moneyLine = brief.sections.find((s) => s.key === "money")?.items[0];
   const headline = brief.headline[0] ?? null;
+  const riskCount = diary.slots.filter((s) => s.state === "risk").length;
   // Scope the recovered-revenue figure to the selected site(s) (default N15) so it
   // matches the rest of the dashboard rather than always summing every practice.
   const recovered = getSiteMetrics(siteIds).reduce((sum, s) => sum + s.recoveredRevenue, 0);
@@ -105,11 +120,11 @@ export default async function ClientHomePage({
   return (
     <>
       {/* Day header: the 3-second answer. */}
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-navy">{longDate(now)}</h1>
-            <p className="mt-0.5 text-sm text-muted">
+            <h1 className="text-display text-navy">{longDate(now)}</h1>
+            <p className="mt-1 text-body text-muted">
               {isOwner
                 ? scope.isAllSites
                   ? "Here is the morning picture across your sites. Start at the top."
@@ -125,43 +140,7 @@ export default async function ClientHomePage({
           ) : null}
         </div>
 
-        <div className={isOwner ? "grid grid-cols-2 gap-4 lg:grid-cols-5" : "grid grid-cols-2 gap-4 lg:grid-cols-4"}>
-          <StatCard
-            label="Appointments today"
-            value={brief.appointmentsToday}
-            icon={CalendarDays}
-            hint={scope.isAllSites ? "Across your sites" : scope.siteName ?? undefined}
-          />
-          <StatCard
-            label="To confirm"
-            value={noshowLine?.count ?? 0}
-            icon={ShieldAlert}
-            hint="High no-show risk"
-          />
-          <StatCard
-            label="Overnight"
-            value={overnightLine?.count ?? 0}
-            icon={PhoneMissed}
-            hint="Missed after hours"
-          />
-          <StatCard
-            label="Outstanding"
-            value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)}
-            icon={PoundSterling}
-            hint="Owed across plans"
-          />
-          {isOwner ? (
-            <StatCard
-              emphasis
-              label="Recovered this month"
-              value={gbp(recovered)}
-              icon={PoundSterling}
-              hint="Pilot figure until live data connects"
-            />
-          ) : null}
-        </div>
-
-        <p className="text-sm text-muted">
+        <p className="text-body text-muted">
           <Sparkles size={14} className="mr-1.5 inline-block align-[-2px] text-blue-dark" aria-hidden="true" />
           {headline ? (
             <>
@@ -176,21 +155,70 @@ export default async function ClientHomePage({
         </p>
       </section>
 
-      {/* The working centre: the live queue beside today's diary. */}
-      <div className="grid items-start gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <TaskQueueBoard
-            clientSlug={clientSlug}
-            maxRows={8}
-            title="Next actions"
-            description="The highest-priority work across every module. Finish one and the next slides in."
+      {/* Hero: the diary timeline beside the month + needs-attention rail. */}
+      <div className="grid items-start gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_332px]">
+        <DiaryTimeline
+          diary={diary}
+          clientSlug={clientSlug}
+          stats={{
+            booked: brief.appointmentsToday,
+            toConfirm: noshowLine?.count ?? 0,
+            gaps: diary.gapCount,
+          }}
+        />
+        <aside className="space-y-6">
+          <MiniMonth
+            now={now}
+            counts={{
+              booked: brief.appointmentsToday,
+              toConfirm: noshowLine?.count ?? 0,
+              risk: riskCount,
+            }}
           />
-        </div>
-        <DiaryRail diary={diary} clientSlug={clientSlug} />
+          <NeedsAttention sections={brief.sections} fallbackHref={briefHref} />
+        </aside>
       </div>
 
-      {/* Owner band: is it paying off. Server-gated — coordinators never receive it. */}
-      {isOwner ? <OverviewDashboard hideHero variant="embedded" siteIds={siteIds} /> : null}
+      {/* The day's numbers: the previous stat cards as quiet big-numeral text
+          stats, always visible whatever the brief contains. */}
+      <section className="border-t border-line pt-5">
+        <div className="flex flex-wrap gap-x-14 gap-y-5">
+          <NumberStat
+            label="Overnight"
+            value={overnightLine?.count ?? 0}
+            hint="Missed after hours"
+          />
+          <NumberStat
+            label="Outstanding"
+            value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)}
+            hint="Owed across plans"
+          />
+          {isOwner ? (
+            <NumberStat
+              label="Recovered this month"
+              value={gbp(recovered)}
+              hint="Pilot figure until live data connects"
+            />
+          ) : null}
+        </div>
+      </section>
+
+      {/* The working centre: the live queue as a hairline section. */}
+      <TaskQueueBoard
+        plain
+        clientSlug={clientSlug}
+        maxRows={8}
+        title="Next actions"
+        description="The highest-priority work across every module. Finish one and the next slides in."
+      />
+
+      {/* Owner band: is it paying off. Server-gated, coordinators never receive it. */}
+      {isOwner ? (
+        <section className="space-y-5 border-t border-line pt-5">
+          <h2 className="text-title text-navy">This month</h2>
+          <OverviewDashboard hideHero variant="embedded" siteIds={siteIds} />
+        </section>
+      ) : null}
     </>
   );
 }

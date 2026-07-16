@@ -1,10 +1,20 @@
-import { PageHeader, StatCard } from "@/components/primitives";
-import { Users, UserCheck, CalendarClock } from "lucide-react";
+import { PageHeader } from "@/components/primitives";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { listPatients, countPatients, type PatientRecord } from "@/lib/dentally/read";
 import { getPatientCounts } from "@/lib/patient-count/repository";
 import { PatientsTable } from "./patients-table";
+
+/** A quiet big-numeral text stat for the header row (was a boxed stat card). */
+function HeaderStat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
+  return (
+    <div>
+      <p className="text-label text-muted">{label}</p>
+      <p className="mt-1 text-display tabular-nums text-navy">{value}</p>
+      <p className="mt-0.5 text-caption text-muted">{hint}</p>
+    </div>
+  );
+}
 
 export async function PatientsView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
@@ -42,42 +52,48 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
   }
 
   const nowIso = new Date().toISOString();
-  // Recall count below is over the bounded slice, NOT the whole book — hence the
-  // caption under the grid.
+  // Recall count below is over the bounded slice, NOT the whole book, hence the
+  // caption under the header.
   const activeInSlice = patients.filter((p) => p.active).length;
   const dueRecall = patients.filter((p) => p.recallDueAt && p.recallDueAt <= nowIso).length;
 
   return (
     <>
-      <PageHeader
-        title="Patients"
-        description="Your patient database, live from Dentally, searchable by name or contact with recall and last visit at a glance."
-      />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard
-          label="Active patients"
-          value={(exactActive ?? activeInSlice).toLocaleString("en-GB")}
-          icon={UserCheck}
-          hint={
-            exactActive !== null
-              ? scope.isAllSites
-                ? "Across all sites, counted nightly"
-                : `At ${scope.siteName}, counted nightly`
-              : "Among the patients listed below"
-          }
-        />
-        <StatCard
-          label="On record"
-          value={exactTotal !== null ? exactTotal.toLocaleString("en-GB") : "—"}
-          icon={Users}
-          hint="Whole book including archived records"
-        />
-        <StatCard label="Due a recall" value={dueRecall} icon={CalendarClock} hint="Among the patients listed below" />
-      </div>
-      <p className="-mt-1 text-xs text-muted">
-        The list shows active patients (first {Math.min(patients.length, 300)}); search reaches everyone, including archived records.
-      </p>
+      {/* Header row: title + the same three counts as inline text stats. */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-x-12 gap-y-5">
+          <div className="max-w-xl">
+            <h1 className="text-display text-navy">Patients</h1>
+            <p className="mt-1 text-body text-muted">
+              Your patient database, live from Dentally, searchable by name or contact with recall
+              and last visit at a glance.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-x-12 gap-y-5">
+            <HeaderStat
+              label="Active patients"
+              value={(exactActive ?? activeInSlice).toLocaleString("en-GB")}
+              hint={
+                exactActive !== null
+                  ? scope.isAllSites
+                    ? "Across all sites, counted nightly"
+                    : `At ${scope.siteName}, counted nightly`
+                  : "Among the patients listed below"
+              }
+            />
+            <HeaderStat
+              label="On record"
+              value={exactTotal !== null ? exactTotal.toLocaleString("en-GB") : "-"}
+              hint="Whole book including archived records"
+            />
+            <HeaderStat label="Due a recall" value={dueRecall} hint="Among the patients listed below" />
+          </div>
+        </div>
+        <p className="text-caption text-muted">
+          The list shows active patients (first {Math.min(patients.length, 300)}); search reaches
+          everyone, including archived records.
+        </p>
+      </section>
 
       <PatientsTable
         patients={patients.filter((p) => p.active)}
