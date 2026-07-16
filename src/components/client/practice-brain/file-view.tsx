@@ -75,7 +75,7 @@ function Row({
             <ChevronRight size={14} className={`transition-transform ${open ? "rotate-90" : ""}`} />
           ) : null}
         </span>
-        <span className="mt-0.5 shrink-0 text-blue-dark">
+        <span className="mt-0.5 shrink-0 text-muted">
           {isBranch ? (open ? <FolderOpen size={16} /> : <Folder size={16} />) : <FileText size={15} className="text-muted" />}
         </span>
         <span className="min-w-0 flex-1">
@@ -164,7 +164,7 @@ export function FileTree({
   const visibleRoots = pathMatch ? roots.filter((r) => pathMatch.has(r.id)) : roots;
 
   return (
-    <div className="rounded-2xl border border-line bg-card p-2 sm:p-3">
+    <div className="rounded-[10px] border border-line bg-card p-2 sm:p-3">
       {roots.length === 0 ? (
         <p className="px-3 py-10 text-center text-sm text-muted">
           No knowledge captured yet. Add a note below and it will file itself onto the right branch.

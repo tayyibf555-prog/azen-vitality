@@ -40,7 +40,7 @@ export function CopyButton({
       className={cn(
         "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors",
         variant === "primary"
-          ? "bg-blue-royal text-white hover:bg-[#17579c] shadow-[0_4px_12px_rgba(28,102,184,0.28)]"
+          ? "bg-blue-royal text-white hover:bg-[#17579c]"
           : "border border-line-strong bg-card text-navy hover:bg-card-muted",
         className,
       )}

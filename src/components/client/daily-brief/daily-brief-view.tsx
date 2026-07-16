@@ -71,7 +71,7 @@ function SectionBlock({ section, clientSlug }: { section: BriefSection; clientSl
       <ul className="divide-y divide-line">
         {visible.map((line, i) => (
           <li key={`${section.key}-${i}`} className="flex items-start gap-3 px-5 py-3">
-            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
               <Icon size={15} />
             </span>
             <div className="min-w-0 flex-1">

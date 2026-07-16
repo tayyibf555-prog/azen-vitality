@@ -140,7 +140,7 @@ export function Worklist({ leads, nowIso }: { leads: Lead[]; nowIso: string }) {
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
                     filter === f.value
-                      ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark"
+                      ? "border-blue-dark/30 bg-[#f0f4f9] text-side-ink"
                       : "border-line-strong bg-card text-muted hover:bg-card-muted",
                   )}
                 >

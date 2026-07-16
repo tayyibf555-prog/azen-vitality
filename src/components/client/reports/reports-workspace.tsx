@@ -61,7 +61,7 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
               className="rounded-xl border border-line bg-card-muted/40 px-3.5 py-3"
             >
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
-                <Icon size={13} className="text-blue-dark" /> {it.label}
+                <Icon size={13} className="text-muted" /> {it.label}
               </p>
               <p className="mt-1 text-xl font-bold tracking-tight tabular-nums text-navy">
                 {it.value}
@@ -231,7 +231,7 @@ export function ReportsWorkspace({ clientSlug }: { clientSlug: string }) {
 
         {loading && !report ? (
           <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong bg-card-muted/60 px-6 py-10 text-sm text-muted">
-            <Loader2 size={16} className="animate-spin text-blue-dark" />
+            <Loader2 size={16} className="animate-spin text-muted" />
             Writing your {period === "week" ? "weekly" : "monthly"} review...
           </div>
         ) : null}
@@ -240,7 +240,7 @@ export function ReportsWorkspace({ clientSlug }: { clientSlug: string }) {
           <ReportPanel report={report} period={reportPeriod} />
         ) : !loading ? (
           <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-line-strong bg-card-muted/40 px-4 py-6 text-sm text-muted">
-            <ListChecks size={16} className="shrink-0 text-blue-dark" />
+            <ListChecks size={16} className="shrink-0 text-muted" />
             Generate a report to get a written {period === "week" ? "weekly" : "monthly"} review with
             highlights and recommendations.
           </div>

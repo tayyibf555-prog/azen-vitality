@@ -117,7 +117,7 @@ export function LaunchGuide() {
           {CREATIVE_PATTERNS.map((pattern, i) => (
             <li key={i} className="rounded-xl border border-line bg-card-muted/40 p-4">
               <p className="flex items-center gap-2 text-sm font-semibold text-navy">
-                <Wand2 size={15} className="text-blue-dark" />
+                <Wand2 size={15} className="text-muted" />
                 {pattern.name}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-ink">{pattern.whatItIs}</p>

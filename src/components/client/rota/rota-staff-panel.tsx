@@ -438,7 +438,7 @@ export function RotaStaffPanel({
             {staff.map((person) => (
               <li
                 key={person.id}
-                className="rounded-xl border border-line bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
+                className="rounded-xl border border-line bg-card px-4 py-3.5"
               >
                 {editingId === person.id ? (
                   <div className="space-y-3">

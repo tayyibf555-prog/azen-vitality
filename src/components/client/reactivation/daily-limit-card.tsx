@@ -66,9 +66,9 @@ export function DailyLimitCard({ clientSlug }: { clientSlug: string }) {
   const atLimit = limit !== null && limit > 0 && usedToday >= limit;
 
   return (
-    <section className="flex flex-col gap-3 rounded-2xl border border-line bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+    <section className="flex flex-col gap-3 rounded-[10px] border border-line bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
-        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-royal/10 text-blue-royal">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#f0f4f9] text-side-ink">
           <Gauge size={18} />
         </span>
         <div className="min-w-0">

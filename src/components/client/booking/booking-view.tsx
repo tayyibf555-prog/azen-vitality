@@ -147,7 +147,7 @@ export async function BookingView({ clientSlug }: { clientSlug: string }) {
           {HOW_IT_WORKS.map(({ icon: Icon, title, body }, i) => (
             <div key={title} className="space-y-1.5">
               <div className="flex items-center gap-2">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
                   <Icon size={15} />
                 </span>
                 <span className="text-[11px] font-medium uppercase tracking-wide text-muted">

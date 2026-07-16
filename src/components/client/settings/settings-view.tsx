@@ -204,7 +204,7 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
             className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between"
           >
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
                 <Icon size={17} />
               </span>
               <div className="space-y-1">
@@ -342,7 +342,7 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
         <SectionCard title="Practice" description="Team and roles are coming.">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
                 <Building2 size={17} />
               </span>
               <div>

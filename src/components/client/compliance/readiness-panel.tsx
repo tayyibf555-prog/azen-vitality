@@ -125,7 +125,7 @@ function KloeCard({
   const openItems = summary?.openItems ?? 0;
 
   return (
-    <div className="flex flex-col rounded-xl border border-line bg-card p-4 shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+    <div className="flex flex-col rounded-xl border border-line bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <h4 className="text-sm font-semibold text-navy">{label}</h4>
         <StatusPill tone={statusTone(status)} className="shrink-0">
@@ -198,7 +198,7 @@ export function ReadinessPanel({ clientSlug }: { clientSlug: string }) {
 
           {loading && !assessment ? (
             <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong bg-card-muted/60 px-6 py-10 text-sm text-muted">
-              <Loader2 size={16} className="animate-spin text-blue-dark" />
+              <Loader2 size={16} className="animate-spin text-muted" />
               Reviewing your current position...
             </div>
           ) : null}

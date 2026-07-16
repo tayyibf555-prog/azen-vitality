@@ -78,7 +78,7 @@ export function MetaAdsWorkspace({
           onClick={() => setTab("guide")}
           className="inline-flex items-center gap-2 rounded-lg border border-line-strong bg-card px-3.5 py-2 text-sm font-semibold text-navy shadow-[0_1px_2px_rgba(10,14,26,0.04)] transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
         >
-          <ListChecks size={16} className="text-blue-dark" />
+          <ListChecks size={16} className="text-muted" />
           How to launch (step by step)
         </button>
       </div>

@@ -24,7 +24,7 @@ export function OwnerViewSwitch({
 
   return (
     <>
-      <div className="inline-flex rounded-xl border border-line bg-card p-1 shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+      <div className="inline-flex rounded-xl border border-line bg-card p-1">
         {tabs.map(({ key, label, Icon }) => {
           const active = view === key;
           return (

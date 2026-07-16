@@ -402,7 +402,7 @@ function SubmissionDetail({ submission: s }: { submission: Submission }) {
                   key={`${f.name}-${i}`}
                   className="flex items-center gap-2.5 rounded-lg border border-line bg-card px-3 py-2"
                 >
-                  <FileText size={15} className="shrink-0 text-blue-dark" aria-hidden />
+                  <FileText size={15} className="shrink-0 text-muted" aria-hidden />
                   <span className="min-w-0 flex-1 truncate text-sm text-ink">{f.name}</span>
                   <span className="shrink-0 text-xs text-muted">{bytes(f.size)}</span>
                 </li>

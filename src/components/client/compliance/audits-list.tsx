@@ -27,7 +27,7 @@ function Legend() {
 
 function AuditRow({ audit }: { audit: AuditItem }) {
   return (
-    <li className="flex flex-col gap-3 rounded-xl border border-line bg-card p-4 shadow-[0_1px_2px_rgba(10,14,26,0.04)] sm:flex-row sm:items-center sm:justify-between">
+    <li className="flex flex-col gap-3 rounded-xl border border-line bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="text-sm font-semibold text-navy">{audit.name}</h4>

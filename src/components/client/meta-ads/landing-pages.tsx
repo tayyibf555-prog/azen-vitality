@@ -414,7 +414,7 @@ function MiniPreview({
   const isWinner = winner === variant.variantKey;
   const isRetired = variant.status === "retired";
   return (
-    <div className="overflow-hidden rounded-2xl border border-line bg-card">
+    <div className="overflow-hidden rounded-[10px] border border-line bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
         <span className="text-xs font-semibold text-navy">{label}</span>
         {isWinner ? (
@@ -520,7 +520,7 @@ function ResultsCard({
   const suggestion = results ? decideAutoPromotion({ a: results.a, b: results.b }) : null;
 
   return (
-    <div className="mt-5 rounded-2xl border border-line bg-card-muted/40 p-4">
+    <div className="mt-5 rounded-[10px] border border-line bg-card-muted/40 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-semibold text-navy">Split test results</h4>
         <span className="text-xs text-muted">

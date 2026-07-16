@@ -152,7 +152,7 @@ export function CalendarBoard({
                 onClick={() => setView(v)}
                 className={cn(
                   "rounded-full px-3 py-1 text-xs font-semibold capitalize transition-colors",
-                  view === v ? "bg-blue-dark/10 text-blue-dark" : "text-muted hover:text-navy",
+                  view === v ? "bg-[#f0f4f9] text-side-ink" : "text-muted hover:text-navy",
                 )}
               >
                 {v}
@@ -291,7 +291,7 @@ function FilterPill({ active, onClick, children }: { active: boolean; onClick: (
       onClick={onClick}
       className={cn(
         "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
-        active ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark" : "border-line-strong bg-card text-muted hover:bg-card-muted",
+        active ? "border-blue-dark/30 bg-[#f0f4f9] text-side-ink" : "border-line-strong bg-card text-muted hover:bg-card-muted",
       )}
     >
       {children}

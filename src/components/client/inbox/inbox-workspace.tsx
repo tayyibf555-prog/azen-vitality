@@ -216,7 +216,7 @@ export function InboxWorkspace({
                       "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                       t.channel === "whatsapp"
                         ? "bg-whatsapp/10 text-[#107c40]"
-                        : "bg-blue-dark/10 text-blue-dark",
+                        : "bg-[#f0f4f9] text-side-ink",
                     )}
                   >
                     <ChannelIcon channel={t.channel} />
@@ -269,7 +269,7 @@ export function InboxWorkspace({
                   "flex h-8 w-8 items-center justify-center rounded-lg",
                   active.channel === "whatsapp"
                     ? "bg-whatsapp/10 text-[#107c40]"
-                    : "bg-blue-dark/10 text-blue-dark",
+                    : "bg-[#f0f4f9] text-side-ink",
                 )}
               >
                 <ChannelIcon channel={active.channel} />

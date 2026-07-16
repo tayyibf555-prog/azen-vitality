@@ -67,7 +67,7 @@ function RecordRow({ record }: { record: TrainingRecord }) {
 function StaffCard({ group }: { group: StaffGroup }) {
   const needsAttention = group.topWeight <= 1;
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-card shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+    <div className="overflow-hidden rounded-xl border border-line bg-card">
       <header className="flex items-center justify-between gap-3 border-b border-line bg-card-muted/50 px-4 py-3">
         <div className="min-w-0">
           <h4 className="text-sm font-semibold text-navy">{group.staff.name}</h4>

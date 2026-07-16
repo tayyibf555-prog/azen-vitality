@@ -153,7 +153,7 @@ export default function ClientDetailPage() {
           </span>
         </div>
         <p className="flex items-center gap-2 text-xs text-muted">
-          <RefreshCw size={14} className="shrink-0 text-blue-dark" />
+          <RefreshCw size={14} className="shrink-0 text-muted" />
           Polled every 15 minutes. Figures shown are mock data for now.
         </p>
       </div>

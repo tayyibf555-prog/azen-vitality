@@ -46,7 +46,7 @@ function Legend() {
 
 function PolicyRow({ policy }: { policy: PolicyDoc }) {
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-line bg-card p-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)] sm:flex-row sm:items-center sm:justify-between">
+    <li className="flex flex-col gap-2 rounded-xl border border-line bg-card p-3.5 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="text-sm font-semibold text-navy">{policy.name}</h4>

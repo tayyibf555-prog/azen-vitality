@@ -9,7 +9,7 @@ const SKIP = new Set(["Overview", "Account"]);
 function SystemRow({ icon: Icon, name, live, note }: { icon: LucideIcon; name: string; live: boolean; note?: string }) {
   return (
     <div className="flex items-start gap-3 py-3.5 first:pt-0 last:pb-0">
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-dark/10 text-blue-dark">
+      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
         <Icon size={16} />
       </span>
       <div className="min-w-0 flex-1">

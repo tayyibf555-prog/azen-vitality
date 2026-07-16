@@ -164,7 +164,7 @@ export default function AgencyCockpitPage() {
             <span className="text-muted">all live clients authorised, no faults</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <RefreshCw size={16} className="shrink-0 text-blue-dark" />
+            <RefreshCw size={16} className="shrink-0 text-muted" />
             <span className="font-semibold text-navy">Polling every 15 min</span>
             <span className="text-muted">
               last sync {relativeTime(CLIENTS[0]?.dentally.lastSyncedAt ?? NOW.toISOString(), NOW)}

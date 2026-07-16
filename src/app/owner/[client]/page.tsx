@@ -140,7 +140,7 @@ export default async function OwnerManagementPage({
       >
         {opportunities.length === 0 ? (
           <p className="m-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
-            <Building2 size={15} className="shrink-0 text-blue-dark" />
+            <Building2 size={15} className="shrink-0 text-muted" />
             No opportunities synced yet. Run the Dentally sync to populate the per-site
             breakdown. This view stays empty until real data lands.
           </p>

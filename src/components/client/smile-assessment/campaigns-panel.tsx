@@ -444,7 +444,7 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
                   <li
                     key={c.id}
                     className={cn(
-                      "rounded-xl border bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)] transition-colors",
+                      "rounded-xl border bg-card px-4 py-3.5 transition-colors",
                       isSel ? "border-blue-dark/50 ring-1 ring-blue-dark/20" : "border-line",
                     )}
                   >

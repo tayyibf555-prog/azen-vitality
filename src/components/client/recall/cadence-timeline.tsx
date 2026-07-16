@@ -29,7 +29,7 @@ export function CadenceTimeline({
                 done
                   ? "bg-success/10 text-success"
                   : isNext
-                    ? "bg-blue-dark/10 text-blue-dark"
+                    ? "bg-[#f0f4f9] text-side-ink"
                     : "bg-card-muted text-muted",
               )}
             >

@@ -41,7 +41,7 @@ export function SmileAssessmentWorkspace({
       <div
         role="tablist"
         aria-label="Smile Assessment sections"
-        className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-card p-1 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
+        className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-card p-1"
       >
         {TABS.map(({ key, label, icon: Icon }) => {
           const active = tab === key;

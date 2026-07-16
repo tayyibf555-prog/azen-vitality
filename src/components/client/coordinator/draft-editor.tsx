@@ -144,7 +144,7 @@ export function DraftEditor({
                 className={cn(
                   "inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors disabled:opacity-50",
                   active
-                    ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark"
+                    ? "border-blue-dark/30 bg-[#f0f4f9] text-side-ink"
                     : "border-line-strong bg-card text-muted hover:bg-card-muted",
                 )}
               >
