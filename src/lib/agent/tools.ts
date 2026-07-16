@@ -27,6 +27,11 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
         treatment: { type: "string", description: "The treatment to book for" },
         fromDate: { type: "string", description: "ISO date to search from (optional)" },
         toDate: { type: "string", description: "ISO date to search to (optional)" },
+        practitionerId: {
+          type: "string",
+          description:
+            "Optional. Restrict slots to one clinician's diary. If the patient was invited to see a specific clinician, that clinician is used automatically; pass \"any\" to show every clinician's availability if the patient asks for other options.",
+        },
       },
       required: ["treatment"],
     },
@@ -128,6 +133,19 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+/**
+ * Restrict availability rows to a single practitioner's diary. Each Dentally
+ * availability row carries its own `practitioner_id`. A null/empty filter returns
+ * the rows unchanged. Pure + exported so it is unit-testable.
+ */
+export function filterSlotsByPractitioner(slots: unknown[], practitionerId: string | null): unknown[] {
+  if (!practitionerId) return slots;
+  return slots.filter((s) => {
+    const row = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
+    return String(row.practitioner_id ?? "") === practitionerId;
+  });
+}
+
 export interface ToolDeps {
   dentally: Pick<
     DentallyClient,
@@ -202,7 +220,17 @@ export function makeDispatch(deps: ToolDeps) {
           finishTime,
           duration: treatment?.durationMinutes,
         });
-        const slots = Array.isArray(res.availability) ? res.availability : [];
+        const allSlots = Array.isArray(res.availability) ? res.availability : [];
+        // Practitioner targeting: a segment-outreach invite primes a preferred
+        // clinician (context.outreachInvite.practitionerId), so this patient is
+        // offered that clinician's diary first without the model needing the id. The
+        // model may pass a practitionerId to override, or "any"/"all" to broaden to
+        // every clinician when the patient asks for other options.
+        const requested = typeof input.practitionerId === "string" ? input.practitionerId.trim() : "";
+        const broaden = requested.toLowerCase() === "any" || requested.toLowerCase() === "all";
+        const preferred = deps.context.outreachInvite?.practitionerId ?? null;
+        const effectivePractitioner = broaden ? null : requested || preferred || null;
+        const slots = filterSlotsByPractitioner(allSlots, effectivePractitioner);
         return JSON.stringify({ slots });
       }
       case "treatment_info": {

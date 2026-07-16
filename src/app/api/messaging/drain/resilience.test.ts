@@ -64,6 +64,13 @@ vi.mock("@/lib/reviews/repository", () => ({
   markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
   markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
 }));
+vi.mock("@/lib/outreach/repository", () => ({
+  listQueuedOutbox: vi.fn(async (..._a: unknown[]): Promise<Row[]> => []),
+  claimOutbox: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
+  recordOutboxSent: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
+  markOutboxFailed: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
+  markOutboxBlocked: vi.fn(async (..._a: unknown[]): Promise<void> => {}),
+}));
 
 vi.mock("@/lib/cron-lock", () => ({
   acquireCronLock: vi.fn(async (..._a: unknown[]): Promise<boolean> => true),
@@ -116,6 +123,7 @@ import * as recall from "@/lib/recall/repository";
 import * as noshow from "@/lib/noshow/repository";
 import * as coordinator from "@/lib/coordinator/repository";
 import * as reviews from "@/lib/reviews/repository";
+import * as outreach from "@/lib/outreach/repository";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
@@ -127,7 +135,7 @@ function req(): Request {
   return new Request(BASE, { method: "POST" });
 }
 
-const allRepos = [reactivation, recall, noshow, coordinator, reviews];
+const allRepos = [reactivation, recall, noshow, coordinator, reviews, outreach];
 
 beforeEach(() => {
   vi.clearAllMocks();

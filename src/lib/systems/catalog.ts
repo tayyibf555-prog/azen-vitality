@@ -62,6 +62,17 @@ export const SYSTEMS: SystemDef[] = [
     halts: "Post-appointment review requests stop.",
   },
   {
+    // Headless system (no dashboard page of its own yet; the UI is a later
+    // workstream). Seeds DISABLED in migration 0041, so it only ever runs during a
+    // supervised client test the owner explicitly switches on from the control
+    // panel. Being in this catalog is what makes the drain fail-closed for outreach
+    // (getDisabledSlugsForSend returns SYSTEM_SLUGS on a live-messaging read error).
+    slug: "outreach",
+    label: "Segment outreach",
+    group: "Patient lifecycle",
+    halts: "Segment outreach campaigns stop drafting and sending, and their sweep halts.",
+  },
+  {
     slug: "after-hours",
     label: "After-hours capture",
     group: "Patient lifecycle",
@@ -153,6 +164,7 @@ export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
   noshow: "no-show-defence",
   coordinator: "treatment-coordinator",
   reviews: "reviews",
+  outreach: "outreach",
 };
 
 /** Whether a slug is a real controllable system (guards toggle writes). */
