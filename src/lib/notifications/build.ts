@@ -17,8 +17,9 @@ import type { NotificationItem } from "./types";
 //
 // Resilience mirrors those two: EVERY source is wrapped in its own safe() builder
 // so one failing or empty module never breaks the whole feed. The compliance
-// source is pure mock (deterministic); the onboarding + smile-assessment sources
-// read the database, so they degrade to [] on any error.
+// source is pure mock (deterministic) and every item it produces carries
+// `sample: true`; the no-show, onboarding + smile-assessment sources read the
+// database (real, untagged), so they degrade to [] on any error.
 //
 // An email digest is intentionally out of scope here: the Daily brief already
 // emails the morning action list. This is the in-app feed only.
@@ -120,7 +121,11 @@ function complianceNotifications(slug: string): NotificationItem[] {
     });
   }
 
-  return out;
+  // Every compliance item is built from pure mock data (MOCK_AUDITS,
+  // MOCK_POLICIES, MOCK_TRAINING_RECORDS): tag it "Sample" so it can never be
+  // mistaken for a real compliance breach, matching the SampleNote precedent
+  // used elsewhere in the dashboard (src/components/primitives/sample-badge.tsx).
+  return out.map((item) => ({ ...item, sample: true }));
 }
 
 /**

@@ -12,7 +12,7 @@ import {
   Undo2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { SectionCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
+import { SectionCard, StatusPill, EmptyState, SampleBadge, type Tone } from "@/components/primitives";
 import type {
   NotificationItem,
   NotificationType,
@@ -79,6 +79,7 @@ function NotificationRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={URGENCY_TONE[item.urgency]}>{URGENCY_LABEL[item.urgency]}</StatusPill>
+          {item.sample ? <SampleBadge /> : null}
           <span className="font-semibold leading-snug text-navy">{item.title}</span>
         </div>
         <p className="mt-0.5 text-xs text-muted">{item.detail}</p>

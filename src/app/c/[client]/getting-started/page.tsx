@@ -9,8 +9,9 @@ export default async function GettingStartedPage({
   params: Promise<{ client: string }>;
 }) {
   const { client: clientSlug } = await params;
-  // Owner-only, like every sibling owner module: block direct-URL access for
-  // coordinators (the sidebar already hides it, but the URL must not work).
+  // Open to every role (unlike its Operations siblings): the coordinator is
+  // normally the one working through the checklist, so this is a no-op guard
+  // for them and only blocks a role/client mismatch.
   await requireModuleAccess("getting-started");
   return <GettingStartedView clientSlug={clientSlug} />;
 }

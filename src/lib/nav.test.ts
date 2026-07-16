@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { navForRole, canRoleAccessModule, CLIENT_NAV, NAV_CATEGORIES, NAV_HIDDEN_SLUGS, categoriesForRole } from "./nav";
 
 const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings"];
-const ALL_ROLE = ["", "reviews", "onboarding", "calendar", "patients", "recall"];
+// "booking" (owner + coordinator tab) and "getting-started" (coordinator can now
+// tick the checklist too) are shared, so both belong alongside the rest here.
+const ALL_ROLE = ["", "reviews", "onboarding", "calendar", "patients", "recall", "booking", "getting-started"];
 
 function slugsFor(role: Parameters<typeof navForRole>[0]): string[] {
   return navForRole(role).flatMap((g) => g.items.map((i) => i.slug));
@@ -72,11 +74,13 @@ describe("sidebar categories (rail + panel nav)", () => {
     for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
   });
 
-  it("drops the whole Operations category for a coordinator (every module in it is owner-only)", () => {
-    const keys = categoriesForRole("client_coordinator").map((c) => c.key);
-    expect(keys).not.toContain("operations");
+  it("shows the coordinator only 'Getting started' inside Operations (every other module in it is owner-only)", () => {
+    const cats = categoriesForRole("client_coordinator");
+    const keys = cats.map((c) => c.key);
     // The everyday categories survive.
     expect(keys).toEqual(expect.arrayContaining(["home", "patients", "messages", "growth"]));
+    const operations = cats.find((c) => c.key === "operations");
+    expect(operations?.items.map((i) => i.slug)).toEqual(["getting-started"]);
   });
 
   it("hides owner-only items inside surviving categories for a coordinator", () => {
@@ -86,6 +90,13 @@ describe("sidebar categories (rail + panel nav)", () => {
     expect(slugs).not.toContain("usps");
     expect(slugs).not.toContain("roi");
     expect(slugs).toContain("smile-assessment");
+  });
+
+  it("the new Booking tab is shared (owner + coordinator) and lives in the growth rail category", () => {
+    expect(canRoleAccessModule("client_owner", "booking")).toBe(true);
+    expect(canRoleAccessModule("client_coordinator", "booking")).toBe(true);
+    const growth = categoriesForRole("client_coordinator").find((c) => c.key === "growth");
+    expect(growth?.items.map((i) => i.slug)).toContain("booking");
   });
 
   it("role null (dev / enforcement off) shows everything except the hidden set", () => {

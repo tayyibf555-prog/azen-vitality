@@ -1,6 +1,7 @@
 import { OwnerSidebar } from "@/components/owner/owner-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
+import { FeedbackWidget } from "@/components/platform/feedback-widget";
 import { guardPage } from "@/lib/auth/page-guard";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteSelection } from "@/lib/site-view";
@@ -37,6 +38,7 @@ export default async function OwnerLayout({
         </main>
       </div>
       <PlatformShortcuts />
+      <FeedbackWidget />
     </div>
   );
 }
