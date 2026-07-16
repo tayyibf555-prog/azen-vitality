@@ -150,7 +150,7 @@ export async function BookingView({ clientSlug }: { clientSlug: string }) {
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
                   <Icon size={15} />
                 </span>
-                <span className="text-[11px] font-bold uppercase tracking-wide text-muted">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
                   Step {i + 1}
                 </span>
               </div>

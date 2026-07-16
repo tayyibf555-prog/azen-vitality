@@ -23,7 +23,7 @@ export function AcquisitionFunnel({ stages }: { stages: FunnelStage[] }) {
               <div className="mb-1 flex items-baseline justify-between gap-3">
                 <span className="text-sm font-semibold text-navy">{stage.label}</span>
                 <span className="flex items-baseline gap-2 text-sm">
-                  <span className="font-bold tabular-nums text-navy">{count(stage.count)}</span>
+                  <span className="font-semibold tabular-nums text-navy">{count(stage.count)}</span>
                   {!isFirst ? (
                     <span className="text-xs font-medium tabular-nums text-muted">
                       {percent(stage.conversionFromPrev)} from previous

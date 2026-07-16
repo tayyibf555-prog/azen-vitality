@@ -182,10 +182,10 @@ export function TaskQueueBoard({
           type="button"
           onClick={() => setMineOnly((v) => !v)}
           className={cn(
-            "pressable rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+            "pressable rounded-md border px-3 py-1 text-xs font-medium transition-colors",
             mineOnly
-              ? "border-navy bg-navy text-on-navy"
-              : "border-line-strong bg-card text-muted hover:bg-card-muted",
+              ? "border-navy bg-navy font-semibold text-white"
+              : "border-line-strong bg-card text-muted hover:text-navy",
           )}
         >
           {mineOnly ? "Showing claimed" : "Claimed only"}
@@ -199,10 +199,10 @@ export function TaskQueueBoard({
             type="button"
             onClick={() => setKindFilter(null)}
             className={cn(
-              "pressable rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+              "pressable rounded-md border px-3 py-1 text-xs font-medium transition-colors",
               kindFilter === null
-                ? "border-navy bg-navy text-on-navy"
-                : "border-line-strong bg-card text-muted hover:bg-card-muted",
+                ? "border-navy bg-navy font-semibold text-white"
+                : "border-line-strong bg-card text-muted hover:text-navy",
             )}
           >
             All <span className="tabular-nums">{total}</span>
@@ -213,10 +213,10 @@ export function TaskQueueBoard({
               type="button"
               onClick={() => setKindFilter((k) => (k === kind ? null : kind))}
               className={cn(
-                "pressable rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+                "pressable rounded-md border px-3 py-1 text-xs font-medium transition-colors",
                 kindFilter === kind
-                  ? "border-navy bg-navy text-on-navy"
-                  : "border-line-strong bg-card text-muted hover:bg-card-muted",
+                  ? "border-navy bg-navy font-semibold text-white"
+                  : "border-line-strong bg-card text-muted hover:text-navy",
               )}
             >
               {TASK_KIND_LABEL[kind]} <span className="tabular-nums">{count}</span>
@@ -259,7 +259,7 @@ export function TaskQueueBoard({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill tone="info">{TASK_KIND_LABEL[task.kind]}</StatusPill>
+                        <StatusPill tone="neutral">{TASK_KIND_LABEL[task.kind]}</StatusPill>
                         <span className="font-semibold text-navy">{task.title}</span>
                         {task.assignee ? (
                           <StatusPill tone="neutral">
@@ -280,7 +280,7 @@ export function TaskQueueBoard({
                     <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                       <a
                         href={task.href}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-2.5 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-line-strong bg-card px-2.5 py-1 text-xs font-medium text-navy transition-colors hover:bg-[#f7f9fc]"
                       >
                         <ExternalLink size={13} /> Open
                       </a>
@@ -337,7 +337,7 @@ export function TaskQueueBoard({
                                 key={o.minutes}
                                 type="button"
                                 onClick={() => act(task, "snooze", o.minutes)}
-                                className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
+                                className="block w-full px-3 py-1.5 text-left text-xs font-medium text-navy transition-colors hover:bg-[#f7f9fc]"
                               >
                                 {o.label}
                               </button>
@@ -368,7 +368,7 @@ export function TaskQueueBoard({
               <li className="px-1 py-3">
                 <a
                   href={`/c/${clientSlug}/task-queue`}
-                  className="text-caption font-semibold text-blue-dark hover:underline"
+                  className="text-caption font-medium text-blue-royal hover:underline"
                 >
                   View all {visible.length} tasks →
                 </a>

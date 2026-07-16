@@ -113,7 +113,7 @@ export function FeedbackWidget() {
           <div className="relative z-10 w-full max-w-md rounded-2xl border border-line bg-card p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-bold text-navy">Report an issue</h3>
+                <h3 className="text-base font-semibold text-navy">Report an issue</h3>
                 <p className="mt-0.5 text-xs text-muted">
                   Reporting from <span className="font-medium text-ink">{pathname}</span>
                 </p>

@@ -587,7 +587,7 @@ function ResultsCard({
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <dd className="text-sm font-bold tabular-nums text-navy">{value.toLocaleString("en-GB")}</dd>
+      <dd className="text-sm font-semibold tabular-nums text-navy">{value.toLocaleString("en-GB")}</dd>
       <dt className="text-[0.6rem] uppercase tracking-wide text-muted">{label}</dt>
     </div>
   );

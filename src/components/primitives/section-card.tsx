@@ -1,5 +1,12 @@
 import { cn } from "@/lib/utils";
 
+/**
+ * A content SECTION in the locked flat language (aesthetic-mock2): a small
+ * 600-weight title, a hairline underneath, then content and whitespace — no
+ * card box, no shadow, no boxes-in-boxes. The name is kept so every existing
+ * call site sweeps to the new construction without edits; the legacy `plain`
+ * prop is accepted (it is now the only rendering).
+ */
 export function SectionCard({
   title,
   description,
@@ -7,6 +14,7 @@ export function SectionCard({
   children,
   className,
   bodyClassName,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   plain,
 }: {
   title?: string;
@@ -15,40 +23,21 @@ export function SectionCard({
   children: React.ReactNode;
   className?: string;
   bodyClassName?: string;
-  /** Render as a plain section (no card chrome): section title + hairline under
-   *  the header, whitespace instead of a box. The aesthetic-shell Home uses this
-   *  so cards are reserved for genuinely card-shaped things. */
+  /** Legacy flag from the earlier boxed design; every section is plain now. */
   plain?: boolean;
 }) {
-  if (plain) {
-    return (
-      <section className={className}>
-        {(title || actions) && (
-          <header className="flex items-center justify-between gap-4 border-b border-line pb-3">
-            <div className="space-y-1">
-              {title ? <h3 className="text-title text-navy">{title}</h3> : null}
-              {description ? <p className="text-caption text-muted">{description}</p> : null}
-            </div>
-            {actions}
-          </header>
-        )}
-        <div className={cn("pt-4", bodyClassName)}>{children}</div>
-      </section>
-    );
-  }
-
   return (
-    <section className={cn("rounded-card bg-card shadow-card ring-1 ring-line/60", className)}>
+    <section className={className}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-4 border-b border-line px-6 py-4">
-          <div className="space-y-1">
-            {title ? <h3 className="text-base text-navy">{title}</h3> : null}
-            {description ? <p className="text-xs text-muted">{description}</p> : null}
+        <header className="flex items-center justify-between gap-4 border-b border-line pb-2.5">
+          <div className="min-w-0">
+            {title ? <h3 className="text-title text-navy">{title}</h3> : null}
+            {description ? <p className="mt-0.5 text-caption font-normal text-muted">{description}</p> : null}
           </div>
-          {actions}
+          {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
         </header>
       )}
-      <div className={cn("p-6", bodyClassName)}>{children}</div>
+      <div className={cn("pt-4", bodyClassName)}>{children}</div>
     </section>
   );
 }

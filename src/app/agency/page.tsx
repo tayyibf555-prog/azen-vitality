@@ -86,7 +86,7 @@ export default function AgencyCockpitPage() {
                 {/* Identity + health */}
                 <div className="min-w-0 space-y-2 lg:col-span-5">
                   <div className="flex flex-wrap items-center gap-2.5">
-                    <h4 className="text-lg font-extrabold tracking-tight text-navy">{client.name}</h4>
+                    <h4 className="text-lg font-semibold tracking-tight text-navy">{client.name}</h4>
                     <StatusPill tone={statusTone}>
                       {client.status === "live" ? "Live" : client.status === "onboarding" ? "Onboarding" : "Paused"}
                     </StatusPill>
@@ -112,19 +112,19 @@ export default function AgencyCockpitPage() {
                   <div className="flex items-center gap-6 lg:col-span-4">
                     <div className="space-y-0.5">
                       <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Leads in</p>
-                      <p className="text-lg font-extrabold tracking-tight text-navy">
+                      <p className="text-lg font-bold tracking-tight tabular-nums text-navy">
                         {metrics.leadsIn.toLocaleString("en-GB")}
                       </p>
                     </div>
                     <div className="space-y-0.5">
                       <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Booked</p>
-                      <p className="text-lg font-extrabold tracking-tight text-navy">
+                      <p className="text-lg font-bold tracking-tight tabular-nums text-navy">
                         {metrics.consultationsBooked.toLocaleString("en-GB")}
                       </p>
                     </div>
                     <div className="space-y-0.5">
                       <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Recovered</p>
-                      <p className="text-lg font-extrabold tracking-tight text-navy">
+                      <p className="text-lg font-bold tracking-tight tabular-nums text-navy">
                         {gbp(metrics.recoveredRevenue)}
                       </p>
                     </div>

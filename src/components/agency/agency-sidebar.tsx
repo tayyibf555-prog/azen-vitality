@@ -50,11 +50,11 @@ export function AgencySidebar() {
     <aside className="chrome-nav sticky top-0 flex h-screen w-[248px] shrink-0 flex-col text-on-navy lg:h-full lg:text-navy">
       {/* Wordmark lockup */}
       <div className="flex items-center gap-3 px-5 py-6">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-dark text-base font-extrabold text-white lg:bg-navy">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-dark text-base font-bold text-white lg:bg-navy">
           A
         </span>
         <span className="flex flex-col leading-tight">
-          <span className="text-lg font-extrabold tracking-tight text-on-navy lg:text-navy">Azen</span>
+          <span className="text-lg font-semibold tracking-tight text-on-navy lg:text-navy">Azen</span>
           <span className="text-[11px] font-medium uppercase tracking-wide text-on-navy-muted lg:text-side-label">Agency</span>
         </span>
       </div>
@@ -109,7 +109,7 @@ export function AgencySidebar() {
       {/* User chip */}
       <div className="border-t border-navy-line px-3 py-4 lg:border-navy/10">
         <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-dark text-sm font-bold text-white">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-dark text-sm font-semibold text-white">
             {initials(displayName)}
           </span>
           <div className="min-w-0 flex-1">

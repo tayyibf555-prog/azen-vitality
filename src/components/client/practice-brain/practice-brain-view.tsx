@@ -88,7 +88,7 @@ export function PracticeBrainView() {
   return (
     <div className="-mx-8 -my-7 min-h-[calc(100vh-3.5rem)] bg-navy px-8 py-7 text-on-navy">
       <div className="mb-5">
-        <h1 className="text-2xl font-extrabold tracking-tight text-on-navy">Practice brain</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-on-navy">Practice brain</h1>
         <p className="mt-1 text-sm text-on-navy-muted">
           The practice knowledge hub. Branches grow as you add knowledge; the co-pilot draws from it.
         </p>

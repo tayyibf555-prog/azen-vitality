@@ -72,7 +72,7 @@ export function ConversationDrawer({
       <aside className="absolute right-0 top-0 flex h-full w-full max-w-[480px] flex-col border-l border-line bg-card shadow-2xl">
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-extrabold text-navy">{conversation.patientName}</h2>
+            <h2 className="truncate text-lg font-semibold text-navy">{conversation.patientName}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill tone={STATUS_TONE[conversation.status]}>{STATUS_LABEL[conversation.status]}</StatusPill>
               {conversation.treatment ? <StatusPill tone="neutral">{conversation.treatment}</StatusPill> : null}

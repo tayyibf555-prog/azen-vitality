@@ -262,11 +262,11 @@ export function PatientsTable({
         <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line pb-3">
           <div className="space-y-1">
             <h3 className="text-title text-navy">All patients</h3>
-            <p className="text-caption text-muted">Click a patient to open their record.</p>
+            <p className="text-caption font-normal text-muted">Click a patient to open their record.</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             <div
-              className="inline-flex flex-wrap gap-1 rounded-full border border-line bg-card p-1 shadow-chip"
+              className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]"
               role="group"
               aria-label="Filter patients"
             >
@@ -279,8 +279,8 @@ export function PatientsTable({
                     aria-pressed={active}
                     onClick={() => setFilter(key)}
                     className={cn(
-                      "pressable rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
-                      active ? "bg-navy text-on-navy shadow-sm" : "text-muted hover:text-ink",
+                      "pressable rounded-md px-3.5 py-1.5 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
+                      active ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
                     )}
                   >
                     {label}
@@ -294,7 +294,7 @@ export function PatientsTable({
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search name, phone or email"
-                className="w-64 rounded-full border border-line bg-card py-2 pl-9 pr-9 text-sm text-ink shadow-chip placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+                className="w-64 rounded-lg border border-line-strong bg-card py-2 pl-9 pr-9 text-[13px] text-ink placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
               />
               {searching ? (
                 <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted" />
@@ -337,10 +337,10 @@ export function PatientsTable({
 function Stat({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string | number }) {
   return (
     <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5">
-      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-        <Icon size={12} className="text-blue-dark" /> {label}
+      <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+        <Icon size={12} /> {label}
       </p>
-      <p className="mt-0.5 text-sm font-bold text-navy">{typeof value === "number" ? num(value) : value}</p>
+      <p className="mt-0.5 text-sm font-semibold tabular-nums text-navy">{typeof value === "number" ? num(value) : value}</p>
     </div>
   );
 }
@@ -348,11 +348,11 @@ function Stat({ icon: Icon, label, value }: { icon: typeof Phone; label: string;
 function Field({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
   return (
     <div className="flex items-start gap-3">
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-card-muted text-blue-dark">
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
         <Icon size={14} />
       </span>
       <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-muted">{label}</p>
         <p className="text-sm text-ink">{value}</p>
       </div>
     </div>
@@ -421,7 +421,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
       <div className="relative z-10 flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-2xl">
         <header className="flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-extrabold text-navy">{patient.name}</h2>
+            <h2 className="truncate text-lg font-semibold text-navy">{patient.name}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill tone={s.tone}>{s.label}</StatusPill>
               <StatusPill tone="neutral">{getSite(patient.siteId)?.name ?? patient.siteId}</StatusPill>
@@ -455,7 +455,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
               {/* Left column: details + treatment plans */}
               <div className="space-y-5">
                 <section className="space-y-3">
-                  <h3 className="text-sm font-extrabold text-navy">Details</h3>
+                  <h3 className="text-sm font-semibold text-navy">Details</h3>
                   <div className="space-y-3.5">
                     <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
                     <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
@@ -474,8 +474,8 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
                 </section>
 
                 <section className="space-y-3">
-                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                    <ReceiptText size={15} className="text-blue-dark" /> Treatment plans
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-navy">
+                    <ReceiptText size={15} className="text-muted" /> Treatment plans
                   </h3>
                   {plans.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
@@ -502,8 +502,8 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
               {/* Right column: notes + appointment history */}
               <div className="space-y-5">
                 <section className="space-y-3">
-                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                    <StickyNote size={15} className="text-blue-dark" /> Clinical notes (Dentally)
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-navy">
+                    <StickyNote size={15} className="text-muted" /> Clinical notes (Dentally)
                   </h3>
                   {notes.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">
@@ -525,15 +525,15 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
                 </section>
 
                 <section className="space-y-3">
-                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                    <NotebookPen size={15} className="text-blue-dark" /> Practice notes
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-navy">
+                    <NotebookPen size={15} className="text-muted" /> Practice notes
                   </h3>
                   <PatientNotesPanel siteId={patient.siteId} patientId={patient.id} />
                 </section>
 
                 <section className="space-y-3">
-                  <h3 className="flex items-center gap-2 text-sm font-extrabold text-navy">
-                    <History size={15} className="text-blue-dark" /> Appointment history
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-navy">
+                    <History size={15} className="text-muted" /> Appointment history
                   </h3>
                   {appointments.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-3 text-center text-sm text-muted">

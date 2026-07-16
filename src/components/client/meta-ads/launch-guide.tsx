@@ -48,7 +48,7 @@ export function LaunchGuide() {
               <li key={step.n} className="relative flex gap-4">
                 {/* Number + connector line */}
                 <div className="flex flex-col items-center">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-dark text-sm font-bold text-white">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-dark text-sm font-semibold text-white">
                     {step.n}
                   </span>
                   {!last ? <span className="mt-1 w-px flex-1 bg-line" aria-hidden="true" /> : null}

@@ -2,10 +2,18 @@ import type { LucideIcon } from "lucide-react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { cn, num } from "@/lib/utils";
 
+/**
+ * A quiet big-numeral text stat (the locked flat language) — the boxed KPI card
+ * is gone. Numerals are the ONLY place 700 weight is allowed; labels sit small
+ * and medium underneath. The `icon` prop is accepted for call-site
+ * compatibility but no longer rendered (decorative accent, removed by the
+ * accent-discipline rule). `emphasis` renders the numeral a step larger.
+ */
 export function StatCard({
   label,
   value,
-  icon: Icon,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  icon,
   delta,
   hint,
   emphasis,
@@ -19,7 +27,7 @@ export function StatCard({
   /** Positive or negative percentage change. `goodWhenUp` flips colour logic. */
   delta?: { value: number; goodWhenUp?: boolean };
   hint?: string;
-  /** Render as the solid-blue headline KPI (one per row). */
+  /** Render the numeral a step larger (the row's one headline figure). */
   emphasis?: boolean;
   className?: string;
 }) {
@@ -27,44 +35,21 @@ export function StatCard({
   const good = delta ? (delta.goodWhenUp ?? true) === up : false;
 
   return (
-    <div
-      className={cn(
-        "rounded-card p-5",
-        emphasis
-          ? "chrome-hero text-white shadow-hero"
-          : "bg-card text-navy shadow-card ring-1 ring-line/60",
-        className,
-      )}
-    >
-      <div className="flex items-center justify-between">
+    <div className={className}>
+      <div className="flex items-baseline gap-2">
         <span
           className={cn(
-            "text-xs font-semibold uppercase tracking-wide",
-            emphasis ? "text-white/80" : "text-muted",
+            "font-bold tabular-nums tracking-[-0.4px] text-navy",
+            emphasis ? "text-[26px]" : "text-[22px]",
           )}
         >
-          {label}
-        </span>
-        {Icon ? (
-          <span
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-[9px]",
-              emphasis ? "bg-white/20 text-white" : "bg-blue-royal/10 text-blue-royal",
-            )}
-          >
-            <Icon size={15} />
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-2 flex items-end justify-between gap-2">
-        <span className={cn("text-2xl font-extrabold tracking-tight", emphasis ? "text-white" : "text-navy")}>
           {typeof value === "number" ? num(value) : value}
         </span>
         {delta ? (
           <span
             className={cn(
-              "flex items-center gap-0.5 text-xs font-semibold",
-              emphasis ? (good ? "text-[#c7f0d6]" : "text-[#f7c1c1]") : good ? "text-success" : "text-danger",
+              "flex items-center gap-0.5 text-xs font-medium tabular-nums",
+              good ? "text-status-green" : "text-status-red",
             )}
           >
             {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
@@ -72,7 +57,8 @@ export function StatCard({
           </span>
         ) : null}
       </div>
-      {hint ? <p className={cn("mt-1 text-xs", emphasis ? "text-white/70" : "text-muted")}>{hint}</p> : null}
+      <p className="mt-0.5 text-[11px] font-medium text-muted">{label}</p>
+      {hint ? <p className="mt-0.5 text-[11px] font-normal text-faint">{hint}</p> : null}
     </div>
   );
 }

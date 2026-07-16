@@ -18,7 +18,7 @@ export interface TabItem {
  * view and tuck secondary detail one click away instead of stacking everything
  * down the page. Only the active panel is mounted, so switching tabs keeps each
  * screen to roughly one viewport. Matches the house segmented style
- * (rounded pill bar, navy active chip).
+ * (the mock switch: white bar, small radius, navy active chip).
  */
 export function Tabs({
   tabs,
@@ -43,7 +43,7 @@ export function Tabs({
         <div
           role="tablist"
           className={cn(
-            "inline-flex flex-wrap gap-1 rounded-full border border-line bg-card p-1 shadow-chip",
+            "inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]",
             tablistClassName,
           )}
         >
@@ -57,8 +57,8 @@ export function Tabs({
                 aria-selected={isActive}
                 onClick={() => setActive(key)}
                 className={cn(
-                  "pressable inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40",
-                  isActive ? "bg-navy text-on-navy shadow-sm" : "text-muted hover:text-ink",
+                  "pressable inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
+                  isActive ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
                 )}
               >
                 {Icon ? <Icon size={15} className="shrink-0" /> : null}
@@ -66,8 +66,8 @@ export function Tabs({
                 {badge != null && badge !== "" ? (
                   <span
                     className={cn(
-                      "ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
-                      isActive ? "bg-white/20 text-white" : "bg-line text-muted",
+                      "ml-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium tabular-nums",
+                      isActive ? "bg-white/20 text-white" : "bg-[#f0f3f8] text-muted",
                     )}
                   >
                     {badge}

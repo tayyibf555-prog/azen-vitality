@@ -43,14 +43,14 @@ export function DataTable<T>({
   return (
     <div className={className}>
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
+        <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-line text-left">
               {columns.map((c) => (
                 <th
                   key={c.key}
                   className={cn(
-                    "px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted",
+                    "px-3 py-2 text-[11px] font-medium uppercase tracking-[0.04em] text-faint",
                     alignClass(c.align),
                   )}
                 >
@@ -65,8 +65,8 @@ export function DataTable<T>({
                 key={getRowKey(row, i)}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={cn(
-                  "border-b border-line/70 last:border-0",
-                  onRowClick && "cursor-pointer transition-colors hover:bg-card-muted",
+                  "border-b border-line last:border-0",
+                  onRowClick && "cursor-pointer transition-colors hover:bg-[#f7f9fc]",
                 )}
               >
                 {columns.map((c) => (
@@ -80,7 +80,7 @@ export function DataTable<T>({
         </table>
       </div>
       {capped ? (
-        <p className="border-t border-line/70 px-3 pt-2.5 text-center text-xs font-medium text-muted">
+        <p className="border-t border-line px-3 pt-2.5 text-center text-xs font-medium text-faint">
           Showing {maxRows} of {rows.length}
         </p>
       ) : null}

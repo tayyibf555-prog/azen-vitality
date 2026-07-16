@@ -134,7 +134,7 @@ function KloeCard({
       </div>
       <p className="mt-1.5 flex-1 text-xs leading-relaxed text-muted">{question}</p>
       <div className="mt-3 flex items-end justify-between gap-2 border-t border-line pt-3">
-        <span className="text-2xl font-extrabold tracking-tight tabular-nums text-navy">
+        <span className="text-2xl font-bold tracking-tight tabular-nums text-navy">
           {score}
           <span className="text-sm font-semibold text-muted">/100</span>
         </span>

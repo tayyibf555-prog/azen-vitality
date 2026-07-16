@@ -1,13 +1,13 @@
 import { cn } from "@/lib/utils";
 
-// Mini month calendar for the Home rail: the current London month with activity
-// dots and a Booked / To confirm / Risk legend. The page only loads TODAY's
-// appointments, so only today carries accurate dots; every other day renders as
-// a plain quiet day rather than inventing activity. When a month-level
-// appointments feed exists, extend the per-cell `dots` below to mark every day
-// (the cell markup already supports it). A pure server component.
+// Mini month calendar for the Home rail, in the locked flat language: a plain
+// section (title + hairline, no card box), plain day numbers, and a navy square
+// (7px radius) for today. The page only loads TODAY's appointments, so no other
+// day can honestly carry an activity dot; the per-cell markup below already
+// supports the mock's 4px dots — extend `dotFor` when a month-level
+// appointments feed exists. A pure server component.
 
-const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
 
 function londonYMD(d: Date): { y: number; m: number; day: number } {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -45,79 +45,55 @@ function monthCells(y: number, m: number, today: number): Cell[] {
   return cells;
 }
 
-export function MiniMonth({
-  now,
-  counts,
-}: {
-  now: Date;
-  /** Today's activity, from data the page already loads. */
-  counts: { booked: number; toConfirm: number; risk: number };
-}) {
+/** Activity dot colour for a day, or null. Today-only data for now (see above). */
+function dotFor(_cell: Cell): string | null {
+  return null;
+}
+
+export function MiniMonth({ now }: { now: Date }) {
   const { y, m, day: today } = londonYMD(now);
-  const monthLabel = new Intl.DateTimeFormat("en-GB", {
+  const monthName = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    month: "long",
+  }).format(now);
+  const yearLabel = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/London",
     month: "long",
     year: "numeric",
   }).format(now);
   const cells = monthCells(y, m, today);
 
-  // Which dot colours today has earned. On the navy today-pill the dots render
-  // muted (like the mock); the legend below carries the colour coding.
-  const todayDots = [
-    counts.booked > 0,
-    counts.toConfirm > 0,
-    counts.risk > 0,
-  ].filter(Boolean).length;
-
   return (
-    <div className="rounded-card border border-line bg-card p-4 shadow-card">
-      <p className="px-1 text-sm font-extrabold tracking-[-0.01em] text-navy">{monthLabel}</p>
-
+    <section>
+      <h3 className="border-b border-line pb-2.5 text-title text-navy" title={yearLabel}>
+        {monthName}
+      </h3>
       <div className="mt-2 grid grid-cols-7 text-center">
-        {WEEKDAYS.map((w) => (
-          <span key={w} className="pb-1 text-[10px] font-bold uppercase tracking-[0.04em] text-muted">
+        {WEEKDAYS.map((w, i) => (
+          <span key={i} className="py-1 text-[9.5px] font-medium uppercase text-faint">
             {w}
           </span>
         ))}
-        {cells.map((c, i) => (
-          <span key={i} className="flex items-center justify-center py-0.5">
-            <span
-              className={cn(
-                "relative inline-flex h-8 w-8 items-center justify-center rounded-full text-caption tabular-nums",
-                c.isToday
-                  ? "bg-navy font-bold text-on-navy"
-                  : c.inMonth
-                    ? "text-ink"
-                    : "text-line-strong",
-              )}
-            >
-              {c.n}
-              {c.isToday && todayDots > 0 ? (
-                <span className="absolute bottom-1 flex gap-0.5" aria-hidden="true">
-                  {Array.from({ length: todayDots }).map((_, d) => (
-                    <i key={d} className="h-1 w-1 rounded-full bg-on-navy-muted" />
-                  ))}
+        {cells.map((c, i) => {
+          const dot = dotFor(c);
+          return (
+            <span key={i} className="py-[3px] text-[11.5px] tabular-nums">
+              {c.isToday ? (
+                <span className="inline-block h-[26px] w-[26px] rounded-[7px] bg-navy text-[11.5px] font-semibold leading-[26px] text-white">
+                  {c.n}
                 </span>
-              ) : null}
+              ) : (
+                <span className={cn("block", c.inMonth ? "text-ink" : "text-line-strong")}>
+                  {c.n}
+                  {dot ? (
+                    <em aria-hidden className={cn("mx-auto mt-[1px] block h-1 w-1 rounded-full not-italic", dot)} />
+                  ) : null}
+                </span>
+              )}
             </span>
-          </span>
-        ))}
+          );
+        })}
       </div>
-
-      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 border-t border-line pt-2.5 text-[10.5px] font-semibold text-muted">
-        <span className="inline-flex items-center gap-1.5">
-          <i className="h-1.5 w-1.5 rounded-full bg-blue-dark" />
-          Booked <b className="text-navy">{counts.booked}</b>
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <i className="h-1.5 w-1.5 rounded-full bg-status-amber" />
-          To confirm <b className="text-navy">{counts.toConfirm}</b>
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <i className="h-1.5 w-1.5 rounded-full bg-status-red" />
-          Risk <b className="text-navy">{counts.risk}</b>
-        </span>
-      </div>
-    </div>
+    </section>
   );
 }

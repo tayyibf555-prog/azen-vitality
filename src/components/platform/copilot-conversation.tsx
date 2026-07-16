@@ -97,7 +97,7 @@ export function CopilotConversation({
               <Bot size={15} />
             </span>
             <div className="leading-tight">
-              <p className="text-[13px] font-extrabold text-navy">Co-pilot</p>
+              <p className="text-[13px] font-semibold text-navy">Co-pilot</p>
               <p className="text-[10px] text-muted">Full visibility of your practice</p>
             </div>
           </div>

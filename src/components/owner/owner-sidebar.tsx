@@ -171,7 +171,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
           alt="Vitality Dental"
           className="h-11 w-11 shrink-0 object-contain brightness-0 invert lg:filter-none"
         />
-        <p className="truncate text-sm font-bold text-on-navy lg:text-navy">{client ? client.name : "Vitality Dental"}</p>
+        <p className="truncate text-sm font-semibold text-on-navy lg:text-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -226,7 +226,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
           </button>
           {current ? (
             <div role="tabpanel" aria-labelledby={`orail-${current.key}`}>
-              <p className="px-2 pb-2 text-[11px] font-bold uppercase tracking-wide text-on-navy lg:text-side-label">
+              <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-on-navy lg:text-side-label">
                 {current.label}
               </p>
               <ul className="space-y-0.5">
@@ -274,7 +274,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
       <div className="border-t border-navy-line px-3 py-3 lg:border-navy/10">
         {user ? (
           <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-soft text-xs font-bold text-on-navy lg:bg-blue-royal lg:text-white">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-soft text-xs font-semibold text-on-navy lg:bg-blue-royal lg:text-white">
               {initialsOf(user.name)}
             </span>
             <div className="min-w-0 flex-1">

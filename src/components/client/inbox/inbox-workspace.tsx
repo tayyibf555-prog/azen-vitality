@@ -183,7 +183,7 @@ export function InboxWorkspace({
   }
 
   return (
-    <div className="grid min-h-[34rem] grid-cols-1 overflow-hidden rounded-card bg-card shadow-card ring-1 ring-line/60 md:grid-cols-[20rem_1fr] lg:grid-cols-[22rem_1fr]">
+    <div className="grid min-h-[34rem] grid-cols-1 overflow-hidden rounded-[10px] border border-line bg-card md:grid-cols-[20rem_1fr] lg:grid-cols-[22rem_1fr]">
       {/* Thread list */}
       <aside
         className={cn(
@@ -194,7 +194,7 @@ export function InboxWorkspace({
         aria-label="Conversations"
       >
         <header className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
-          <h2 className="text-sm font-extrabold text-navy">Inbox</h2>
+          <h2 className="text-sm font-semibold text-navy">Inbox</h2>
           <span className="text-xs text-muted">{threads.length} conversations</span>
         </header>
         <ul className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
@@ -275,7 +275,7 @@ export function InboxWorkspace({
                 <ChannelIcon channel={active.channel} />
               </span>
               <div className="min-w-0">
-                <p className="truncate text-sm font-extrabold text-navy">{active.contactName}</p>
+                <p className="truncate text-sm font-semibold text-navy">{active.contactName}</p>
                 <p className="text-[11px] text-muted">{CHANNEL_LABEL[active.channel]}</p>
               </div>
             </header>

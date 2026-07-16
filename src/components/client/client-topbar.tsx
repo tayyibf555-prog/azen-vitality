@@ -92,7 +92,7 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
 
         {/* Breadcrumb: product context / current section, per the mock */}
         <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-muted sm:flex">
-          <span className="truncate font-bold text-navy">{client ? client.name : "Vitality Dental"}</span>
+          <span className="truncate font-semibold text-navy">{client ? client.name : "Vitality Dental"}</span>
           <span aria-hidden>/</span>
           <span className="truncate">{sectionLabel(pathname, base)}</span>
         </nav>
@@ -104,7 +104,7 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
           onClick={() => setOpen((v) => !v)}
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           aria-label="Switch site"
-          className="pressable ml-1 flex items-center gap-1.5 rounded-md bg-blue-soft px-2.5 py-[3px] text-[11.5px] font-bold text-blue-royal transition-colors hover:bg-tint-blue"
+          className="pressable ml-1 flex items-center gap-1.5 rounded-md bg-blue-soft px-2.5 py-[3px] text-[11.5px] font-semibold text-blue-royal transition-colors hover:bg-tint-blue"
         >
           <span>{siteCode(selectedLabel)}</span>
           <span className="hidden max-w-[10rem] truncate md:inline">{selectedLabel}</span>

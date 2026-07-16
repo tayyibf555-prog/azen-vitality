@@ -1,34 +1,25 @@
 import type { BriefSection } from "@/lib/daily-brief/types";
 import { cn } from "@/lib/utils";
 
-// The Home rail's "Needs attention" cards: the top line of each daily-brief
-// section as a soft tinted block (bold title, one-line detail, a white urgency
-// pill and an arrow action), mirroring the approved mock. Built purely from the
-// brief the page already loads; the full section lists stay one click away on
-// the Morning brief page. A pure server component.
+// The Home rail's "Needs attention" list, in the locked flat language: a plain
+// section title + hairline, then whisper-tinted cards (8px radius, tint fill +
+// tint hairline) each carrying a full-saturation status dot, a 600-weight
+// title, a one-line detail and a right-aligned quiet urgency. Built purely from
+// the brief the page already loads; the full section lists stay one click away
+// on the Morning brief page. A pure server component.
 
 type Priority = "high" | "medium" | "low";
 
-const TONE: Record<Priority, { wrap: string; ink: string }> = {
-  high: { wrap: "border-tint-red-line bg-tint-red", ink: "text-status-red" },
-  medium: { wrap: "border-tint-amber-line bg-tint-amber", ink: "text-status-amber" },
-  low: { wrap: "border-tint-blue-line bg-tint-blue", ink: "text-status-blue" },
+const TONE: Record<Priority, { wrap: string; dot: string }> = {
+  high: { wrap: "border-tint-red-line bg-tint-red", dot: "bg-status-red" },
+  medium: { wrap: "border-tint-amber-line bg-tint-amber", dot: "bg-status-amber" },
+  low: { wrap: "border-tint-blue-line bg-tint-blue", dot: "bg-status-blue" },
 };
 
 const URGENCY: Record<Priority, string> = {
   high: "Now",
   medium: "Today",
   low: "This week",
-};
-
-// Per-section action labels; anything unmapped falls back to "Open".
-const ACTION: Record<string, string> = {
-  noshow: "Confirm now",
-  chase: "Review list",
-  overnight: "Review calls",
-  money: "Chase payments",
-  compliance: "Review items",
-  arriving: "See the list",
 };
 
 const RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
@@ -49,11 +40,11 @@ export function NeedsAttention({
 
   return (
     <section>
-      <h3 className="text-title text-navy">Needs attention</h3>
+      <h3 className="border-b border-line pb-2.5 text-title text-navy">Needs attention</h3>
       {cards.length === 0 ? (
-        <p className="mt-3 text-caption text-muted">Nothing needs attention right now.</p>
+        <p className="mt-3 text-caption font-normal text-muted">Nothing needs attention right now.</p>
       ) : (
-        <div className="mt-3 space-y-3">
+        <div className="mt-2 space-y-2">
           {cards.map(({ key, item }) => {
             const tone = TONE[item.priority] ?? TONE.low;
             return (
@@ -61,26 +52,17 @@ export function NeedsAttention({
                 key={key}
                 href={item.href ?? fallbackHref}
                 className={cn(
-                  "pressable flex flex-col gap-1.5 rounded-[18px] border p-4 shadow-chip",
+                  "pressable flex items-start gap-2.5 rounded-[8px] border p-3",
                   tone.wrap,
                 )}
               >
-                <div className="flex items-start gap-2">
-                  <b className="min-w-0 flex-1 text-caption font-bold leading-snug text-navy">
-                    {item.title}
-                  </b>
-                  <span
-                    className={cn(
-                      "shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.04em]",
-                      tone.ink,
-                    )}
-                  >
-                    {URGENCY[item.priority] ?? "Today"}
-                  </span>
-                </div>
-                <p className="text-caption text-muted">{item.detail}</p>
-                <span className={cn("text-caption font-bold", tone.ink)}>
-                  {ACTION[key] ?? "Open"} →
+                <span aria-hidden className={cn("mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full", tone.dot)} />
+                <span className="min-w-0 flex-1">
+                  <b className="block text-[12.5px] font-semibold leading-snug text-navy">{item.title}</b>
+                  <span className="text-[11.5px] text-muted">{item.detail}</span>
+                </span>
+                <span className="whitespace-nowrap text-[10.5px] font-medium text-faint">
+                  {URGENCY[item.priority] ?? "Today"}
                 </span>
               </a>
             );

@@ -119,7 +119,7 @@ export function TargetDrawer({
       <aside className="absolute right-0 top-0 flex h-full w-full max-w-[480px] flex-col overflow-y-auto border-l border-line bg-card shadow-2xl">
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-extrabold text-navy">{target.patientName}</h2>
+            <h2 className="truncate text-lg font-semibold text-navy">{target.patientName}</h2>
             <p className="mt-0.5 text-sm text-muted">{REASON_LABEL[target.reason]}</p>
           </div>
           <button
@@ -148,7 +148,7 @@ export function TargetDrawer({
 
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-extrabold text-navy">Cadence</h3>
+              <h3 className="text-sm font-semibold text-navy">Cadence</h3>
               {cadence ? (
                 <Button onClick={togglePause} variant="ghost" size="sm" disabled={pausing}>
                   {pausing ? <Loader2 size={14} className="animate-spin" /> : paused ? <Play size={14} /> : <Pause size={14} />}
@@ -160,12 +160,12 @@ export function TargetDrawer({
           </section>
 
           <section className="space-y-3">
-            <h3 className="text-sm font-extrabold text-navy">Outreach</h3>
+            <h3 className="text-sm font-semibold text-navy">Outreach</h3>
             <DraftEditor target={target} onSent={logSent} />
           </section>
 
           <section className="space-y-3">
-            <h3 className="text-sm font-extrabold text-navy">Book re-engagement</h3>
+            <h3 className="text-sm font-semibold text-navy">Book re-engagement</h3>
             {!showBook ? (
               <Button onClick={() => setShowBook(true)} variant="secondary" className="w-full">
                 <CalendarPlus size={15} />
@@ -203,7 +203,7 @@ export function TargetDrawer({
           </section>
 
           <section className="space-y-3">
-            <h3 className="text-sm font-extrabold text-navy">Activity</h3>
+            <h3 className="text-sm font-semibold text-navy">Activity</h3>
             {touches.length === 0 ? (
               <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-4 text-center text-sm text-muted">
                 No activity in this session yet. Sent messages and bookings will appear here.

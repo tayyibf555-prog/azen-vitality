@@ -75,7 +75,7 @@ function FormPreview({ practiceName, headline, intro }: { practiceName: string; 
     <div className="rounded-xl border border-line-strong bg-card-muted/40 p-4">
       <p className="text-[0.7rem] font-semibold uppercase tracking-wide text-muted">Preview</p>
       <div className="mt-3 rounded-xl border border-line bg-card p-5 text-center shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
-        <p className="text-sm font-bold text-navy">{practiceName || "Your practice"}</p>
+        <p className="text-sm font-semibold text-navy">{practiceName || "Your practice"}</p>
         <p className="text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-blue-deep">
           New patient onboarding
         </p>

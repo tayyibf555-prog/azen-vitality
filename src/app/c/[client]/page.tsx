@@ -1,10 +1,8 @@
-import { Clock, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/primitives";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import { DiaryTimeline } from "@/components/client/home/diary-timeline";
 import { MiniMonth } from "@/components/client/home/mini-month";
 import { NeedsAttention } from "@/components/client/home/needs-attention";
-import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { getSiteMetrics } from "@/lib/mock";
@@ -13,15 +11,16 @@ import { OWNER_ROLES } from "@/lib/nav";
 import { generateBrief } from "@/lib/daily-brief/generate";
 import type { DailyBrief } from "@/lib/daily-brief/types";
 import { getTodayDiary } from "@/lib/home/diary";
-import { gbp } from "@/lib/utils";
+import { cn, gbp } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-// "One Front Door": the landing page IS the working page, arranged to the
-// approved aesthetic study. The diary timeline is the hero, a rail carries the
-// month at a glance and what needs attention, and the day's numbers, worklist
-// and owner band follow as hairline-separated sections. Nothing shown to the
-// client before this layout has been removed; it has been repositioned.
+// "One Front Door", arranged exactly as the locked mock (aesthetic-mock2):
+// greeting, dot-prefixed day numerals, the diary as flat hairline slot rows
+// beside a Needs-attention + mini-month rail, then the numbers band — the
+// page's ONE blue moment — carrying the money/priority figures with a Reports
+// link through to the full charts. Nothing shown to the client before this
+// layout has been removed; it has been repositioned or sits one click away.
 
 function longDate(now: Date): string {
   return now.toLocaleDateString("en-GB", {
@@ -32,21 +31,38 @@ function longDate(now: Date): string {
   });
 }
 
-/** A quiet big-numeral text stat (the aesthetic-shell replacement for stat cards). */
-function NumberStat({
-  label,
+/** A dot-prefixed big numeral (the mock's day stats). 700 is reserved for these. */
+function DayStat({ dot, value, label }: { dot: string; value: string | number; label: string }) {
+  return (
+    <div>
+      <p className="text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
+        <i aria-hidden className={cn("mr-1.5 inline-block h-[7px] w-[7px] rounded-full align-[2px]", dot)} />
+        {value}
+      </p>
+      <p className="mt-0.5 text-[11px] font-medium text-muted">{label}</p>
+    </div>
+  );
+}
+
+/** A numbers-band figure: big quiet numeral + small label (+ optional footnote). */
+function BandStat({
   value,
+  label,
   hint,
+  valueClassName,
 }: {
-  label: string;
   value: string | number;
-  hint: string;
+  label: string;
+  hint?: string;
+  valueClassName?: string;
 }) {
   return (
     <div>
-      <p className="text-label text-muted">{label}</p>
-      <p className="mt-1 text-display tabular-nums text-navy">{value}</p>
-      <p className="mt-0.5 text-caption text-muted">{hint}</p>
+      <b className={cn("text-[24px] font-bold tracking-[-0.4px] tabular-nums text-navy", valueClassName)}>
+        {value}
+      </b>
+      <span className="block text-[11px] font-medium text-muted">{label}</span>
+      {hint ? <span className="block text-[10.5px] font-normal text-faint">{hint}</span> : null}
     </div>
   );
 }
@@ -76,8 +92,6 @@ export default async function ClientHomePage({
   const scope = await getViewScope(client.id);
   const siteIds = scope.siteIds;
 
-  // Both data loads are best-effort: a failed read renders an empty section, never
-  // a broken landing page.
   // The two loads run CONCURRENTLY: the diary no longer waits behind the whole
   // brief (nor behind the brief's slowest builder). Each has its own fallback so a
   // failed read renders empty, never a broken page. They share ONE underlying
@@ -111,97 +125,69 @@ export default async function ClientHomePage({
   const overnightLine = brief.sections.find((s) => s.key === "overnight")?.items[0];
   const moneyLine = brief.sections.find((s) => s.key === "money")?.items[0];
   const headline = brief.headline[0] ?? null;
-  const riskCount = diary.slots.filter((s) => s.state === "risk").length;
   // Scope the recovered-revenue figure to the selected site(s) (default N15) so it
   // matches the rest of the dashboard rather than always summing every practice.
   const recovered = getSiteMetrics(siteIds).reduce((sum, s) => sum + s.recoveredRevenue, 0);
   const briefHref = `/c/${clientSlug}/daily-brief`;
+  // The full charts live one click away: owners get the overview console, the
+  // coordinator view gets the reports module.
+  const reportsHref = isOwner ? `/owner/${clientSlug}/overview` : `/c/${clientSlug}/reports`;
 
   return (
     <>
-      {/* Day header: the 3-second answer. */}
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-display text-navy">{longDate(now)}</h1>
-            <p className="mt-1 text-body text-muted">
-              {isOwner
-                ? scope.isAllSites
-                  ? "Here is the morning picture across your sites. Start at the top."
-                  : `Here is the morning picture for ${scope.siteName}. Start at the top.`
-                : "Here is your morning. Start at the top."}
-            </p>
-          </div>
-          {diary.next ? (
-            <span className="inline-flex items-center gap-2 rounded-full border border-tint-blue-line bg-tint-blue px-3.5 py-1.5 text-sm font-semibold text-status-blue">
-              <Clock size={15} className="shrink-0" />
-              Next: {diary.next.time} · {diary.next.label}
-            </span>
-          ) : null}
-        </div>
-
-        <p className="text-body text-muted">
-          <Sparkles size={14} className="mr-1.5 inline-block align-[-2px] text-blue-dark" aria-hidden="true" />
+      {/* Greeting: the 3-second answer. */}
+      <section>
+        <h1 className="text-display text-navy">{longDate(now)}</h1>
+        <p className="mt-1.5 text-[13px] font-normal text-muted">
           {headline ? (
             <>
-              <span className="font-semibold text-navy">{headline.title}.</span> {headline.detail}{" "}
+              <span className="font-medium text-ink">{headline.title}.</span> {headline.detail}{" "}
             </>
           ) : (
             <>Nothing is on fire this morning. </>
           )}
-          <a href={briefHref} className="font-semibold text-blue-dark hover:underline">
+          <a href={briefHref} className="font-medium text-blue-royal hover:underline">
             Morning brief
           </a>
         </p>
       </section>
 
-      {/* Hero: the diary timeline beside the month + needs-attention rail. */}
-      <div className="grid items-start gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_332px]">
-        <DiaryTimeline
-          diary={diary}
-          clientSlug={clientSlug}
-          stats={{
-            booked: brief.appointmentsToday,
-            toConfirm: noshowLine?.count ?? 0,
-            gaps: diary.gapCount,
-          }}
-        />
-        <aside className="space-y-6">
-          <MiniMonth
-            now={now}
-            counts={{
-              booked: brief.appointmentsToday,
-              toConfirm: noshowLine?.count ?? 0,
-              risk: riskCount,
-            }}
-          />
+      {/* Day stats: dot-prefixed numerals, never stat cards. */}
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <DayStat dot="bg-status-blue" value={brief.appointmentsToday} label="Booked today" />
+        <DayStat dot="bg-status-amber" value={noshowLine?.count ?? 0} label="To confirm" />
+        <DayStat dot="bg-status-red" value={diary.gapCount} label="Open slots" />
+        {diary.fillPercent !== null ? (
+          <DayStat dot="bg-status-green" value={`${diary.fillPercent}%`} label="Diary full" />
+        ) : null}
+      </div>
+
+      {/* Hero: the diary rows beside the attention + month rail. */}
+      <div className="grid items-start gap-x-11 gap-y-8 lg:grid-cols-[minmax(0,1fr)_288px]">
+        <DiaryTimeline diary={diary} clientSlug={clientSlug} />
+        <aside className="space-y-7">
           <NeedsAttention sections={brief.sections} fallbackHref={briefHref} />
+          <MiniMonth now={now} />
         </aside>
       </div>
 
-      {/* The day's numbers: the previous stat cards as quiet big-numeral text
-          stats, always visible whatever the brief contains. */}
-      <section className="border-t border-line pt-5">
-        <div className="flex flex-wrap gap-x-14 gap-y-5">
-          <NumberStat
-            label="Overnight"
-            value={overnightLine?.count ?? 0}
-            hint="Missed after hours"
+      {/* The numbers band: the page's one blue moment. The owner band's charts
+          moved behind the Reports link (the full overview keeps them). */}
+      <div className="flex flex-wrap items-center gap-x-11 gap-y-4 rounded-[10px] border border-band-line bg-band px-6 py-5">
+        <BandStat value={overnightLine?.count ?? 0} label="Overnight enquiries" />
+        <BandStat value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)} label="Outstanding balances" />
+        {isOwner ? (
+          <BandStat
+            value={gbp(recovered)}
+            label="Recovered this month"
+            hint="Pilot figure until live data connects"
+            valueClassName="text-status-green"
           />
-          <NumberStat
-            label="Outstanding"
-            value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)}
-            hint="Owed across plans"
-          />
-          {isOwner ? (
-            <NumberStat
-              label="Recovered this month"
-              value={gbp(recovered)}
-              hint="Pilot figure until live data connects"
-            />
-          ) : null}
-        </div>
-      </section>
+        ) : null}
+        <a href={reportsHref} className="ml-auto text-xs font-semibold text-blue-royal hover:underline">
+          Reports →
+        </a>
+      </div>
 
       {/* The working centre: the live queue as a hairline section. */}
       <TaskQueueBoard
@@ -211,14 +197,6 @@ export default async function ClientHomePage({
         title="Next actions"
         description="The highest-priority work across every module. Finish one and the next slides in."
       />
-
-      {/* Owner band: is it paying off. Server-gated, coordinators never receive it. */}
-      {isOwner ? (
-        <section className="space-y-5 border-t border-line pt-5">
-          <h2 className="text-title text-navy">This month</h2>
-          <OverviewDashboard hideHero variant="embedded" siteIds={siteIds} />
-        </section>
-      ) : null}
     </>
   );
 }

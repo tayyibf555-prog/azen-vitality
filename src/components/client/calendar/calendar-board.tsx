@@ -195,7 +195,7 @@ export function CalendarBoard({
                   )}
                 >
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">{dow(d)}</span>
-                  <span className={cn("text-base font-extrabold", isToday ? "text-blue-dark" : "text-navy")}>{dnum(d)}</span>
+                  <span className={cn("text-base font-semibold tabular-nums", isToday ? "text-blue-royal" : "text-navy")}>{dnum(d)}</span>
                   <span className="mt-0.5 h-4 text-[10px] tabular-nums text-muted">{count > 0 ? `${count} appt` : ""}</span>
                 </button>
               );
@@ -209,7 +209,7 @@ export function CalendarBoard({
               {dayRows.map((a) => (
                 <li key={a.id} className="flex items-center gap-4 rounded-lg border border-line bg-card px-4 py-3">
                   <div className="w-16 shrink-0 text-right">
-                    <p className="text-sm font-bold tabular-nums text-navy">{hhmm(a.start)}</p>
+                    <p className="text-sm font-semibold tabular-nums text-navy">{hhmm(a.start)}</p>
                     <p className="text-[11px] text-muted">{a.durationMin} min</p>
                   </div>
                   <div className="h-9 w-px shrink-0 bg-line" />
@@ -249,7 +249,7 @@ export function CalendarBoard({
                     )}
                   >
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">{dow(d)}</span>
-                    <span className={cn("text-sm font-extrabold", isToday ? "text-blue-dark" : "text-navy")}>{dnum(d)}</span>
+                    <span className={cn("text-sm font-semibold tabular-nums", isToday ? "text-blue-royal" : "text-navy")}>{dnum(d)}</span>
                   </button>
                   <div className="flex flex-1 flex-col gap-1 p-1.5">
                     {list.length === 0 ? (
@@ -267,7 +267,7 @@ export function CalendarBoard({
                         >
                           <span className="flex items-center gap-1.5">
                             <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATE_DOT[a.state] ?? "bg-muted")} />
-                            <span className="text-[11px] font-bold tabular-nums text-navy">{hhmm(a.start)}</span>
+                            <span className="text-[11px] font-medium tabular-nums text-navy">{hhmm(a.start)}</span>
                           </span>
                           <span className="mt-0.5 block truncate text-[11px] text-ink">{a.patientName}</span>
                         </button>

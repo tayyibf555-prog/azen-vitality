@@ -63,7 +63,7 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
                 <Icon size={13} className="text-blue-dark" /> {it.label}
               </p>
-              <p className="mt-1 text-xl font-extrabold tracking-tight tabular-nums text-navy">
+              <p className="mt-1 text-xl font-bold tracking-tight tabular-nums text-navy">
                 {it.value}
               </p>
             </div>
@@ -134,7 +134,7 @@ function ReportPanel({ report, period }: { report: Report; period: ReportPeriod 
                 key={i}
                 className="flex items-start gap-2.5 rounded-lg border border-line bg-card px-3.5 py-2.5"
               >
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-card-muted text-[11px] font-bold text-blue-dark">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#f0f4f9] text-[11px] font-semibold text-side-ink">
                   {i + 1}
                 </span>
                 <p className="text-sm font-medium leading-snug text-navy">{r}</p>

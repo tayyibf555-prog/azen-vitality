@@ -9,9 +9,9 @@ import { PatientsTable } from "./patients-table";
 function HeaderStat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
   return (
     <div>
-      <p className="text-label text-muted">{label}</p>
-      <p className="mt-1 text-display tabular-nums text-navy">{value}</p>
-      <p className="mt-0.5 text-caption text-muted">{hint}</p>
+      <p className="text-[22px] font-bold tracking-[-0.4px] tabular-nums text-navy">{value}</p>
+      <p className="mt-0.5 text-[11px] font-medium text-muted">{label}</p>
+      <p className="mt-0.5 text-[10.5px] font-normal text-faint">{hint}</p>
     </div>
   );
 }
@@ -64,7 +64,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
         <div className="flex flex-wrap items-end justify-between gap-x-12 gap-y-5">
           <div className="max-w-xl">
             <h1 className="text-display text-navy">Patients</h1>
-            <p className="mt-1 text-body text-muted">
+            <p className="mt-1.5 text-[13px] font-normal text-muted">
               Your patient database, live from Dentally, searchable by name or contact with recall
               and last visit at a glance.
             </p>
@@ -89,7 +89,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
             <HeaderStat label="Due a recall" value={dueRecall} hint="Among the patients listed below" />
           </div>
         </div>
-        <p className="text-caption text-muted">
+        <p className="text-caption font-normal text-faint">
           The list shows active patients (first {Math.min(patients.length, 300)}); search reaches
           everyone, including archived records.
         </p>

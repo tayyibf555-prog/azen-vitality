@@ -144,7 +144,7 @@ export function OpportunityDrawer({
       <aside className="absolute right-0 top-0 flex h-full w-full max-w-[480px] flex-col overflow-y-auto border-l border-line bg-card shadow-2xl">
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-extrabold text-navy">{opportunity.patientName}</h2>
+            <h2 className="truncate text-lg font-semibold text-navy">{opportunity.patientName}</h2>
             <p className="mt-0.5 text-sm text-muted">{opportunity.treatment}</p>
           </div>
           <button
@@ -162,13 +162,13 @@ export function OpportunityDrawer({
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-lg border border-line bg-card-muted/60 px-3 py-2.5">
               <p className="text-xs font-medium uppercase tracking-wide text-muted">Planned</p>
-              <p className="mt-0.5 text-lg font-extrabold text-navy tabular-nums">
+              <p className="mt-0.5 text-lg font-bold text-navy tabular-nums">
                 {gbp(opportunity.plannedValue)}
               </p>
             </div>
             <div className="rounded-lg border border-line bg-card-muted/60 px-3 py-2.5">
               <p className="text-xs font-medium uppercase tracking-wide text-muted">Outstanding</p>
-              <p className="mt-0.5 text-lg font-extrabold text-navy tabular-nums">
+              <p className="mt-0.5 text-lg font-bold text-navy tabular-nums">
                 {gbp(opportunity.amountOutstanding)}
               </p>
             </div>
@@ -193,13 +193,13 @@ export function OpportunityDrawer({
 
           {/* Draft and approve */}
           <section className="space-y-3">
-            <h3 className="text-sm font-extrabold text-navy">Outreach</h3>
+            <h3 className="text-sm font-semibold text-navy">Outreach</h3>
             <DraftEditor opportunity={opportunity} onSent={logSent} />
           </section>
 
           {/* Book next step */}
           <section className="space-y-3">
-            <h3 className="text-sm font-extrabold text-navy">Next step</h3>
+            <h3 className="text-sm font-semibold text-navy">Next step</h3>
             {!showBook ? (
               <Button onClick={() => setShowBook(true)} variant="secondary" className="w-full">
                 <CalendarPlus size={15} />
@@ -247,7 +247,7 @@ export function OpportunityDrawer({
 
           {/* Touch history (this session) */}
           <section className="space-y-3">
-            <h3 className="text-sm font-extrabold text-navy">Activity</h3>
+            <h3 className="text-sm font-semibold text-navy">Activity</h3>
             {touches.length === 0 ? (
               <p className="rounded-lg border border-dashed border-line-strong bg-card-muted/40 px-3 py-4 text-center text-sm text-muted">
                 No activity in this session yet. Sent messages and bookings will appear here.
