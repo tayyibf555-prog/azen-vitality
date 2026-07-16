@@ -33,20 +33,23 @@ export default async function ClientLayout({
   ]);
   const disabledSlugs = [...disabled];
   return (
-    // Floating app shell: the whole app floats as one rounded card on a deep-navy
-    // backdrop from lg up (the .app-shell-backdrop media query paints the navy +
-    // glows only there). Below lg it stays full-bleed so the off-canvas fixed
-    // sidebar behaves exactly as before. The main column owns the internal scroll
-    // at lg (lg:overflow-y-auto); the sticky topbar pins to it. The fixed floating
-    // widgets (co-pilot, feedback) are position:fixed and escape the shell clip.
-    <div className="app-shell-backdrop min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden lg:p-4 xl:p-5">
-      <div className="flex min-h-screen bg-cream lg:h-full lg:min-h-0 lg:overflow-hidden lg:rounded-shell lg:shadow-shell">
+    // The approved frame (aesthetic-mock2, A - Light): a light brand-blue wash,
+    // the sidebar transparent directly on it, and ALL page content inside ONE
+    // white panel (18px radius, 12px gutter top/right/bottom) with its own
+    // internal scroll. Below lg there is no frame: full-bleed white, and the
+    // off-canvas fixed sidebar keeps its navy chrome untouched. The topbar sits
+    // INSIDE the panel above the scroller (sticky still covers the mobile body
+    // scroll). Fixed widgets (co-pilot, feedback) escape the panel clip.
+    <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
+      <div className="flex min-h-screen lg:h-full lg:min-h-0">
         <ClientSidebar disabledSlugs={disabledSlugs} />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:h-full lg:min-h-0 lg:overflow-y-auto">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:my-3 lg:mr-3 lg:h-auto lg:min-h-0 lg:overflow-hidden lg:rounded-[18px]">
           <ClientTopbar selected={selectedSite} />
-          <main className="flex-1">
-            <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">{children}</div>
-          </main>
+          <div className="min-h-0 flex-1 lg:overflow-y-auto">
+            <main>
+              <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">{children}</div>
+            </main>
+          </div>
         </div>
       </div>
       <PlatformShortcuts />

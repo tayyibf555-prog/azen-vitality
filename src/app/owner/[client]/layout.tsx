@@ -29,17 +29,19 @@ export default async function OwnerLayout({
   ]);
   const disabledSlugs = [...disabled];
   return (
-    // Floating app shell (see c/[client]/layout.tsx for the full rationale): the
-    // app floats as one rounded card on a navy backdrop from lg up; below lg it
-    // stays full-bleed so the off-canvas fixed sidebar is untouched.
-    <div className="app-shell-backdrop min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden lg:p-4 xl:p-5">
-      <div className="flex min-h-screen bg-cream lg:h-full lg:min-h-0 lg:overflow-hidden lg:rounded-shell lg:shadow-shell">
+    // The approved frame (see c/[client]/layout.tsx for the full rationale):
+    // light blue wash, transparent sidebar, one white content panel with an
+    // internal scroll; full-bleed white below lg.
+    <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
+      <div className="flex min-h-screen lg:h-full lg:min-h-0">
         <OwnerSidebar disabledSlugs={disabledSlugs} />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:h-full lg:min-h-0 lg:overflow-y-auto">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:my-3 lg:mr-3 lg:h-auto lg:min-h-0 lg:overflow-hidden lg:rounded-[18px]">
           <ClientTopbar selected={selectedSite} />
-          <main className="flex-1">
-            <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">{children}</div>
-          </main>
+          <div className="min-h-0 flex-1 lg:overflow-y-auto">
+            <main>
+              <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">{children}</div>
+            </main>
+          </div>
         </div>
       </div>
       <PlatformShortcuts />

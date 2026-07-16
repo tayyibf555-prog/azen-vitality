@@ -156,7 +156,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
         inert={hiddenFromA11y || undefined}
         aria-hidden={hiddenFromA11y || undefined}
         className={cn(
-          "chrome-nav fixed left-0 top-0 z-50 flex h-screen w-[296px] max-w-[85vw] shrink-0 flex-col self-start border-r border-navy-line transition-transform duration-200 ease-out",
+          "chrome-nav fixed left-0 top-0 z-50 flex h-screen w-[296px] max-w-[85vw] shrink-0 flex-col self-start border-r border-navy-line transition-transform lg:border-r-0 duration-200 ease-out",
           // Inside the floating shell at lg the sidebar fills the shell height
           // (h-full) rather than the full viewport, so its foot never clips.
           "lg:sticky lg:z-auto lg:h-full lg:max-w-none lg:translate-x-0",
@@ -169,9 +169,9 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
         <img
           src="/copilot-logo.png"
           alt="Vitality Dental"
-          className="h-11 w-11 shrink-0 object-contain brightness-0 invert"
+          className="h-11 w-11 shrink-0 object-contain brightness-0 invert lg:filter-none"
         />
-        <p className="truncate text-sm font-bold text-on-navy">{client ? client.name : "Vitality Dental"}</p>
+        <p className="truncate text-sm font-bold text-on-navy lg:text-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -181,7 +181,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
           aria-label="Areas"
           aria-orientation="vertical"
           onKeyDown={onRailKeyDown}
-          className="flex w-[76px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-white/10 px-1.5 py-2"
+          className="flex w-[76px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-white/10 px-1.5 py-2 lg:border-navy/10"
         >
           {railCategories.map((c) => {
             const CIcon = c.icon;
@@ -196,10 +196,10 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
                 tabIndex={selected ? 0 : -1}
                 onClick={() => setBrowseKey(c.key)}
                 className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+                  "flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 lg:focus-visible:ring-navy/25",
                   selected
-                    ? "bg-white/15 text-white"
-                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
+                    ? "bg-white/15 text-white lg:bg-white lg:text-navy lg:shadow-chip"
+                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy lg:text-side-ink lg:hover:bg-white/55 lg:hover:text-navy",
                 )}
               >
                 <CIcon size={18} className="shrink-0" />
@@ -218,15 +218,15 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
           <button
             type="button"
             onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
-            className="mb-2.5 flex w-full items-center gap-2.5 rounded-xl border border-white/15 px-2.5 py-2 text-sm text-on-navy-muted transition-colors hover:bg-white/10 hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            className="mb-2.5 flex w-full items-center gap-2.5 rounded-xl border border-white/15 px-2.5 py-2 text-sm text-on-navy-muted transition-colors hover:bg-white/10 hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 lg:border-navy/15 lg:text-side-ink lg:hover:bg-white/55 lg:hover:text-navy lg:focus-visible:ring-navy/25"
           >
             <Search size={15} className="shrink-0" />
             <span>Search</span>
-            <kbd className="ml-auto rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted">{modKey}K</kbd>
+            <kbd className="ml-auto rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted lg:border-navy/15 lg:text-side-label">{modKey}K</kbd>
           </button>
           {current ? (
             <div role="tabpanel" aria-labelledby={`orail-${current.key}`}>
-              <p className="px-2 pb-2 text-[11px] font-bold uppercase tracking-wide text-on-navy">
+              <p className="px-2 pb-2 text-[11px] font-bold uppercase tracking-wide text-on-navy lg:text-side-label">
                 {current.label}
               </p>
               <ul className="space-y-0.5">
@@ -247,14 +247,14 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
                         className={cn(
                           "group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
                           active
-                            ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)]"
-                            : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
+                            ? "bg-white font-semibold text-navy shadow-[0_6px_16px_rgba(4,20,50,0.28)] lg:shadow-chip"
+                            : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy lg:text-side-ink lg:hover:bg-white/55 lg:hover:text-navy",
                         )}
                       >
                         <Icon size={16} className={cn("shrink-0", active && "text-blue-royal")} />
                         <span className="truncate">{e.label}</span>
                         {e.soon ? (
-                          <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted">
+                          <span className="ml-auto rounded-full border border-navy-line px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-on-navy-muted lg:rounded-md lg:border-line-strong lg:text-faint">
                             soon
                           </span>
                         ) : null}
@@ -271,15 +271,15 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
       </div>
 
       {/* User chip + logout */}
-      <div className="border-t border-navy-line px-3 py-3">
+      <div className="border-t border-navy-line px-3 py-3 lg:border-navy/10">
         {user ? (
           <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-soft text-xs font-bold text-on-navy">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-soft text-xs font-bold text-on-navy lg:bg-blue-royal lg:text-white">
               {initialsOf(user.name)}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-semibold text-on-navy">{user.name}</p>
-              <p className="truncate text-[11px] text-on-navy-muted">
+              <p className="truncate text-xs font-semibold text-on-navy lg:text-navy">{user.name}</p>
+              <p className="truncate text-[11px] text-on-navy-muted lg:text-faint">
                 {ROLE_LABELS[user.role] ?? user.role}
               </p>
             </div>
@@ -290,7 +290,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
                 router.push("/login");
               }}
               aria-label="Log out"
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-on-navy-muted transition-colors hover:bg-navy-soft hover:text-on-navy"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-on-navy-muted transition-colors hover:bg-navy-soft hover:text-on-navy lg:text-side-ink lg:hover:bg-white/55 lg:hover:text-navy"
             >
               <LogOut size={15} />
             </button>
@@ -298,7 +298,7 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
         ) : (
           <Link
             href="/login"
-            className="flex items-center justify-center rounded-lg px-2 py-2 text-xs font-semibold text-on-navy-muted hover:text-on-navy"
+            className="flex items-center justify-center rounded-lg px-2 py-2 text-xs font-semibold text-on-navy-muted hover:text-on-navy lg:text-side-ink lg:hover:text-navy"
           >
             Sign in
           </Link>

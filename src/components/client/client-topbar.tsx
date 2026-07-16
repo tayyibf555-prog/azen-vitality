@@ -78,42 +78,40 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
     // Translucent material layer: content scrolls UNDER the pinned bar; the
     // .topbar-material class carries the blur + the scroll-edge fade and its own
     // reduced-transparency/no-blur fallbacks (globals.css).
-    <header className="topbar-material sticky top-0 z-10 flex h-14 items-center justify-between gap-3 px-4 lg:px-7">
+    <header className="topbar-material sticky top-0 z-10 flex h-14 items-center justify-between gap-3 px-4 lg:px-8">
       {/* Left: mobile menu toggle + breadcrumb + site chip */}
       <div className="flex min-w-0 items-center gap-2.5">
         <button
           type="button"
           onClick={toggleMobileNav}
           aria-label="Open menu"
-          className="pressable flex h-9 w-9 items-center justify-center rounded-full border border-line-strong text-navy transition-colors hover:bg-card-muted lg:hidden"
+          className="pressable -ml-1 flex h-9 w-9 items-center justify-center rounded-lg text-navy transition-colors hover:bg-blue-soft lg:hidden"
         >
           <Menu size={18} />
         </button>
 
-        {/* Breadcrumb: product context -> current section */}
-        <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-2 text-[13px] font-semibold text-muted sm:flex">
-          <span className="truncate text-navy">{client ? client.name : "Vitality Dental"}</span>
-          <span aria-hidden className="text-line-strong">›</span>
+        {/* Breadcrumb: product context / current section, per the mock */}
+        <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-muted sm:flex">
+          <span className="truncate font-bold text-navy">{client ? client.name : "Vitality Dental"}</span>
+          <span aria-hidden>/</span>
           <span className="truncate">{sectionLabel(pathname, base)}</span>
         </nav>
 
-        {/* Site switcher, styled as the mock's round-dot chip */}
+        {/* Site switcher, styled as the mock's soft blue chip */}
         <div className="relative" ref={switcherRef}>
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           aria-label="Switch site"
-          className="pressable flex items-center gap-2 rounded-full border border-line bg-card-muted py-1 pl-1 pr-3 text-xs font-bold text-navy transition-colors hover:border-line-strong"
+          className="pressable ml-1 flex items-center gap-1.5 rounded-md bg-blue-soft px-2.5 py-[3px] text-[11.5px] font-bold text-blue-royal transition-colors hover:bg-tint-blue"
         >
-          <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-blue-royal px-1.5 text-[9.5px] font-extrabold text-white">
-            {siteCode(selectedLabel)}
-          </span>
-          <span className="max-w-[10rem] truncate">{selectedLabel}</span>
-          <ChevronDown size={13} className="text-muted" />
+          <span>{siteCode(selectedLabel)}</span>
+          <span className="hidden max-w-[10rem] truncate md:inline">{selectedLabel}</span>
+          <ChevronDown size={12} className="opacity-70" />
         </button>
         {open ? (
-          <div className="absolute left-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-2xl border border-line bg-card py-1 shadow-lg">
+          <div className="absolute left-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-[10px] border border-line bg-card py-1 shadow-[0_10px_30px_rgba(11,32,73,0.12)]">
             {sites.map((s) => (
               <SiteOption
                 key={s.id}
@@ -133,13 +131,13 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
         </div>
       </div>
 
-      {/* Right: round icon buttons for existing actions */}
-      <div className="flex items-center gap-2">
+      {/* Right: quiet icon actions, per the mock */}
+      <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
           aria-label="Search"
-          className="pressable flex h-9 w-9 items-center justify-center rounded-full border border-line bg-card text-muted transition-colors hover:border-line-strong hover:text-navy"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-lg text-faint transition-colors hover:bg-blue-soft hover:text-navy"
         >
           <Search size={16} />
         </button>

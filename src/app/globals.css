@@ -28,6 +28,17 @@
   --line: #dde5f0; /* hairline borders on the cool bg */
   --line-strong: #c8d4e6;
   --muted: #64748b; /* secondary text */
+  --faint: #94a3b8; /* quiet meta text (times, footnotes) */
+
+  /* The approved frame (aesthetic-mock2): a light wash of the brand blue that the
+     authed app sits on, plus the sidebar-on-frame ink colours and the soft blue
+     chip fill. New tokens, unused by the public surfaces. */
+  --frame: #c3d7ef;
+  --side-ink: #3b5686; /* sidebar nav text on the frame */
+  --side-label: #7d93bd; /* sidebar group labels on the frame */
+  --blue-soft: #eef4fb; /* soft blue chip fill (topbar site chip) */
+  --band: #e9f1fb; /* the numbers band: the page's ONE blue moment */
+  --band-line: #d3e2f5;
   --navy-soft: #16407a; /* raised/hover surface on the blue chrome */
   --navy-line: #274d86; /* borders inside the blue chrome */
   --on-navy: #eaf1fb; /* primary text on the blue chrome */
@@ -91,6 +102,13 @@
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-band: var(--band);
+  --color-band-line: var(--band-line);
+  --color-frame: var(--frame);
+  --color-side-ink: var(--side-ink);
+  --color-side-label: var(--side-label);
+  --color-blue-soft: var(--blue-soft);
   --color-on-navy: var(--on-navy);
   --color-on-navy-muted: var(--on-navy-muted);
   --color-success: var(--success);
@@ -155,16 +173,16 @@ h1, h2, h3, h4 {
   Colour is deliberately not set here; pair with text-navy/text-muted as needed.
 */
 .text-display {
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   line-height: 1.1;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.4px;
 }
 .text-title {
-  font-size: 1.125rem;
-  line-height: 1.25;
-  font-weight: 800;
-  letter-spacing: -0.01em;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.1px;
 }
 .text-body {
   font-size: 0.875rem;
@@ -174,7 +192,7 @@ h1, h2, h3, h4 {
 .text-label {
   font-size: 0.6875rem;
   line-height: 1.2;
-  font-weight: 700;
+  font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -213,19 +231,10 @@ h1, h2, h3, h4 {
   translucency on top of this layer.
 */
 .topbar-material {
-  background: color-mix(in srgb, var(--card) 72%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(1.5);
-  backdrop-filter: blur(14px) saturate(1.5);
-}
-.topbar-material::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 100%;
-  height: 12px;
-  pointer-events: none;
-  background: linear-gradient(to bottom, rgba(11, 32, 73, 0.06), transparent);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+  border-bottom: 1px solid var(--line);
 }
 @media (prefers-reduced-transparency: reduce) {
   .topbar-material {
@@ -245,10 +254,20 @@ h1, h2, h3, h4 {
 .scroll-navy::-webkit-scrollbar-thumb { background: var(--navy-line); border-radius: 8px; }
 .scroll-navy::-webkit-scrollbar-track { background: transparent; }
 
-/* Blue-forward chrome: the deep-to-lead blue gradient used by the sidebars. */
+/* Blue-forward chrome: the deep-to-lead blue gradient used by the sidebars.
+   Below lg only (the off-canvas drawer keeps its navy identity for contrast).
+   From lg, inside the approved frame, the sidebar sits TRANSPARENT directly on
+   the light blue wash — no panel of its own. Unlayered rule, so it must be
+   unset here rather than by (layered) utility classes. */
 .chrome-nav {
   background-image: linear-gradient(180deg, var(--chrome-from), var(--chrome-mid) 55%, var(--chrome-to));
   background-color: var(--chrome-from);
+}
+@media (min-width: 1024px) {
+  .app-frame .chrome-nav {
+    background-image: none;
+    background-color: transparent;
+  }
 }
 /* A blue hero band (dashboards): headline copy sits on this. */
 .chrome-hero {
@@ -263,20 +282,73 @@ h1, h2, h3, h4 {
 .shadow-shell { box-shadow: var(--shadow-shell); }
 
 /*
-  The floating app shell (authed dashboards only). The whole app floats as one
-  large rounded card on a deep-navy backdrop with two soft radial glows, mirroring
-  the approved aesthetic study. Applied ONLY from lg up: on phones/tablets the app
-  stays full-bleed so the off-canvas fixed sidebar keeps working untouched. The
-  backdrop paints nothing below lg, so the page shows the normal cream body there.
+  The approved frame (aesthetic-mock2, variant A - Light), authed app only.
+
+  Construction: the app sits on a light wash of the brand blue (--frame). The
+  sidebar is transparent directly on that wash; ALL page content lives in one
+  white panel (18px radius, overflow hidden, 12px gutter top/right/bottom) with
+  its own internal scroll. Below lg there is no frame: full-bleed white, and the
+  off-canvas sidebar keeps its navy chrome for contrast.
+
+  This class also RETUNES the shared content tokens for the flat hairline
+  language (white surfaces, #e7ecf3 hairlines, mock-exact status tints, no card
+  shadows). Scoped here — not on :root — so the public patient surfaces
+  (/login, /assess, /book, /onboard) keep the base values pixel-for-pixel.
 */
-.app-shell-backdrop {
-  background: var(--cream);
+.app-frame {
+  /* Surfaces + hairlines */
+  --card: #ffffff;
+  --card-muted: #eef4fb;
+  --cream: #fbfcfe;
+  --line: #e5e9f0;
+  --line-strong: #dde5f0;
+
+  /* Ink depth (premium layer): deep navy-ink body text, never pure black;
+     secondary a step lighter; --faint carries quiet meta. */
+  --ink: #16233c;
+  --muted: #5a6a85;
+
+  /* Status tints: the mock's fills mixed ~50% further toward white (whisper
+     backgrounds), keeping the mock's saturated status inks for text and dots. */
+  --tint-blue: #f4f8fd;
+  --tint-blue-line: #e9f0fa;
+  --status-blue: #16559a;
+  --tint-green: #f1f9f5;
+  --tint-green-line: #e3f3ea;
+  --status-green: #178a5b;
+  --tint-amber: #fef9ef;
+  --tint-amber-line: #f9eed7;
+  --status-amber: #b47811;
+  --tint-red: #fef5f5;
+  --tint-red-line: #f9e6e6;
+  --status-red: #c04b49;
+  --tint-royal: #f4f8fd;
+  --tint-royal-line: #e9f0fa;
+  --status-royal: #16559a;
+
+  /* Flat content: no card shadows; the only shadow left is the subtle lift on
+     the sidebar's active white pill and true overlays. */
+  --shadow-card: none;
+  --shadow-float: none;
+  --shadow-hero: none;
+  --shadow-chip: 0 1px 3px rgba(11, 32, 73, 0.08);
+
+  /* Any straggler rounded-card boxes soften to the small-radius language. */
+  --radius-card-px: 10px;
+
+  background: var(--card);
 }
 @media (min-width: 1024px) {
-  .app-shell-backdrop {
-    background:
-      radial-gradient(1200px 600px at 85% -10%, rgba(35, 121, 171, 0.28), transparent 60%),
-      radial-gradient(900px 500px at -10% 110%, rgba(22, 85, 154, 0.35), transparent 55%),
-      var(--navy);
+  .app-frame {
+    background: var(--frame);
   }
+}
+
+/* Weight restraint (premium layer), authed app only: headings settle at 600
+   with their negative tracking; the public surfaces keep the brand 800. */
+.app-frame h1,
+.app-frame h2,
+.app-frame h3,
+.app-frame h4 {
+  font-weight: 600;
 }

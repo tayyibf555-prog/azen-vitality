@@ -46,8 +46,8 @@ export function SidebarShortcuts() {
     },
   ];
   return (
-    <div className="mx-2.5 mb-2.5 shrink-0 rounded-xl border border-white/15 px-3 py-2">
-      <p className="pb-1 text-[10px] font-bold uppercase tracking-wide text-on-navy-muted">Shortcuts</p>
+    <div className="mx-2.5 mb-2.5 shrink-0 rounded-xl border border-white/15 px-3 py-2 lg:border-navy/10">
+      <p className="pb-1 text-[10px] font-bold uppercase tracking-wide text-on-navy-muted lg:text-side-label">Shortcuts</p>
       {rows.map((r) => {
         const Icon = r.icon;
         return (
@@ -55,13 +55,13 @@ export function SidebarShortcuts() {
             key={r.key}
             type="button"
             onClick={r.onClick}
-            className="flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs text-on-navy-muted transition-colors hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            className="flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs text-on-navy-muted transition-colors hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 lg:text-side-ink lg:hover:text-navy lg:focus-visible:ring-navy/25"
           >
             <span className="flex min-w-0 items-center gap-1.5">
               <Icon size={12} className="shrink-0" />
               <span className="truncate">{r.label}</span>
             </span>
-            <kbd className="shrink-0 rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted">{r.kbd}</kbd>
+            <kbd className="shrink-0 rounded border border-white/20 px-1.5 py-0.5 text-[10px] text-on-navy-muted lg:border-navy/15 lg:text-side-label">{r.kbd}</kbd>
           </button>
         );
       })}
