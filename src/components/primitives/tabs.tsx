@@ -57,7 +57,7 @@ export function Tabs({
                 aria-selected={isActive}
                 onClick={() => setActive(key)}
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40",
+                  "pressable inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40",
                   isActive ? "bg-navy text-on-navy shadow-sm" : "text-muted hover:text-ink",
                 )}
               >

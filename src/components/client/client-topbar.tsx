@@ -75,14 +75,17 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-3 border-b border-line bg-card px-4 lg:px-7">
+    // Translucent material layer: content scrolls UNDER the pinned bar; the
+    // .topbar-material class carries the blur + the scroll-edge fade and its own
+    // reduced-transparency/no-blur fallbacks (globals.css).
+    <header className="topbar-material sticky top-0 z-10 flex h-14 items-center justify-between gap-3 px-4 lg:px-7">
       {/* Left: mobile menu toggle + breadcrumb + site chip */}
       <div className="flex min-w-0 items-center gap-2.5">
         <button
           type="button"
           onClick={toggleMobileNav}
           aria-label="Open menu"
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-line-strong text-navy transition-colors hover:bg-card-muted lg:hidden"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-full border border-line-strong text-navy transition-colors hover:bg-card-muted lg:hidden"
         >
           <Menu size={18} />
         </button>
@@ -101,7 +104,7 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
           onClick={() => setOpen((v) => !v)}
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           aria-label="Switch site"
-          className="flex items-center gap-2 rounded-full border border-line bg-card-muted py-1 pl-1 pr-3 text-xs font-bold text-navy transition-colors hover:border-line-strong"
+          className="pressable flex items-center gap-2 rounded-full border border-line bg-card-muted py-1 pl-1 pr-3 text-xs font-bold text-navy transition-colors hover:border-line-strong"
         >
           <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-blue-royal px-1.5 text-[9.5px] font-extrabold text-white">
             {siteCode(selectedLabel)}
@@ -136,7 +139,7 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
           aria-label="Search"
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-line bg-card text-muted transition-colors hover:border-line-strong hover:text-navy"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-full border border-line bg-card text-muted transition-colors hover:border-line-strong hover:text-navy"
         >
           <Search size={16} />
         </button>

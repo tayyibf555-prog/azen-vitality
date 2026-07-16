@@ -144,6 +144,102 @@ h1, h2, h3, h4 {
   letter-spacing: -0.02em;
 }
 
+/*
+  Typography scale (the aesthetic-shell type system). Five named styles used as a
+  SET (size + weight + leading + tracking together) instead of ad-hoc text-[13px]:
+    text-display  page titles and hero numerals: big, tight leading, -0.02em
+    text-title    section headings: tight-ish leading, -0.01em
+    text-body     reading copy: comfortable 1.5 leading, neutral tracking
+    text-label    tiny uppercase labels: positive tracking so caps stay legible
+    text-caption  dense data rows and footnotes: tighter 1.35 leading
+  Colour is deliberately not set here; pair with text-navy/text-muted as needed.
+*/
+.text-display {
+  font-size: 1.75rem;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.text-title {
+  font-size: 1.125rem;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.text-body {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+.text-label {
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.text-caption {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/*
+  Press feedback for buttons and chips: a quiet 0.97 scale on pointer-down,
+  transform-only so nothing repaints, ~100ms ease-out. Guarded so reduced-motion
+  users get no transform animation at all.
+*/
+.pressable {
+  transition: transform 100ms ease-out;
+}
+.pressable:active {
+  transform: scale(0.97);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pressable {
+    transition: none;
+  }
+  .pressable:active {
+    transform: none;
+  }
+}
+
+/*
+  Translucent chrome for the pinned topbar: a material layer the content scrolls
+  under (semi-transparent fill + blur + saturate), with a soft scroll-edge fade
+  below instead of a hard 1px border. Falls back to a solid bar when the user
+  prefers reduced transparency or the browser cannot blur. Nothing else stacks
+  translucency on top of this layer.
+*/
+.topbar-material {
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+}
+.topbar-material::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 12px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(11, 32, 73, 0.06), transparent);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .topbar-material {
+    background: var(--card);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topbar-material {
+    background: var(--card);
+  }
+}
+
 /* Thin, unobtrusive scrollbars inside the blue chrome */
 .scroll-navy::-webkit-scrollbar { width: 8px; height: 8px; }
 .scroll-navy::-webkit-scrollbar-thumb { background: var(--navy-line); border-radius: 8px; }

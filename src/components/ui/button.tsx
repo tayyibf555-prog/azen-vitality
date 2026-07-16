@@ -9,8 +9,11 @@ type Size = "sm" | "md" | "lg";
 // radius is left as rounded-lg to keep those surfaces byte-for-byte unchanged. The
 // study's pill language is carried instead by the segmented Tabs, the tinted
 // status pills, and the sidebar/topbar/filter chips.
+// .pressable adds the quiet press-down scale (transform-only, reduced-motion
+// guarded in globals.css). It changes nothing at rest, so the public surfaces'
+// resting appearance stays identical.
 const base =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap";
+  "pressable inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap";
 
 const variants: Record<Variant, string> = {
   primary: "bg-blue-royal text-white hover:bg-[#17579c] shadow-[0_4px_12px_rgba(28,102,184,0.28)]",
