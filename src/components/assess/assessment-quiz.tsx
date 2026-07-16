@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
+import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { iconFor } from "./option-icons";
 
 // Shared Smile Assessment quiz UI — an ADAPTIVE, one-question-at-a-time funnel.
@@ -128,6 +129,20 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
   // Guards against double-advance from a rapid second click while thinking.
   const advancing = useRef(false);
 
+  // PII-free funnel telemetry (started / question_answered / contact_viewed /
+  // submitted). Lazy one-time init so listeners are not re-registered per render.
+  const trackerRef = useRef<FunnelTracker | null>(null);
+  if (trackerRef.current === null) {
+    trackerRef.current = createFunnelTracker({
+      surface: "assessment",
+      clientSlug,
+      campaignSlug,
+    });
+  }
+  useEffect(() => {
+    trackerRef.current?.track("started");
+  }, []);
+
   const current = history[history.length - 1];
   const step = history.length; // 1-based count of questions shown so far.
 
@@ -149,12 +164,15 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     advancing.current = false;
     setPhase("contact");
     setAnimKey((k) => k + 1);
+    trackerRef.current?.track("contact_viewed");
   }
 
   /** Record the chosen answer, then ask the backend for the next question. */
   async function choose(value: string) {
     if (advancing.current || thinking || busy) return;
     advancing.current = true;
+    // Which question (1-based) they just answered — the index only, never the answer.
+    trackerRef.current?.track("question_answered", { index: history.length });
     const q = current.question;
     const nextAnswers = { ...answers, [q.id]: value };
 
@@ -298,6 +316,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         bookingUrl: typeof data.bookingUrl === "string" && data.bookingUrl ? data.bookingUrl : undefined,
       });
       setPhase("thanks");
+      trackerRef.current?.track("submitted", { band: data.band });
     } catch {
       setError("Sorry, something went wrong. Please try again in a moment.");
     }

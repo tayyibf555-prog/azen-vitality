@@ -13,6 +13,7 @@ import {
 import { verifySubmitToken } from "@/lib/smile-assessment/embed-token";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/booking/slots";
+import { markHoldConfirmed } from "@/lib/booking/holds";
 import { londonDayKey } from "@/lib/time/london";
 
 export const dynamic = "force-dynamic";
@@ -129,6 +130,10 @@ export async function POST(request: Request): Promise<Response> {
       return bad("Please pick a time slot and try again.", 400);
     }
     const requestedPractitionerId = str(body.practitionerId);
+    // Optional: the step-1 hold this confirmation completes. Flipped to
+    // 'confirmed' after a successful write so the sweep never mistakes a finished
+    // booking for an abandonment. Absent for a direct (non-two-step) booking.
+    const holdId = str(body.holdId);
 
     // (f) Rate caps: per IP (cheap flood blunting) and per phone (a handset gets
     // at most a few booking attempts an hour).
@@ -219,7 +224,20 @@ export async function POST(request: Request): Promise<Response> {
       return bad(BOOKING_FAILED, 502);
     }
 
-    // (j) Done.
+    // (j) The booking is made. Flip the step-1 hold to 'confirmed' so the
+    // abandoned-hold sweep never turns this finished booking into a win-back lead.
+    // Best-effort and scoped to this site: a completed appointment must never fail
+    // because its hold row could not be stamped (worst case the hold expires and
+    // the dedupe on the sweep catches the already-booked patient).
+    if (holdId) {
+      try {
+        await markHoldConfirmed(holdId, siteId);
+      } catch {
+        // Swallow: the appointment already exists in Dentally.
+      }
+    }
+
+    // (k) Done.
     return Response.json({
       ok: true,
       booked: {

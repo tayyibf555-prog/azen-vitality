@@ -6,6 +6,7 @@
 //   quiz / smile-assessment — the generic Smile Assessment funnel
 //   missed-call            — after-hours missed call bridged into a lead
 //   web / webform          — the public intake endpoint (website form)
+//   abandoned-booking      — started the online booking but did not confirm
 
 const FIXED: Record<string, string> = {
   "smile-assessment": "Smile Assessment",
@@ -13,6 +14,7 @@ const FIXED: Record<string, string> = {
   "missed-call": "Missed call",
   web: "Website form",
   webform: "Website form",
+  "abandoned-booking": "Abandoned booking",
 };
 
 export function sourceLabel(source: string | null | undefined): string {
