@@ -180,7 +180,7 @@ export function TaskQueueBoard({
           className={cn(
             "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
             mineOnly
-              ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark"
+              ? "border-navy bg-navy text-on-navy"
               : "border-line-strong bg-card text-muted hover:bg-card-muted",
           )}
         >
@@ -197,7 +197,7 @@ export function TaskQueueBoard({
             className={cn(
               "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
               kindFilter === null
-                ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark"
+                ? "border-navy bg-navy text-on-navy"
                 : "border-line-strong bg-card text-muted hover:bg-card-muted",
             )}
           >
@@ -211,7 +211,7 @@ export function TaskQueueBoard({
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
                 kindFilter === kind
-                  ? "border-blue-dark/30 bg-blue-dark/10 text-blue-dark"
+                  ? "border-navy bg-navy text-on-navy"
                   : "border-line-strong bg-card text-muted hover:bg-card-muted",
               )}
             >
