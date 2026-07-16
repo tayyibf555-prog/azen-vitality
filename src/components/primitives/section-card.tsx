@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * A content SECTION in the locked flat language (aesthetic-mock2): a small
- * 600-weight title, a hairline underneath, then content and whitespace — no
+ * 600-weight title, a hairline underneath, then content and whitespace, no
  * card box, no shadow, no boxes-in-boxes. The name is kept so every existing
  * call site sweeps to the new construction without edits; the legacy `plain`
  * prop is accepted (it is now the only rendering).

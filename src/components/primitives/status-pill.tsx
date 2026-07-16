@@ -4,7 +4,7 @@ export type Tone = "neutral" | "success" | "warning" | "danger" | "info" | "what
 
 // Flat tinted status TAGS (the locked language): 6px radius, a whisper tint
 // fill + tint hairline, and the saturated status ink for the text. Reserved for
-// rows that need action — quiet rows carry a dot and muted meta instead.
+// rows that need action; quiet rows carry a dot and muted meta instead.
 const tones: Record<Tone, string> = {
   neutral: "bg-[#f5f7fa] text-muted border-[#e5e9f0]",
   success: "bg-tint-green text-status-green border-tint-green-line",

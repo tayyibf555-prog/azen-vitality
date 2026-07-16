@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 /**
  * Page header in the locked flat language: display title (24px/600, negative
  * tracking) + quiet description, actions on the right. The old blue-gradient
- * `hero` band is retired — the flag is accepted so call sites need no edits,
+ * `hero` band is retired; the flag is accepted so call sites need no edits,
  * but every header renders flat (the numbers band is a page's one blue moment).
  */
 export function PageHeader({

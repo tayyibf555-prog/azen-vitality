@@ -17,8 +17,8 @@ export const dynamic = "force-dynamic";
 
 // "One Front Door", arranged exactly as the locked mock (aesthetic-mock2):
 // greeting, dot-prefixed day numerals, the diary as flat hairline slot rows
-// beside a Needs-attention + mini-month rail, then the numbers band — the
-// page's ONE blue moment — carrying the money/priority figures with a Reports
+// beside a Needs-attention + mini-month rail, then the numbers band (the
+// page's ONE blue moment) carrying the money/priority figures with a Reports
 // link through to the full charts. Nothing shown to the client before this
 // layout has been removed; it has been repositioned or sits one click away.
 

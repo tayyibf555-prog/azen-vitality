@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 // section (title + hairline, no card box), plain day numbers, and a navy square
 // (7px radius) for today. The page only loads TODAY's appointments, so no other
 // day can honestly carry an activity dot; the per-cell markup below already
-// supports the mock's 4px dots — extend `dotFor` when a month-level
+// supports the mock's 4px dots; extend `dotFor` when a month-level
 // appointments feed exists. A pure server component.
 
 const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];

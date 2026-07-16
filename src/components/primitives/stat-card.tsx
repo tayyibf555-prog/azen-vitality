@@ -3,7 +3,7 @@ import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { cn, num } from "@/lib/utils";
 
 /**
- * A quiet big-numeral text stat (the locked flat language) — the boxed KPI card
+ * A quiet big-numeral text stat (the locked flat language); the boxed KPI card
  * is gone. Numerals are the ONLY place 700 weight is allowed; labels sit small
  * and medium underneath. The `icon` prop is accepted for call-site
  * compatibility but no longer rendered (decorative accent, removed by the

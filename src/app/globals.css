@@ -257,7 +257,7 @@ h1, h2, h3, h4 {
 /* Blue-forward chrome: the deep-to-lead blue gradient used by the sidebars.
    Below lg only (the off-canvas drawer keeps its navy identity for contrast).
    From lg, inside the approved frame, the sidebar sits TRANSPARENT directly on
-   the light blue wash — no panel of its own. Unlayered rule, so it must be
+   the light blue wash, no panel of its own. Unlayered rule, so it must be
    unset here rather than by (layered) utility classes. */
 .chrome-nav {
   background-image: linear-gradient(180deg, var(--chrome-from), var(--chrome-mid) 55%, var(--chrome-to));
@@ -292,7 +292,7 @@ h1, h2, h3, h4 {
 
   This class also RETUNES the shared content tokens for the flat hairline
   language (white surfaces, #e7ecf3 hairlines, mock-exact status tints, no card
-  shadows). Scoped here — not on :root — so the public patient surfaces
+  shadows). Scoped here, not on :root, so the public patient surfaces
   (/login, /assess, /book, /onboard) keep the base values pixel-for-pixel.
 */
 .app-frame {
