@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks } from "lucide-react";
+import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks, LayoutTemplate } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Campaign } from "@/lib/meta-ads/types";
@@ -10,12 +10,14 @@ import { CampaignsTable } from "./campaigns-table";
 import { CampaignBuilder } from "./campaign-builder";
 import { AdLibrary } from "./ad-library";
 import { LaunchGuide } from "./launch-guide";
+import { LandingPagesTab } from "./landing-pages";
 
-type TabKey = "campaigns" | "create" | "library" | "guide";
+type TabKey = "campaigns" | "create" | "landing" | "library" | "guide";
 
 const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
   { key: "campaigns", label: "Campaigns", icon: LayoutGrid },
   { key: "create", label: "Create campaign", icon: PlusCircle },
+  { key: "landing", label: "Landing pages", icon: LayoutTemplate },
   { key: "library", label: "Ad library", icon: Images },
   { key: "guide", label: "Guide", icon: BookOpen },
 ];
@@ -93,7 +95,12 @@ export function MetaAdsWorkspace({
             practiceName={practiceName}
             onSaveDraft={handleSaveDraft}
             onOpenGuide={() => setTab("guide")}
+            onOpenLanding={() => setTab("landing")}
           />
+        ) : null}
+
+        {tab === "landing" ? (
+          <LandingPagesTab clientSlug={clientSlug} practiceName={practiceName} />
         ) : null}
 
         {tab === "library" ? <AdLibrary clientSlug={clientSlug} /> : null}

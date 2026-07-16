@@ -14,6 +14,7 @@ import {
   Share2,
   ShieldCheck,
   Info,
+  LayoutTemplate,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard } from "@/components/primitives";
@@ -173,6 +174,7 @@ export function CampaignBuilder({
   practiceName,
   onSaveDraft,
   onOpenGuide,
+  onOpenLanding,
 }: {
   clientSlug: string;
   practiceName: string;
@@ -180,6 +182,8 @@ export function CampaignBuilder({
   onSaveDraft: (draft: Campaign) => void;
   /** Jump to the Guide tab (launching the live ad happens in Meta). */
   onOpenGuide: () => void;
+  /** Jump to the Landing pages tab to add a custom destination for this campaign. */
+  onOpenLanding: () => void;
 }) {
   const [templateId, setTemplateId] = useState<string>(CAMPAIGN_TEMPLATES[0]?.id ?? "");
   const template = CAMPAIGN_TEMPLATES.find((t) => t.id === templateId) ?? CAMPAIGN_TEMPLATES[0];
@@ -396,6 +400,26 @@ export function CampaignBuilder({
                       className="mt-1.5 rounded font-semibold text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
                     >
                       Open the launch guide
+                    </button>
+                  </div>
+                </div>
+
+                {/* Custom landing page step: point the ad at an on-brand, compliant
+                    landing page with a built-in A/B test, instead of a raw profile. */}
+                <div className="flex gap-2.5 rounded-lg border border-blue-dark/20 bg-blue-dark/[0.06] px-3 py-2.5">
+                  <LayoutTemplate size={16} className="mt-0.5 shrink-0 text-blue-deep" />
+                  <div className="text-xs leading-relaxed text-ink">
+                    <p className="font-semibold text-navy">Add a custom landing page</p>
+                    <p className="mt-0.5">
+                      Send this campaign to an on-brand landing page with two AI-written variants to
+                      split test, prices pulled from your real price list.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={onOpenLanding}
+                      className="mt-1.5 rounded font-semibold text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+                    >
+                      Build a landing page
                     </button>
                   </div>
                 </div>
