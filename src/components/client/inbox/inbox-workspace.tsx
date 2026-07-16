@@ -183,7 +183,7 @@ export function InboxWorkspace({
   }
 
   return (
-    <div className="grid min-h-[34rem] grid-cols-1 overflow-hidden rounded-[15px] bg-card shadow-float ring-1 ring-line/60 md:grid-cols-[20rem_1fr] lg:grid-cols-[22rem_1fr]">
+    <div className="grid min-h-[34rem] grid-cols-1 overflow-hidden rounded-card bg-card shadow-card ring-1 ring-line/60 md:grid-cols-[20rem_1fr] lg:grid-cols-[22rem_1fr]">
       {/* Thread list */}
       <aside
         className={cn(

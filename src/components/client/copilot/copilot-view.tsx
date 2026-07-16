@@ -8,7 +8,7 @@ export function CopilotView({ clientSlug }: { clientSlug: string }) {
   }
 
   return (
-    <div className="flex h-[calc(100vh-10rem)] min-h-[480px] flex-col rounded-[15px] bg-card p-4 shadow-float ring-1 ring-line/60">
+    <div className="flex h-[calc(100vh-10rem)] min-h-[480px] flex-col rounded-card bg-card p-4 shadow-card ring-1 ring-line/60">
       <CopilotConversation clientSlug={clientSlug} />
     </div>
   );

@@ -35,7 +35,7 @@ export function CopilotView() {
       />
 
       {checking ? (
-        <div className="rounded-[15px] bg-card p-8 text-center text-sm text-muted shadow-float ring-1 ring-line/60">
+        <div className="rounded-card bg-card p-8 text-center text-sm text-muted shadow-card ring-1 ring-line/60">
           Checking access...
         </div>
       ) : !unlocked ? (

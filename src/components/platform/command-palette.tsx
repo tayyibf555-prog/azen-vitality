@@ -188,7 +188,7 @@ export function CommandPalette({
       <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-navy/40 backdrop-blur-[1px]" />
       <div
         onKeyDown={onKeyDown}
-        className="relative z-10 flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-2xl"
+        className="relative z-10 flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-card border border-line bg-card shadow-2xl"
       >
         <div className="flex items-center gap-2 border-b border-line px-4">
           <Search size={16} className="shrink-0 text-muted" />

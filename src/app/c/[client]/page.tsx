@@ -118,7 +118,7 @@ export default async function ClientHomePage({
             </p>
           </div>
           {diary.next ? (
-            <span className="inline-flex items-center gap-2 rounded-full border border-blue-dark/20 bg-blue-dark/10 px-3.5 py-1.5 text-sm font-semibold text-blue-dark">
+            <span className="inline-flex items-center gap-2 rounded-full border border-tint-blue-line bg-tint-blue px-3.5 py-1.5 text-sm font-semibold text-status-blue">
               <Clock size={15} className="shrink-0" />
               Next: {diary.next.time} · {diary.next.label}
             </span>

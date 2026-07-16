@@ -90,7 +90,7 @@ export function CopilotConversation({
     // Bottom-docked: a floating card (identity + starter prompts, or the growing
     // conversation) sits directly above a slim ask-bar. Nothing fills the screen.
     <div className="flex flex-col gap-2">
-      <div className="overflow-hidden rounded-2xl border border-line bg-card shadow-[0_20px_55px_rgba(11,32,73,0.30)]">
+      <div className="overflow-hidden rounded-card border border-line bg-card shadow-[0_20px_55px_rgba(11,32,73,0.30)]">
         <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
           <div className="flex items-center gap-2">
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-royal text-white">
@@ -164,7 +164,7 @@ export function CopilotConversation({
         )}
       </div>
 
-      <div className="flex items-center gap-2 rounded-2xl border border-line-strong bg-card px-3 py-2.5 shadow-[0_20px_55px_rgba(11,32,73,0.30)]">
+      <div className="flex items-center gap-2 rounded-card border border-line-strong bg-card px-3 py-2.5 shadow-[0_20px_55px_rgba(11,32,73,0.30)]">
         <input
           ref={inputRef}
           value={input}
