@@ -32,6 +32,7 @@ import {
   Briefcase,
   Power,
   Rocket,
+  CalendarPlus,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -153,6 +154,13 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: UserPlus,
         status: "live",
         note: "A branded new-patient onboarding form at /onboard/<client>: contact, brief medical intake, documents upload and consent, collected step by step. Submissions land here for the team to review and register.",
+      },
+      {
+        slug: "booking",
+        label: "Booking",
+        icon: CalendarPlus,
+        status: "live",
+        note: "The patient-facing online booking link for the selected site: a live Dentally diary a patient can pick a time from, with the appointment landing straight in the diary. Shareable link and pre-written message, per site.",
       },
     ],
   },
@@ -315,8 +323,10 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Getting started",
         icon: Rocket,
         status: "live",
-        roles: OWNER_ROLES,
-        note: "The practice owner's go-live checklist: the eleven items we need from the practice (with three go-live gates that block patient messaging) to move the platform from read-and-review mode to fully live, with per-item detail on what each means and how to do it.",
+        // Not owner-only (unlike its Operations siblings): the practice coordinator
+        // is normally the one who works through this checklist day to day, so both
+        // the owner and the coordinator may see and tick it. No `roles` = every role.
+        note: "The go-live checklist: the eleven items we need from the practice (with three go-live gates that block patient messaging) to move the platform from read-and-review mode to fully live, with per-item detail on what each means and how to do it.",
       },
       { slug: "settings", label: "Settings", icon: Settings, status: "live", roles: OWNER_ROLES, note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
     ],
@@ -391,7 +401,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "growth",
     label: "Growth",
     icon: TrendingUp,
-    slugs: ["meta-ads", "smile-assessment", "speed-to-lead", "power-dialler", "usps", "roi"],
+    slugs: ["meta-ads", "smile-assessment", "speed-to-lead", "booking", "power-dialler", "usps", "roi"],
   },
   {
     key: "operations",

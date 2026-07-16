@@ -26,4 +26,11 @@ export interface NotificationItem {
   at: string;
   /** Where to go to act on it, e.g. `/c/<slug>/compliance`. Optional for system notes. */
   href?: string;
+  /**
+   * True when this item was built from pure mock data (currently: compliance,
+   * see src/lib/notifications/build.ts), so the UI can carry a visible "Sample"
+   * tag (matching the SampleNote/SampleBadge precedent elsewhere in the
+   * dashboard). Real-sourced items (no_show, onboarding, lead) omit this.
+   */
+  sample?: boolean;
 }

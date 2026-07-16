@@ -1,11 +1,10 @@
-import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 import { getChecklistState, setChecklistItem } from "@/lib/getting-started/repository";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/getting-started?client=<slug> -> { ok, state: { itemKey: true } }
-// Any signed-in user of the client may read the progress (only owners can reach
-// the page, but reading is harmless).
+// Any signed-in user of the client may read the progress.
 export async function GET(request: Request) {
   const user = await requireUser();
   if (user instanceof Response) return user;
@@ -21,13 +20,13 @@ export async function GET(request: Request) {
 }
 
 // POST /api/getting-started  { client, key, checked } -> { ok }
-// Owner-only: ticking off go-live items is an owner decision.
+// Open to every role with access to this client (not requireOwnerRole): the
+// practice coordinator is normally the one who works through the checklist day
+// to day, same as the nav item's visibility (src/lib/nav.ts). requireClientAccess
+// below is still the real gate against a foreign client.
 export async function POST(request: Request) {
   const user = await requireUser();
   if (user instanceof Response) return user;
-
-  const ownerOnly = requireOwnerRole(user);
-  if (ownerOnly) return ownerOnly;
 
   const body = (await request.json().catch(() => null)) as
     | { client?: unknown; key?: unknown; checked?: unknown }

@@ -332,7 +332,7 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Getting started"
-        description="Your go-live checklist. The platform, your data and every feature are already built and running, in read and review mode. This short list is only what we need from the practice to go fully live. Tick items off as you send them, both owners share the same list."
+        description="Your go-live checklist. The platform, your data and every feature are already built and running, in read and review mode. This short list is only what we need from the practice to go fully live. Tick items off as you send them, the whole team shares the same list."
       />
 
       <SectionCard bodyClassName="p-5">

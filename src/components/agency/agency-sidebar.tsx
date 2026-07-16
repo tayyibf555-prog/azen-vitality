@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, CreditCard, Settings, LogOut, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessageSquarePlus, CreditCard, Settings, LogOut, type LucideIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { label: "Cockpit", href: "/agency", icon: LayoutDashboard },
+  { label: "Feedback", href: "/agency/feedback", icon: MessageSquarePlus },
   { label: "Billing", icon: CreditCard, soon: true },
   { label: "Settings", icon: Settings, soon: true },
 ];
