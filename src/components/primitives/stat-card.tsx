@@ -29,10 +29,10 @@ export function StatCard({
   return (
     <div
       className={cn(
-        "rounded-[15px] p-4",
+        "rounded-card p-5",
         emphasis
           ? "chrome-hero text-white shadow-hero"
-          : "bg-card text-navy shadow-float ring-1 ring-line/60",
+          : "bg-card text-navy shadow-card ring-1 ring-line/60",
         className,
       )}
     >

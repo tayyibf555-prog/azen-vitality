@@ -39,16 +39,39 @@
   --danger: #ef4444;
   --info: var(--blue-dark);
 
+  /* Soft status tints (the "aesthetic-shell" chip language). Each tone is a pale
+     tinted fill + a matching hairline + a readable ink colour, used for pill chips,
+     attention blocks and status badges. Mirrors the approved aesthetic study. */
+  --tint-blue: #e8f0fb;
+  --tint-blue-line: #c9dcf3;
+  --status-blue: var(--blue-dark);
+  --tint-green: #e5f4ee;
+  --tint-green-line: #c2e5d4;
+  --status-green: #177a53;
+  --tint-amber: #fdf3e2;
+  --tint-amber-line: #f3ddb3;
+  --status-amber: #9a6a12;
+  --tint-red: #fdecec;
+  --tint-red-line: #f4cccc;
+  --status-red: #b3403e;
+  --tint-royal: #e9eefb;
+  --tint-royal-line: #cdd9f2;
+  --status-royal: var(--blue-royal);
+
   /* Floating-card elevation scale (soft, diffuse, blue-tinted shadows). */
-  --shadow-card: 0 1px 3px rgba(20, 45, 95, 0.05);
+  --shadow-chip: 0 1px 2px rgba(11, 32, 73, 0.04);
+  --shadow-card: 0 10px 30px rgba(11, 32, 73, 0.07); /* soft card lift (aesthetic shell) */
   --shadow-float: 0 6px 20px rgba(20, 45, 95, 0.07);
   --shadow-hero: 0 12px 30px rgba(22, 85, 154, 0.24);
+  --shadow-shell: 0 30px 80px rgba(4, 14, 38, 0.45); /* deep lift of the floating app shell */
 
   /* App surfaces */
   --background: var(--cream);
   --foreground: var(--navy);
 
   --radius: 0.875rem;
+  --radius-card-px: 20px; /* white-card corner radius */
+  --radius-shell-px: 28px; /* the floating app shell corner radius */
 }
 
 /* Map tokens to Tailwind utilities (bg-navy, text-ink, border-line, etc.) */
@@ -75,6 +98,23 @@
   --color-danger: var(--danger);
   --color-info: var(--info);
 
+  /* Soft status tints -> bg-tint-*, border-tint-*-line, text-status-* */
+  --color-tint-blue: var(--tint-blue);
+  --color-tint-blue-line: var(--tint-blue-line);
+  --color-status-blue: var(--status-blue);
+  --color-tint-green: var(--tint-green);
+  --color-tint-green-line: var(--tint-green-line);
+  --color-status-green: var(--status-green);
+  --color-tint-amber: var(--tint-amber);
+  --color-tint-amber-line: var(--tint-amber-line);
+  --color-status-amber: var(--status-amber);
+  --color-tint-red: var(--tint-red);
+  --color-tint-red-line: var(--tint-red-line);
+  --color-status-red: var(--status-red);
+  --color-tint-royal: var(--tint-royal);
+  --color-tint-royal-line: var(--tint-royal-line);
+  --color-status-royal: var(--status-royal);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
 
@@ -82,6 +122,8 @@
 
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 0.25rem);
+  --radius-card: var(--radius-card-px); /* rounded-card = 20px white cards */
+  --radius-shell: var(--radius-shell-px); /* rounded-shell = 28px app shell */
 }
 
 * {
@@ -119,5 +161,26 @@ h1, h2, h3, h4 {
 
 /* Floating-card elevation helpers (Phase 1 primitives consume these). */
 .shadow-card { box-shadow: var(--shadow-card); }
+.shadow-chip { box-shadow: var(--shadow-chip); }
 .shadow-float { box-shadow: var(--shadow-float); }
 .shadow-hero { box-shadow: var(--shadow-hero); }
+.shadow-shell { box-shadow: var(--shadow-shell); }
+
+/*
+  The floating app shell (authed dashboards only). The whole app floats as one
+  large rounded card on a deep-navy backdrop with two soft radial glows, mirroring
+  the approved aesthetic study. Applied ONLY from lg up: on phones/tablets the app
+  stays full-bleed so the off-canvas fixed sidebar keeps working untouched. The
+  backdrop paints nothing below lg, so the page shows the normal cream body there.
+*/
+.app-shell-backdrop {
+  background: var(--cream);
+}
+@media (min-width: 1024px) {
+  .app-shell-backdrop {
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(35, 121, 171, 0.28), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(22, 85, 154, 0.35), transparent 55%),
+      var(--navy);
+  }
+}

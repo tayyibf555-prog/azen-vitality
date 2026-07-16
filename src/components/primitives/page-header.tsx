@@ -18,7 +18,7 @@ export function PageHeader({
     return (
       <div
         className={cn(
-          "chrome-hero flex flex-wrap items-center justify-between gap-4 rounded-[16px] px-6 py-5 text-white shadow-hero",
+          "chrome-hero flex flex-wrap items-center justify-between gap-4 rounded-card px-6 py-5 text-white shadow-hero",
           className,
         )}
       >

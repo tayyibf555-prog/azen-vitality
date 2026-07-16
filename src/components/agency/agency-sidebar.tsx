@@ -47,7 +47,7 @@ export function AgencySidebar() {
   };
 
   return (
-    <aside className="chrome-nav fixed inset-y-0 left-0 z-20 flex w-[248px] flex-col text-on-navy">
+    <aside className="chrome-nav sticky top-0 flex h-screen w-[248px] shrink-0 flex-col text-on-navy lg:h-full">
       {/* Wordmark lockup */}
       <div className="flex items-center gap-3 px-5 py-6">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-dark text-base font-extrabold text-white">

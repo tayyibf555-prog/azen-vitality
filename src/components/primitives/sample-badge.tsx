@@ -43,12 +43,12 @@ export function SampleNote({
   return (
     <div
       className={cn(
-        "flex items-center gap-2.5 rounded-xl border border-warning/25 bg-warning/10 px-4 py-2.5",
+        "flex items-center gap-2.5 rounded-full border border-tint-amber-line bg-tint-amber px-4 py-2.5",
         className,
       )}
     >
-      <Info size={16} className="shrink-0 text-[#9a6700]" />
-      <p className="text-xs font-medium leading-relaxed text-[#9a6700]">{children}</p>
+      <Info size={16} className="shrink-0 text-status-amber" />
+      <p className="text-xs font-medium leading-relaxed text-status-amber">{children}</p>
     </div>
   );
 }

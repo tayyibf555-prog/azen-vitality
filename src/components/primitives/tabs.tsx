@@ -43,7 +43,7 @@ export function Tabs({
         <div
           role="tablist"
           className={cn(
-            "inline-flex flex-wrap gap-1 rounded-xl border border-line bg-card p-1 shadow-[0_1px_2px_rgba(10,14,26,0.04)]",
+            "inline-flex flex-wrap gap-1 rounded-full border border-line bg-card p-1 shadow-chip",
             tablistClassName,
           )}
         >
@@ -57,7 +57,7 @@ export function Tabs({
                 aria-selected={isActive}
                 onClick={() => setActive(key)}
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40",
+                  "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-royal/40",
                   isActive ? "bg-navy text-on-navy shadow-sm" : "text-muted hover:text-ink",
                 )}
               >

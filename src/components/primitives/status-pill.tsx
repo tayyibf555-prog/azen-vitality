@@ -2,12 +2,14 @@ import { cn } from "@/lib/utils";
 
 export type Tone = "neutral" | "success" | "warning" | "danger" | "info" | "whatsapp";
 
+// Soft tinted chips (the aesthetic-shell status language): a pale tint fill, a
+// matching hairline and a readable ink. Retuned from the older /10 alpha tones.
 const tones: Record<Tone, string> = {
   neutral: "bg-card-muted text-ink border-line-strong",
-  success: "bg-success/10 text-success border-success/20",
-  warning: "bg-warning/10 text-[#9a6700] border-warning/25",
-  danger: "bg-danger/10 text-danger border-danger/20",
-  info: "bg-blue-royal/10 text-blue-royal border-blue-royal/20",
+  success: "bg-tint-green text-status-green border-tint-green-line",
+  warning: "bg-tint-amber text-status-amber border-tint-amber-line",
+  danger: "bg-tint-red text-status-red border-tint-red-line",
+  info: "bg-tint-blue text-status-blue border-tint-blue-line",
   whatsapp: "bg-whatsapp/10 text-[#107c40] border-whatsapp/25",
 };
 

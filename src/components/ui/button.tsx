@@ -4,6 +4,11 @@ import { Slot } from "./slot";
 type Variant = "primary" | "secondary" | "ghost" | "navy";
 type Size = "sm" | "md" | "lg";
 
+// NOTE: the shared Button is used by the public patient surfaces (login, /assess,
+// /book, /onboard) which are OUT of the aesthetic-shell re-skin, so its base
+// radius is left as rounded-lg to keep those surfaces byte-for-byte unchanged. The
+// study's pill language is carried instead by the segmented Tabs, the tinted
+// status pills, and the sidebar/topbar/filter chips.
 const base =
   "inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap";
 
