@@ -1,12 +1,43 @@
-import { ArrowRight, Check, CalendarDays } from "lucide-react";
+import { ArrowRight, Check, Clock, AlertTriangle, CalendarDays } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { SectionCard, EmptyState } from "@/components/primitives";
+import type { DiarySlotState } from "@/lib/home/diary";
 import type { TodayDiary } from "@/lib/home/diary";
 import { cn } from "@/lib/utils";
 
-// The Home page's glanceable "Today's diary" rail: every slot of the day with its
-// state at a glance — done ticks, the highlighted next patient, high no-show-risk
-// dots and gap-to-fill markers. A plain presentational component (no state, no
-// function props) so it renders server-side with the page.
+// The Home page's glanceable "Today's diary" rail: every slot of the day as a soft
+// tinted pill chip with a white rounded icon square (the aesthetic-shell chip
+// language) — green ticks for seen, a highlighted next patient, amber/red risk and
+// quiet dashed rows for gaps to fill. A plain presentational component (no state,
+// no function props) so it renders server-side with the page.
+
+// Per-state chip styling. Each tone is a pale tint + hairline + a white icon square.
+const CHIP: Record<
+  Exclude<DiarySlotState, "gap">,
+  { wrap: string; square: string; icon: LucideIcon; flag?: string }
+> = {
+  completed: {
+    wrap: "bg-tint-green border-tint-green-line",
+    square: "text-status-green",
+    icon: Check,
+  },
+  next: {
+    wrap: "bg-tint-royal border-tint-royal-line ring-1 ring-blue-royal/25",
+    square: "text-status-royal",
+    icon: ArrowRight,
+  },
+  booked: {
+    wrap: "bg-tint-blue border-tint-blue-line",
+    square: "text-status-blue",
+    icon: Clock,
+  },
+  risk: {
+    wrap: "bg-tint-red border-tint-red-line",
+    square: "text-status-red",
+    icon: AlertTriangle,
+    flag: "Risk",
+  },
+};
 
 export function DiaryRail({ diary, clientSlug }: { diary: TodayDiary; clientSlug: string }) {
   const calendarHref = `/c/${clientSlug}/calendar`;
@@ -22,46 +53,57 @@ export function DiaryRail({ diary, clientSlug }: { diary: TodayDiary; clientSlug
         />
       ) : (
         <>
-          <ul className="space-y-0.5">
-            {diary.slots.map((s) => (
-              <li
-                key={s.id}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-sm",
-                  s.state === "next" ? "bg-blue-dark/10 font-semibold text-navy" : "text-ink",
-                )}
-              >
-                <span className="w-11 shrink-0 tabular-nums text-xs text-muted">{s.time}</span>
-                {s.state === "completed" ? (
-                  <Check size={14} className="shrink-0 text-success" aria-label="Seen" />
-                ) : s.state === "next" ? (
-                  <ArrowRight size={14} className="shrink-0 text-blue-dark" aria-label="Next" />
-                ) : s.state === "risk" ? (
-                  <span
-                    className="h-2 w-2 shrink-0 rounded-full bg-warning"
-                    role="img"
-                    aria-label="High no-show risk"
-                  />
-                ) : s.state === "gap" ? (
-                  <span className="h-2 w-2 shrink-0 rounded-full border border-dashed border-line-strong" aria-hidden="true" />
-                ) : (
-                  <span className="h-2 w-2 shrink-0 rounded-full border-[1.5px] border-line-strong" aria-hidden="true" />
-                )}
-                {s.state === "gap" ? (
-                  <span className="min-w-0 truncate text-muted">
-                    Gap ·{" "}
-                    <a href={noshowHref} className="font-semibold text-blue-dark hover:underline">
-                      offer to waitlist
-                    </a>
-                  </span>
-                ) : (
-                  <span className="min-w-0 truncate" title={s.label}>
-                    {s.label}
-                    {s.state === "risk" ? <span className="text-warning"> · risk</span> : null}
-                  </span>
-                )}
-              </li>
-            ))}
+          <ul className="space-y-1.5">
+            {diary.slots.map((s) => {
+              if (s.state === "gap") {
+                // Quiet empty row: a dashed marker and a call to fill it.
+                return (
+                  <li key={s.id} className="flex items-center gap-2.5 px-1.5 py-1.5 text-sm">
+                    <span className="w-11 shrink-0 tabular-nums text-xs text-muted">{s.time}</span>
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full border border-dashed border-line-strong"
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 truncate text-muted">
+                      Gap ·{" "}
+                      <a href={noshowHref} className="font-semibold text-blue-dark hover:underline">
+                        offer to waitlist
+                      </a>
+                    </span>
+                  </li>
+                );
+              }
+              const chip = CHIP[s.state];
+              const Icon = chip.icon;
+              return (
+                <li key={s.id}>
+                  <div
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-full border py-1.5 pl-1.5 pr-3.5 shadow-chip",
+                      chip.wrap,
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-white",
+                        chip.square,
+                      )}
+                    >
+                      <Icon size={14} aria-hidden="true" />
+                    </span>
+                    <span className="w-10 shrink-0 tabular-nums text-xs font-semibold text-muted">{s.time}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-navy" title={s.label}>
+                      {s.label}
+                    </span>
+                    {chip.flag ? (
+                      <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-status-red">
+                        {chip.flag}
+                      </span>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
           <p className="mt-3 border-t border-line pt-3 text-xs text-muted">
             {diary.fillPercent !== null ? `${diary.fillPercent}% full` : "No slots"}
