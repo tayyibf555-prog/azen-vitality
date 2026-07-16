@@ -1,24 +1,38 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, Clock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
+import { earliestSlots } from "@/lib/booking/slots";
+import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 
-// Public booking calendar for /book/<client>. Three screens in one card:
+// Public booking calendar for /book/<client>. A simple two-step booking in four
+// screens, kept as plain as Dentally's own flow (big obvious steps, little
+// scrolling):
 //
-//   times   — a horizontal strip of the next 14 days (extendable once to 28)
-//             with per-day slot counts, and the selected day's times as pill
-//             buttons grouped morning/afternoon.
-//   details — the chosen time summarised, plus name/mobile/email fields.
+//   times   — "next available" quick-pick chips (soonest first), then a
+//             horizontal strip of the next 14 days (extendable once to 28) with
+//             per-day slot counts and the selected day's times grouped
+//             morning/afternoon.
+//   details — STEP 1: the chosen time summarised, plus name/mobile/email. Submit
+//             HOLDS the time (POST /api/booking/hold) with NO Dentally write, and
+//             a short line that the practice may text about the booking.
+//   confirm — STEP 2: the exact slot read back, one big "Confirm" that runs the
+//             existing POST /api/booking/create (which flips the hold to
+//             confirmed).
 //   success — the booked confirmation.
 //
 // Availability comes from GET /api/booking/slots (max 14 days per request, so
-// the "next two weeks" toggle issues exactly one extra request). Booking POSTs
-// to /api/booking/create; the server is the authority on validation and slot
-// freshness. Its error strings are patient-friendly and rendered VERBATIM. On a
-// 409 (slot just taken) we re-pull availability so the taken time disappears
-// and return the patient to the time grid with the message visible.
+// the "next two weeks" toggle issues exactly one extra request). The server is
+// the authority on validation and slot freshness; its error strings are
+// patient-friendly and rendered VERBATIM. On a 409 at confirm (slot just taken)
+// we re-pull availability so the taken time disappears and return the patient to
+// the time grid with the message visible.
+//
+// Anonymous, PII-free funnel events (viewed / slot_selected / details_submitted /
+// confirmed) are fired fire-and-forget for the drop-off report; they never block
+// the UI.
 //
 // All dates and times are presented in Europe/London regardless of the
 // device's timezone, matching the practice diary.
@@ -35,7 +49,7 @@ interface Props {
   siteName: string;
 }
 
-type Phase = "times" | "details" | "success";
+type Phase = "times" | "details" | "confirm" | "success";
 
 const GENERIC_ERROR = "Sorry, something went wrong. Please try again in a moment.";
 
@@ -168,7 +182,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Slot | null>(null);
 
-  // Details step.
+  // Details step (step 1).
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
@@ -176,13 +190,25 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // The step-1 hold id, once the time is held; carried into the step-2 confirm.
+  const [holdId, setHoldId] = useState<string | null>(null);
+
   // Success screen: what the server confirmed we booked.
   const [booked, setBooked] = useState<{ start: string } | null>(null);
 
   // Bumped on every screen change so the entrance animation re-triggers.
   const [animKey, setAnimKey] = useState(0);
-  // Guards a rapid double-tap on Confirm.
+  // Guards a rapid double-tap on the hold / confirm buttons.
   const submitting = useRef(false);
+
+  // PII-free funnel telemetry. Lazy one-time init so listeners are registered once.
+  const trackerRef = useRef<FunnelTracker | null>(null);
+  if (trackerRef.current === null) {
+    trackerRef.current = createFunnelTracker({ surface: "booking", clientSlug });
+  }
+  useEffect(() => {
+    trackerRef.current?.track("viewed");
+  }, []);
 
   const dates = useMemo(() => {
     const count = extended ? 28 : 14;
@@ -277,16 +303,27 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
 
   function chooseSlot(slot: Slot) {
     setChosen(slot);
+    setHoldId(null);
     setError(null);
     setPhase("details");
     setAnimKey((k) => k + 1);
+    trackerRef.current?.track("slot_selected");
   }
 
   function backToTimes() {
     if (busy) return;
     setChosen(null);
+    setHoldId(null);
     setError(null);
     setPhase("times");
+    setAnimKey((k) => k + 1);
+  }
+
+  /** From the confirm step, step back to the details (step 1) to edit anything. */
+  function backToDetails() {
+    if (busy) return;
+    setError(null);
+    setPhase("details");
     setAnimKey((k) => k + 1);
   }
 
@@ -295,7 +332,20 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   const canSubmit =
     firstName.trim() !== "" && lastName.trim() !== "" && phone.trim() !== "" && !busy;
 
-  async function confirmBooking(e: React.FormEvent) {
+  /** Fetch the short-lived public-funnel page token (best effort). */
+  async function fetchPageToken(): Promise<string | undefined> {
+    return fetch(`/api/smile-assessment/token?client=${encodeURIComponent(clientSlug)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { token?: string | null } | null) => j?.token ?? undefined)
+      .catch(() => undefined);
+  }
+
+  /**
+   * STEP 1 — hold the time. Validates the details, then POSTs /api/booking/hold
+   * (NO Dentally write). On success we move to the confirm screen; the real
+   * appointment is only created there.
+   */
+  async function submitHold(e: React.FormEvent) {
     e.preventDefault();
     if (submitting.current || busy || !chosen) return;
 
@@ -323,17 +373,8 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
     setBusy(true);
     setError(null);
     try {
-      // Short-lived page token: marks this booking as coming from the real
-      // page. Best effort; a failed fetch still attempts the booking and the
-      // server decides.
-      const pageToken = await fetch(
-        `/api/smile-assessment/token?client=${encodeURIComponent(clientSlug)}`,
-      )
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j: { token?: string | null } | null) => j?.token ?? undefined)
-        .catch(() => undefined);
-
-      const res = await fetch("/api/booking/create", {
+      const pageToken = await fetchPageToken();
+      const res = await fetch("/api/booking/hold", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -350,6 +391,60 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
         }),
       });
       const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; holdId?: unknown; error?: unknown }
+        | null;
+
+      if (res.ok && data?.ok && typeof data.holdId === "string") {
+        setHoldId(data.holdId);
+        setPhase("confirm");
+        setAnimKey((k) => k + 1);
+        trackerRef.current?.track("details_submitted");
+        return;
+      }
+
+      const message =
+        typeof data?.error === "string" && data.error.trim() !== "" ? data.error : GENERIC_ERROR;
+      setError(message);
+    } catch {
+      setError(GENERIC_ERROR);
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
+
+  /**
+   * STEP 2 — confirm. Runs the EXISTING create path, which revalidates the slot
+   * against live availability, writes the Dentally appointment and flips the hold
+   * to confirmed. On a 409 (taken while they were on the confirm screen) we return
+   * to the grid and refresh so the gone time disappears.
+   */
+  async function confirmBooking() {
+    if (submitting.current || busy || !chosen) return;
+
+    submitting.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const pageToken = await fetchPageToken();
+      const res = await fetch("/api/booking/create", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          clientSlug,
+          siteId,
+          slotStart: chosen.start,
+          finish: chosen.finish,
+          practitionerId: chosen.practitionerId,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: phone.trim(),
+          email: email.trim() ? normaliseEmail(email.trim()) ?? undefined : undefined,
+          holdId: holdId ?? undefined,
+          pageToken,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as
         | { ok?: boolean; booked?: { start?: unknown }; error?: unknown }
         | null;
 
@@ -359,6 +454,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
         setBooked({ start });
         setPhase("success");
         setAnimKey((k) => k + 1);
+        trackerRef.current?.track("confirmed");
         return;
       }
 
@@ -367,9 +463,10 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
         typeof data?.error === "string" && data.error.trim() !== "" ? data.error : GENERIC_ERROR;
 
       if (res.status === 409) {
-        // The time was taken while they typed: back to the grid, message
+        // The time was taken while they were confirming: back to the grid, message
         // visible, and a fresh pull so the taken time disappears.
         setChosen(null);
+        setHoldId(null);
         setPhase("times");
         setError(message);
         setAnimKey((k) => k + 1);
@@ -388,12 +485,37 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   const selectedSlots = selectedDate ? (daysByDate[selectedDate] ?? []) : [];
   const totalSlots = dates.reduce((n, d) => n + (daysByDate[d]?.length ?? 0), 0);
 
+  // The soonest 3 bookable times across every loaded day, for the one-tap "next
+  // available" chips. Dentally deliberately leads with the earliest availability;
+  // the shared pure helper keeps that ordering identical here and in tests.
+  const earliest = useMemo(
+    () =>
+      earliestSlots(
+        dates.map((d) => ({ date: d, slots: daysByDate[d] ?? [] })),
+        3,
+      ),
+    [dates, daysByDate],
+  );
+
   return (
     <div className="overflow-hidden rounded-[1.4rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
       <style>{ENTER_KEYFRAMES}</style>
       <div className="p-5 sm:p-7">
         {phase === "success" && booked ? (
           <SuccessScreen animKey={animKey} startIso={booked.start} siteName={siteName} />
+        ) : phase === "confirm" && chosen ? (
+          <ConfirmStep
+            animKey={animKey}
+            chosen={chosen}
+            siteName={siteName}
+            firstName={firstName}
+            lastName={lastName}
+            phone={phone}
+            busy={busy}
+            error={error}
+            onConfirm={confirmBooking}
+            onBack={backToDetails}
+          />
         ) : phase === "details" && chosen ? (
           <DetailsStep
             animKey={animKey}
@@ -410,7 +532,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
             canSubmit={canSubmit}
             busy={busy}
             error={error}
-            onSubmit={confirmBooking}
+            onSubmit={submitHold}
             onBack={backToTimes}
           />
         ) : loading ? (
@@ -432,6 +554,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
               <EmptyRange extended={extended} loadingMore={loadingMore} onLoadMore={loadMore} />
             ) : (
               <>
+                <QuickPicks slots={earliest} today={today} onChoose={chooseSlot} />
                 <DayStrip
                   dates={dates}
                   today={today}
@@ -462,6 +585,57 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
 /* ---------------------------------------------------------------------------
  * Times screen pieces
  * ------------------------------------------------------------------------- */
+
+/**
+ * "Next available" quick-pick chips: the soonest few times, one tap to book.
+ * Surfaces the earliest availability first the way Dentally deliberately does, so
+ * the common case (book the next free slot) needs no calendar hunting.
+ */
+function QuickPicks({
+  slots,
+  today,
+  onChoose,
+}: {
+  slots: Array<Slot & { date: string }>;
+  today: string;
+  onChoose: (slot: Slot) => void;
+}) {
+  if (slots.length === 0) return null;
+  return (
+    <div className="mb-4">
+      <p className="mb-2 flex items-center gap-1.5 text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-muted">
+        <Clock size={12} aria-hidden />
+        Next available
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {slots.map((s) => {
+          const prefix =
+            s.date === today
+              ? "Today"
+              : s.date === addDays(today, 1)
+                ? "Tomorrow"
+                : weekdayShortFmt.format(noonUtc(s.date));
+          return (
+            <button
+              key={s.start}
+              type="button"
+              onClick={() => onChoose(s)}
+              aria-label={`Book ${longDateFmt.format(noonUtc(s.date))} at ${timeLabel(s.start)}`}
+              className={[
+                "inline-flex items-center gap-1.5 rounded-full border border-blue-dark/30 bg-blue-dark/[0.06] px-3 py-2 text-sm transition duration-150 ease-out",
+                "hover:border-blue-dark/60 hover:bg-blue-dark/[0.12] motion-safe:hover:-translate-y-0.5",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+              ].join(" ")}
+            >
+              <span className="font-semibold text-navy">{prefix}</span>
+              <span className="font-semibold text-blue-deep">{timeLabel(s.start)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function DayStrip({
   dates,
@@ -749,21 +923,27 @@ function DetailsStep({
       onSubmit={onSubmit}
       className="space-y-4 motion-safe:[animation:bookEnter_240ms_ease-out]"
     >
-      <button
-        type="button"
-        onClick={onBack}
-        disabled={busy}
-        className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
-      >
-        <ArrowLeft size={14} />
-        Change time
-      </button>
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={busy}
+          className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
+        >
+          <ArrowLeft size={14} />
+          Change time
+        </button>
+        <span className="rounded-full bg-card-muted px-2.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide text-ink">
+          Step 1 of 2
+        </span>
+      </div>
 
       <div className="rounded-xl bg-blue-dark/[0.08] px-3.5 py-3">
         <p className="text-sm font-bold text-navy">
           {longDateFmt.format(new Date(chosen.start))}, {timeLabel(chosen.start)}
         </p>
         <p className="text-xs text-muted">at {siteName}</p>
+        <p className="mt-1 text-xs font-medium text-blue-deep">We&apos;ll hold this time for you.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -831,12 +1011,104 @@ function DetailsStep({
 
       <Button type="submit" variant="primary" className="w-full" disabled={!canSubmit}>
         {busy ? <Loader2 size={16} className="motion-safe:animate-spin" /> : null}
-        Confirm booking
+        Hold this time for me
       </Button>
+      {/* Consent microcopy: plain, non-clinical, and specific to this booking. */}
       <p className="text-center text-xs text-muted">
-        We&apos;ll only use your details for this appointment.
+        We&apos;ll hold this time and may text you about this booking. Nothing is confirmed until the
+        next step.
       </p>
     </form>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Confirm screen (step 2)
+ * ------------------------------------------------------------------------- */
+
+function ConfirmStep({
+  animKey,
+  chosen,
+  siteName,
+  firstName,
+  lastName,
+  phone,
+  busy,
+  error,
+  onConfirm,
+  onBack,
+}: {
+  animKey: number;
+  chosen: Slot;
+  siteName: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  busy: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div
+      key={animKey}
+      className="space-y-4 motion-safe:[animation:bookEnter_240ms_ease-out]"
+    >
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={busy}
+          className="-mx-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-40"
+        >
+          <ArrowLeft size={14} />
+          Change details
+        </button>
+        <span className="rounded-full bg-card-muted px-2.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide text-ink">
+          Step 2 of 2
+        </span>
+      </div>
+
+      <div className="space-y-1">
+        <h2 className="text-lg font-bold text-navy [text-wrap:balance]">Please check and confirm</h2>
+        <p className="text-sm text-muted">This is the appointment we&apos;ll book for you.</p>
+      </div>
+
+      {/* The exact slot read back, large and unmissable. */}
+      <div className="rounded-xl border border-blue-dark/20 bg-blue-dark/[0.06] px-4 py-3.5">
+        <p className="text-base font-bold text-navy">
+          {longDateFmt.format(new Date(chosen.start))}
+        </p>
+        <p className="text-base font-bold text-blue-deep">{timeLabel(chosen.start)}</p>
+        <p className="mt-1 text-xs text-muted">at {siteName}</p>
+      </div>
+
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        <dt className="text-muted">Name</dt>
+        <dd className="font-semibold text-navy">
+          {firstName} {lastName}
+        </dd>
+        <dt className="text-muted">Mobile</dt>
+        <dd className="font-semibold text-navy">{phone}</dd>
+      </dl>
+
+      {error ? (
+        <p
+          role="alert"
+          className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-[#b3261e]"
+        >
+          {error}
+        </p>
+      ) : null}
+
+      <Button type="button" variant="primary" className="w-full" onClick={onConfirm} disabled={busy}>
+        {busy ? <Loader2 size={16} className="motion-safe:animate-spin" /> : null}
+        Confirm booking
+      </Button>
+      <Button type="button" variant="secondary" className="w-full" onClick={onBack} disabled={busy}>
+        Go back
+      </Button>
+    </div>
   );
 }
 

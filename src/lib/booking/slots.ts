@@ -165,6 +165,26 @@ export async function fetchAvailabilityDays(
 }
 
 /**
+ * The earliest N bookable slots across already-grouped days, soonest first. This
+ * is what powers the "next available" quick-pick chips: Dentally deliberately
+ * surfaces the soonest times, so a patient can book the first free slot in one
+ * tap instead of hunting the calendar.
+ *
+ * `days` is expected to already be day-sorted with each day's slots start-sorted
+ * (as groupSlotsIntoLondonDays returns), but this re-sorts defensively so a
+ * caller passing merged/unsorted ranges still gets a correct earliest-first list.
+ * Pure: no clock read, no I/O.
+ */
+export function earliestSlots(days: BookingDay[], limit: number): Array<BookingSlot & { date: string }> {
+  const flat: Array<BookingSlot & { date: string }> = [];
+  for (const day of days) {
+    for (const slot of day.slots) flat.push({ ...slot, date: day.date });
+  }
+  flat.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  return limit > 0 ? flat.slice(0, limit) : [];
+}
+
+/**
  * Find the live slot exactly matching a patient's selection: same start and
  * finish instants, and the same practitioner when the caller pinned one. The
  * MATCHED slot (with its own practitionerId/finish) is what gets booked; the

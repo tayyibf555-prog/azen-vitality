@@ -6,6 +6,7 @@ import {
   releaseLeadClaim,
   resetStaleContacting,
 } from "@/lib/speed-to-lead/repository";
+import { convertAbandonedHolds } from "@/lib/booking/abandoned-holds";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabledForSend } from "@/lib/systems/repository";
 
@@ -39,6 +40,20 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
   const now = Date.now();
+
+  // Abandoned-booking capture (best-effort, must NEVER break the SLA sweep). A
+  // booking hold left un-confirmed past its window becomes a speed-to-lead lead
+  // (source 'abandoned-booking') that this same sweep then first-contacts on a
+  // later tick. Fully isolated in try/catch: a failure here cannot stop the
+  // uncontacted-lead pass below, which is this route's actual job.
+  let abandonedConverted = 0;
+  try {
+    const res = await convertAbandonedHolds(new Date(now));
+    abandonedConverted = res.converted;
+  } catch {
+    // Swallow: the main sweep must run regardless.
+  }
+
   // Recover leads stranded at 'contacting' by a crash/timeout between claim and the
   // contactLead stage-advance: reset any older than 10 min back to 'new' so they are
   // re-picked below. The 10-min window is safe against an in-flight contact (the claim
@@ -76,7 +91,14 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ ok: true, recovered, checked: stale.length, claimed: claimedBy, contacted });
+  return Response.json({
+    ok: true,
+    recovered,
+    checked: stale.length,
+    claimed: claimedBy,
+    contacted,
+    abandonedConverted,
+  });
   } finally {
     await releaseCronLock("sweep-speed-to-lead");
   }
