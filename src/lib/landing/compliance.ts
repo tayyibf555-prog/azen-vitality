@@ -19,7 +19,11 @@
 //   3. Price cross-check - every advertised "from" price MUST exactly match the
 //      practice's real catalogue price for that treatment. Invented prices are
 //      the single highest-risk failure mode, so the real price list is injected
-//      and enforced here rather than trusted from the model.
+//      and enforced here rather than trusted from the model. This runs at TWO
+//      levels: the structured pricing.lines[] block, AND every prose field - a
+//      GBP figure written into ANY free text (a "just £99 this month" in an FAQ,
+//      hero subhead, benefit detail, etc.) must equal one of the sanctioned
+//      catalogue "from" prices the page is allowed to show, or it is rejected.
 //
 // British English, no em-dash. Conservative by design: err towards flagging.
 
@@ -211,6 +215,26 @@ export interface LintOptions {
 }
 
 /**
+ * Every GBP money figure written into a free-text field, as a numeric value.
+ * Matches "£99", "£2,500", "£2500.00", "2500 GBP" and "GBP 2500"; commas are
+ * stripped before parsing. Deliberately CURRENCY-ONLY: a plain number ("3
+ * months"), a percentage ("0 percent", "100%") or a rating ("5 star") never
+ * matches, so only actual price claims are surfaced for the catalogue check.
+ * A fresh regex per call keeps the global-flag lastIndex state local.
+ */
+function prosePriceFigures(text: string): number[] {
+  const re = /£\s?(\d[\d,]*(?:\.\d+)?)|\bGBP\s?(\d[\d,]*(?:\.\d+)?)\b|\b(\d[\d,]*(?:\.\d+)?)\s?GBP\b/gi;
+  const values: number[] = [];
+  for (const m of text.matchAll(re)) {
+    const raw = m[1] ?? m[2] ?? m[3];
+    if (raw === undefined) continue;
+    const value = Number(raw.replace(/,/g, ""));
+    if (Number.isFinite(value)) values.push(value);
+  }
+  return values;
+}
+
+/**
  * Lint a content variant. Returns every failure (not just the first) so the
  * generation flow can quote them all back to the model on its single retry.
  */
@@ -218,7 +242,23 @@ export function lintContent(content: LandingPageContent, opts: LintOptions = {})
   const resolvePrice = opts.resolvePrice ?? catalogPriceResolver;
   const failures: LintFailure[] = [];
 
-  // 1 + 2. Banned patterns (including proof claims) across every text field.
+  // Sanctioned prose prices: the REAL catalogue "from" price for each treatment the
+  // page lists in its (separately cross-checked) pricing block. Built from the
+  // resolver over the page's OWN pricing lines, so prose may only ever echo a price
+  // the page is genuinely allowed to show. A line whose treatment is unknown, or
+  // whose price is wrong, contributes nothing here (its real price is used, never
+  // the invented one) and is caught by the structured check below.
+  const allowedPrices = new Set<number>();
+  for (const line of content.pricing.lines) {
+    const real = resolvePrice(line.treatment);
+    if (real !== null) allowedPrices.add(real);
+  }
+  const allowedList = allowedPrices.size
+    ? [...allowedPrices].map((p) => `£${p}`).join(", ")
+    : "no sanctioned price on this page";
+
+  // 1 + 2 + prose price. Banned patterns (including proof claims) AND any
+  // unsanctioned GBP figure, across every text field.
   for (const { where, text } of textFields(content)) {
     if (!text) continue;
     for (const { category, patterns } of BANNED) {
@@ -227,9 +267,18 @@ export function lintContent(content: LandingPageContent, opts: LintOptions = {})
         if (m) failures.push({ category, where, matched: m[0] });
       }
     }
+    for (const value of prosePriceFigures(text)) {
+      if (!allowedPrices.has(value)) {
+        failures.push({
+          category: "price",
+          where,
+          matched: `prose price £${value} is not a sanctioned catalogue price (allowed: ${allowedList})`,
+        });
+      }
+    }
   }
 
-  // 3. Price cross-check: every "from" price must exactly match the real price.
+  // 3. Structured price cross-check: every "from" price must exactly match the real price.
   content.pricing.lines.forEach((line, i) => {
     const real = resolvePrice(line.treatment);
     if (real === null) {
