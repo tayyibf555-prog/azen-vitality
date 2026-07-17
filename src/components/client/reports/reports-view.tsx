@@ -37,38 +37,19 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
       <PageHeader
         title="Reports"
         description="AI weekly and monthly business reviews across acquisition, conversion, lifecycle and compliance, with recommendations."
+        stats={
+          <>
+            <StatCard label="Spend (30 days)" value={money(s.spendGbp)} dot="bg-status-amber" />
+            <StatCard label="New patients" value={count(s.newPatients)} dot="bg-status-blue" />
+            <StatCard label="Revenue (30 days)" value={money(s.revenueGbp)} dot="bg-status-green" />
+            <StatCard label="Return on spend" value={`${s.returnX.toFixed(1)}x`} dot="bg-status-blue" />
+          </>
+        }
       />
 
       {/* Was a subtle line in the header description; promoted to a visible banner so
           the figures below are unmistakably sample. */}
       <SampleNote>Sample data, not yet from your live sources. The figures in these reviews are pilot estimates until the live sources connect.</SampleNote>
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Spend (30 days)"
-          value={money(s.spendGbp)}
-          dot="bg-status-amber"
-          hint="Across every paid channel"
-        />
-        <StatCard
-          label="New patients"
-          value={count(s.newPatients)}
-          dot="bg-status-blue"
-          hint={`From ${count(s.leads)} enquiries`}
-        />
-        <StatCard
-          label="Revenue (30 days)"
-          value={money(s.revenueGbp)}
-          dot="bg-status-green"
-          hint="Attributed to acquisition"
-        />
-        <StatCard
-          label="Return on spend"
-          value={`${s.returnX.toFixed(1)}x`}
-          dot="bg-status-blue"
-          hint={`£${s.costPerNewPatientGbp} per new patient`}
-        />
-      </div>
 
       <ReportsWorkspace clientSlug={clientSlug} />
     </>
