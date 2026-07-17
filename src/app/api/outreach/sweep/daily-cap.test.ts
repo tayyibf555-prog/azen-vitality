@@ -162,6 +162,25 @@ describe("outreach sweep daily contact cap", () => {
   });
 });
 
+describe("outreach sweep send-safety ordering (finding #3: keep advance-before-enqueue)", () => {
+  it("advances the cadence BEFORE enqueuing the outbox row, mirroring recall/reactivation", async () => {
+    // Deliberate ordering, NOT a bug: the target is advanced past this step BEFORE the
+    // outbox row is enqueued, so a crash between the two SKIPS a message rather than
+    // re-sending it (a skipped message beats a double-send). Both sibling sweeps order it
+    // the same way for the same reason (recall route.ts ~L185-207, reactivation route.ts
+    // ~L162-183, each with an explicit comment). Reversing it to enqueue-then-advance
+    // would make outreach the ONLY module that can double-send a patient-facing marketing
+    // SMS. This test locks the ordering so it is not silently inverted.
+    arrange(1, 25, 0);
+    await sweep();
+    expect(vi.mocked(advanceTarget)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueOutbox)).toHaveBeenCalledTimes(1);
+    const advanceOrder = vi.mocked(advanceTarget).mock.invocationCallOrder[0];
+    const enqueueOrder = vi.mocked(enqueueOutbox).mock.invocationCallOrder[0];
+    expect(advanceOrder).toBeLessThan(enqueueOrder);
+  });
+});
+
 describe("outreach sweep kill switch", () => {
   it("does nothing when the outreach system is switched OFF", async () => {
     vi.mocked(isSystemEnabledForSend).mockResolvedValue(false);

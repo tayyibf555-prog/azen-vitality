@@ -72,11 +72,17 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     if (surface === "landing") {
-      const variants = await funnelVariantSummary({ clientId, surface, fromIso, toIso });
+      // Per-variant results are inherently per-PAGE, so a specific landing slug is
+      // required: without it we would tally (and auto-promote on) another page's
+      // traffic. The results card always sends ?landing=<slug>.
+      const landingSlug = url.searchParams.get("landing");
+      if (!landingSlug) return bad("landing surface requires a ?landing=<slug>", 400);
+      const variants = await funnelVariantSummary({ clientId, surface, fromIso, toIso, landingSlug });
       // Lazy auto-promotion is evaluated here (see maybeAutoPromote): there is no
       // cron slot for landing split tests yet, so the read path is where a winner
-      // gets promoted. Best-effort — never fails the results read.
-      await maybeAutoPromote(clientId, url.searchParams.get("landing"), variants);
+      // gets promoted. It now judges on this page's own (scoped) counters.
+      // Best-effort — never fails the results read.
+      await maybeAutoPromote(clientId, landingSlug, variants);
       return Response.json({ ok: true, surface, from: fromIso, to: toIso, variants });
     }
 

@@ -36,6 +36,41 @@ describe("lintContent (schema v2)", () => {
     expect(res.failures.some((f) => f.category === "price")).toBe(true);
   });
 
+  it("fails on a GBP price in PROSE that is not a sanctioned catalogue price", () => {
+    // A valid, correctly-priced pricing block (Invisalign £2,500) but an invented,
+    // discounted figure smuggled into an FAQ answer. The structured lines pass; the
+    // prose figure must still be caught, or it reaches patients unvetted.
+    const c = cleanContent();
+    c.faqs[0].a = "Great news, it is just £99 this month if you book now.";
+    const res = lintContent(c, { resolvePrice: stubResolver });
+    expect(res.ok).toBe(false);
+    expect(res.failures.some((f) => f.category === "price" && f.where === "faqs[0].a")).toBe(true);
+  });
+
+  it("scans prose prices in EVERY text field, not just FAQs", () => {
+    const hero = cleanContent();
+    hero.hero.subhead = "A brighter smile from just £49, book today.";
+    expect(
+      lintContent(hero, { resolvePrice: stubResolver }).failures.some(
+        (f) => f.category === "price" && f.where === "hero.subhead",
+      ),
+    ).toBe(true);
+  });
+
+  it("allows prose that only repeats the sanctioned from-price", () => {
+    const c = cleanContent();
+    c.faqs[0].a = "Treatment starts from £2,500, confirmed after a clinical assessment.";
+    expect(lintContent(c, { resolvePrice: stubResolver }).ok).toBe(true);
+  });
+
+  it("does not mistake percentages, ratings or plain numbers for prices", () => {
+    // "0 percent", "4 weeks", "3 months" and the like carry no £/GBP and must pass
+    // the prose-price scan (banned-word categories are covered separately).
+    const c = cleanContent();
+    c.about.body = "Aligners are worn about 22 hours a day, swapped every 2 weeks, over 6 months.";
+    expect(lintContent(c, { resolvePrice: stubResolver }).ok).toBe(true);
+  });
+
   it("fails on TESTIMONIAL / review language", () => {
     const c = cleanContent();
     c.hero.subhead = "See our 5 star reviews from happy patients.";

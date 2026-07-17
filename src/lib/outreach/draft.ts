@@ -147,11 +147,14 @@ export async function draftOutreach(
       .join("")
       .trim();
 
-    // Guardrail the model output. Price is excluded here (an invitation carries no
-    // firm figure; a stray "from £X" USP is legitimate) but the funding + clinical
-    // rules are hard. A trip or an empty body falls back to the safe template.
+    // Guardrail the model output. This is patient-facing MARKETING SMS with priced
+    // USPs injected into the prompt, and an invitation never carries a legitimate firm
+    // figure, so the price rule IS enforced here (includePrice: true): an invented firm
+    // price like "just £99" trips the guardrail and forces the deterministic fallback.
+    // A genuinely hedged "from £X" USP is whitelisted by the guardrail and still passes.
+    // Funding + clinical rules are hard as always. A trip or empty body uses the template.
     if (!body) return { body: fallback, usedFallback: true };
-    const guard = checkAgentReply(body, { includePrice: false });
+    const guard = checkAgentReply(body, { includePrice: true });
     if (!guard.ok) {
       console.warn(
         `[outreach] draft blocked by guardrail (${guard.category}: ${JSON.stringify(guard.matched)}); using fallback`,

@@ -56,6 +56,14 @@ describe("output guardrail: unverified / invented price", () => {
     ).toBe(true);
     expect(checkAgentReply("Whitening is from £250. Shall I book you a consultation?").ok).toBe(true);
   });
+  it("blocks a bare marketing price ('just £99' / 'only £99'), the shape a marketing SMS invents", () => {
+    // These unhedged intensifier forms are a firm price to a patient even without a
+    // "the price is" lead-in; outreach (patient-facing marketing) enables this check.
+    expect(checkAgentReply("Whitening this month, just £99! Reply to book.").ok).toBe(false);
+    expect(checkAgentReply("Only £99 for a scale and polish.").ok).toBe(false);
+    // A hedged "from £99" is still allowed - the intensifier rule must not catch it.
+    expect(checkAgentReply("Whitening from £99. Shall I book you in?").ok).toBe(true);
+  });
 });
 
 describe("output guardrail: pass-through", () => {

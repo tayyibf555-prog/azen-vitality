@@ -96,6 +96,10 @@ const PRICE_SAFE_HEDGES: RegExp[] = [
 const PRICE_FIRM: RegExp[] = [
   /\b(?:the price is|it (?:is|'s)|that (?:is|'s)|costs?|total (?:is|of)|exactly|it will be|that will be|comes to)\s*£/i,
   /£\s?\d[\d,]*(?:\.\d{2})?\s*(?:exactly|in total|all in|flat)\b/i,
+  // Bare marketing-price forms ("just £99", "only £99"): an unhedged concrete figure
+  // offered as THE price, the shape a marketing SMS most often invents. A legitimate
+  // hedged "from £99" is whitelisted above and still passes; these intensifiers do not.
+  /\b(?:just|only)\s+£\s?\d/i,
 ];
 
 function firstMatch(text: string, patterns: RegExp[]): string | null {

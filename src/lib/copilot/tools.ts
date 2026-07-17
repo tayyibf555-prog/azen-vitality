@@ -413,12 +413,23 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // patients match without any send intent. It becomes required at launch.
           const messageAngle = String(input.messageAngle ?? "").trim() || null;
 
-          // Resolve the target site: an explicit, in-client site wins; otherwise the
-          // site currently in view (the first scoped site).
-          const clientSites = getSites(clientId);
+          // Resolve the target site WITHIN the co-pilot's view scope (siteIds), never
+          // across every client site: a campaign must not be built or launched against
+          // a site outside the selected scope. An explicit in-scope site wins; otherwise
+          // default to the site in view (the first scoped site). A requested site that is
+          // real but out of scope is refused with a clear pointer to the site selector,
+          // mirroring how the other co-pilot tools stay bounded to siteIds.
           const requestedSite = String(input.siteId ?? "").trim();
-          const siteId =
-            requestedSite && clientSites.some((s) => s.id === requestedSite) ? requestedSite : siteIds[0];
+          if (requestedSite && !siteIds.includes(requestedSite)) {
+            const knownButUnscoped = getSites(clientId).some((s) => s.id === requestedSite);
+            return JSON.stringify({
+              created: false,
+              error: knownButUnscoped
+                ? "That site is outside the site you have in view. Switch the site selector to it first, then create the campaign there."
+                : "I could not find that site for your practice.",
+            });
+          }
+          const siteId = requestedSite || siteIds[0];
           if (!siteId) return JSON.stringify({ created: false, error: "No site is in scope to target." });
 
           // Build + validate the segment from ONLY the stated fields (never invent a
@@ -501,14 +512,27 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // the count will climb, or 'ready' if it completed in one pass. NEVER launches.
           let matched = 0;
           let excludedMissingData = 0;
-          let buildStatus: "ready" | "building" | "unavailable" = "building";
+          let buildStatus: "ready" | "building" | "paused" | "unavailable" = "building";
+          let pauseReason: "rate-limit" | "error" | null = null;
           if (!dentallyReadKey()) {
             buildStatus = "unavailable";
           } else {
             const tick = await runOutreachBuildTick(campaign);
             matched = tick.counts.matched ?? 0;
             excludedMissingData = tick.counts.excludedMissingData ?? 0;
-            buildStatus = tick.done ? "ready" : "building";
+            // Report honestly. A Dentally 403/429 stop (tick.stopped) or a failed tick
+            // (!tick.ok) means the scan PAUSED before finishing: the cursor is preserved
+            // and it resumes where it left off, so we must NOT tell the owner the count
+            // is currently climbing. Only a clean, still-running tick keeps 'building'.
+            if (tick.stopped) {
+              buildStatus = "paused";
+              pauseReason = "rate-limit";
+            } else if (!tick.ok) {
+              buildStatus = "paused";
+              pauseReason = "error";
+            } else {
+              buildStatus = tick.done ? "ready" : "building";
+            }
           }
 
           const usesDemographics =
@@ -537,7 +561,11 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
                 ? "The segment is fully built. Read the segment and matched count back to the owner. "
                 : buildStatus === "unavailable"
                   ? "The list is saved but the patient scan could not run here. "
-                  : "The build is still running; the matched count will keep climbing, so tell the owner it updates shortly. ") +
+                  : buildStatus === "paused"
+                    ? pauseReason === "rate-limit"
+                      ? "The patient scan paused on a Dentally rate limit before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. Tell the owner it paused and will continue automatically, not that the count is rising right now. "
+                      : "The patient scan hit a temporary problem before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. "
+                    : "The build is still running; the matched count will keep climbing, so tell the owner it updates shortly. ") +
               (usesDemographics && excludedMissingData > 0
                 ? `${excludedMissingData} record(s) had no recorded age or gender on file and were not included. `
                 : "") +

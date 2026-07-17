@@ -11,7 +11,9 @@ import { serviceClient } from "@/lib/supabase/server";
 
 // 'landing' was added at integration: the landing-page split-test tracker
 // (src/lib/landing/track.ts) emits funnel events on this same endpoint, carrying
-// its A/B `variant` in each event's meta so funnelVariantSummary can group by it.
+// its A/B `variant` AND its `landingSlug` in each event's meta, so
+// funnelVariantSummary can both group by variant and scope to a single page (one
+// page's split test must never count another page's traffic).
 export const FUNNEL_SURFACES = ["assessment", "booking", "landing"] as const;
 export type FunnelSurface = (typeof FUNNEL_SURFACES)[number];
 
@@ -114,10 +116,26 @@ export interface FunnelStepCount {
   count: number;
 }
 
+// Page size for the raw-row scan below. Kept at the PostgREST default page cap so
+// a short page is a reliable "no more rows" signal; the loop is anchored to an
+// exact head-count regardless, so a lower server cap can never truncate the tally.
+const SUMMARY_PAGE = 1000;
+// Above this row total the scan is logged: it means a big range / heavy traffic,
+// worth surfacing so a truer DB-side rollup can be prioritised if it recurs.
+const LARGE_SCAN_WARN = 50_000;
+
 /**
  * Per-step counts for one client + surface over a date range, for the owner
  * drop-off view. Counts rows (a later workstream may switch to distinct sessions
  * per step for a truer funnel; the raw rows carry session_id for that).
+ *
+ * Steps are an OPEN set (landing emits arbitrary `section_<name>` scroll markers),
+ * so the buckets cannot be enumerated for a single grouped count without a DB view
+ * or RPC (a migration this workstream must not add). Instead of the old single
+ * 50k-capped fetch (which silently under-counted past the cap), we take the exact
+ * total from a head-count and page through the `step` column until every row is
+ * tallied: correct at any scale, ordered by a stable unique key so offset paging
+ * never skips or double-counts.
  */
 export async function funnelSummary(args: {
   clientId: string;
@@ -126,19 +144,45 @@ export async function funnelSummary(args: {
   toIso: string;
 }): Promise<FunnelStepCount[]> {
   const db = serviceClient();
-  const { data, error } = await db
+
+  // Exact total first (head-count, no rows transferred): the ground truth for when
+  // the page loop is done, so it is correct even if the server caps pages lower.
+  const { count, error: countError } = await db
     .from("funnel_event")
-    .select("step")
+    .select("*", { count: "exact", head: true })
     .eq("client_id", args.clientId)
     .eq("surface", args.surface)
     .gte("created_at", args.fromIso)
-    .lte("created_at", args.toIso)
-    .limit(50_000);
-  if (error) throw error;
+    .lte("created_at", args.toIso);
+  if (countError) throw countError;
+  const total = count ?? 0;
+
   const counts = new Map<string, number>();
-  for (const row of (data ?? []) as Array<{ step: string }>) {
-    counts.set(row.step, (counts.get(row.step) ?? 0) + 1);
+  let scanned = 0;
+  while (scanned < total) {
+    const { data, error } = await db
+      .from("funnel_event")
+      .select("step")
+      .eq("client_id", args.clientId)
+      .eq("surface", args.surface)
+      .gte("created_at", args.fromIso)
+      .lte("created_at", args.toIso)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(scanned, scanned + SUMMARY_PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<{ step: string }>;
+    if (rows.length === 0) break; // safety: never loop forever on an unexpected empty page
+    for (const row of rows) counts.set(row.step, (counts.get(row.step) ?? 0) + 1);
+    scanned += rows.length;
   }
+
+  if (total >= LARGE_SCAN_WARN) {
+    console.warn(
+      `[funnelSummary] large scan: ${total} rows for client=${args.clientId} surface=${args.surface} ${args.fromIso}..${args.toIso}`,
+    );
+  }
+
   return [...counts.entries()].map(([step, count]) => ({ step, count })).sort((a, b) => b.count - a.count);
 }
 
@@ -149,41 +193,57 @@ export interface FunnelVariantCounters {
 }
 
 /**
- * Per-variant counters for an A/B split test on one surface (today: landing
- * pages), grouped by the `variant` label carried in each event's meta. Maps the
- * landing steps onto the counters the promotion decision reads:
+ * Per-variant counters for the A/B split test on ONE landing page, grouped by the
+ * `variant` label and SCOPED to the page's `landingSlug` (both carried in each
+ * event's meta). Scoping to landingSlug is essential: a client can run several
+ * landing pages at once, and the promotion decision must judge a page on its own
+ * traffic, never the whole surface. Maps the landing steps onto the counters the
+ * promotion decision reads:
  *   step "viewed"      -> views
  *   step "cta_clicked" -> ctaClicks
  *   step "lead"        -> leads   (no landing step emits this yet; reserved so a
  *                                  later "converted" signal slots in with no schema change)
- * Only 'a' and 'b' variants are counted; any other value is ignored. Shares the
- * same (client, surface, created_at) index and bounded scan as funnelSummary.
+ *
+ * DB-SIDE AGGREGATION: the buckets are a FIXED grid (2 variants x 3 steps), so each
+ * cell is a single exact head-count (no rows transferred, no 50k cap). Correct at
+ * any scale, unlike the old fetch-and-tally which silently under-counted past 50k.
  */
 export async function funnelVariantSummary(args: {
   clientId: string;
   surface: FunnelSurface;
   fromIso: string;
   toIso: string;
+  /** The specific landing page to scope to (its meta.landingSlug). Required. */
+  landingSlug: string;
 }): Promise<{ a: FunnelVariantCounters; b: FunnelVariantCounters }> {
   const db = serviceClient();
-  const { data, error } = await db
-    .from("funnel_event")
-    .select("step, meta")
-    .eq("client_id", args.clientId)
-    .eq("surface", args.surface)
-    .gte("created_at", args.fromIso)
-    .lte("created_at", args.toIso)
-    .limit(50_000);
-  if (error) throw error;
-  const blank = (): FunnelVariantCounters => ({ views: 0, ctaClicks: 0, leads: 0 });
-  const out: { a: FunnelVariantCounters; b: FunnelVariantCounters } = { a: blank(), b: blank() };
-  for (const row of (data ?? []) as Array<{ step: string; meta: Record<string, unknown> | null }>) {
-    const variant = row.meta && typeof row.meta.variant === "string" ? row.meta.variant : null;
-    if (variant !== "a" && variant !== "b") continue;
-    const bucket = out[variant];
-    if (row.step === "viewed") bucket.views += 1;
-    else if (row.step === "cta_clicked") bucket.ctaClicks += 1;
-    else if (row.step === "lead") bucket.leads += 1;
-  }
-  return out;
+
+  const countFor = async (variant: "a" | "b", step: string): Promise<number> => {
+    const { count, error } = await db
+      .from("funnel_event")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", args.clientId)
+      .eq("surface", args.surface)
+      .eq("meta->>landingSlug", args.landingSlug)
+      .eq("meta->>variant", variant)
+      .eq("step", step)
+      .gte("created_at", args.fromIso)
+      .lte("created_at", args.toIso);
+    if (error) throw error;
+    return count ?? 0;
+  };
+
+  const [aViews, aCta, aLeads, bViews, bCta, bLeads] = await Promise.all([
+    countFor("a", "viewed"),
+    countFor("a", "cta_clicked"),
+    countFor("a", "lead"),
+    countFor("b", "viewed"),
+    countFor("b", "cta_clicked"),
+    countFor("b", "lead"),
+  ]);
+
+  return {
+    a: { views: aViews, ctaClicks: aCta, leads: aLeads },
+    b: { views: bViews, ctaClicks: bCta, leads: bLeads },
+  };
 }

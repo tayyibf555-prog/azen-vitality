@@ -221,16 +221,28 @@ export function makeDispatch(deps: ToolDeps) {
           duration: treatment?.durationMinutes,
         });
         const allSlots = Array.isArray(res.availability) ? res.availability : [];
-        // Practitioner targeting: a segment-outreach invite primes a preferred
-        // clinician (context.outreachInvite.practitionerId), so this patient is
-        // offered that clinician's diary first without the model needing the id. The
-        // model may pass a practitionerId to override, or "any"/"all" to broaden to
-        // every clinician when the patient asks for other options.
+        // Practitioner targeting. A segment-outreach invite primes a preferred clinician
+        // (context.outreachInvite.practitionerId): offer THAT clinician's diary first, but
+        // SOFT-prefer rather than hard-filter, so if they have no slots in the window the
+        // patient still sees other clinicians instead of a false "no availability". An
+        // EXPLICIT practitionerId from the model is an intentional choice and stays a hard
+        // filter; "any"/"all" broadens to every clinician when the patient asks.
         const requested = typeof input.practitionerId === "string" ? input.practitionerId.trim() : "";
         const broaden = requested.toLowerCase() === "any" || requested.toLowerCase() === "all";
         const preferred = deps.context.outreachInvite?.practitionerId ?? null;
-        const effectivePractitioner = broaden ? null : requested || preferred || null;
-        const slots = filterSlotsByPractitioner(allSlots, effectivePractitioner);
+        let slots: unknown[];
+        if (broaden) {
+          slots = allSlots; // patient asked to see every clinician
+        } else if (requested) {
+          slots = filterSlotsByPractitioner(allSlots, requested); // explicit choice: hard filter
+        } else if (preferred) {
+          // Outreach invite: prefer the invited clinician, but fall back to every
+          // clinician's availability when they have nothing free in the window.
+          const preferredSlots = filterSlotsByPractitioner(allSlots, preferred);
+          slots = preferredSlots.length > 0 ? preferredSlots : allSlots;
+        } else {
+          slots = allSlots; // no targeting at all
+        }
         return JSON.stringify({ slots });
       }
       case "treatment_info": {

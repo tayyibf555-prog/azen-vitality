@@ -86,7 +86,7 @@ function mapAppointments(payload: { appointments: unknown[] }): AppointmentLike[
 }
 
 export function initBuildCursor(): OutreachBuildCursor {
-  return { siteIndex: 0, page: 1, done: false, scanned: 0, candidates: 0, matched: 0, excludedMissingData: 0 };
+  return { siteIndex: 0, page: 1, pageOffset: 0, done: false, scanned: 0, candidates: 0, matched: 0, excludedMissingData: 0 };
 }
 
 export interface BuildTickResult {
@@ -138,6 +138,7 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
   const siteId = campaign.siteId;
 
   let page = cursor.page;
+  let pageOffset = cursor.pageOffset ?? 0;
   let scanned = cursor.scanned;
   let candidates = cursor.candidates;
   let matched = cursor.matched;
@@ -168,9 +169,15 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
       const rawPatients = Array.isArray(listRes.patients) ? listRes.patients : [];
       pagesThisRun += 1;
 
-      for (const raw of rawPatients) {
+      // Resume WITHIN the page: rows [0, pageOffset) were fully processed (counted and
+      // enrolled) on a prior tick, so skip them cheaply. This is what makes a mid-page
+      // budget/rate-limit stop genuinely resumable: the appointment-read budget is spent
+      // on the UNSCANNED tail, never re-reading the head, and no row is counted twice.
+      let idx = pageOffset;
+      let budgetStop = false;
+      for (; idx < rawPatients.length; idx++) {
         scanned += 1;
-        const patient = mapPatient(raw, siteId);
+        const patient = mapPatient(rawPatients[idx], siteId);
         if (!patient.id) continue;
         // Cheap pre-filter, now including the age/gender demographic gates. A patient
         // dropped ONLY for a missing age/gender the filter needs is counted, so the
@@ -192,44 +199,66 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
           if (err instanceof DentallyError && err.status === 403) {
             consecutive403 += 1;
             // Stop-and-persist on two consecutive 403s (a permission/auth block on the
-            // shared key): do not burn the run hammering a closed door.
+            // shared key): do not burn the run hammering a closed door. This row was
+            // not evaluated, so roll back its eager counts and resume ON it next tick.
             if (consecutive403 >= 2) {
+              scanned -= 1;
+              candidates -= 1;
               stopped = "403";
               break;
             }
-            continue; // skip this patient; retried next run
+            continue; // single 403: skip this patient; move on
           }
           if (err instanceof DentallyError && err.status === 429) {
-            stopped = "429"; // rate-limited: back off, resume next tick
+            // Rate-limited: roll back this row's eager counts and resume ON it next tick.
+            scanned -= 1;
+            candidates -= 1;
+            stopped = "429";
             break;
           }
-          continue; // transient: skip; the page is re-scanned next run
+          continue; // transient: skip this patient; move on
         }
 
         const m = matchAppointmentHistory(appts, campaign.filters, now);
-        if (!m.matched) continue;
-        matched += 1;
-        enrol.push({
-          campaignId,
-          patientId: patient.id,
-          name: patient.name,
-          phone: patient.phone,
-          siteId,
-          matchedReason: m.matchedReason,
-          consent: { sms: patient.smsConsent, email: patient.emailConsent, marketing: false },
-          nextDueAt,
-        });
+        if (m.matched) {
+          matched += 1;
+          enrol.push({
+            campaignId,
+            patientId: patient.id,
+            name: patient.name,
+            phone: patient.phone,
+            siteId,
+            matchedReason: m.matchedReason,
+            consent: { sms: patient.smsConsent, email: patient.emailConsent, marketing: false },
+            nextDueAt,
+          });
+        }
 
-        if (appointmentReads >= MAX_APPOINTMENT_READS_PER_RUN) break;
+        // Budget spent: this row is fully processed (committed), so resume AFTER it.
+        if (appointmentReads >= MAX_APPOINTMENT_READS_PER_RUN) {
+          budgetStop = true;
+          break;
+        }
       }
 
-      if (stopped) break;
-
-      if (rawPatients.length < PER_PAGE) {
-        reachedEnd = true;
-        break;
+      // Decide the resume point. A read-stop (403/429) leaves `idx` on the uncommitted
+      // row, so retry it. A budget stop leaves `idx` on the last committed row, so
+      // resume AFTER it. Otherwise every row was processed and the page is complete.
+      const nextIdx = stopped ? idx : budgetStop ? idx + 1 : rawPatients.length;
+      if (!stopped && nextIdx >= rawPatients.length) {
+        // Page fully processed: clear the intra-page offset and advance the cursor.
+        pageOffset = 0;
+        if (rawPatients.length < PER_PAGE) {
+          reachedEnd = true;
+          break;
+        }
+        page += 1; // page fully processed; advance the resume point
+        continue;
       }
-      page += 1; // page fully processed; advance the resume point
+      // Mid-run stop (budget or 403/429): leave `page` as-is and persist the intra-page
+      // offset so the next tick resumes exactly where this one left off.
+      pageOffset = nextIdx;
+      break;
     }
 
     // Persist any newly matched targets before the cursor, so a crash after the cursor
@@ -239,9 +268,11 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
     const done = reachedEnd && !stopped;
     const newCursor: OutreachBuildCursor = {
       siteIndex: 0,
-      // On a mid-run stop (budget or 403/429) leave `page` as-is so the next tick
-      // re-scans the current page; on a clean page boundary `page` already advanced.
+      // On a mid-run stop (budget or 403/429) `page` is left as-is and `pageOffset`
+      // marks how far into it we got, so the next tick resumes at the unscanned tail;
+      // on a clean page boundary `page` already advanced and `pageOffset` reset to 0.
       page,
+      pageOffset,
       done,
       scanned,
       candidates,

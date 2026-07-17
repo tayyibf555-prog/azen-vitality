@@ -13,6 +13,12 @@
 //   - output always passes validateContent (shape) for well-formed v1 input
 //   - the filled sections are lint-clean by construction (they come from the
 //     defaults, which the compliance tests pin as clean)
+//   - the ASSEMBLED page is re-linted before it is returned: a stored v1 row was
+//     written before the compliance lint existed, and the v1 coercers accept any
+//     positive price and any wording, so an unvetted stale/edited price or banned
+//     phrase in the row's OWN copy could otherwise reach patients. On any lint
+//     failure the row's copy is dropped for the hand-written, guaranteed-clean
+//     default (owner CTA routing preserved); a clean v1 row keeps its own copy.
 //   - v2 input passes through unchanged (idempotent)
 //   - never invents proof claims: filled sections carry none, and showcase3d is
 //     never added (it stays owner-configured only)
@@ -21,6 +27,7 @@
 
 import type { CtaTarget, LandingPageContent, TitledCard } from "./content";
 import { CONTENT_VERSION } from "./content";
+import { lintContent } from "./compliance";
 import { getDefaultContent, hasDefaultContent } from "./defaults";
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -193,7 +200,7 @@ export function upgradeContent(raw: unknown, treatmentKey: string): LandingPageC
   const faqs = coerceFaqs(raw.faqs) ?? template.faqs;
   const cta = coerceCta(raw.cta) ?? template.cta;
 
-  return {
+  const upgraded: LandingPageContent = {
     version: CONTENT_VERSION,
     hero: {
       eyebrow: template.hero.eyebrow,
@@ -219,6 +226,23 @@ export function upgradeContent(raw: unknown, treatmentKey: string): LandingPageC
     // Never invented by an upgrade: 3D stays owner-configured only.
     showcase3d: null,
   };
+
+  // READ-TIME COMPLIANCE GATE. The row's OWN v1 copy (hero/benefits/faqs/pricing)
+  // was never linted at write time, and coercePricing accepts any positive price,
+  // so a stale/edited price or a banned phrase could ride through to a public,
+  // paid ad-destination page. Re-lint the assembled page with the SAME price-aware
+  // lint the generator uses. On any failure, serve the treatment's hand-written,
+  // guaranteed-clean default instead of the unvetted row copy, preserving only the
+  // owner's CTA routing (target + slug are campaign config, not compliance copy).
+  // A clean v1 row lints fine and keeps its own copy (the happy path).
+  if (!lintContent(upgraded).ok) {
+    const safe = hasDefaultContent(treatmentKey)
+      ? (getDefaultContent(treatmentKey, cta.target) as LandingPageContent)
+      : genericContent(cta.target);
+    return { ...safe, cta: { ...safe.cta, targetSlug: cta.targetSlug } };
+  }
+
+  return upgraded;
 }
 
 /** The full generic v2 content (used only when a treatment has no default). */

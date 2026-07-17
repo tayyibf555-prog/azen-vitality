@@ -82,6 +82,47 @@ describe("upgradeContent (v1 -> v2 at read time)", () => {
     expect(upgraded.hero.headline).toBe(def.hero.headline);
   });
 
+  it("falls back to the treatment default when a v1 row carries a stale price", () => {
+    const stale = v1Content();
+    // Real Invisalign price is £2,500; this row was stored with a wrong/edited price
+    // that coercePricing (positive number) would otherwise pass straight through.
+    (stale.pricing as { lines: { fromPriceGBP: number }[] }).lines[0].fromPriceGBP = 1999;
+    const upgraded = upgradeContent(stale, "invisalign");
+    const def = getDefaultContent("invisalign", "assessment") as LandingPageContent;
+    // The unvetted v1 copy is dropped for the clean default, at the real price.
+    expect(upgraded.hero.headline).toBe(def.hero.headline);
+    expect(upgraded.hero.headline).not.toBe("Straighten your smile with Invisalign");
+    expect(upgraded.pricing.lines[0].fromPriceGBP).toBe(2500);
+    // What we serve is itself lint-clean.
+    expect(lintContent(upgraded).ok).toBe(true);
+  });
+
+  it("falls back when a v1 row carries banned copy of its own (guarantee/pain/superlative)", () => {
+    const bad = v1Content();
+    (bad.faqs as { q: string; a: string }[])[0].a = "We guarantee a pain-free result, the best in town.";
+    const upgraded = upgradeContent(bad, "invisalign");
+    const def = getDefaultContent("invisalign", "assessment") as LandingPageContent;
+    expect(upgraded.faqs[0].a).toBe(def.faqs[0].a); // clean default FAQ, not the banned v1 answer
+    expect(lintContent(upgraded).ok).toBe(true);
+  });
+
+  it("preserves the owner's CTA routing when it falls back", () => {
+    const stale = v1Content();
+    (stale.pricing as { lines: { fromPriceGBP: number }[] }).lines[0].fromPriceGBP = 1999;
+    (stale.cta as { target: string; targetSlug: string | null }).target = "booking";
+    (stale.cta as { target: string; targetSlug: string | null }).targetSlug = "spring-implants";
+    const upgraded = upgradeContent(stale, "invisalign");
+    expect(upgraded.cta.target).toBe("booking");
+    expect(upgraded.cta.targetSlug).toBe("spring-implants");
+  });
+
+  it("keeps a clean v1 row's own copy (happy path preserved after the read-time lint)", () => {
+    const upgraded = upgradeContent(v1Content(), "invisalign"); // correct £2,500, clean copy
+    expect(upgraded.hero.headline).toBe("Straighten your smile with Invisalign");
+    expect(upgraded.pricing.lines[0].fromPriceGBP).toBe(2500);
+    expect(upgraded.faqs[0].q).toBe("How long does treatment take?");
+  });
+
   it("is idempotent: v2 input passes through unchanged (showcase3d preserved)", () => {
     const v2 = validateContent(goodContent()).content as LandingPageContent;
     v2.showcase3d = {

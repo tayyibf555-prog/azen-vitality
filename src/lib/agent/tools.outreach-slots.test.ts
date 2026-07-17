@@ -87,6 +87,22 @@ describe("find_slots dispatch practitioner targeting", () => {
     expect(slots[0].practitioner_id).toBe("p2");
   });
 
+  it("SOFT-prefers: when the invited clinician has NO slots, falls back to other clinicians (finding #7)", async () => {
+    // p3 was invited but has no availability in the window. The patient must still be
+    // offered every clinician's slots, not told there is nothing free.
+    const d = deps({ outreachInvite: { treatmentAngle: "hygiene clean", practitionerName: "Dr Gone", practitionerId: "p3" } });
+    const { slots } = await callFindSlots(d, { treatment: "hygiene" });
+    expect(slots).toHaveLength(3);
+  });
+
+  it("an EXPLICIT practitionerId with no slots stays a hard filter (does not fall back)", async () => {
+    // An explicit clinician request is an intentional choice: honour it even when empty,
+    // unlike the soft outreach preference. Only the invite path softens.
+    const d = deps({ outreachInvite: { treatmentAngle: "hygiene clean", practitionerName: "Dr P1", practitionerId: "p1" } });
+    const { slots } = await callFindSlots(d, { treatment: "hygiene", practitionerId: "p3" });
+    expect(slots).toHaveLength(0);
+  });
+
   it("returns all slots for an ordinary conversation (no outreach invite)", async () => {
     const d = deps();
     const { slots } = await callFindSlots(d, { treatment: "hygiene" });
