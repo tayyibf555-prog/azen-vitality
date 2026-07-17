@@ -33,7 +33,7 @@
   /* The approved frame (aesthetic-mock2): a light wash of the brand blue that the
      authed app sits on, plus the sidebar-on-frame ink colours and the soft blue
      chip fill. New tokens, unused by the public surfaces. */
-  --frame: #dde5f1; /* was #c3d7ef: chroma halved for the large-area law, blue whispers, accents own the colour */
+  --frame: #c3d7ef; /* the approved mock blue: user judged the desaturated variant not premium enough */
   --side-ink: #3b5686; /* sidebar nav text on the frame */
   --side-label: #7d93bd; /* sidebar group labels on the frame */
   --blue-soft: #eef4fb; /* soft blue chip fill (topbar site chip) */
