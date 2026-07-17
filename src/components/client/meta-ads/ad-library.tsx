@@ -12,12 +12,18 @@ import {
   Lightbulb,
   ShieldAlert,
   Clock,
+  ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, type Tone } from "@/components/primitives";
 import type { AdFormat, AdLibraryItem } from "@/lib/meta-ads/types";
 import { MOCK_AD_LIBRARY } from "@/lib/meta-ads/mock";
 import { formatShort } from "./format";
+import { CreativeDetail } from "./creative-detail";
+
+// The winning-ads library is a curated SAMPLE until the client's Meta account is
+// connected. Kept explicit so the detail view can stay honest about that.
+const LIBRARY_IS_SAMPLE = true;
 
 const FORMAT_ICON: Record<AdFormat, typeof ImageIcon> = {
   reel: Film,
@@ -44,12 +50,19 @@ interface OverviewResponse {
   error?: string;
 }
 
-function AdCard({ item }: { item: AdLibraryItem }) {
+function AdCard({ item, onOpen }: { item: AdLibraryItem; onOpen: () => void }) {
   const FormatIcon = FORMAT_ICON[item.format];
   const perf = PERFORMANCE[item.estPerformance];
 
   return (
-    <li className="flex flex-col overflow-hidden rounded-xl border border-line bg-card shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+    <li className="flex">
+      {/* The whole card is the click target for the analysis detail view. */}
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open AI analysis for ${item.advertiser}: ${item.headline}`}
+        className="group flex flex-1 flex-col overflow-hidden rounded-xl border border-line bg-card text-left shadow-[0_1px_2px_rgba(10,14,26,0.04)] transition-all hover:border-line-strong hover:shadow-[0_4px_14px_rgba(10,14,26,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+      >
       {/* Creative thumbnail placeholder, by format */}
       <div className="relative flex h-28 items-center justify-center bg-card-muted text-muted">
         <FormatIcon size={24} />
@@ -95,17 +108,24 @@ function AdCard({ item }: { item: AdLibraryItem }) {
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
             <Sparkles size={12} /> Why it works
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-ink">{item.aiAnalysis}</p>
+          <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-ink">{item.aiAnalysis}</p>
         </div>
 
         {/* Compliance flag, if any */}
         {item.complianceFlag ? (
           <div className="flex gap-2 rounded-lg border border-warning/25 bg-warning/10 px-2.5 py-2">
             <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[#9a6700]" />
-            <p className="text-xs leading-relaxed text-[#9a6700]">{item.complianceFlag}</p>
+            <p className="line-clamp-2 text-xs leading-relaxed text-[#9a6700]">{item.complianceFlag}</p>
           </div>
         ) : null}
+
+        {/* Affordance: the whole card opens the scored analysis detail view. */}
+        <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-blue-deep transition-colors group-hover:text-blue-dark">
+          <Sparkles size={12} /> View AI analysis and cost per lead
+          <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+        </span>
       </div>
+      </button>
     </li>
   );
 }
@@ -173,10 +193,18 @@ function OverviewPanel({ overview }: { overview: Overview }) {
   );
 }
 
-export function AdLibrary({ clientSlug }: { clientSlug: string }) {
+export function AdLibrary({
+  clientSlug,
+  onRecreate,
+}: {
+  clientSlug: string;
+  /** Recreate a creative via the landing-page generate flow (owner picks it up). */
+  onRecreate?: (item: AdLibraryItem) => void;
+}) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<AdLibraryItem | null>(null);
 
   async function generateOverview() {
     if (loading) return;
@@ -224,10 +252,23 @@ export function AdLibrary({ clientSlug }: { clientSlug: string }) {
 
         <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {MOCK_AD_LIBRARY.map((item) => (
-            <AdCard key={item.id} item={item} />
+            <AdCard key={item.id} item={item} onOpen={() => setSelected(item)} />
           ))}
         </ul>
       </div>
+
+      {selected ? (
+        <CreativeDetail
+          ad={selected}
+          clientSlug={clientSlug}
+          sample={LIBRARY_IS_SAMPLE}
+          onClose={() => setSelected(null)}
+          onRecreate={(item) => {
+            setSelected(null);
+            onRecreate?.(item);
+          }}
+        />
+      ) : null}
     </SectionCard>
   );
 }

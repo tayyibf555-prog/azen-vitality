@@ -43,13 +43,13 @@ const STATUS_TONE: Record<LandingPageStatus, Tone> = {
 };
 
 // Treatments the generator supports (those with a hand-written safe default, so a
-// double lint failure can still fall back). Ordered marketing-first.
-const TREATMENT_OPTIONS = TREATMENTS.filter((t) =>
-  ["invisalign", "implant", "veneers", "whitening", "checkup", "hygiene"].includes(t.key),
-).sort((a, b) => {
-  const order = ["invisalign", "implant", "veneers", "whitening", "checkup", "hygiene"];
-  return order.indexOf(a.key) - order.indexOf(b.key);
-});
+// double lint failure can still fall back). Ordered marketing-first. Exported so the
+// workspace can decide whether a "Recreate this" treatment can be pre-selected here.
+export const LANDING_TREATMENT_KEYS = ["invisalign", "implant", "veneers", "whitening", "checkup", "hygiene"];
+
+const TREATMENT_OPTIONS = TREATMENTS.filter((t) => LANDING_TREATMENT_KEYS.includes(t.key)).sort(
+  (a, b) => LANDING_TREATMENT_KEYS.indexOf(a.key) - LANDING_TREATMENT_KEYS.indexOf(b.key),
+);
 
 const inputClass =
   "mt-1 w-full rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30";
@@ -70,12 +70,18 @@ async function fetchPagesList(clientSlug: string): Promise<AdminPage[]> {
 export function LandingPagesTab({
   clientSlug,
   practiceName,
+  initialTreatment,
 }: {
   clientSlug: string;
   practiceName: string;
+  /** Pre-selected treatment key, seeded by "Recreate this" from the ad library. */
+  initialTreatment?: string;
 }) {
   const [pages, setPages] = useState<AdminPage[] | null>(null);
-  const [treatment, setTreatment] = useState<string>(TREATMENT_OPTIONS[0]?.key ?? "invisalign");
+  const [treatment, setTreatment] = useState<string>(() => {
+    const seeded = initialTreatment && LANDING_TREATMENT_KEYS.includes(initialTreatment) ? initialTreatment : null;
+    return seeded ?? TREATMENT_OPTIONS[0]?.key ?? "invisalign";
+  });
   const [angle, setAngle] = useState("");
   const [ctaTarget, setCtaTarget] = useState<CtaTarget>("assessment");
   const [generating, setGenerating] = useState(false);
