@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageHeader, SectionCard, StatCard, StatusPill, ProgressMeter, type Tone } from "@/components/primitives";
-import { ListChecks, ShieldAlert, Rocket, Check } from "lucide-react";
+import { PageHeader, SectionCard, StatCard, StatusPill, type Tone } from "@/components/primitives";
+import { Check } from "lucide-react";
 import { getClient } from "@/lib/mock/clients";
 import { cn } from "@/lib/utils";
 
@@ -353,26 +353,21 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
         </div>
       </SectionCard>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           emphasis
           label="Ticked off"
           value={`${doneCount} / ${TOTAL_ITEMS}`}
-          icon={ListChecks}
-          hint={doneCount === TOTAL_ITEMS ? "All items done" : "Items you have sent"}
+          dot={doneCount === TOTAL_ITEMS ? "bg-status-green" : "bg-status-blue"}
+          hint={
+            doneCount === TOTAL_ITEMS
+              ? "All items done"
+              : `${Math.round(fraction * 100)}% complete, items you have sent`
+          }
         />
-        <StatCard label="Go-live gates" value={GATE_COUNT} icon={ShieldAlert} hint="Block messaging until cleared" />
-        <StatCard label="Platform" value="Built" icon={Rocket} hint="Data and features already live" />
+        <StatCard label="Go-live gates" value={GATE_COUNT} dot="bg-status-amber" hint="Block messaging until cleared" />
+        <StatCard label="Platform" value="Built" dot="bg-status-green" hint="Data and features already live" />
       </div>
-
-      <SectionCard bodyClassName="p-4">
-        <div className="flex items-center gap-3">
-          <ProgressMeter value={fraction} className="flex-1" />
-          <span className="shrink-0 text-sm font-semibold text-navy tabular-nums">
-            {doneCount} of {TOTAL_ITEMS} done
-          </span>
-        </div>
-      </SectionCard>
 
       {SECTIONS.map((section) => (
         <SectionCard
@@ -380,7 +375,6 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
           title={`${section.kicker}. ${section.title}`}
           description={section.sub}
           bodyClassName="p-0"
-          className={section.gated ? "ring-warning/30" : undefined}
         >
           <ul className="divide-y divide-line">
             {section.items.map((item) => {
@@ -425,7 +419,7 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
                         <span className="text-[9px] leading-none transition-transform group-open:rotate-90">&#9656;</span>
                         <span>More info</span>
                       </summary>
-                      <div className="mt-2.5 max-w-2xl space-y-2 rounded-xl bg-card-muted px-4 py-3 text-sm leading-relaxed text-muted">
+                      <div className="mt-2.5 max-w-2xl space-y-2 border-l border-line pl-4 text-sm leading-relaxed text-muted">
                         {item.detail.map((para) => (
                           <p key={para.lead}>
                             <span className="font-semibold text-navy">{para.lead}</span> {para.body}

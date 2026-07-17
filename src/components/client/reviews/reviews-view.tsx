@@ -1,4 +1,3 @@
-import { CheckCircle2, Clock, Send, MinusCircle } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { getClient, getSites } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
@@ -55,29 +54,29 @@ export async function ReviewsView({ clientSlug }: { clientSlug: string }) {
         description="After each appointment, mark who attended and a Google review request is sent automatically a few hours later or the next morning. Consent and opt-outs are always respected. Requesting Google reviews is allowed and is separate from using testimonials in ads. Data is mock and messages are in test mode until go-live."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Attended today"
           value={attendedToday}
-          icon={CheckCircle2}
+          dot="bg-status-blue"
           hint="Marked seen so far"
         />
         <StatCard
           label="Requests scheduled"
           value={scheduled}
-          icon={Clock}
+          dot="bg-status-amber"
           hint="Queued to send later"
         />
         <StatCard
           label="Sent"
           value={sent}
-          icon={Send}
+          dot="bg-status-green"
           hint="Review request delivered"
         />
         <StatCard
           label="Opted out / skipped"
           value={optedOut}
-          icon={MinusCircle}
+          dot="bg-line-strong"
           hint="No consent or opted out"
         />
       </div>

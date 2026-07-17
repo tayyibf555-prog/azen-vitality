@@ -1,5 +1,4 @@
 import { PageHeader, StatCard } from "@/components/primitives";
-import { Bot, MessagesSquare, CalendarCheck, UserCog } from "lucide-react";
 import {
   getAgentAnalytics,
   listDashboardConversations,
@@ -54,19 +53,19 @@ export async function AgentView({ clientSlug, channel }: { clientSlug: string; c
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Status"
           value={allEnabled ? "Running" : "Paused"}
-          icon={Bot}
+          dot={allEnabled ? "bg-status-green" : "bg-status-amber"}
           hint={allEnabled ? "Answering replies" : "Routing to your team"}
         />
-        <StatCard label="Conversations" value={analytics.total} icon={MessagesSquare} hint="Patients texted" />
-        <StatCard label="Booked" value={analytics.booked} icon={CalendarCheck} hint="Appointments made" />
+        <StatCard label="Conversations" value={analytics.total} dot="bg-status-blue" hint="Patients texted" />
+        <StatCard label="Booked" value={analytics.booked} dot="bg-status-green" hint="Appointments made" />
         <StatCard
           label="Needs a human"
           value={analytics.needsHuman}
-          icon={UserCog}
+          dot="bg-status-red"
           hint="Waiting for your team"
         />
       </div>

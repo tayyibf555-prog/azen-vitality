@@ -1,8 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Plug,
   Send,
-  ShieldCheck,
   Building2,
   CheckCircle2,
   Circle,
@@ -272,29 +270,29 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
         description="Your integrations, messaging mode and go-live checklist in one place."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Integrations connected"
           value={`${connectedCount} of ${totalIntegrations}`}
-          icon={Plug}
+          dot="bg-status-blue"
           hint={`${totalIntegrations - connectedCount} still to connect`}
         />
         <StatCard
           label="Messaging mode"
           value={dryRun ? "Test" : "Live"}
-          icon={Send}
+          dot={dryRun ? "bg-status-amber" : "bg-status-green"}
           hint={dryRun ? "Recorded, not delivered" : "Messages are delivered"}
         />
         <StatCard
           label="Authentication"
           value={authOn ? "Enforced" : "Pilot"}
-          icon={ShieldCheck}
+          dot={authOn ? "bg-status-green" : "bg-status-amber"}
           hint={authOn ? "Sign-in required" : "Open until go-live"}
         />
         <StatCard
           label="Go-live checklist"
           value={`${checklistDone} of ${checklist.length}`}
-          icon={CheckCircle2}
+          dot={checklistDone === checklist.length ? "bg-status-green" : "bg-status-amber"}
           hint={checklistDone === checklist.length ? "Ready to go live" : "Items outstanding"}
         />
       </div>
@@ -352,14 +350,11 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
                 </p>
               </div>
             </div>
-            <ul className="grid gap-2 sm:grid-cols-2">
+            <ul className="divide-y divide-line border-t border-line">
               {sites.map((site) => (
-                <li
-                  key={site.id}
-                  className="rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-navy"
-                >
-                  {site.name}
-                  <span className="block text-xs text-muted">{site.timezone}</span>
+                <li key={site.id} className="flex items-baseline justify-between gap-3 py-2.5">
+                  <span className="text-sm text-navy">{site.name}</span>
+                  <span className="text-xs text-muted">{site.timezone}</span>
                 </li>
               ))}
             </ul>

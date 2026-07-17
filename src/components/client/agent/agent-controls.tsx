@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DataTable, StatusPill, EmptyState, type Column, type Tone } from "@/components/primitives";
+import { SectionCard, DataTable, StatusPill, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, relativeTime } from "@/lib/utils";
 import { Loader2, MessageSquare } from "lucide-react";
 import type { ConversationStatus } from "@/lib/agent/types";
@@ -105,51 +105,54 @@ export function AgentControls({
   ];
 
   return (
-    <div className="space-y-4">
-      {/* Run/pause control */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-card-muted/50 px-4 py-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-navy">
-            {enabled ? "Agent is running" : "Agent is paused"}
-          </p>
-          <p className="text-xs text-muted">
-            {enabled
-              ? "Patient replies are answered and booked automatically. Tricky cases go to your team."
-              : "Replies are not answered automatically. Every reply is routed to your team."}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={toggle}
-          disabled={busy}
-          aria-pressed={enabled}
-          className={cn(
-            "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50",
-            enabled
-              ? "border-success/30 bg-success/10 text-success hover:bg-success/15"
-              : "border-line-strong bg-card text-muted hover:bg-card-muted",
-          )}
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : (
-            <span className={cn("h-2 w-2 rounded-full", enabled ? "bg-success" : "bg-muted")} />
-          )}
-          {enabled ? "Running" : "Paused"}
-        </button>
-      </div>
-      {error ? (
-        <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
-      ) : null}
+    <div className="space-y-6">
+      {/* Run/pause control as a quiet hairline section, the toggle right-aligned. */}
+      <SectionCard
+        title={enabled ? "Agent is running" : "Agent is paused"}
+        actions={
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={busy}
+            aria-pressed={enabled}
+            className={cn(
+              "pressable inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50",
+              enabled
+                ? "border-success/30 bg-success/10 text-success hover:bg-success/15"
+                : "border-line-strong bg-card text-muted hover:bg-card-muted",
+            )}
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : (
+              <span className={cn("h-2 w-2 rounded-full", enabled ? "bg-success" : "bg-muted")} />
+            )}
+            {enabled ? "Running" : "Paused"}
+          </button>
+        }
+      >
+        <p className="text-[13px] text-muted">
+          {enabled
+            ? "Patient replies are answered and booked automatically. Tricky cases go to your team."
+            : "Replies are not answered automatically. Every reply is routed to your team."}
+        </p>
+        {error ? (
+          <p className="mt-3 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+        ) : null}
+      </SectionCard>
 
       {/* Conversations */}
-      {conversations.length === 0 ? (
-        <EmptyState
-          icon={MessageSquare}
-          title="No conversations yet"
-          description="When a patient replies to outreach, the agent picks it up and the conversation appears here."
-          className="m-0"
-        />
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-line">
+      <SectionCard
+        title="Conversations"
+        description="Every patient thread the agent is handling. Open one to read the full exchange."
+        bodyClassName="p-0"
+      >
+        {conversations.length === 0 ? (
+          <EmptyState
+            icon={MessageSquare}
+            title="No conversations yet"
+            description="When a patient replies to outreach, the agent picks it up and the conversation appears here."
+            className="m-4"
+          />
+        ) : (
           <DataTable
             columns={columns}
             rows={conversations}
@@ -157,8 +160,8 @@ export function AgentControls({
             onRowClick={(c) => setSelectedId(c.id)}
             className="px-2 py-1"
           />
-        </div>
-      )}
+        )}
+      </SectionCard>
 
       {selected ? (
         <ConversationDrawer conversation={selected} nowIso={nowIso} onClose={() => setSelectedId(null)} />

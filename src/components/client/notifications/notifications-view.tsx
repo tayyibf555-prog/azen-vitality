@@ -1,4 +1,3 @@
-import { Bell, ShieldAlert, ShieldCheck, CalendarX, UserPlus, Sparkles } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
@@ -37,31 +36,31 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
         description="The alerts that need attention now, pulled from compliance, no-shows, onboarding and new enquiries."
       />
 
-      <div className="grid auto-rows-fr grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="High priority"
           value={highCount}
-          icon={ShieldAlert}
+          dot="bg-status-red"
           hint="Needs action now"
         />
-        <StatCard label="Total" value={items.length} icon={Bell} hint="Across all sources" />
+        <StatCard label="Total" value={items.length} dot="bg-status-blue" hint="Across all sources" />
         <StatCard
           label="Compliance"
           value={byType.compliance ?? 0}
-          icon={ShieldCheck}
+          dot="bg-status-blue"
           hint="Audits, policies, training"
         />
         <StatCard
           label="No-show risk"
           value={byType.no_show ?? 0}
-          icon={CalendarX}
+          dot="bg-status-amber"
           hint="High-risk appointments"
         />
         {(byType.lead ?? 0) > 0 ? (
           <StatCard
             label="New enquiries"
             value={byType.lead ?? 0}
-            icon={Sparkles}
+            dot="bg-status-green"
             hint="High-intent, to contact"
           />
         ) : null}
@@ -69,7 +68,7 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
           <StatCard
             label="Onboarding"
             value={byType.onboarding ?? 0}
-            icon={UserPlus}
+            dot="bg-status-amber"
             hint="Submissions to review"
           />
         ) : null}

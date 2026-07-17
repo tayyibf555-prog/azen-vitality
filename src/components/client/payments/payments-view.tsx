@@ -6,7 +6,7 @@ import {
   EmptyState,
   type Column,
 } from "@/components/primitives";
-import { PoundSterling, ReceiptText, Users } from "lucide-react";
+import { ReceiptText } from "lucide-react";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { getSite } from "@/lib/mock";
@@ -65,10 +65,10 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
         description="Outstanding balances owed on unpaid invoices, live from Dentally. Ranked by what is owed."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <StatCard label="Outstanding" value={gbp(totalOutstanding)} icon={PoundSterling} hint="Total owed" />
-        <StatCard label="Patients" value={patientCount} icon={Users} hint="With a balance" />
-        <StatCard label="Largest balance" value={gbp(largestBalance)} icon={ReceiptText} hint="Single account" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Outstanding" value={gbp(totalOutstanding)} dot="bg-status-amber" hint="Total owed" />
+        <StatCard label="Patients" value={patientCount} dot="bg-status-blue" hint="With a balance" />
+        <StatCard label="Largest balance" value={gbp(largestBalance)} dot="bg-status-amber" hint="Single account" />
       </div>
 
       <SectionCard title="Outstanding balances" description="Highest owed first." bodyClassName="p-0">
