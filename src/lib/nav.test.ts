@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { navForRole, canRoleAccessModule, CLIENT_NAV, NAV_CATEGORIES, NAV_HIDDEN_SLUGS, categoriesForRole } from "./nav";
+import {
+  navForRole,
+  canRoleAccessModule,
+  CLIENT_NAV,
+  NAV_CATEGORIES,
+  NAV_HIDDEN_SLUGS,
+  NAV_SWITCH_EXEMPT_SLUGS,
+  categoriesForRole,
+} from "./nav";
 
 const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings"];
 // "booking" (owner + coordinator tab) and "getting-started" (coordinator can now
@@ -132,5 +140,37 @@ describe("canRoleAccessModule", () => {
       expect(canRoleAccessModule("client_coordinator", slug)).toBe(true);
       expect(canRoleAccessModule("client_owner", slug)).toBe(true);
     }
+  });
+});
+
+describe("outreach (Campaigns) nav visibility", () => {
+  it("shows Campaigns to the owner in the Growth rail category", () => {
+    const growth = categoriesForRole("client_owner").find((c) => c.key === "growth");
+    expect(growth?.items.map((i) => i.slug)).toContain("outreach");
+  });
+
+  it("is owner-only: hidden from a coordinator in nav and blocked by direct URL", () => {
+    const coordSlugs = navForRole("client_coordinator").flatMap((g) => g.items.map((i) => i.slug));
+    expect(coordSlugs).not.toContain("outreach");
+    const growth = categoriesForRole("client_coordinator").find((c) => c.key === "growth");
+    expect(growth?.items.map((i) => i.slug) ?? []).not.toContain("outreach");
+    expect(canRoleAccessModule("client_coordinator", "outreach")).toBe(false);
+    expect(canRoleAccessModule("client_owner", "outreach")).toBe(true);
+  });
+
+  it("stays reachable when its OWN kill switch is off (a management surface)", () => {
+    // Segment outreach seeds OFF: switching it off must not hide the page where the
+    // owner reviews campaigns and turns it back on (only the Launch action is gated).
+    expect(NAV_SWITCH_EXEMPT_SLUGS.has("outreach")).toBe(true);
+    const disabled = new Set(["outreach"]);
+    const growth = categoriesForRole("client_owner", disabled).find((c) => c.key === "growth");
+    expect(growth?.items.map((i) => i.slug)).toContain("outreach");
+  });
+
+  it("a non-exempt disabled system is still hidden from its category", () => {
+    // Control check: reactivation has no exemption, so disabling it hides it.
+    const disabled = new Set(["reactivation"]);
+    const patients = categoriesForRole("client_owner", disabled).find((c) => c.key === "patients");
+    expect(patients?.items.map((i) => i.slug) ?? []).not.toContain("reactivation");
   });
 });

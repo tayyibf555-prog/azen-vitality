@@ -574,6 +574,17 @@ export const PATIENT_DOB: Record<string, string> = {
   "pat-016": "1968-11-11", "pat-017": "1995-06-06", "pat-018": "1996-03-15",
 };
 
+// Gender, mirroring the real Dentally patient `gender` field (a string here) so the
+// demographic pre-filter is demonstrable in dev. Derived from the fixture first names.
+export const PATIENT_GENDER: Record<string, "Female" | "Male"> = {
+  "pat-001": "Female", "pat-002": "Male", "pat-003": "Female",
+  "pat-004": "Male", "pat-005": "Female", "pat-006": "Male",
+  "pat-007": "Female", "pat-008": "Male", "pat-009": "Female",
+  "pat-010": "Male", "pat-011": "Female", "pat-012": "Male",
+  "pat-013": "Female", "pat-014": "Male", "pat-015": "Female",
+  "pat-016": "Male", "pat-017": "Female", "pat-018": "Male",
+};
+
 // --- Lookups --------------------------------------------------------------
 export function findPatient(id: string): MockPatient | undefined {
   return MOCK_PATIENTS.find((p) => p.id === id);
@@ -628,4 +639,7 @@ export function notesForPatient(patientId: string): MockPatientNote[] {
 }
 export function dobForPatient(patientId: string): string | null {
   return PATIENT_DOB[patientId] ?? null;
+}
+export function genderForPatient(patientId: string): "Female" | "Male" | null {
+  return PATIENT_GENDER[patientId] ?? null;
 }
