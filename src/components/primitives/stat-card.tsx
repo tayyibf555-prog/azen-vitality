@@ -8,12 +8,17 @@ import { cn, num } from "@/lib/utils";
  * and medium underneath. The `icon` prop is accepted for call-site
  * compatibility but no longer rendered (decorative accent, removed by the
  * accent-discipline rule). `emphasis` renders the numeral a step larger.
+ *
+ * `dot` prefixes the numeral with a 7px status dot (a bg-* utility class), the
+ * mock's day-stat idiom: place a set of these in a `flex flex-wrap gap-x-7
+ * gap-y-4` row (not a grid) to get the inline dot-prefixed stats row.
  */
 export function StatCard({
   label,
   value,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   icon,
+  dot,
   delta,
   hint,
   emphasis,
@@ -24,6 +29,8 @@ export function StatCard({
    *  pre-formatted string for currency (gbp()) or any non-numeric value. */
   value: string | number;
   icon?: LucideIcon;
+  /** A bg-* utility (e.g. "bg-status-amber") that tints a 7px dot before the numeral. */
+  dot?: string;
   /** Positive or negative percentage change. `goodWhenUp` flips colour logic. */
   delta?: { value: number; goodWhenUp?: boolean };
   hint?: string;
@@ -43,6 +50,9 @@ export function StatCard({
             emphasis ? "text-[26px]" : "text-[22px]",
           )}
         >
+          {dot ? (
+            <i aria-hidden className={cn("mr-2 inline-block h-[7px] w-[7px] rounded-full align-[3px]", dot)} />
+          ) : null}
           {typeof value === "number" ? num(value) : value}
         </span>
         {delta ? (

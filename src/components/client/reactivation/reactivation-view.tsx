@@ -1,4 +1,4 @@
-import { RotateCcw, PoundSterling, Users, CheckCircle2, Send } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/reactivation/worklist";
 import { DailyLimitCard } from "@/components/client/reactivation/daily-limit-card";
@@ -46,11 +46,11 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
         description="Dormant patients ranked by recoverable value and worked through a multi step cadence, with replies picked up by the AI Booking Agent."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Dormant patients" value={dormant.length} icon={Users} hint="Open across all cohorts" />
-        <StatCard label="Recoverable value" value={gbp(totalRecoverable)} icon={PoundSterling} hint="Across dormant patients" />
-        <StatCard label="In cadence" value={inCadence.length} icon={Send} hint="Active outreach sequences" />
-        <StatCard label="Re-engaged" value={converted.length} icon={CheckCircle2} hint="Booked back in" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Dormant patients" value={dormant.length} dot="bg-status-blue" hint="Open across all cohorts" />
+        <StatCard label="Recoverable value" value={gbp(totalRecoverable)} dot="bg-status-amber" hint="Across dormant patients" />
+        <StatCard label="In cadence" value={inCadence.length} dot="bg-status-blue" hint="Active outreach sequences" />
+        <StatCard label="Re-engaged" value={converted.length} dot="bg-status-green" hint="Booked back in" />
       </div>
 
       <DailyLimitCard clientSlug={clientSlug} />

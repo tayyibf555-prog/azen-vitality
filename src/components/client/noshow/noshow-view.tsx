@@ -1,4 +1,3 @@
-import { CalendarClock, CheckCircle2, AlertTriangle, Users } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { NoshowTabs } from "./noshow-tabs";
 import { getClient } from "@/lib/mock/clients";
@@ -45,11 +44,11 @@ export async function NoshowView({ clientSlug }: { clientSlug: string }) {
         description="Confirms appointments, scores no-show risk, and auto-fills cancellations from the waitlist."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Upcoming" value={upcoming.length} icon={CalendarClock} hint="Awaiting confirmation" />
-        <StatCard label="Confirmed" value={confirmed.length} icon={CheckCircle2} hint="Patient confirmed" />
-        <StatCard label="High risk" value={atRisk.length} icon={AlertTriangle} hint="Most likely to no-show" />
-        <StatCard label="Waitlist" value={waiting.length} icon={Users} hint="Ready to fill a gap" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Upcoming" value={upcoming.length} dot="bg-status-blue" hint="Awaiting confirmation" />
+        <StatCard label="Confirmed" value={confirmed.length} dot="bg-status-green" hint="Patient confirmed" />
+        <StatCard label="High risk" value={atRisk.length} dot="bg-status-red" hint="Most likely to no-show" />
+        <StatCard label="Waitlist" value={waiting.length} dot="bg-status-amber" hint="Ready to fill a gap" />
       </div>
 
       <NoshowTabs targets={targets} waitlist={waitlist} nowIso={nowIso} />

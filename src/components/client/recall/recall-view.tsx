@@ -1,4 +1,4 @@
-import { CalendarClock, Clock, AlertTriangle, Send, CheckCircle2 } from "lucide-react";
+import { CalendarClock } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/recall/worklist";
 import { getClient } from "@/lib/mock/clients";
@@ -45,11 +45,11 @@ export async function RecallView({ clientSlug }: { clientSlug: string }) {
         description="Books patients back in before their recall lapses, on an SMS and email cadence with consent respected."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Due soon" value={dueSoon.length} icon={Clock} hint="Within the lead window" />
-        <StatCard label="Overdue" value={overdue.length} icon={AlertTriangle} hint="Past due, inside the recall window" />
-        <StatCard label="In cadence" value={inCadence.length} icon={Send} hint="Active outreach sequences" />
-        <StatCard label="Booked back" value={booked.length} icon={CheckCircle2} hint="Recalls booked in" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Due soon" value={dueSoon.length} dot="bg-status-amber" hint="Within the lead window" />
+        <StatCard label="Overdue" value={overdue.length} dot="bg-status-red" hint="Past due, inside the recall window" />
+        <StatCard label="In cadence" value={inCadence.length} dot="bg-status-blue" hint="Active outreach sequences" />
+        <StatCard label="Booked back" value={booked.length} dot="bg-status-green" hint="Recalls booked in" />
       </div>
 
       {targets.length === 0 ? (

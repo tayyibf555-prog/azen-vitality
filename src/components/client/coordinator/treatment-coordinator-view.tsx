@@ -1,4 +1,4 @@
-import { HeartPulse, PoundSterling, ListChecks, CheckCircle2, Clock } from "lucide-react";
+import { HeartPulse } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/coordinator/worklist";
 import { getClient } from "@/lib/mock/clients";
@@ -62,29 +62,29 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
         description="Recover accepted but incomplete treatment, ranked so the highest impact patient is always at the top."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Recoverable value"
           value={gbp(totalRecoverable)}
-          icon={PoundSterling}
+          dot="bg-status-amber"
           hint="Outstanding across open plans"
         />
         <StatCard
           label="Open opportunities"
           value={open.length}
-          icon={ListChecks}
+          dot="bg-status-blue"
           hint="Plans not yet completed"
         />
         <StatCard
           label="Recovered to date"
           value={gbp(recoveredToDate)}
-          icon={CheckCircle2}
+          dot="bg-status-green"
           hint="Completed plan value"
         />
         <StatCard
           label="Average days stalled"
           value={avgDaysStalled}
-          icon={Clock}
+          dot="bg-status-red"
           hint="Across stalled plans"
         />
       </div>

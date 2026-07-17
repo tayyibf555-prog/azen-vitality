@@ -1,4 +1,4 @@
-import { PhoneMissed, Inbox, CheckCircle2, CalendarCheck, Clock } from "lucide-react";
+import { PhoneMissed } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "./worklist";
 import { getClient } from "@/lib/mock/clients";
@@ -48,11 +48,11 @@ export async function AfterHoursView({ clientSlug }: { clientSlug: string }) {
         description="Answers missed and overflow calls out of hours, follows up by text, and logs every one into a worklist the team clears in the morning."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="New" value={newCount} icon={Inbox} hint="Awaiting a follow-up" />
-        <StatCard label="Followed up" value={followedUp} icon={CheckCircle2} hint="Team reached back out" />
-        <StatCard label="Booked" value={booked} icon={CalendarCheck} hint="Turned into an appointment" />
-        <StatCard label="Today" value={today} icon={Clock} hint="Captured today" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="New" value={newCount} dot="bg-status-amber" hint="Awaiting a follow-up" />
+        <StatCard label="Followed up" value={followedUp} dot="bg-status-blue" hint="Team reached back out" />
+        <StatCard label="Booked" value={booked} dot="bg-status-green" hint="Turned into an appointment" />
+        <StatCard label="Today" value={today} dot="bg-status-blue" hint="Captured today" />
       </div>
 
       {captures.length === 0 ? (

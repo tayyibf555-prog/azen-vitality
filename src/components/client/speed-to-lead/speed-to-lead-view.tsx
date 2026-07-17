@@ -1,4 +1,4 @@
-import { Zap, Inbox, Send, CheckCircle2, Timer } from "lucide-react";
+import { Zap } from "lucide-react";
 import { PageHeader, StatCard, EmptyState, Tabs, SectionCard } from "@/components/primitives";
 import { Worklist } from "./worklist";
 import { ResponsesTable } from "./responses-table";
@@ -70,11 +70,11 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
         description="Every enquiry in one place, with where it came from. Qualified leads are texted within seconds; close-to-qualified ones are listed for the team to nurture."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="New" value={newLeads.length} icon={Inbox} hint="Awaiting first contact" />
-        <StatCard label="Contacted" value={contacted.length} icon={Send} hint="First reply sent, in conversation" />
-        <StatCard label="Booked" value={booked.length} icon={CheckCircle2} hint="Enquiry turned into a booking" />
-        <StatCard label="Median response" value={medianResponseLabel(leads)} icon={Timer} hint="Enquiry to first contact" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="New" value={newLeads.length} dot="bg-status-amber" hint="Awaiting first contact" />
+        <StatCard label="Contacted" value={contacted.length} dot="bg-status-blue" hint="First reply sent, in conversation" />
+        <StatCard label="Booked" value={booked.length} dot="bg-status-green" hint="Enquiry turned into a booking" />
+        <StatCard label="Median response" value={medianResponseLabel(leads)} dot="bg-status-blue" hint="Enquiry to first contact" />
       </div>
 
       <Tabs
