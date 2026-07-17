@@ -1,4 +1,3 @@
-import { Coins, Users, Target, CalendarCheck } from "lucide-react";
 import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { ACCOUNT_SUMMARY } from "@/lib/meta-ads/mock";
@@ -28,24 +27,24 @@ export function MetaAdsView({ clientSlug }: { clientSlug: string }) {
           sample until the practice's Meta account connects. */}
       <SampleNote>Sample data, not yet from your live sources. Spend, leads and cost figures are pilot estimates until your Meta account connects.</SampleNote>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Spend (last 30 days)"
           value={money(s.spendGbp)}
-          icon={Coins}
+          dot="bg-status-amber"
           hint={`Across active campaigns`}
         />
-        <StatCard label="Leads" value={count(s.leads)} icon={Users} hint="Enquiries from ads" />
+        <StatCard label="Leads" value={count(s.leads)} dot="bg-status-blue" hint="Enquiries from ads" />
         <StatCard
           label="Cost per lead"
           value={money(s.cplGbp, true)}
-          icon={Target}
+          dot="bg-status-blue"
           hint="Spend divided by leads"
         />
         <StatCard
           label="Booked patients"
           value={count(s.bookings)}
-          icon={CalendarCheck}
+          dot="bg-status-green"
           hint={`${money(s.costPerBookingGbp, true)} per booking`}
         />
       </div>

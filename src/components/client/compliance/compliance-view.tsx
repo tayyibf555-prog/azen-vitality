@@ -1,4 +1,3 @@
-import { ShieldCheck, ClipboardCheck, FileText, GraduationCap } from "lucide-react";
 import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { READINESS } from "@/lib/compliance/mock";
@@ -29,29 +28,29 @@ export function ComplianceView({ clientSlug }: { clientSlug: string }) {
           the readiness %, audits and training figures unmistakably sample. */}
       <SampleNote>Sample data, not yet from your live sources. Readiness and audit figures are pilot estimates until your real records are connected.</SampleNote>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Overall readiness"
           value={`${r.overallScore}%`}
-          icon={ShieldCheck}
+          dot="bg-status-green"
           hint={statusLabel(r.status)}
         />
         <StatCard
           label="Audits overdue"
           value={r.auditsOverdue}
-          icon={ClipboardCheck}
+          dot="bg-status-red"
           hint={`+ ${r.auditsDue} due soon`}
         />
         <StatCard
           label="Policies to action"
           value={r.policiesNeedingAttention}
-          icon={FileText}
+          dot="bg-status-amber"
           hint="Review due or missing"
         />
         <StatCard
           label="Training expiring"
           value={r.trainingExpiring}
-          icon={GraduationCap}
+          dot="bg-status-amber"
           hint="Overdue or due soon"
         />
       </div>

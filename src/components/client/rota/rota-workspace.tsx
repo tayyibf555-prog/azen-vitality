@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarRange, Users, Settings2, MessageSquare, MapPin } from "lucide-react";
+import { CalendarRange, Users, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatCard } from "@/components/primitives";
@@ -86,22 +86,22 @@ export function RotaWorkspace({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Staff" value={staffCount} icon={Users} hint="Active on the rota" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Staff" value={staffCount} dot="bg-status-blue" hint="Active on the rota" />
         <StatCard
           label="Shifts this week"
           value={shiftsThisWeek}
-          icon={CalendarRange}
+          dot="bg-status-blue"
           hint={isAllSites || !siteName ? "Generated across all sites" : `Generated for ${siteName}`}
         />
-        <StatCard label="Notified" value={notified} icon={MessageSquare} hint="Texted their shifts" />
-        <StatCard label="Sites" value={siteCount} icon={MapPin} hint="Covered by the rota" />
+        <StatCard label="Notified" value={notified} dot="bg-status-green" hint="Texted their shifts" />
+        <StatCard label="Sites" value={siteCount} dot="bg-line-strong" hint="Covered by the rota" />
       </div>
 
       <div
         role="tablist"
         aria-label="Staff rota sections"
-        className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-card p-1 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
+        className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]"
       >
         {TABS.map(({ key, label, icon: Icon }) => {
           const active = tab === key;
@@ -115,10 +115,8 @@ export function RotaWorkspace({
               aria-controls={`rota-panel-${key}`}
               onClick={() => setTab(key)}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
-                active
-                  ? "bg-blue-dark/[0.08] text-blue-deep"
-                  : "text-muted hover:bg-card-muted hover:text-ink",
+                "pressable inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
+                active ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
               )}
             >
               <Icon size={15} />

@@ -1,4 +1,4 @@
-import { PoundSterling, ListChecks, CheckCircle2, Building2 } from "lucide-react";
+import { Building2 } from "lucide-react";
 import {
   PageHeader,
   SectionCard,
@@ -108,23 +108,23 @@ export default async function OwnerManagementPage({
         systems={<SystemsCatalog />}
         operations={
           <>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Recoverable value"
           value={gbp(totalRecoverable)}
-          icon={PoundSterling}
+          dot="bg-status-amber"
           hint="Outstanding across open plans"
         />
         <StatCard
           label="Open opportunities"
           value={openCount}
-          icon={ListChecks}
+          dot="bg-status-blue"
           hint="Plans not yet completed"
         />
         <StatCard
           label="Recovered to date"
           value={gbp(recoveredToDate)}
-          icon={CheckCircle2}
+          dot="bg-status-green"
           hint="Completed plan value"
         />
       </div>

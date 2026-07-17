@@ -1,4 +1,3 @@
-import { Coins, UserPlus, TrendingUp, Gauge } from "lucide-react";
 import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient, getSites, getSiteMetrics } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
@@ -44,29 +43,29 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
           the figures below are unmistakably sample. */}
       <SampleNote>Sample data, not yet from your live sources. The figures in these reviews are pilot estimates until the live sources connect.</SampleNote>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Spend (30 days)"
           value={money(s.spendGbp)}
-          icon={Coins}
+          dot="bg-status-amber"
           hint="Across every paid channel"
         />
         <StatCard
           label="New patients"
           value={count(s.newPatients)}
-          icon={UserPlus}
+          dot="bg-status-blue"
           hint={`From ${count(s.leads)} enquiries`}
         />
         <StatCard
           label="Revenue (30 days)"
           value={money(s.revenueGbp)}
-          icon={TrendingUp}
+          dot="bg-status-green"
           hint="Attributed to acquisition"
         />
         <StatCard
           label="Return on spend"
           value={`${s.returnX.toFixed(1)}x`}
-          icon={Gauge}
+          dot="bg-status-blue"
           hint={`£${s.costPerNewPatientGbp} per new patient`}
         />
       </div>

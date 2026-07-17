@@ -16,9 +16,6 @@ import {
   Calendar,
   CheckCircle2,
   Lock,
-  Inbox,
-  ClipboardCheck,
-  Users,
 } from "lucide-react";
 import { SectionCard, StatCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
 import { cn } from "@/lib/utils";
@@ -196,24 +193,24 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="New" value={stat(counts.new)} icon={Inbox} hint="Awaiting review" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="New" value={stat(counts.new)} dot="bg-status-amber" hint="Awaiting review" />
         <StatCard
           label="Reviewed"
           value={stat(counts.reviewed)}
-          icon={ClipboardCheck}
+          dot="bg-status-blue"
           hint="Checked, not yet registered"
         />
         <StatCard
           label="Registered"
           value={stat(counts.registered)}
-          icon={UserPlus}
+          dot="bg-status-green"
           hint="Added to the practice"
         />
         <StatCard
           label="Total"
           value={stat(submissions.length)}
-          icon={Users}
+          dot="bg-line-strong"
           hint="All submissions"
         />
       </div>

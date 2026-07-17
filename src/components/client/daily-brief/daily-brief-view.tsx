@@ -1,7 +1,6 @@
 import {
   Sunrise,
   CalendarDays,
-  PoundSterling,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -151,29 +150,29 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader title="Daily brief" description={`${longDate(now)}. ${greeting}`} />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Appointments today"
           value={brief.appointmentsToday}
-          icon={CalendarDays}
+          dot="bg-status-blue"
           hint={scope.isAllSites ? "Across your sites" : scope.siteName ?? undefined}
         />
         <StatCard
           label="To confirm"
           value={noshowLine?.count ?? 0}
-          icon={ShieldAlert}
+          dot="bg-status-amber"
           hint="High no-show risk"
         />
         <StatCard
           label="Overnight"
           value={overnightLine?.count ?? 0}
-          icon={PhoneMissed}
+          dot="bg-status-red"
           hint="Missed after hours"
         />
         <StatCard
           label="Outstanding"
           value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)}
-          icon={PoundSterling}
+          dot="bg-status-green"
           hint="Owed across plans"
         />
       </div>

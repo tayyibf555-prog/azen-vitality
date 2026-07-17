@@ -1,4 +1,3 @@
-import { Sparkles, Flame, Gauge, Leaf } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/primitives";
 import { SmileAssessmentWorkspace } from "./smile-assessment-workspace";
 import { getClient } from "@/lib/mock/clients";
@@ -37,16 +36,16 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
         description="An embeddable quiz that scores each enquiry on intent and fit, fast-tracking high scorers to contact and recording the rest for nurture."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Total" value={responses.length} icon={Sparkles} hint="Quiz submissions" />
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Total" value={responses.length} dot="bg-status-blue" hint="Quiz submissions" />
         <StatCard
           label="High intent"
           value={high.length}
-          icon={Flame}
+          dot="bg-status-green"
           hint={`${contacted} fast-tracked to contact`}
         />
-        <StatCard label="Medium" value={medium.length} icon={Gauge} hint="Worth a follow-up" />
-        <StatCard label="Low" value={low.length} icon={Leaf} hint="Nurture for later" />
+        <StatCard label="Medium" value={medium.length} dot="bg-status-amber" hint="Worth a follow-up" />
+        <StatCard label="Low" value={low.length} dot="bg-line-strong" hint="Nurture for later" />
       </div>
 
       <SmileAssessmentWorkspace clientSlug={clientSlug} responses={responses} nowIso={nowIso} />
