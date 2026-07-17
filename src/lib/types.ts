@@ -75,7 +75,16 @@ export interface SessionUser {
 // lead 'new' → 'contacting' atomically before sending, so it can't race the
 // in-request intake contact. It resets to 'new' on send failure and advances to
 // 'contacted' on success, so it is short-lived; the worklist treats it like 'new'.
-export type LeadStage = "new" | "contacting" | "contacted" | "qualifying" | "booked" | "lost";
+// "nurture_done" is terminal: a contacted-but-quiet lead has had its full 3-touch
+// nurture with no reply, so it is retired from the warm-up cadence.
+export type LeadStage =
+  | "new"
+  | "contacting"
+  | "contacted"
+  | "qualifying"
+  | "booked"
+  | "lost"
+  | "nurture_done";
 export type Channel = "sms" | "email" | "whatsapp" | "phone";
 
 export interface Lead {

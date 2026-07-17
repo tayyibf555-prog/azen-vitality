@@ -54,6 +54,8 @@ function lead(overrides: Partial<SpeedToLeadLead> = {}): SpeedToLeadLead {
     firstResponseAt: null,
     conversationId: null,
     updatedAt: "2026-07-01T09:00:00Z",
+    nurtureStep: 0,
+    nurtureNextAt: null,
     ...overrides,
   };
 }

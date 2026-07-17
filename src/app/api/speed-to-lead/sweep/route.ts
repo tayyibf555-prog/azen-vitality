@@ -6,6 +6,7 @@ import {
   releaseLeadClaim,
   resetStaleContacting,
 } from "@/lib/speed-to-lead/repository";
+import { nurtureSweep } from "@/lib/speed-to-lead/nurture";
 import { convertAbandonedHolds } from "@/lib/booking/abandoned-holds";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabledForSend } from "@/lib/systems/repository";
@@ -91,6 +92,19 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // Nurture pass (best-effort, must NEVER break the SLA sweep). A contacted-but-
+  // quiet lead gets its next gentle nudge here. Fully isolated in try/catch and
+  // bounded (per-tick send cap + scan limit inside nurtureSweep): a failure here
+  // cannot stop the uncontacted-lead pass above, which is this route's actual job.
+  // The kill-switch check at the top of this handler already gates it (fail-closed).
+  let nurture: Awaited<ReturnType<typeof nurtureSweep>> | { error: string };
+  try {
+    nurture = await nurtureSweep(new Date(now));
+  } catch (err) {
+    nurture = { error: err instanceof Error ? err.message : String(err) };
+    console.error("[sweep] nurture pass threw; continuing", err);
+  }
+
   return Response.json({
     ok: true,
     recovered,
@@ -98,6 +112,7 @@ export async function POST(request: Request): Promise<Response> {
     claimed: claimedBy,
     contacted,
     abandonedConverted,
+    nurture,
   });
   } finally {
     await releaseCronLock("sweep-speed-to-lead");

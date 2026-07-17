@@ -37,6 +37,10 @@ export interface SpeedToLeadLead {
   firstResponseAt: string | null; // ISO, when first contact went out
   conversationId: string | null;
   updatedAt: string;
+  /** Nurture touches sent so far (0..3). Terminal at 3 (stage 'nurture_done'). */
+  nurtureStep: number;
+  /** When the next nurture touch is due (ISO), or null when not scheduled. */
+  nurtureNextAt: string | null;
 }
 
 /** One outbound first-contact attempt. */

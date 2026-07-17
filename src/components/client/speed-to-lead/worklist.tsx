@@ -14,6 +14,7 @@ const STAGE_TONE: Record<LeadStage, Tone> = {
   contacted: "success",
   qualifying: "info",
   booked: "success",
+  nurture_done: "neutral", // full nurture ran, no reply
   lost: "neutral",
 };
 const STAGE_LABEL: Record<LeadStage, string> = {
@@ -22,6 +23,7 @@ const STAGE_LABEL: Record<LeadStage, string> = {
   contacted: "Contacted",
   qualifying: "Qualifying",
   booked: "Booked",
+  nurture_done: "Nurtured",
   lost: "Lost",
 };
 

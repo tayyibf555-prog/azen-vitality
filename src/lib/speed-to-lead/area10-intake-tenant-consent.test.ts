@@ -74,6 +74,8 @@ beforeEach(() => {
     conversationId: null,
     createdAt: "2026-07-01T09:00:00Z",
     updatedAt: "2026-07-01T09:00:00Z",
+    nurtureStep: 0,
+    nurtureNextAt: null,
   }));
   findEarlierOpenLead.mockResolvedValue(null); // no double-submit race by default
   setLeadStage.mockResolvedValue(undefined);
