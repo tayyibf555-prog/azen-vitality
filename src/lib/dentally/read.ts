@@ -2,6 +2,7 @@ import { cache } from "react";
 import { DentallyClient } from "./client";
 import { normaliseAppointmentState } from "./appointment-state";
 import { dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
+import { normaliseGender, type Gender } from "@/lib/patient/demographics";
 
 /**
  * The Dentally API key for READ / sync operations (listing patients, appointments,
@@ -54,6 +55,44 @@ export async function listDentallySites(): Promise<DentallySiteRecord[]> {
   }
 }
 
+export interface PractitionerRecord {
+  /** Dentally practitioner id (what an appointment's practitioner_id expects). */
+  id: string;
+  name: string;
+}
+
+/**
+ * A site's ACTIVE practitioners for our INTERNAL site id (read-only GET
+ * /v1/practitioners), mapped to {id, name}. Mirrors the availability flow's read
+ * (agent tools.ts find_slots): keep only active rows, and rows whose site_id matches
+ * the requested site when Dentally scopes them. Best-effort: [] on error, so a
+ * practitioner picker degrades to empty rather than breaking the page.
+ */
+export async function listSitePractitioners(internalSiteId: string): Promise<PractitionerRecord[]> {
+  const client = dentallyFromEnv();
+  const siteUuid = dentallySiteId(internalSiteId);
+  try {
+    const res = await client.listPractitioners(siteUuid);
+    const rows = Array.isArray(res.practitioners) ? res.practitioners : [];
+    return rows
+      .map((raw) => {
+        const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        const user = (r.user && typeof r.user === "object" ? r.user : {}) as Record<string, unknown>;
+        const first = str(user.first_name) ?? "";
+        const last = str(user.last_name) ?? "";
+        const name = `${first} ${last}`.trim() || str(user.name) || "Practitioner";
+        const active = r.active === true;
+        const siteMatch = typeof r.site_id !== "string" || r.site_id === siteUuid;
+        return { id: String(r.id ?? ""), name, active, siteMatch };
+      })
+      .filter((p) => p.id !== "" && p.active && p.siteMatch)
+      .map(({ id, name }) => ({ id, name }));
+  } catch (err) {
+    console.error("[dentally] listSitePractitioners failed", err);
+    return [];
+  }
+}
+
 export interface PatientRecord {
   id: string;
   name: string;
@@ -65,6 +104,8 @@ export interface PatientRecord {
   recallDueAt: string | null;
   lastVisitAt: string | null;
   dateOfBirth: string | null;
+  /** 'male' | 'female' | null (normalised from Dentally's gender; null = not on file). */
+  gender: Gender | null;
   smsConsent: boolean;
   emailConsent: boolean;
 }
@@ -122,6 +163,7 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
     recallDueAt: str(r.dentist_recall_date) ?? str(r.hygienist_recall_date),
     lastVisitAt: str(r.last_visit_at),
     dateOfBirth: str(r.date_of_birth),
+    gender: normaliseGender(r.gender),
     smsConsent: bool(r.use_sms),
     emailConsent: bool(r.use_email),
   };

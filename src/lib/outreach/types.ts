@@ -51,6 +51,11 @@ export type OutreachTargetStatus =
  * - treatmentLookbackDays: how far back to read appointment history (default 3y).
  * - excludeSeenSinceDays: drop anyone with ANY appointment in the last N days.
  * - requiresMobile: require a mobile number (default true).
+ * - ageMin / ageMax: inclusive whole-years age bounds, computed from the patient's
+ *   date of birth against the Europe/London current date. CHEAP pre-filters (no
+ *   appointment read). A patient with no DOB on file is EXCLUDED when either is set.
+ * - gender: 'female' | 'male'. CHEAP pre-filter. A patient with no gender on file is
+ *   EXCLUDED when set. (Excluded-for-missing-data is counted, for an honest read-back.)
  *
  * Consent is deliberately NOT a build filter: it is decided at send time (the
  * sweep checks the snapshot, the drain re-checks suppression live).
@@ -62,6 +67,9 @@ export interface OutreachFilters {
   treatmentLookbackDays?: number;
   excludeSeenSinceDays?: number;
   requiresMobile?: boolean;
+  ageMin?: number;
+  ageMax?: number;
+  gender?: "female" | "male";
 }
 
 /**
@@ -82,6 +90,8 @@ export interface OutreachBuildCursor {
   candidates: number;
   /** Targets matched + enrolled so far (all sites). */
   matched: number;
+  /** Patients dropped ONLY because a set age/gender filter needed data not on file. */
+  excludedMissingData?: number;
 }
 
 export interface OutreachCampaign {

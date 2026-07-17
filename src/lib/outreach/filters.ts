@@ -8,6 +8,7 @@
 // PatientRecord / AppointmentRecord are structurally compatible supersets.
 
 import type { OutreachFilters } from "./types";
+import { ageFromDob, type Gender } from "@/lib/patient/demographics";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 1095; // ~3 years
@@ -16,6 +17,11 @@ export interface PatientLike {
   active: boolean;
   phone: string | null;
   lastVisitAt: string | null;
+  /** ISO date; used by the age pre-filter. Optional so pre-demographic callers/tests
+   *  need not supply it (a missing DOB is excluded only when an age filter is set). */
+  dateOfBirth?: string | null;
+  /** Normalised gender; a missing value is excluded only when a gender filter is set. */
+  gender?: Gender | null;
 }
 
 export interface AppointmentLike {
@@ -36,37 +42,83 @@ function ms(iso: string | null | undefined): number {
   return Date.parse(iso);
 }
 
+export interface PrefilterOutcome {
+  /** Whether the patient survives the cheap pre-filter (becomes a candidate). */
+  pass: boolean;
+  /**
+   * True ONLY when the patient was rejected specifically because a set age or gender
+   * filter required demographic data they do not have on file. Counted separately so
+   * the campaign read-back can honestly say "N records had no recorded age/gender and
+   * were not included". Never true for a plain no-match (wrong age/gender/window).
+   */
+  excludedForMissingData: boolean;
+}
+
+const PASS: PrefilterOutcome = { pass: true, excludedForMissingData: false };
+const REJECT: PrefilterOutcome = { pass: false, excludedForMissingData: false };
+
 /**
  * The cheap gate applied to a raw patient-list record BEFORE any per-patient
  * appointment read. Narrows the whole base (tens of thousands) down to plausible
  * candidates so the expensive history reads only ever touch a small slice.
  *
  * Rejects: archived/inactive patients (never message someone who has left, moved
- * away or died); patients with no mobile when requiresMobile is on; and anyone
- * whose last visit falls outside the [lastVisitAfter, lastVisitBefore] window
- * when either bound is set (a missing last-visit date fails a bounded window,
- * since we cannot place them in it).
+ * away or died); patients with no mobile when requiresMobile is on; anyone whose last
+ * visit falls outside the [lastVisitAfter, lastVisitBefore] window when either bound
+ * is set (a missing last-visit date fails a bounded window); and, when an age/gender
+ * filter is set, anyone outside the range OR with that datum missing. A missing
+ * age/gender when the filter is set is flagged `excludedForMissingData` so it can be
+ * counted for an honest read-back.
+ *
+ * The non-demographic gates run first, so `excludedForMissingData` only ever reflects
+ * patients who would otherwise have been candidates but were dropped for missing
+ * age/gender data (not inactive or no-mobile rows).
  */
-export function prefilterPatient(patient: PatientLike, filters: OutreachFilters): boolean {
-  if (!patient.active) return false;
+export function prefilterOutcome(patient: PatientLike, filters: OutreachFilters, now: Date): PrefilterOutcome {
+  if (!patient.active) return REJECT;
 
   const requiresMobile = filters.requiresMobile ?? true;
-  if (requiresMobile && !(patient.phone && patient.phone.trim())) return false;
+  if (requiresMobile && !(patient.phone && patient.phone.trim())) return REJECT;
 
   const hasWindow = Boolean(filters.lastVisitAfter || filters.lastVisitBefore);
   if (hasWindow) {
     const lv = ms(patient.lastVisitAt);
-    if (Number.isNaN(lv)) return false; // cannot place an unknown last visit in a bounded window
+    if (Number.isNaN(lv)) return REJECT; // cannot place an unknown last visit in a bounded window
     if (filters.lastVisitAfter) {
       const after = ms(filters.lastVisitAfter);
-      if (!Number.isNaN(after) && lv < after) return false;
+      if (!Number.isNaN(after) && lv < after) return REJECT;
     }
     if (filters.lastVisitBefore) {
       const before = ms(filters.lastVisitBefore);
-      if (!Number.isNaN(before) && lv > before) return false;
+      if (!Number.isNaN(before) && lv > before) return REJECT;
     }
   }
-  return true;
+
+  // Gender pre-filter. A set gender with no gender on file is an honest exclusion.
+  if (filters.gender) {
+    if (!patient.gender) return { pass: false, excludedForMissingData: true };
+    if (patient.gender !== filters.gender) return REJECT;
+  }
+
+  // Age pre-filter (inclusive). A set age bound with no DOB on file is an honest
+  // exclusion; an in-file DOB outside the range is a plain no-match.
+  if (filters.ageMin !== undefined || filters.ageMax !== undefined) {
+    const age = ageFromDob(patient.dateOfBirth ?? null, now);
+    if (age === null) return { pass: false, excludedForMissingData: true };
+    if (filters.ageMin !== undefined && age < filters.ageMin) return REJECT;
+    if (filters.ageMax !== undefined && age > filters.ageMax) return REJECT;
+  }
+
+  return PASS;
+}
+
+/**
+ * Boolean convenience over prefilterOutcome for callers that only need pass/fail.
+ * `now` defaults to the current instant (age filters need a reference day); pass an
+ * explicit `now` for deterministic tests.
+ */
+export function prefilterPatient(patient: PatientLike, filters: OutreachFilters, now: Date = new Date()): boolean {
+  return prefilterOutcome(patient, filters, now).pass;
 }
 
 /** A patient-facing-safe label for a matched appointment, e.g. "Scale & Polish 14 Mar 2025". */
