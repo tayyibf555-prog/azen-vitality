@@ -95,6 +95,32 @@ describe("draftOutreach fallback behaviour", () => {
     expect(res.body.toLowerCase()).not.toContain("nhs");
   });
 
+  // Finding #4 (compliance): outreach is patient-facing marketing SMS, so an INVENTED
+  // firm price must trip the guardrail (includePrice is enforced here, not disabled)
+  // and the deterministic fallback (which carries no price) must be used instead.
+  it("falls back when the model invents a firm marketing price (just £99)", async () => {
+    const client = { messages: { create: vi.fn(async () => ({ content: [{ type: "text", text: "Hi Jane, whitening this month, just £99! Reply to book." }] })) } };
+    const res = await draftOutreach(target(), campaign(), "sms", step, client as never);
+    expect(res.usedFallback).toBe(true);
+    expect(res.body).not.toContain("£"); // the safe fallback quotes no price at all
+    expect(res.body).not.toContain("99");
+  });
+
+  it("falls back when the model states a firm exact price (it costs £99)", async () => {
+    const client = { messages: { create: vi.fn(async () => ({ content: [{ type: "text", text: "Hi Jane, a scale and polish costs £99. Reply to book." }] })) } };
+    const res = await draftOutreach(target(), campaign(), "sms", step, client as never);
+    expect(res.usedFallback).toBe(true);
+    expect(res.body).not.toContain("£");
+  });
+
+  it("does NOT over-block a legitimately hedged 'from £' selling point", async () => {
+    // A hedged "from £X" line is the one allowed price shape; it must pass, not fall back.
+    const client = { messages: { create: vi.fn(async () => ({ content: [{ type: "text", text: "Hi Jane, whitening from £99. Reply and we will find a time that suits you." }] })) } };
+    const res = await draftOutreach(target(), campaign(), "sms", step, client as never);
+    expect(res.usedFallback).toBe(false);
+    expect(res.body).toContain("from £99");
+  });
+
   it("falls back when the model call throws", async () => {
     const client = { messages: { create: vi.fn(async () => { throw new Error("model down"); }) } };
     const res = await draftOutreach(target(), campaign(), "sms", step, client as never);

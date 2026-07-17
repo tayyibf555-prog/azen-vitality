@@ -82,6 +82,14 @@ export interface OutreachBuildCursor {
   siteIndex: number;
   /** Next patient-list page to fetch for the current site (1-based). */
   page: number;
+  /**
+   * Resume position WITHIN `page`: the number of leading rows of that page already
+   * fully processed (counted + enrolled) on a prior tick. A mid-page budget or
+   * 403/429 stop persists this so the next tick resumes at the unscanned tail rather
+   * than re-reading the head (which would re-spend the appointment-read budget on
+   * rows it already scanned and double-count them). 0 at every clean page boundary.
+   */
+  pageOffset?: number;
   /** True once every site's patient base has been fully scanned. */
   done: boolean;
   /** Patients scanned so far (all sites). */

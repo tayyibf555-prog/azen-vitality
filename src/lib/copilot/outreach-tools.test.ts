@@ -25,6 +25,8 @@ const store = vi.hoisted(() => ({
   isSystemEnabled: true,
   buildCounts: { matched: 5, excludedMissingData: 0 } as Record<string, number>,
   buildDone: true,
+  buildStopped: null as "403" | "429" | null,
+  buildOk: true,
 }));
 
 vi.mock("@/lib/copilot/actions", () => ({
@@ -67,7 +69,13 @@ vi.mock("@/lib/outreach/repository", () => ({
   campaignStatusCounts: async () => ({ built: 42, contacted: 0, replied: 0, booked: 0 }),
 }));
 vi.mock("@/lib/outreach/build", () => ({
-  runOutreachBuildTick: async () => ({ ok: true, done: store.buildDone, counts: store.buildCounts, cursor: null }),
+  runOutreachBuildTick: async () => ({
+    ok: store.buildOk,
+    done: store.buildDone,
+    stopped: store.buildStopped,
+    counts: store.buildCounts,
+    cursor: null,
+  }),
 }));
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => store.isSystemEnabled }));
 
@@ -97,6 +105,8 @@ beforeEach(() => {
   store.isSystemEnabled = true;
   store.buildCounts = { matched: 5, excludedMissingData: 0 };
   store.buildDone = true;
+  store.buildStopped = null;
+  store.buildOk = true;
 });
 
 describe("create_outreach_campaign", () => {
@@ -135,6 +145,62 @@ describe("create_outreach_campaign", () => {
     const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "x", ageMin: 40, ageMax: 30 }));
     expect(out.created).toBe(false);
     expect(store.created).toHaveLength(0);
+  });
+
+  // Finding #5: the target site must stay within the co-pilot's VIEW SCOPE (siteIds =
+  // ["site-cc"]), never every client site. site-rv is a real vitality site but is out
+  // of scope, so it must be refused, not built.
+  it("REFUSES a site outside the co-pilot's view scope, pointing at the selector (finding #5)", async () => {
+    const out = JSON.parse(
+      await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit", siteId: "site-rv" }),
+    );
+    expect(out.created).toBe(false);
+    expect(out.error).toMatch(/site selector|outside/i);
+    expect(store.created).toHaveLength(0); // nothing built against the out-of-scope site
+  });
+
+  it("targets an explicit IN-scope site", async () => {
+    const out = JSON.parse(
+      await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit", siteId: "site-cc" }),
+    );
+    expect(out.created).toBe(true);
+    expect(store.created[0].siteId).toBe("site-cc");
+  });
+
+  it("refuses an unknown site with a not-found message", async () => {
+    const out = JSON.parse(
+      await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit", siteId: "site-zzz" }),
+    );
+    expect(out.created).toBe(false);
+    expect(out.error).toMatch(/could not find/i);
+    expect(store.created).toHaveLength(0);
+  });
+
+  // Finding #6: honour the build tick's ok/stopped, not just done. A Dentally 403/429
+  // stop must be reported as a PAUSE, not "the count will keep climbing".
+  it("reports a rate-limit PAUSE honestly, not as a healthy climb (finding #6)", async () => {
+    store.buildDone = false;
+    store.buildStopped = "429";
+    const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
+    expect(out.buildStatus).toBe("paused");
+    expect(out.note).toMatch(/paused/i);
+    expect(out.note).not.toMatch(/climbing/i);
+  });
+
+  it("still reports a genuinely running build as 'building' with the climbing note", async () => {
+    store.buildDone = false;
+    store.buildStopped = null; // clean, still-running tick
+    const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
+    expect(out.buildStatus).toBe("building");
+    expect(out.note).toMatch(/climbing/i);
+  });
+
+  it("reports a FAILED build tick (!ok) as paused, never as building", async () => {
+    store.buildOk = false;
+    store.buildDone = false;
+    const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
+    expect(out.buildStatus).toBe("paused");
+    expect(out.note).not.toMatch(/climbing/i);
   });
 });
 
