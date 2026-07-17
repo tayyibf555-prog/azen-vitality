@@ -39,7 +39,7 @@ export function OnboardingWorkspace({
         <div
           role="tablist"
           aria-label="Onboarding sections"
-          className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-card p-1 shadow-[0_1px_2px_rgba(10,14,26,0.04)]"
+          className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]"
         >
           {TABS.map(({ key, label, icon: Icon }) => {
             const active = tab === key;
@@ -53,10 +53,8 @@ export function OnboardingWorkspace({
                 aria-controls={`onboarding-panel-${key}`}
                 onClick={() => setTab(key)}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
-                  active
-                    ? "bg-blue-dark/[0.08] text-blue-deep"
-                    : "text-muted hover:bg-card-muted hover:text-ink",
+                  "pressable inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
+                  active ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
                 )}
               >
                 <Icon size={15} />
@@ -70,7 +68,7 @@ export function OnboardingWorkspace({
           <button
             type="button"
             onClick={() => setTab("builder")}
-            className="inline-flex items-center gap-2 rounded-lg border border-line-strong bg-card px-3.5 py-2 text-sm font-semibold text-navy shadow-[0_1px_2px_rgba(10,14,26,0.04)] transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+            className="pressable inline-flex items-center gap-2 rounded-lg border border-line-strong bg-card px-3.5 py-2 text-sm font-semibold text-navy transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
           >
             <Wrench size={16} className="text-muted" />
             Build form

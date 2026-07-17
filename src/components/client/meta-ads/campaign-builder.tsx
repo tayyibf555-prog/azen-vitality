@@ -82,7 +82,7 @@ function TemplateCard({
       className={cn(
         "w-full rounded-xl border bg-card px-3.5 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
         selected
-          ? "border-blue-dark bg-blue-dark/[0.04] shadow-[0_0_0_1px_var(--blue-dark)]"
+          ? "border-blue-dark bg-tint-blue shadow-[0_0_0_1px_var(--blue-dark)]"
           : "border-line hover:border-line-strong hover:bg-card-muted/60",
       )}
     >
@@ -112,7 +112,7 @@ function AdPreview({
   const initial = practiceName.trim().charAt(0).toUpperCase() || "V";
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-card shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+    <div className="overflow-hidden rounded-xl border border-line bg-card">
       {/* Header: page identity */}
       <div className="flex items-center gap-2.5 px-3.5 py-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-navy text-sm font-semibold text-on-navy">

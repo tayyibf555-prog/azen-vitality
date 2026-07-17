@@ -43,7 +43,7 @@ function Legend() {
 function RecordRow({ record }: { record: TrainingRecord }) {
   const attention = record.status === "overdue" || record.status === "due_soon";
   return (
-    <li className="flex flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+    <li className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:justify-between">
       <span className="text-sm font-medium text-navy">{reqName(record.requirementId)}</span>
       <div className="flex items-center gap-4 text-xs tabular-nums text-muted sm:gap-6">
         <span>
@@ -67,10 +67,10 @@ function RecordRow({ record }: { record: TrainingRecord }) {
 function StaffCard({ group }: { group: StaffGroup }) {
   const needsAttention = group.topWeight <= 1;
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-card">
-      <header className="flex items-center justify-between gap-3 border-b border-line bg-card-muted/50 px-4 py-3">
+    <section>
+      <header className="flex items-center justify-between gap-3 border-b border-line pb-2.5">
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-navy">{group.staff.name}</h4>
+          <h4 className="text-title text-navy">{group.staff.name}</h4>
           <p className="text-xs capitalize text-muted">{group.staff.role}</p>
         </div>
         {needsAttention ? (
@@ -91,9 +91,9 @@ function StaffCard({ group }: { group: StaffGroup }) {
           ))}
         </ul>
       ) : (
-        <p className="px-4 py-3 text-xs text-muted">No training records on file.</p>
+        <p className="py-3 text-xs text-muted">No training records on file.</p>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -104,7 +104,7 @@ export function TrainingMatrix() {
       description="Mandatory training by team member, grouped per person, with overdue and expiring records highlighted. Team members needing attention are listed first."
       actions={<Legend />}
     >
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-x-10 gap-y-7 lg:grid-cols-2">
         {GROUPS.map((group) => (
           <StaffCard key={group.staff.id} group={group} />
         ))}

@@ -43,19 +43,17 @@ const KLOE_SUMMARY_BY_KEY = new Map<KloeSummary["kloe"], KloeSummary>(
   READINESS.kloes.map((k) => [k.kloe, k]),
 );
 
-// The AI assessment, rendered above the KLOE cards once generated.
+// The AI assessment, a flat hairline section rendered above the KLOE table.
 function AssessmentPanel({ assessment }: { assessment: Assessment }) {
   return (
-    <div className="space-y-5 rounded-xl border border-line bg-card-muted/50 p-4 sm:p-5">
-      <div className="flex items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-card text-blue-dark shadow-sm">
-          <Sparkles size={15} />
-        </span>
-        <h4 className="text-sm font-semibold text-navy">AI readiness check</h4>
-      </div>
+    <section className="space-y-4">
+      <h4 className="flex items-center gap-2 border-b border-line pb-2.5 text-title text-navy">
+        <Sparkles size={14} className="text-blue-royal" />
+        AI readiness check
+      </h4>
 
       {assessment.inspectionView ? (
-        <div className="rounded-lg border border-line bg-card px-3.5 py-3">
+        <div>
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
             <Eye size={13} /> Inspection view
           </p>
@@ -64,18 +62,15 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
       ) : null}
 
       {assessment.priorities.length > 0 ? (
-        <div>
+        <div className="border-t border-line pt-3">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
             <ListChecks size={13} /> Priorities
           </p>
-          <ol className="mt-2 space-y-2">
+          <ol className="mt-1 divide-y divide-line">
             {assessment.priorities.map((p, i) => {
               const u = URGENCY[p.urgency] ?? URGENCY.medium;
               return (
-                <li
-                  key={i}
-                  className="flex items-start justify-between gap-3 rounded-lg border border-line bg-card px-3.5 py-2.5"
-                >
+                <li key={i} className="flex items-start justify-between gap-3 py-2.5">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold leading-snug text-navy">{p.action}</p>
                     {p.area ? <p className="mt-0.5 text-xs text-muted">{p.area}</p> : null}
@@ -91,7 +86,7 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
       ) : null}
 
       {assessment.quickWins.length > 0 ? (
-        <div>
+        <div className="border-t border-line pt-3">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
             <Zap size={13} /> Quick wins
           </p>
@@ -105,13 +100,13 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
           </ul>
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }
 
-// One KLOE card: the CQC question, the practice's score, status pill and open
-// items.
-function KloeCard({
+// One KLOE row in the hairline table: the CQC question under the domain, with
+// the score numeral, open items and status on the right.
+function KloeRow({
   label,
   question,
   summary,
@@ -125,24 +120,24 @@ function KloeCard({
   const openItems = summary?.openItems ?? 0;
 
   return (
-    <div className="flex flex-col rounded-xl border border-line bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
+    <li className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line py-3.5 last:border-0">
+      <div className="min-w-0 max-w-xl flex-1 basis-64">
         <h4 className="text-sm font-semibold text-navy">{label}</h4>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted">{question}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-5">
+        <span className="text-xs font-medium text-muted">
+          {openItems} open {openItems === 1 ? "item" : "items"}
+        </span>
+        <span className="w-20 text-right text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
+          {score}
+          <span className="text-sm font-semibold text-muted">/100</span>
+        </span>
         <StatusPill tone={statusTone(status)} className="shrink-0">
           {statusLabel(status)}
         </StatusPill>
       </div>
-      <p className="mt-1.5 flex-1 text-xs leading-relaxed text-muted">{question}</p>
-      <div className="mt-3 flex items-end justify-between gap-2 border-t border-line pt-3">
-        <span className="text-2xl font-bold tracking-tight tabular-nums text-navy">
-          {score}
-          <span className="text-sm font-semibold text-muted">/100</span>
-        </span>
-        <span className="text-xs font-medium text-muted">
-          {openItems} open {openItems === 1 ? "item" : "items"}
-        </span>
-      </div>
-    </div>
+    </li>
   );
 }
 
@@ -191,7 +186,7 @@ export function ReadinessPanel({ clientSlug }: { clientSlug: string }) {
       >
         <div className="space-y-5">
           {error ? (
-            <p className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-sm text-[#9a6700]">
+            <p className="rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-sm text-status-amber">
               {error}
             </p>
           ) : null}
@@ -209,28 +204,26 @@ export function ReadinessPanel({ clientSlug }: { clientSlug: string }) {
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
               Five key lines of enquiry
             </p>
-            <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="mt-1">
               {KLOES.map((k) => (
-                <KloeCard
+                <KloeRow
                   key={k.key}
                   label={k.label}
                   question={k.question}
                   summary={KLOE_SUMMARY_BY_KEY.get(k.key)}
                 />
               ))}
-            </div>
+            </ul>
           </div>
         </div>
       </SectionCard>
 
       {/* Generated note + disclaimer, kept subtle at the foot of the readiness view. */}
-      <div className="rounded-xl border border-line bg-card-muted/50 p-4">
-        <div className="flex gap-2.5">
-          <Info size={16} className="mt-0.5 shrink-0 text-muted" />
-          <div className="space-y-2 text-xs leading-relaxed text-muted">
-            <p className="text-ink">{READINESS.generatedNote}</p>
-            <p>{COMPLIANCE_DISCLAIMER}</p>
-          </div>
+      <div className="flex gap-2.5 border-t border-line pt-4">
+        <Info size={16} className="mt-0.5 shrink-0 text-muted" />
+        <div className="space-y-2 text-xs leading-relaxed text-muted">
+          <p className="text-ink">{READINESS.generatedNote}</p>
+          <p>{COMPLIANCE_DISCLAIMER}</p>
         </div>
       </div>
     </div>

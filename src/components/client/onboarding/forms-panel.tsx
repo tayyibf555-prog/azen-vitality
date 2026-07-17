@@ -74,7 +74,7 @@ function FormPreview({ practiceName, headline, intro }: { practiceName: string; 
   return (
     <div className="rounded-xl border border-line-strong bg-card-muted/40 p-4">
       <p className="text-[0.7rem] font-semibold uppercase tracking-wide text-muted">Preview</p>
-      <div className="mt-3 rounded-xl border border-line bg-card p-5 text-center shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+      <div className="mt-3 rounded-xl border border-line bg-card p-5 text-center">
         <p className="text-sm font-semibold text-navy">{practiceName || "Your practice"}</p>
         <p className="text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-blue-deep">
           New patient onboarding
@@ -420,15 +420,15 @@ export function FormsPanel({ clientSlug }: { clientSlug: string }) {
           </p>
         ) : (
           <div className={cn("grid gap-4", selected ? "lg:grid-cols-[minmax(0,1fr)_300px]" : "")}>
-            <ul className="space-y-3">
+            <ul>
               {filtered.map((f) => {
                 const isSel = f.slug === selectedSlug;
                 return (
                   <li
                     key={f.id}
                     className={cn(
-                      "rounded-xl border bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)] transition-colors",
-                      isSel ? "border-blue-dark/50 ring-1 ring-blue-dark/20" : "border-line",
+                      "border-b border-line px-2 py-3.5 transition-colors last:border-0",
+                      isSel && "rounded-md bg-tint-blue",
                     )}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">

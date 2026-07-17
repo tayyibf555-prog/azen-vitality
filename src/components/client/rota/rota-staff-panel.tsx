@@ -434,11 +434,11 @@ export function RotaStaffPanel({
             </Button>
           </EmptyState>
         ) : (
-          <ul className="space-y-3">
+          <ul>
             {staff.map((person) => (
               <li
                 key={person.id}
-                className="rounded-xl border border-line bg-card px-4 py-3.5"
+                className="border-b border-line py-4 first:pt-1 last:border-0"
               >
                 {editingId === person.id ? (
                   <div className="space-y-3">

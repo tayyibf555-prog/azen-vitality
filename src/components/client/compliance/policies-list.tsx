@@ -46,7 +46,7 @@ function Legend() {
 
 function PolicyRow({ policy }: { policy: PolicyDoc }) {
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-line bg-card p-3.5 sm:flex-row sm:items-center sm:justify-between">
+    <li className="flex flex-col gap-2 border-b border-line py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="text-sm font-semibold text-navy">{policy.name}</h4>
@@ -78,7 +78,7 @@ export function PoliciesList() {
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
               {group.category}
             </p>
-            <ul className="mt-2 space-y-2.5">
+            <ul className="mt-1">
               {group.items.map((policy) => (
                 <PolicyRow key={policy.id} policy={policy} />
               ))}

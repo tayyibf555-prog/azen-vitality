@@ -41,7 +41,7 @@ export function SmileAssessmentWorkspace({
       <div
         role="tablist"
         aria-label="Smile Assessment sections"
-        className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-card p-1"
+        className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]"
       >
         {TABS.map(({ key, label, icon: Icon }) => {
           const active = tab === key;
@@ -55,10 +55,8 @@ export function SmileAssessmentWorkspace({
               aria-controls={`smile-panel-${key}`}
               onClick={() => setTab(key)}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
-                active
-                  ? "bg-blue-dark/[0.08] text-blue-deep"
-                  : "text-muted hover:bg-card-muted hover:text-ink",
+                "pressable inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
+                active ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
               )}
             >
               <Icon size={15} />

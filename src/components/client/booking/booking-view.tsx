@@ -88,9 +88,9 @@ export async function BookingView({ clientSlug }: { clientSlug: string }) {
       />
 
       {bookingOff ? (
-        <div className="flex items-start gap-2.5 rounded-xl border border-warning/25 bg-warning/10 px-4 py-2.5">
-          <Info size={16} className="mt-0.5 shrink-0 text-[#9a6700]" />
-          <p className="text-xs font-medium leading-relaxed text-[#9a6700]">
+        <div className="flex items-start gap-2.5 rounded-[8px] border border-tint-amber-line bg-tint-amber px-4 py-2.5">
+          <Info size={16} className="mt-0.5 shrink-0 text-status-amber" />
+          <p className="text-xs font-medium leading-relaxed text-status-amber">
             Online booking is currently switched off. Patients can still browse available times on this
             link, but final confirmation is paused until you switch it back on in{" "}
             <a href={`/c/${client.slug}/controls`} className="font-semibold underline underline-offset-2">
@@ -100,9 +100,9 @@ export async function BookingView({ clientSlug }: { clientSlug: string }) {
           </p>
         </div>
       ) : (
-        <div className="flex items-center gap-2.5 rounded-xl border border-success/20 bg-success/10 px-4 py-2.5">
-          <CheckCircle2 size={16} className="shrink-0 text-success" />
-          <p className="text-xs font-medium leading-relaxed text-success">
+        <div className="flex items-center gap-2.5 rounded-[8px] border border-tint-green-line bg-tint-green px-4 py-2.5">
+          <CheckCircle2 size={16} className="shrink-0 text-status-green" />
+          <p className="text-xs font-medium leading-relaxed text-status-green">
             Online booking is live: patients can browse times and confirm an appointment instantly.
           </p>
         </div>

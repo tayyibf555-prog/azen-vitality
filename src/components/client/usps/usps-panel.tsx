@@ -305,11 +305,11 @@ export function UspsPanel({ clientSlug }: { clientSlug: string }) {
             </Button>
           </EmptyState>
         ) : (
-          <ul className="space-y-3">
+          <ul>
             {usps.map((u) => (
               <li
                 key={u.id}
-                className="rounded-xl border border-line bg-card px-4 py-3.5"
+                className="border-b border-line py-4 first:pt-1 last:border-0"
               >
                 {editingId === u.id ? (
                   // Inline edit

@@ -27,7 +27,7 @@ function Legend() {
 
 function AuditRow({ audit }: { audit: AuditItem }) {
   return (
-    <li className="flex flex-col gap-3 rounded-xl border border-line bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+    <li className="flex flex-col gap-3 border-b border-line py-4 last:border-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="text-sm font-semibold text-navy">{audit.name}</h4>
@@ -66,7 +66,7 @@ export function AuditsList() {
       description="Your recurring compliance obligations, sorted with overdue items first: decontamination and IPC, radiography, fire, Legionella and water safety, medical emergencies, and clinical audits."
       actions={<Legend />}
     >
-      <ul className="space-y-3">
+      <ul>
         {SORTED_AUDITS.map((audit) => (
           <AuditRow key={audit.id} audit={audit} />
         ))}
