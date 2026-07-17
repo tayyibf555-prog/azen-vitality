@@ -319,15 +319,54 @@ export async function getTarget(id: string): Promise<OutreachTarget | null> {
   return data ? rowToTarget(data as TargetRow) : null;
 }
 
-export async function listTargetsByCampaign(campaignId: string): Promise<OutreachTarget[]> {
+export async function listTargetsByCampaign(
+  campaignId: string,
+  opts: { limit?: number } = {},
+): Promise<OutreachTarget[]> {
   const db = serviceClient();
-  const { data, error } = await db
+  let q = db
     .from("outreach_target")
     .select("*")
     .eq("campaign_id", campaignId)
     .order("created_at", { ascending: true });
+  // Bound the read for a UI preview so a large campaign cannot pull thousands of
+  // rows into a page render; omit for the full set.
+  if (typeof opts.limit === "number" && opts.limit > 0) q = q.limit(opts.limit);
+  const { data, error } = await q;
   if (error) throw error;
   return (data as TargetRow[]).map(rowToTarget);
+}
+
+export interface CampaignStatusCounts {
+  /** Total enrolled targets (every status). */
+  built: number;
+  contacted: number;
+  replied: number;
+  booked: number;
+}
+
+/**
+ * Live headline counts for a campaign's list card: total enrolled ("built") plus the
+ * contacted / replied / booked buckets. Uses head-count reads (COUNT with head:true)
+ * so nothing but the numbers crosses the wire, run concurrently. Single-client pilot
+ * scale: a handful of campaigns, so a few cheap counts per row is fine.
+ */
+export async function campaignStatusCounts(campaignId: string): Promise<CampaignStatusCounts> {
+  const db = serviceClient();
+  const count = async (status?: OutreachTargetStatus): Promise<number> => {
+    let q = db.from("outreach_target").select("id", { count: "exact", head: true }).eq("campaign_id", campaignId);
+    if (status) q = q.eq("status", status);
+    const { count: n, error } = await q;
+    if (error) throw error;
+    return n ?? 0;
+  };
+  const [built, contacted, replied, booked] = await Promise.all([
+    count(),
+    count("contacted"),
+    count("replied"),
+    count("booked"),
+  ]);
+  return { built, contacted, replied, booked };
 }
 
 /**

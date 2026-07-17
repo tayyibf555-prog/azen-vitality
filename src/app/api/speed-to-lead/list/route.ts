@@ -8,7 +8,7 @@ import type { LeadStage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-const STAGES: LeadStage[] = ["new", "contacted", "qualifying", "booked", "lost"];
+const STAGES: LeadStage[] = ["new", "contacted", "qualifying", "booked", "nurture_done", "lost"];
 
 export async function GET(request: Request): Promise<Response> {
   const result = await requireUser();
@@ -31,6 +31,7 @@ export async function GET(request: Request): Promise<Response> {
     contacted: 0,
     qualifying: 0,
     booked: 0,
+    nurture_done: 0,
     lost: 0,
   };
   // 'contacting' is a transient in-flight claim; count it as 'new' so the stats

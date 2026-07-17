@@ -1,35 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { validateContent, LIMITS, type LandingPageContent } from "./content";
+import { validateContent, LIMITS, COUNTS, CONTENT_VERSION, type LandingPageContent } from "./content";
+import { goodContent } from "./test-fixtures";
 
-/** A minimal, valid content object to mutate per test. */
-function goodContent(): Record<string, unknown> {
-  return {
-    hero: { headline: "Straighten your smile", subhead: "Clear aligners with a free consultation." },
-    benefits: [
-      { title: "Barely there", detail: "Most people will not notice you are wearing them." },
-      { title: "Removable", detail: "Take them out to eat, brush and floss." },
-      { title: "Spread the cost", detail: "0 percent finance is available." },
-    ],
-    pricing: { lines: [{ treatment: "Invisalign", fromPriceGBP: 2500 }], caveat: "From price, confirmed after a clinical assessment." },
-    faqs: [
-      { q: "How long?", a: "It varies from person to person." },
-      { q: "Suitable for me?", a: "Depends on a clinical assessment." },
-      { q: "Finance?", a: "Yes, 0 percent finance is available." },
-    ],
-    cta: { label: "Check your options", target: "assessment", targetSlug: null },
-  };
-}
-
-describe("validateContent", () => {
-  it("accepts a well-formed content object and normalises it", () => {
+describe("validateContent (schema v2)", () => {
+  it("accepts a well-formed content object, normalises it and stamps the version", () => {
     const res = validateContent(goodContent());
     expect(res.ok).toBe(true);
     const c = res.content as LandingPageContent;
+    expect(c.version).toBe(CONTENT_VERSION);
+    expect(c.hero.checklist).toHaveLength(COUNTS.checklist);
     expect(c.benefits).toHaveLength(3);
-    expect(c.faqs).toHaveLength(3);
+    expect(c.painPoints.items.length).toBeGreaterThanOrEqual(COUNTS.minPainPoints);
+    expect(c.howItWorks.steps).toHaveLength(COUNTS.steps);
+    expect(c.suitability.items.length).toBeGreaterThanOrEqual(COUNTS.minSuitability);
+    expect(c.faqs.length).toBeGreaterThanOrEqual(COUNTS.minFaqs);
     expect(c.pricing.lines[0].fromPriceGBP).toBe(2500);
     expect(c.cta.target).toBe("assessment");
     expect(c.cta.targetSlug).toBeNull();
+    // No showcase supplied -> cleanly null, never invented.
+    expect(c.showcase3d).toBeNull();
   });
 
   it("rejects a non-object", () => {
@@ -38,23 +27,81 @@ describe("validateContent", () => {
     expect(validateContent(42).ok).toBe(false);
   });
 
-  it("requires exactly three benefits and three faqs", () => {
+  it("rejects v1-shaped content (missing the new sections)", () => {
+    const v1 = goodContent();
+    delete v1.painPoints;
+    delete v1.about;
+    delete v1.howItWorks;
+    delete v1.suitability;
+    (v1.hero as Record<string, unknown>).eyebrow = undefined;
+    const res = validateContent(v1);
+    expect(res.ok).toBe(false);
+    expect(res.errors.join(" ")).toMatch(/painPoints/);
+    expect(res.errors.join(" ")).toMatch(/howItWorks/);
+  });
+
+  it("requires the headline accent to appear inside the headline", () => {
+    const bad = goodContent();
+    (bad.hero as Record<string, unknown>).headlineAccent = "totally absent phrase";
+    const res = validateContent(bad);
+    expect(res.ok).toBe(false);
+    expect(res.errors.join(" ")).toMatch(/headlineAccent must appear verbatim/);
+
+    // Case-insensitive match is accepted.
+    const caseDiff = goodContent();
+    (caseDiff.hero as Record<string, unknown>).headlineAccent = "From 3 Months";
+    expect(validateContent(caseDiff).ok).toBe(true);
+  });
+
+  it("requires exactly four checklist items and exactly four steps", () => {
+    const shortList = goodContent();
+    ((shortList.hero as Record<string, unknown>).checklist as unknown[]).pop();
+    const r1 = validateContent(shortList);
+    expect(r1.ok).toBe(false);
+    expect(r1.errors.join(" ")).toMatch(/hero\.checklist must contain exactly 4/);
+
+    const fiveSteps = goodContent();
+    ((fiveSteps.howItWorks as Record<string, unknown>).steps as unknown[]).push({
+      title: "Extra",
+      body: "One too many.",
+    });
+    const r2 = validateContent(fiveSteps);
+    expect(r2.ok).toBe(false);
+    expect(r2.errors.join(" ")).toMatch(/howItWorks\.steps must contain exactly 4/);
+  });
+
+  it("bounds pain points (4-6) and faqs (3-5)", () => {
+    const threePains = goodContent();
+    ((threePains.painPoints as Record<string, unknown>).items as unknown[]).pop();
+    expect(validateContent(threePains).ok).toBe(false);
+
+    const sixFaqs = goodContent();
+    (sixFaqs.faqs as unknown[]).push(
+      { q: "Four?", a: "Fine." },
+      { q: "Five?", a: "Fine." },
+      { q: "Six?", a: "One too many." },
+    );
+    const res = validateContent(sixFaqs);
+    expect(res.ok).toBe(false);
+    expect(res.errors.join(" ")).toMatch(/faqs must contain between 3 and 5/);
+
+    const fiveFaqs = goodContent();
+    (fiveFaqs.faqs as unknown[]).push({ q: "Four?", a: "Fine." }, { q: "Five?", a: "Fine." });
+    expect(validateContent(fiveFaqs).ok).toBe(true);
+  });
+
+  it("requires exactly three benefits", () => {
     const two = goodContent();
     (two.benefits as unknown[]).pop();
-    const r1 = validateContent(two);
-    expect(r1.ok).toBe(false);
-    expect(r1.errors.join(" ")).toMatch(/benefits must contain exactly 3/);
-
-    const fourFaqs = goodContent();
-    (fourFaqs.faqs as unknown[]).push({ q: "Extra?", a: "One too many." });
-    const r2 = validateContent(fourFaqs);
-    expect(r2.ok).toBe(false);
-    expect(r2.errors.join(" ")).toMatch(/faqs must contain exactly 3/);
+    const r = validateContent(two);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/benefits must contain exactly 3/);
   });
 
   it("enforces the headline max length", () => {
     const long = goodContent();
     (long.hero as Record<string, unknown>).headline = "x".repeat(LIMITS.headline + 1);
+    (long.hero as Record<string, unknown>).headlineAccent = "x".repeat(10);
     const res = validateContent(long);
     expect(res.ok).toBe(false);
     expect(res.errors.join(" ")).toMatch(/hero\.headline must be/);
@@ -89,5 +136,53 @@ describe("validateContent", () => {
       fromPriceGBP: 2500,
     }));
     expect(validateContent(many).ok).toBe(false);
+  });
+
+  describe("showcase3d (owner-configured, optional)", () => {
+    it("is null when absent or explicitly null (section omitted)", () => {
+      const absent = validateContent(goodContent());
+      expect(absent.ok).toBe(true);
+      expect(absent.content?.showcase3d).toBeNull();
+
+      const explicit = goodContent();
+      explicit.showcase3d = null;
+      const res = validateContent(explicit);
+      expect(res.ok).toBe(true);
+      expect(res.content?.showcase3d).toBeNull();
+    });
+
+    it("accepts a valid local .glb + poster + caption", () => {
+      const withShowcase = goodContent();
+      withShowcase.showcase3d = {
+        modelUrl: "/models/aligner.glb",
+        posterUrl: "/models/aligner-poster.webp",
+        caption: "Explore a clear aligner from every angle.",
+      };
+      const res = validateContent(withShowcase);
+      expect(res.ok).toBe(true);
+      expect(res.content?.showcase3d?.modelUrl).toBe("/models/aligner.glb");
+    });
+
+    it("rejects remote URLs and non-glb models (self-hosted assets only)", () => {
+      const remote = goodContent();
+      remote.showcase3d = {
+        modelUrl: "https://evil.example/model.glb",
+        posterUrl: "/models/poster.webp",
+        caption: "Nope.",
+      };
+      const r1 = validateContent(remote);
+      expect(r1.ok).toBe(false);
+      expect(r1.errors.join(" ")).toMatch(/local path/);
+
+      const notGlb = goodContent();
+      notGlb.showcase3d = {
+        modelUrl: "/models/model.obj",
+        posterUrl: "/models/poster.webp",
+        caption: "Nope.",
+      };
+      const r2 = validateContent(notGlb);
+      expect(r2.ok).toBe(false);
+      expect(r2.errors.join(" ")).toMatch(/\.glb/);
+    });
   });
 });

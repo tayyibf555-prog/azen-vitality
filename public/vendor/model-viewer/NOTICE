@@ -1,0 +1,39 @@
+<model-viewer> vendored build
+================================
+
+This directory contains a self-hosted copy of Google's <model-viewer> web
+component, used by the landing-page "3D showcase" section. It is a static asset
+only; there is no npm dependency on @google/model-viewer.
+
+Primary work
+------------
+model-viewer (the <model-viewer> custom element)
+  Copyright 2017 Google LLC
+  Licensed under the Apache Licence, Version 2.0 (see the LICENSE file in this
+  directory). Project home: https://modelviewer.dev/
+
+Bundled third-party components
+------------------------------
+The distributed, minified bundle (model-viewer.min.js) statically embeds several
+third-party libraries. Their licences (identified by the SPDX headers inside the
+bundle) are:
+
+  three.js               MIT Licence            (c) 2010-2024 three.js authors
+  lit / lit-html / lit-element
+                         BSD-3-Clause Licence   (c) 2017 Google LLC
+
+The full text of the MIT and BSD-3-Clause licences is available from each
+project's repository; both are permissive and compatible with redistribution of
+the minified bundle as shipped here.
+
+Runtime note (external decoder fetches)
+---------------------------------------
+For UNCOMPRESSED .glb models the bundle makes no external network requests. If a
+model uses Draco geometry compression or KTX2 (Basis) textures, model-viewer
+lazily fetches the matching decoder at runtime from Google's static host:
+
+  Draco decoder   https://www.gstatic.com/draco/versioned/decoders/1.5.6/
+  KTX2 / Basis    https://www.gstatic.com/basis-universal/versioned/2021-04-15-ba1c3e4/
+
+To keep a page fully self-hosted, ship uncompressed .glb assets, or self-host the
+decoders and point model-viewer at them. See README.md for guidance.

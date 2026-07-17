@@ -35,6 +35,7 @@ const STAGE_TONE: Record<Lead["stage"], Tone> = {
   contacted: "info",
   qualifying: "warning",
   booked: "success",
+  nurture_done: "neutral", // full nurture ran, no reply; retired warm
   lost: "neutral",
 };
 

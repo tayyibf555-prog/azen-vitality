@@ -33,6 +33,7 @@ import {
   Power,
   Rocket,
   CalendarPlus,
+  Send,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -161,6 +162,14 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: CalendarPlus,
         status: "live",
         note: "The patient-facing online booking link for the selected site: a live Dentally diary a patient can pick a time from, with the appointment landing straight in the diary. Shareable link and pre-written message, per site.",
+      },
+      {
+        slug: "outreach",
+        label: "Campaigns",
+        icon: Send,
+        status: "live",
+        roles: OWNER_ROLES,
+        note: "Segment outreach campaigns: build a list of patients from the existing base (by past treatment, last-visit window, age and gender), preview who matches, then text them a warm invite back, optionally into a chosen clinician's diary. Every send honours consent, opt-outs, a per-campaign daily cap and one message per patient per day. Gated by the Segment outreach switch in System controls.",
       },
     ],
   },
@@ -401,7 +410,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "growth",
     label: "Growth",
     icon: TrendingUp,
-    slugs: ["meta-ads", "smile-assessment", "speed-to-lead", "booking", "power-dialler", "usps", "roi"],
+    slugs: ["meta-ads", "smile-assessment", "speed-to-lead", "booking", "outreach", "power-dialler", "usps", "roi"],
   },
   {
     key: "operations",
@@ -417,6 +426,16 @@ export const NAV_CATEGORIES: NavCategory[] = [
  * as deep-link targets and the command palette still finds them by name.
  */
 export const NAV_HIDDEN_SLUGS = new Set<string>(["daily-brief", "task-queue"]);
+
+/**
+ * Slugs that are MANAGEMENT surfaces for a controllable system, and so must stay in
+ * the nav even when that system's kill switch is OFF (like System controls, which is
+ * never a system itself). Segment outreach seeds OFF: switching it off must halt its
+ * sends + sweep (enforced in the sweep + drain), but must NOT hide the page where the
+ * owner reviews campaigns and turns it back on. The Launch action there is separately
+ * gated in-page, so an off switch means "cannot launch", not "cannot reach".
+ */
+export const NAV_SWITCH_EXEMPT_SLUGS = new Set<string>(["outreach"]);
 
 export interface ResolvedNavCategory {
   key: string;
@@ -445,10 +464,14 @@ export function categoriesForRole(
       .map((s) => bySlug.get(s))
       // Drop items this role may not see, and any system the owner has switched
       // OFF (the kill switch hides the module; System controls is never a
-      // controllable system, so it is never hidden and stays reachable).
+      // controllable system, so it is never hidden and stays reachable). Management
+      // surfaces in NAV_SWITCH_EXEMPT_SLUGS also stay reachable when their own switch
+      // is off, so the owner can review + re-enable them.
       .filter(
         (i): i is NavItem =>
-          Boolean(i) && (!role || roleCanSeeItem(role, i!)) && !disabledSlugs?.has(i!.slug),
+          Boolean(i) &&
+          (!role || roleCanSeeItem(role, i!)) &&
+          (!disabledSlugs?.has(i!.slug) || NAV_SWITCH_EXEMPT_SLUGS.has(i!.slug)),
       ),
   })).filter((c) => c.items.length > 0);
 }

@@ -41,6 +41,18 @@ export const CLIENTS: Client[] = [
     status: "live",
     dentally: { connected: true, lastSyncedAt: "2026-06-18T08:52:00Z" },
     siteIds: ["site-cc", "site-rv", "site-ng"],
+    // OWNER-VERIFIED facts for public marketing surfaces. Only clinicsCount and
+    // the locations line are set (both provable from this very config); the
+    // rating/review/awards/press fields stay null until the practice supplies
+    // verified values, and the landing page omits those elements while null.
+    facts: {
+      googleRating: null,
+      reviewCount: null,
+      clinicsCount: 3,
+      locationsLine: "N15, N17 and Romford Road, London",
+      awardsLine: null,
+      pressMentions: [],
+    },
   },
 ];
 

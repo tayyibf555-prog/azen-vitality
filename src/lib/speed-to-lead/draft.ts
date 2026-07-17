@@ -123,3 +123,94 @@ export async function draftFirstContact(
     .trim();
   return { body };
 }
+
+// ---------------------------------------------------------------------------
+// Nurture follow-ups.
+//
+// A contacted-but-quiet lead gets up to three gentle nudges. Same house style as
+// the first contact (Sonnet, NO_THINKING, British English, no funding wording, no
+// em-dash), but framed as a warm follow-up rather than a first hello. The touch
+// number (1..3) nudges the tone from a light check-in to a final, no-pressure note.
+// ---------------------------------------------------------------------------
+
+/** Guardrail-safe deterministic fallback used when the model errors or trips the guard. */
+export function nurtureFallback(lead: SpeedToLeadLead, touch: number, client?: Client): string {
+  const name = firstName(lead.name);
+  const practice = client?.name ?? "the practice";
+  if (touch <= 1) {
+    return `Hi ${name}, it is ${practice}. Just checking in about your enquiry. Would you like us to find a time that suits you? Reply here and we will help.`;
+  }
+  if (touch === 2) {
+    return `Hi ${name}, ${practice} here. We would still love to help with your enquiry. If now is a better time, reply and we will sort a visit that works around you.`;
+  }
+  return `Hi ${name}, one last note from ${practice}. If you would like to book, just reply and we will find you a time. No rush, we are here whenever you are ready.`;
+}
+
+export function buildNurturePrompt(
+  lead: SpeedToLeadLead,
+  touch: number,
+  client?: Client,
+  usps?: string[],
+) {
+  const practice = client?.name ?? "our dental practice";
+  const interest = sanitiseInterest(lead.treatmentInterest);
+  const toneByTouch =
+    touch <= 1
+      ? "This is a light, friendly check-in a few days after your first message. Gently remind them you are here to help and invite them to pick a time."
+      : touch === 2
+        ? "This is a second, warm follow-up. Keep it brief and human, reassure them there is no pressure, and make it easy to say when suits them."
+        : "This is a final, no-pressure note. Warmly leave the door open, make clear you will not keep messaging, and invite them to reply whenever they are ready.";
+  const system = [
+    "You are a warm, professional patient coordinator for a UK dental practice.",
+    `You work for ${practice}.`,
+    "Someone enquired with the practice a little while ago and has not replied yet. Write a short, friendly follow-up message.",
+    toneByTouch,
+    "Rules:",
+    "- Lead with the person by first name.",
+    "- One gentle next step: offer to find them a time that suits.",
+    interest
+      ? `- You may refer to what they enquired about (${interest}) naturally, without overpromising.`
+      : "- Keep it general, since they did not say what they are interested in.",
+    "- Never guilt-trip or pressure them. Warm and easy, never pushy.",
+    "- Under 45 words. Shorter is better for a nudge.",
+    "- Any money figure is in GBP using the £ symbol.",
+    "- Use no em-dash characters anywhere. Use commas or full stops.",
+    "- Never use internal funding or treatment category wording like NHS or private. These are internal labels, not patient-facing language.",
+    uspPromptLine(usps),
+    "- Plain text only, suitable for an SMS.",
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+
+  const user = [
+    `Follow-up number: ${touch}`,
+    `Name: ${firstName(lead.name)}`,
+    `Treatment interest: ${interest ?? "not specified"}`,
+    `Enquiry source: ${lead.source}`,
+  ].join("\n");
+
+  return { system, user };
+}
+
+export async function draftNurtureTouch(
+  lead: SpeedToLeadLead,
+  touch: number,
+  client?: Client,
+  anthropic: Anthropic = new Anthropic(),
+): Promise<FirstContactResult> {
+  const usps = await listActiveUspTexts(getSite(lead.siteId)?.clientId ?? "");
+  const { system, user } = buildNurturePrompt(lead, touch, client, usps);
+  const msg = await anthropic.messages.create({
+    model: SONNET,
+    thinking: NO_THINKING,
+    max_tokens: 220,
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+  const body = msg.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  return { body };
+}

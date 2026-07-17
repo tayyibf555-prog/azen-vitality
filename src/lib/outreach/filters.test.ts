@@ -3,6 +3,7 @@
 import { describe, it, expect } from "vitest";
 import {
   prefilterPatient,
+  prefilterOutcome,
   matchAppointmentHistory,
   hasAppointmentSince,
   matchedReasonLabel,
@@ -66,6 +67,57 @@ describe("prefilterPatient", () => {
 
   it("ignores the last-visit window when neither bound is set", () => {
     expect(prefilterPatient(patient({ lastVisitAt: null }), { treatmentContains: ["hygiene"] })).toBe(true);
+  });
+});
+
+describe("prefilterOutcome (age + gender demographics)", () => {
+  // NOW is 2026-07-16; born 1990-01-01 => age 36.
+  const base: PatientLike = { active: true, phone: "07700900000", lastVisitAt: daysAgo(200) };
+
+  it("passes a patient inside an age range", () => {
+    const out = prefilterOutcome({ ...base, dateOfBirth: "1990-01-01" }, { ageMin: 30, ageMax: 40 }, NOW);
+    expect(out).toEqual({ pass: true, excludedForMissingData: false });
+  });
+
+  it("rejects (no missing-data flag) a patient outside the age range", () => {
+    const out = prefilterOutcome({ ...base, dateOfBirth: "1990-01-01" }, { ageMin: 40, ageMax: 50 }, NOW);
+    expect(out.pass).toBe(false);
+    expect(out.excludedForMissingData).toBe(false);
+  });
+
+  it("EXCLUDES a patient with no DOB and flags missing data when an age filter is set", () => {
+    const out = prefilterOutcome({ ...base, dateOfBirth: null }, { ageMin: 30, ageMax: 40 }, NOW);
+    expect(out.pass).toBe(false);
+    expect(out.excludedForMissingData).toBe(true);
+  });
+
+  it("passes a matching gender and rejects a non-matching one", () => {
+    expect(prefilterOutcome({ ...base, gender: "female" }, { gender: "female" }, NOW).pass).toBe(true);
+    const wrong = prefilterOutcome({ ...base, gender: "male" }, { gender: "female" }, NOW);
+    expect(wrong.pass).toBe(false);
+    expect(wrong.excludedForMissingData).toBe(false);
+  });
+
+  it("EXCLUDES a patient with no gender and flags missing data when a gender filter is set", () => {
+    const out = prefilterOutcome({ ...base, gender: null }, { gender: "female" }, NOW);
+    expect(out.pass).toBe(false);
+    expect(out.excludedForMissingData).toBe(true);
+  });
+
+  it("does not flag missing data when no demographic filter is set", () => {
+    const out = prefilterOutcome({ ...base, dateOfBirth: null, gender: null }, { treatmentContains: ["hygiene"] }, NOW);
+    expect(out).toEqual({ pass: true, excludedForMissingData: false });
+  });
+
+  it("counts missing-demographic exclusion only AFTER the cheap gates (inactive is a plain reject)", () => {
+    const out = prefilterOutcome({ ...base, active: false, gender: null }, { gender: "female" }, NOW);
+    expect(out.pass).toBe(false);
+    expect(out.excludedForMissingData).toBe(false); // rejected for inactive, not missing gender
+  });
+
+  it("applies age bounds inclusively at both ends", () => {
+    // age 36 exactly at both bounds.
+    expect(prefilterOutcome({ ...base, dateOfBirth: "1990-01-01" }, { ageMin: 36, ageMax: 36 }, NOW).pass).toBe(true);
   });
 });
 

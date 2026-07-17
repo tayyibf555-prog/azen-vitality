@@ -17,6 +17,31 @@
 
 export type Role = "agency_admin" | "client_owner" | "client_coordinator";
 
+/**
+ * OWNER-VERIFIED practice facts for public marketing surfaces (landing pages).
+ *
+ * COMPLIANCE-CRITICAL: proof claims (Google rating, review count, awards, press
+ * mentions) may ONLY ever render from this configuration, never from AI-generated
+ * content. The landing-page lint rejects any generated copy that carries such
+ * claims; the renderer shows a proof element only when the matching field here is
+ * non-null (absent = the element is omitted cleanly). Every value must be a real,
+ * verifiable fact the practice has confirmed.
+ */
+export interface PracticeFacts {
+  /** Verified Google rating (e.g. 4.9), or null when not verified. */
+  googleRating: number | null;
+  /** Verified Google review count, or null when not verified. */
+  reviewCount: number | null;
+  /** Number of clinics/sites, or null to omit. */
+  clinicsCount: number | null;
+  /** Short human locations line for the topbar (e.g. "Tottenham, N17 and Romford Road"). */
+  locationsLine: string | null;
+  /** A verified awards line (e.g. a named award and year), or null. */
+  awardsLine: string | null;
+  /** Verified press/publication names the practice has appeared in. Empty = omit. */
+  pressMentions: string[];
+}
+
 export interface Client {
   id: string;
   slug: string; // used in /c/[slug]
@@ -29,6 +54,8 @@ export interface Client {
     lastSyncedAt: string | null;
   };
   siteIds: string[];
+  /** Owner-verified marketing facts; absent fields suppress the matching UI. */
+  facts?: PracticeFacts;
 }
 
 export type Weekday =
@@ -75,7 +102,16 @@ export interface SessionUser {
 // lead 'new' → 'contacting' atomically before sending, so it can't race the
 // in-request intake contact. It resets to 'new' on send failure and advances to
 // 'contacted' on success, so it is short-lived; the worklist treats it like 'new'.
-export type LeadStage = "new" | "contacting" | "contacted" | "qualifying" | "booked" | "lost";
+// "nurture_done" is terminal: a contacted-but-quiet lead has had its full 3-touch
+// nurture with no reply, so it is retired from the warm-up cadence.
+export type LeadStage =
+  | "new"
+  | "contacting"
+  | "contacted"
+  | "qualifying"
+  | "booked"
+  | "lost"
+  | "nurture_done";
 export type Channel = "sms" | "email" | "whatsapp" | "phone";
 
 export interface Lead {

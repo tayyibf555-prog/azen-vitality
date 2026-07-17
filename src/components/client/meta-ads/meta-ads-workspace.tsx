@@ -4,8 +4,10 @@ import { useState } from "react";
 import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks, LayoutTemplate } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Campaign } from "@/lib/meta-ads/types";
+import type { Campaign, AdLibraryItem } from "@/lib/meta-ads/types";
 import { MOCK_CAMPAIGNS } from "@/lib/meta-ads/mock";
+import { findTreatment } from "@/lib/treatments/catalog";
+import { LANDING_TREATMENT_KEYS } from "./landing-pages";
 import { CampaignsTable } from "./campaigns-table";
 import { CampaignBuilder } from "./campaign-builder";
 import { AdLibrary } from "./ad-library";
@@ -33,12 +35,32 @@ export function MetaAdsWorkspace({
   // Drafts the owner saves from the Create tab, newest first. Kept here so they
   // survive tab switches and show alongside the mock campaigns.
   const [drafts, setDrafts] = useState<Campaign[]>([]);
+  // Treatment key seeded by "Recreate this" from the ad library, pre-selecting the
+  // Landing pages generator. Cleared on any MANUAL tab click (see selectTab), so it
+  // is only ever consumed by the one recreate navigation that set it.
+  const [recreateTreatment, setRecreateTreatment] = useState<string | null>(null);
 
   const campaigns = [...drafts, ...MOCK_CAMPAIGNS];
 
   function handleSaveDraft(draft: Campaign) {
     setDrafts((prev) => [draft, ...prev]);
     setTab("campaigns");
+  }
+
+  // Manual navigation: clears any pending recreate seed so a hand-picked tab switch
+  // never carries a stale pre-selection.
+  function selectTab(next: TabKey) {
+    setRecreateTreatment(null);
+    setTab(next);
+  }
+
+  // "Recreate this" from a library creative: map its treatment to a supported
+  // landing-page treatment key (when possible), seed it, and open the Landing tab.
+  function handleRecreate(item: AdLibraryItem) {
+    const matched = findTreatment(item.treatment);
+    const key = matched && LANDING_TREATMENT_KEYS.includes(matched.key) ? matched.key : null;
+    setRecreateTreatment(key);
+    setTab("landing");
   }
 
   return (
@@ -58,7 +80,7 @@ export function MetaAdsWorkspace({
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => setTab(key)}
+                onClick={() => selectTab(key)}
                 className={cn(
                   "pressable inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
                   active ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
@@ -73,7 +95,7 @@ export function MetaAdsWorkspace({
 
         <button
           type="button"
-          onClick={() => setTab("guide")}
+          onClick={() => selectTab("guide")}
           className="pressable inline-flex items-center gap-2 rounded-lg border border-line-strong bg-card px-3.5 py-2 text-sm font-semibold text-navy transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
         >
           <ListChecks size={16} className="text-muted" />
@@ -84,7 +106,7 @@ export function MetaAdsWorkspace({
       {/* Panels */}
       <div role="tabpanel">
         {tab === "campaigns" ? (
-          <CampaignsTable campaigns={campaigns} onCreate={() => setTab("create")} />
+          <CampaignsTable campaigns={campaigns} onCreate={() => selectTab("create")} />
         ) : null}
 
         {tab === "create" ? (
@@ -92,16 +114,22 @@ export function MetaAdsWorkspace({
             clientSlug={clientSlug}
             practiceName={practiceName}
             onSaveDraft={handleSaveDraft}
-            onOpenGuide={() => setTab("guide")}
-            onOpenLanding={() => setTab("landing")}
+            onOpenGuide={() => selectTab("guide")}
+            onOpenLanding={() => selectTab("landing")}
           />
         ) : null}
 
         {tab === "landing" ? (
-          <LandingPagesTab clientSlug={clientSlug} practiceName={practiceName} />
+          <LandingPagesTab
+            clientSlug={clientSlug}
+            practiceName={practiceName}
+            initialTreatment={recreateTreatment ?? undefined}
+          />
         ) : null}
 
-        {tab === "library" ? <AdLibrary clientSlug={clientSlug} /> : null}
+        {tab === "library" ? (
+          <AdLibrary clientSlug={clientSlug} onRecreate={handleRecreate} />
+        ) : null}
 
         {tab === "guide" ? <LaunchGuide /> : null}
       </div>

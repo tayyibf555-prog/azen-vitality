@@ -5,6 +5,7 @@ import {
   appointmentsForPatient,
   addPatient,
   dobForPatient,
+  genderForPatient,
   type MockPatient,
 } from "@/app/api/mock-dentally/_fixtures";
 
@@ -38,6 +39,7 @@ function serialise(p: MockPatient) {
     dentist_recall_date: p.dentist_recall_date ?? null,
     hygienist_recall_date: p.hygienist_recall_date ?? null,
     date_of_birth: dobForPatient(p.id),
+    gender: genderForPatient(p.id),
     last_visit_at: lastVisitAt(p.id),
     updated_at: "2026-06-17T00:00:00Z",
   };

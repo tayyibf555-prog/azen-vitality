@@ -3,6 +3,8 @@ import { sendMessage } from "@/lib/messaging/send";
 import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
+import { validateMobile } from "@/lib/messaging/lookup";
+import { getChannelPref, resolvePreferredChannel } from "@/lib/messaging/channel-pref";
 import { londonDayKey } from "@/lib/time/london";
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
@@ -129,13 +131,25 @@ async function drainSource(
   siteIds: string[],
   statusCallbackUrl: string | undefined,
   today: string,
+  whatsappEnabled: boolean,
 ): Promise<{ drained: number; sent: number; failed: number; blocked: number }> {
   const rows = await source.list(siteIds);
   let sent = 0, failed = 0, blocked = 0;
   let resolveFailures = 0;
   let examined = 0;
   for (const row of rows) {
-    const channel = row.channel as MessageChannel;
+    const rowChannel = row.channel as MessageChannel;
+    // Channel preference: honour the patient's chosen channel where BOTH channels
+    // are viable. WhatsApp is behind its own kill switch, so when WhatsApp is OFF
+    // (today's state) this is a no-op that skips the preference read entirely and
+    // the effective channel is exactly the queued one. sms and whatsapp resolve to
+    // the same handset, and a STOP suppresses both channels, so switching between
+    // them is address- and opt-out-safe.
+    let channel = rowChannel;
+    if (whatsappEnabled && rowChannel !== "email") {
+      const preferred = await getChannelPref(row.siteId, row.toRef);
+      channel = resolvePreferredChannel(rowChannel, preferred, true);
+    }
 
     // Resolve the recipient first. A THROW here is transient (e.g. Dentally briefly
     // unavailable): leave the row 'queued' so the next drain retries, rather than
@@ -212,6 +226,26 @@ async function drainSource(
       await source.markBlocked(row.id);
       blocked += 1;
       continue;
+    }
+
+    // Twilio Lookup pre-send validation (dormant unless TWILIO_LOOKUP_ENABLED).
+    // A resolved number that is a landline or otherwise undeliverable is BLOCKED
+    // before the paid send: marked blocked exactly like a consent block (never
+    // failed), and, because we skip before wasContactedToday/recordContacted, it
+    // never consumes the recipient's daily cap. A Lookup API error fails OPEN
+    // (validateMobile returns valid), so an outage never halts genuine sends.
+    // Phone channels only; email is out of scope.
+    if (channel !== "email") {
+      const check = await validateMobile(to);
+      if (!check.valid) {
+        await source.markBlocked(row.id);
+        blocked += 1;
+        console.warn(
+          `[drain] ${source.name}: outbox ${row.id} resolved to ${to} which is not a deliverable ` +
+            `mobile (${check.lineType ?? "invalid-number"}); blocked pre-send, not sent`,
+        );
+        continue;
+      }
     }
 
     // Cross-module daily frequency cap: at most one OUTREACH message per recipient per
@@ -326,6 +360,12 @@ export async function POST(request: Request): Promise<Response> {
     // fail-open only under dry-run. Single client in the pilot, matching
     // vitalitySiteIds().
     const disabledSlugs = await getDisabledSlugsForSend("vitality");
+    // Reuse the already-fetched disabled set for the channel-preference gate: a
+    // patient's WhatsApp preference is only honoured while WhatsApp is switched on.
+    // getDisabledSlugsForSend fails CLOSED when messaging is live (every slug
+    // disabled on a read error), so a blip leaves WhatsApp treated as OFF: no
+    // channel switch, exactly the safe default.
+    const whatsappEnabled = !disabledSlugs.has("whatsapp");
     let drained = 0, sent = 0, failed = 0, blocked = 0;
     const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};
     const sourceErrors: string[] = [];
@@ -343,7 +383,7 @@ export async function POST(request: Request): Promise<Response> {
       // recall/noshow/coordinator/reviews from delivering their queued rows.
       // The rows of the failing module stay 'queued' for the next tick.
       try {
-        const r = await drainSource(source, client, siteIds, statusCallbackUrl, today);
+        const r = await drainSource(source, client, siteIds, statusCallbackUrl, today, whatsappEnabled);
         perSource[source.name] = r;
         drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
       } catch (err) {

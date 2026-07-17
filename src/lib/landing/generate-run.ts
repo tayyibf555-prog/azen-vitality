@@ -54,11 +54,16 @@ function vet(
   if (!validation.ok || !validation.content) {
     return { ok: false, failuresText: validation.errors.map((e) => `- ${e}`).join("\n") };
   }
-  // The CTA destination is the owner's choice, never the model's: pin it after
-  // validation so the button always points where the campaign intends.
+  // Two owner-only fields are pinned after validation, never trusted from the model:
+  //   - cta: the destination is the owner's campaign choice, so the button always
+  //     points where the campaign intends;
+  //   - showcase3d: the 3D section is owner-configured (a practice-supplied,
+  //     self-hosted asset). The generator can never invent or reference a model
+  //     file, so anything it emitted here is stripped to null.
   const content: LandingPageContent = {
     ...validation.content,
     cta: { ...validation.content.cta, target: ctaTarget, targetSlug: ctaTargetSlug },
+    showcase3d: null,
   };
   const lint = lintContent(content, { resolvePrice });
   if (!lint.ok) return { ok: false, failuresText: describeFailures(lint.failures) };
