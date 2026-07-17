@@ -57,9 +57,16 @@ export async function setChannelPref(
  *
  * Pure and conservative:
  *   - No preference, or an email message: unchanged (never re-route an email).
- *   - Prefers WhatsApp: honoured ONLY when WhatsApp is live (whatsappEnabled). With
- *     WhatsApp off this returns the queued channel, so nothing changes today.
+ *   - Prefers WhatsApp: honoured ONLY when WhatsApp is SENDABLE (whatsappSendable),
+ *     which the caller MUST compute as "kill switch ON *and* a WhatsApp sender is
+ *     configured". When WhatsApp is not sendable this returns the queued channel,
+ *     so a WhatsApp preference is a no-op that leaves the SMS path intact - it is
+ *     never routed to a dead channel.
  *   - Prefers SMS: always honoured (SMS is always viable for a mobile).
+ *
+ * The third argument is deliberately the COMBINED verdict (enabled AND deliverable),
+ * not just the toggle: this function stays pure (no env/DB reads) and testable, and
+ * the caller owns both gates so the routing decision cannot be made on a half-check.
  *
  * SMS and WhatsApp address the same handset and a STOP suppresses both channels,
  * so swapping between them is address- and opt-out-safe.
@@ -67,11 +74,11 @@ export async function setChannelPref(
 export function resolvePreferredChannel(
   requested: MessageChannel,
   preferred: PreferredChannel | null,
-  whatsappEnabled: boolean,
+  whatsappSendable: boolean,
 ): MessageChannel {
   if (!preferred) return requested;
   if (requested === "email") return requested;
-  if (preferred === "whatsapp") return whatsappEnabled ? "whatsapp" : requested;
+  if (preferred === "whatsapp") return whatsappSendable ? "whatsapp" : requested;
   // preferred === "sms": always deliverable to a mobile.
   return "sms";
 }

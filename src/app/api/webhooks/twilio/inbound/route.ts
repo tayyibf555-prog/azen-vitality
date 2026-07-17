@@ -20,7 +20,9 @@ import {
   setTargetStatus as setOutreachTargetStatus,
   getCampaignIdForTarget as getOutreachCampaignIdForTarget,
   getCampaign as getOutreachCampaign,
+  getTarget as getOutreachTarget,
 } from "@/lib/outreach/repository";
+import type { OutreachTarget, OutreachTargetStatus } from "@/lib/outreach/types";
 import { handleNoshowInbound } from "@/lib/noshow/inbound";
 import {
   findTargetByAddress as findCoordinatorTargetByAddress,
@@ -69,6 +71,27 @@ const DEFAULT_SITE_ID = process.env.AGENT_DEFAULT_SITE_ID ?? "site-cc";
 // consumeBudget() guard the sibling public AI endpoints use. Overridable.
 const SENDER_BUDGET_LIMIT = Number(process.env.AGENT_SENDER_BUDGET_LIMIT ?? "20");
 const SENDER_BUDGET_WINDOW_SECONDS = Number(process.env.AGENT_SENDER_BUDGET_WINDOW ?? "3600");
+
+// Segment-outreach reply-linkage guards (see the linkage block in POST). Only an
+// ACTIVE, RECENT campaign target may be regressed to 'replied' and used to prime the
+// booking agent - mirrors how recall/reactivation pause ONLY an active cadence.
+const OUTREACH_ACTIVE_STATES = new Set<OutreachTargetStatus>(["pending", "queued", "contacted"]);
+// A reply-to-outbound correlation older than this is stale (an unrelated later
+// inbound that merely address-matches a long-finished campaign): do not regress or
+// prime on it. Comfortably covers the outreach cadence window (roughly days 0/3/10).
+const OUTREACH_MATCH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the matched outreach target's last cadence activity is recent enough that
+ * this inbound plausibly answers it (vs a stale, long-finished campaign match). Uses
+ * the most recent available activity timestamp; an active target's last update is its
+ * last send/advance.
+ */
+function outreachMatchRecent(target: OutreachTarget, nowMs: number): boolean {
+  const ts = target.updatedAt ?? target.startedAt ?? target.createdAt ?? null;
+  const t = ts ? Date.parse(ts) : NaN;
+  return Number.isFinite(t) && nowMs - t <= OUTREACH_MATCH_MAX_AGE_MS;
+}
 
 function publicUrl(path: string): string {
   return `${process.env.PUBLIC_BASE_URL ?? "http://localhost:3000"}${path}`;
@@ -276,6 +299,9 @@ export async function POST(request: Request): Promise<Response> {
     const outreachTarget = await findOutreachTargetByAddress(from);
     if (outreachTarget) {
       const campaignId = await getOutreachCampaignIdForTarget(outreachTarget.targetId);
+      // Always RECORD the reply as an inbound touch (audit; harmless on a terminal
+      // target since the sweep only ever acts on active targets). This mirrors
+      // recall/reactivation, which likewise always log the inbound touch.
       await insertOutreachInboundTouch({
         targetId: outreachTarget.targetId,
         campaignId,
@@ -283,19 +309,33 @@ export async function POST(request: Request): Promise<Response> {
         channel,
         body,
       });
-      // Pause: 'replied' is excluded from the sweep's due set and clears next_due_at.
-      await setOutreachTargetStatus(outreachTarget.targetId, "replied", {
-        nextDueAt: null,
-        endedAt: new Date().toISOString(),
-      });
-      if (campaignId) {
-        const campaign = await getOutreachCampaign(campaignId);
-        if (campaign) {
-          outreachInvite = {
-            treatmentAngle: campaign.messageAngle ?? "an appointment",
-            practitionerName: campaign.practitionerName,
-            practitionerId: campaign.practitionerId,
-          };
+      // STATUS + RECENCY guard (mirrors recall/reactivation, which pause ONLY an
+      // ACTIVE cadence). findOutreachTargetByAddress returns the LATEST outbox
+      // address-match with no guard on the target's state or age, so without this an
+      // unrelated later inbound would drag an already-'booked'/'exhausted'/'replied'
+      // target back to 'replied' and mis-prime the booking agent with a stale
+      // campaign's clinician/angle. Only regress + prime when the matched target is
+      // still in an active cadence state AND the correlating send is recent.
+      const fullTarget = await getOutreachTarget(outreachTarget.targetId);
+      const linkable =
+        !!fullTarget &&
+        OUTREACH_ACTIVE_STATES.has(fullTarget.status) &&
+        outreachMatchRecent(fullTarget, Date.now());
+      if (linkable) {
+        // Pause: 'replied' is excluded from the sweep's due set and clears next_due_at.
+        await setOutreachTargetStatus(outreachTarget.targetId, "replied", {
+          nextDueAt: null,
+          endedAt: new Date().toISOString(),
+        });
+        if (campaignId) {
+          const campaign = await getOutreachCampaign(campaignId);
+          if (campaign) {
+            outreachInvite = {
+              treatmentAngle: campaign.messageAngle ?? "an appointment",
+              practitionerName: campaign.practitionerName,
+              practitionerId: campaign.practitionerId,
+            };
+          }
         }
       }
     }

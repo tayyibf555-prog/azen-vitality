@@ -5,6 +5,7 @@ import { isSuppressed } from "@/lib/messaging/suppression";
 import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
 import { validateMobile } from "@/lib/messaging/lookup";
 import { getChannelPref, resolvePreferredChannel } from "@/lib/messaging/channel-pref";
+import { isWhatsappConfigured } from "@/lib/messaging/providers/twilio";
 import { londonDayKey } from "@/lib/time/london";
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
@@ -140,15 +141,18 @@ async function drainSource(
   for (const row of rows) {
     const rowChannel = row.channel as MessageChannel;
     // Channel preference: honour the patient's chosen channel where BOTH channels
-    // are viable. WhatsApp is behind its own kill switch, so when WhatsApp is OFF
-    // (today's state) this is a no-op that skips the preference read entirely and
-    // the effective channel is exactly the queued one. sms and whatsapp resolve to
-    // the same handset, and a STOP suppresses both channels, so switching between
-    // them is address- and opt-out-safe.
+    // are genuinely viable. WhatsApp routing is DOUBLE-GATED by the caller (owner
+    // kill switch ON *and* a WhatsApp sender configured); `whatsappEnabled` is that
+    // combined verdict. When either gate is closed it is false, so this whole block
+    // is skipped, the preference read is never even issued, and the effective
+    // channel is exactly the queued one - a WhatsApp preference is never routed to a
+    // dead channel. sms and whatsapp resolve to the same handset, and a STOP
+    // suppresses both channels, so switching between them is address- and
+    // opt-out-safe.
     let channel = rowChannel;
     if (whatsappEnabled && rowChannel !== "email") {
       const preferred = await getChannelPref(row.siteId, row.toRef);
-      channel = resolvePreferredChannel(rowChannel, preferred, true);
+      channel = resolvePreferredChannel(rowChannel, preferred, whatsappEnabled);
     }
 
     // Resolve the recipient first. A THROW here is transient (e.g. Dentally briefly
@@ -360,12 +364,19 @@ export async function POST(request: Request): Promise<Response> {
     // fail-open only under dry-run. Single client in the pilot, matching
     // vitalitySiteIds().
     const disabledSlugs = await getDisabledSlugsForSend("vitality");
-    // Reuse the already-fetched disabled set for the channel-preference gate: a
-    // patient's WhatsApp preference is only honoured while WhatsApp is switched on.
-    // getDisabledSlugsForSend fails CLOSED when messaging is live (every slug
-    // disabled on a read error), so a blip leaves WhatsApp treated as OFF: no
-    // channel switch, exactly the safe default.
-    const whatsappEnabled = !disabledSlugs.has("whatsapp");
+    // Channel-preference gate for WhatsApp - DOUBLE-GATED and fail-closed. A
+    // patient's WhatsApp preference is honoured ONLY when BOTH are true:
+    //   1) the owner kill switch is ON - 'whatsapp' is not in the disabled set.
+    //      getDisabledSlugsForSend fails CLOSED when messaging is live (every slug
+    //      disabled on a read error), so a blip leaves WhatsApp treated as OFF; and
+    //      migration 0047 seeds the 'whatsapp' toggle OFF so it is never live by the
+    //      mere ABSENCE of a row (system_toggle is default-ON, like 0041 for outreach).
+    //   2) WhatsApp is actually DELIVERABLE - a WhatsApp sender (TWILIO_WHATSAPP_FROM)
+    //      is configured. Without a sender, routing to WhatsApp would fail the send in
+    //      live mode instead of using SMS, so a 'whatsapp' preference must stay a no-op.
+    // Either gate closed => WhatsApp treated as OFF: the queued SMS path is left intact,
+    // never routed to a dead channel. This holds regardless of the toggle's state.
+    const whatsappEnabled = !disabledSlugs.has("whatsapp") && isWhatsappConfigured();
     let drained = 0, sent = 0, failed = 0, blocked = 0;
     const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};
     const sourceErrors: string[] = [];

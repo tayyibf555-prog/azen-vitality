@@ -112,6 +112,26 @@ describe("nurtureSweep", () => {
     expect(res.sent).toBe(0);
   });
 
+  it("a conversation READ ERROR leaves the lead untouched and nothing sent (retried next tick)", async () => {
+    // A transient getConversation failure must NOT be treated as a reply (the old
+    // bug): that would permanently move a merely-quiet lead to 'qualifying' and clear
+    // its nurture schedule on a blip. Safe outcome on error is "do nothing this tick".
+    getConversation.mockRejectedValue(new Error("conversation store briefly down"));
+    listNurtureDue.mockResolvedValue([lead({ nurtureStep: 1, nurtureNextAt: "2026-07-01T00:00:00Z" })]);
+
+    const res = await nurtureSweep(NOW);
+
+    // Nothing sent, no exit, no stage change, no schedule change: the lead is left
+    // exactly as it was, to be retried on the next tick.
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(setLeadStage).not.toHaveBeenCalled(); // stays 'contacted', not moved to 'qualifying'
+    expect(setNurtureSchedule).not.toHaveBeenCalled(); // nurture_next_at unchanged
+    expect(markNurtureDone).not.toHaveBeenCalled();
+    expect(res.skipped).toBe(1);
+    expect(res.exited).toBe(0);
+    expect(res.sent).toBe(0);
+  });
+
   it("sends touch 1 and schedules touch 2 seven days out", async () => {
     listNurtureDue.mockResolvedValue([lead({ nurtureStep: 0 })]);
 

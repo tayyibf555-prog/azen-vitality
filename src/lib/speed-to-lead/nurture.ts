@@ -48,20 +48,35 @@ export interface NurtureResult {
   capped: number; // yielded to the cross-module daily cap this tick
   failed: number; // send failed -> left scheduled to retry
   completed: number; // full 3-touch nurture finished
+  skipped: number; // reply-state read errored -> left untouched to retry next tick (nothing sent)
 }
 
-/** Whether the patient has replied since we contacted them (via the threaded conversation). */
-async function hasReplied(lead: SpeedToLeadLead): Promise<boolean> {
-  if (!lead.conversationId) return false;
+/**
+ * Whether the patient has replied since we contacted them (via the threaded
+ * conversation). Three-state on purpose:
+ *   - "replied": a real inbound since first contact -> exit nurture.
+ *   - "quiet":   no inbound yet -> continue the cadence.
+ *   - "unknown": the conversation read THREW (a transient DB blip). This is NEITHER
+ *     a reply NOR a licence to send. Treating an error as "replied" (the old
+ *     behaviour) would permanently move a merely-quiet lead to 'qualifying' and
+ *     clear its nurture schedule on a mere blip; treating it as "quiet" would nudge
+ *     someone who may in fact have replied. So the caller does NOTHING this tick -
+ *     no send, no stage change, no schedule change, leaving the lead intact to be
+ *     retried on the next tick.
+ */
+async function replyStatus(lead: SpeedToLeadLead): Promise<"replied" | "quiet" | "unknown"> {
+  if (!lead.conversationId) return "quiet";
   try {
     const conv = await getConversation(lead.conversationId);
     // contactLead only ever sends OUTBOUND on first contact (never stamps inbound),
     // so a non-null last_inbound_at means the patient has actually replied.
-    return Boolean(conv?.lastInboundAt);
-  } catch {
-    // Best-effort: if we cannot read the conversation, do not send (safer to skip a
-    // nurture than to nudge someone who may have replied). Treat as replied-exit.
-    return true;
+    return conv?.lastInboundAt ? "replied" : "quiet";
+  } catch (err) {
+    console.warn(
+      `[nurture] lead ${lead.id}: conversation read failed; skipping this tick, schedule left intact`,
+      err,
+    );
+    return "unknown";
   }
 }
 
@@ -93,7 +108,7 @@ async function nurtureBody(
  */
 export async function nurtureSweep(now: Date): Promise<NurtureResult> {
   const nowIso = now.toISOString();
-  const result: NurtureResult = { due: 0, sent: 0, exited: 0, retired: 0, capped: 0, failed: 0, completed: 0 };
+  const result: NurtureResult = { due: 0, sent: 0, exited: 0, retired: 0, capped: 0, failed: 0, completed: 0, skipped: 0 };
 
   const due = await listNurtureDue({
     nowIso,
@@ -113,8 +128,17 @@ export async function nurtureSweep(now: Date): Promise<NurtureResult> {
     if (result.sent >= NURTURE_PER_TICK_CAP) break; // per-tick send cap
 
     // A reply at any point exits nurture: move the engaged lead to 'qualifying' and
-    // clear its schedule so it is never selected again.
-    if (await hasReplied(lead)) {
+    // clear its schedule so it is never selected again. A read ERROR is neither a
+    // reply nor a licence to send: skip this lead for THIS tick with its schedule
+    // left intact (retried next tick) rather than terminating a merely-quiet lead on
+    // a transient blip. Send-safety on error is "do nothing": neither send nor
+    // terminate.
+    const replied = await replyStatus(lead);
+    if (replied === "unknown") {
+      result.skipped += 1;
+      continue;
+    }
+    if (replied === "replied") {
       try {
         await setLeadStage(lead.id, "qualifying");
         await setNurtureSchedule(lead.id, lead.nurtureStep, null);

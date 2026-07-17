@@ -23,6 +23,22 @@ function envConfig(): TwilioConfig {
   };
 }
 
+/**
+ * Whether WhatsApp is genuinely DELIVERABLE - i.e. a WhatsApp sender is configured
+ * (TWILIO_WHATSAPP_FROM). SMS and WhatsApp share the same Twilio account + auth, so
+ * the ONLY thing that makes WhatsApp separately sendable is its own From number.
+ *
+ * The messaging drain's channel-preference gate consults this so a patient's
+ * 'whatsapp' preference is only ever honoured when WhatsApp can actually be sent:
+ * routing to WhatsApp with no sender configured would, in live mode, throw in
+ * sendViaTwilio (missing TWILIO_WHATSAPP_FROM) and the drain would mark the row
+ * failed INSTEAD of falling back to SMS - a dead-channel route. This is env-based on
+ * purpose, so the deliverability gate holds regardless of the owner kill switch.
+ */
+export function isWhatsappConfigured(): boolean {
+  return Boolean(process.env.TWILIO_WHATSAPP_FROM?.trim());
+}
+
 export async function sendViaTwilio(
   msg: OutboundMessage,
   cfg: TwilioConfig = envConfig(),
