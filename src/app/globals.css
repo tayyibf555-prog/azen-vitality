@@ -254,20 +254,13 @@ h1, h2, h3, h4 {
 .scroll-navy::-webkit-scrollbar-thumb { background: var(--navy-line); border-radius: 8px; }
 .scroll-navy::-webkit-scrollbar-track { background: transparent; }
 
-/* Blue-forward chrome: the deep-to-lead blue gradient used by the sidebars.
-   Below lg only (the off-canvas drawer keeps its navy identity for contrast).
-   From lg, inside the approved frame, the sidebar sits TRANSPARENT directly on
-   the light blue wash, no panel of its own. Unlayered rule, so it must be
-   unset here rather than by (layered) utility classes. */
+/* Blue-forward chrome: the deep-to-lead blue gradient used by the sidebars at
+   EVERY breakpoint. The mobile off-canvas drawer and the lg+ in-frame sidebar
+   share one identity: a solid blue column flush on the left, with the light
+   --frame wash showing only in the gutter around the white content panel. */
 .chrome-nav {
   background-image: linear-gradient(180deg, var(--chrome-from), var(--chrome-mid) 55%, var(--chrome-to));
   background-color: var(--chrome-from);
-}
-@media (min-width: 1024px) {
-  .app-frame .chrome-nav {
-    background-image: none;
-    background-color: transparent;
-  }
 }
 /* A blue hero band (dashboards): headline copy sits on this. */
 .chrome-hero {
