@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { getClient } from "@/lib/mock/clients";
+import { TREATMENTS } from "@/lib/treatments/catalog";
 import { getLivePageBySlug, getPageBySlug } from "@/lib/landing/repository";
 import { verifyPreviewToken } from "@/lib/landing/preview-token";
 import { assignVariant, coinToss, variantCookieName, variantCookiePath } from "@/lib/landing/assignment";
@@ -125,6 +126,10 @@ export default async function LandingPageRoute({
       landingSlug={slug}
       variant={variant}
       siteId={found.page.siteId}
+      // OWNER-VERIFIED facts from practice configuration: the ONLY source the
+      // proof stats row / awards line / press mentions can render from.
+      practiceFacts={record.facts ?? null}
+      treatmentName={TREATMENTS.find((t) => t.key === found.page.treatment)?.name}
     />
   );
 

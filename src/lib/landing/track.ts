@@ -23,7 +23,10 @@
 // call is fire-and-forget, uses keepalive (so a click that navigates away still
 // sends), and swallows every error. No-ops during SSR or when fetch is absent.
 
-export type LandingStep = "viewed" | "cta_clicked";
+// 'viewed' and 'cta_clicked' feed the A/B counters; 'section_<name>' steps are
+// per-section scroll-depth markers (the endpoint accepts arbitrary step strings,
+// and the variant aggregation ignores steps it does not know).
+export type LandingStep = "viewed" | "cta_clicked" | `section_${string}`;
 
 export interface LandingEvent {
   clientSlug: string;

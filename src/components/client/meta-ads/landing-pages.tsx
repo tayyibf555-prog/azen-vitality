@@ -11,10 +11,12 @@ import {
   Archive,
   Trophy,
   LayoutTemplate,
+  Boxes,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
 import { TREATMENTS } from "@/lib/treatments/catalog";
+import { getClient } from "@/lib/mock/clients";
 import type { LandingPageContent, CtaTarget } from "@/lib/landing/content";
 import type { LandingPage, LandingPageStatus } from "@/lib/landing/types";
 import type { VariantKey } from "@/lib/landing/winner";
@@ -389,6 +391,22 @@ function ActivePanel({
         </Button>
       </div>
 
+      {/* 3D showcase status: owner-configured only, so it reads as an add-on. */}
+      <p className="mt-3 flex items-start gap-1.5 rounded-lg border border-line bg-card-muted/40 px-3 py-2 text-xs text-muted">
+        <Boxes size={14} className="mt-px shrink-0 text-blue-dark" aria-hidden />
+        <span>
+          {variants.some((v) => v.content.showcase3d) ? (
+            <>A 3D showcase is configured on this page and renders between the steps and pricing.</>
+          ) : (
+            <>
+              <span className="font-semibold text-navy">3D showcase (add a model to enable).</span>{" "}
+              Supply a practice-owned 3D model (.glb) and poster image and we will attach an
+              interactive viewer to this page. Nothing shows until a model is added.
+            </>
+          )}
+        </span>
+      </p>
+
       <ResultsCard
         clientSlug={clientSlug}
         landingSlug={page.slug}
@@ -441,6 +459,8 @@ function MiniPreview({
             landingSlug={page.slug}
             variant={variant.variantKey}
             siteId={page.siteId}
+            practiceFacts={getClient(clientSlug)?.facts ?? null}
+            treatmentName={TREATMENTS.find((t) => t.key === page.treatment)?.name}
             preview
           />
         </div>
