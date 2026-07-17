@@ -1,17 +1,23 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { SectionCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
+import { EmptyState } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 import type { AppointmentRecord } from "@/lib/dentally/read";
 
-const STATE_TONE: Record<string, Tone> = {
-  booked: "info",
-  completed: "success",
-  did_not_attend: "danger",
-  cancelled: "neutral",
-  pending: "info",
+// The diary board in the locked flat language: a display-type date header with
+// the count as a quiet caption, segment-style filters, and the day view as the
+// Home diary's hairline slot rows (time gutter, 7px status dot, name 600 with
+// the reason muted, quiet right meta; a tinted tag only for the no-show state).
+// The week grid stays a grid, with its chrome quieted to hairlines.
+
+const STATE_DOT: Record<string, string> = {
+  booked: "bg-status-blue",
+  completed: "bg-status-green",
+  did_not_attend: "bg-status-red",
+  cancelled: "bg-line-strong",
+  pending: "bg-status-blue",
 };
 const STATE_LABEL: Record<string, string> = {
   booked: "Booked",
@@ -19,13 +25,6 @@ const STATE_LABEL: Record<string, string> = {
   did_not_attend: "No-show",
   cancelled: "Cancelled",
   pending: "Pending",
-};
-const STATE_DOT: Record<string, string> = {
-  booked: "bg-blue-dark",
-  completed: "bg-success",
-  did_not_attend: "bg-danger",
-  cancelled: "bg-muted",
-  pending: "bg-blue-dark",
 };
 
 function dayKey(iso: string): string {
@@ -123,40 +122,46 @@ export function CalendarBoard({
   const step = view === "week" ? 7 : 1;
 
   return (
-    <SectionCard
-      title={view === "day" ? longDate(day) : weekLabel(day)}
-      description={
-        view === "day"
-          ? `${dayRows.length} appointment${dayRows.length === 1 ? "" : "s"}${siteFilter === "all" ? "" : ` at ${siteName(siteFilter)}`}.`
-          : `${weekTotal} appointment${weekTotal === 1 ? "" : "s"} this week${siteFilter === "all" ? "" : ` at ${siteName(siteFilter)}`}.`
-      }
-      actions={
+    <section>
+      {/* Display-type date header with the count caption; controls right-aligned
+          above a hairline. */}
+      <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-line pb-3">
+        <div className="min-w-0">
+          <h2 className="text-[20px] font-semibold leading-tight tracking-[-0.3px] text-navy">
+            {view === "day" ? longDate(day) : weekLabel(day)}
+          </h2>
+          <p className="mt-1 text-caption font-normal text-muted">
+            {view === "day"
+              ? `${dayRows.length} appointment${dayRows.length === 1 ? "" : "s"}${siteFilter === "all" ? "" : ` at ${siteName(siteFilter)}`}.`
+              : `${weekTotal} appointment${weekTotal === 1 ? "" : "s"} this week${siteFilter === "all" ? "" : ` at ${siteName(siteFilter)}`}.`}
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {sites.length > 1 ? (
-            <div className="flex flex-wrap gap-1">
-              <FilterPill active={siteFilter === "all"} onClick={() => setSiteFilter("all")}>
+            <div
+              className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]"
+              role="group"
+              aria-label="Filter by site"
+            >
+              <SegmentBtn active={siteFilter === "all"} onClick={() => setSiteFilter("all")}>
                 All sites
-              </FilterPill>
+              </SegmentBtn>
               {sites.map((s) => (
-                <FilterPill key={s.id} active={siteFilter === s.id} onClick={() => setSiteFilter(s.id)}>
+                <SegmentBtn key={s.id} active={siteFilter === s.id} onClick={() => setSiteFilter(s.id)}>
                   {s.name}
-                </FilterPill>
+                </SegmentBtn>
               ))}
             </div>
           ) : null}
-          <div className="flex rounded-full border border-line-strong p-0.5">
+          <div
+            className="inline-flex gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]"
+            role="group"
+            aria-label="Day or week view"
+          >
             {(["day", "week"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-semibold capitalize transition-colors",
-                  view === v ? "bg-[#f0f4f9] text-side-ink" : "text-muted hover:text-navy",
-                )}
-              >
+              <SegmentBtn key={v} active={view === v} onClick={() => setView(v)} className="capitalize">
                 {v}
-              </button>
+              </SegmentBtn>
             ))}
           </div>
           <div className="flex items-center gap-1">
@@ -166,7 +171,7 @@ export function CalendarBoard({
             <button
               type="button"
               onClick={() => setDay(today)}
-              className="rounded-full border border-line-strong bg-card px-3 py-1 text-xs font-semibold text-ink hover:bg-card-muted"
+              className="pressable rounded-lg border border-line-strong bg-card px-3 py-1 text-xs font-medium text-ink hover:bg-card-muted"
             >
               Today
             </button>
@@ -175,11 +180,13 @@ export function CalendarBoard({
             </NavBtn>
           </div>
         </div>
-      }
-    >
+      </header>
+
       {view === "day" ? (
         <>
-          <div className="mb-4 grid grid-cols-7 gap-1.5">
+          {/* Quiet 7-day strip: plain numbers, the selected day as the navy chip
+              (the mini-month idiom), today's numeral in blue. */}
+          <div className="mt-4 grid grid-cols-7 gap-1.5">
             {strip.map((d) => {
               const isSel = d === day;
               const isToday = d === today;
@@ -190,70 +197,111 @@ export function CalendarBoard({
                   type="button"
                   onClick={() => setDay(d)}
                   className={cn(
-                    "flex flex-col items-center rounded-lg border px-1 py-2 transition-colors",
-                    isSel ? "border-blue-dark/40 bg-blue-dark/10" : "border-line bg-card hover:bg-card-muted",
+                    "pressable flex flex-col items-center rounded-lg px-1 py-2 transition-colors",
+                    isSel ? "bg-navy" : "hover:bg-[#f7f9fc]",
                   )}
                 >
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">{dow(d)}</span>
-                  <span className={cn("text-base font-semibold tabular-nums", isToday ? "text-blue-royal" : "text-navy")}>{dnum(d)}</span>
-                  <span className="mt-0.5 h-4 text-[10px] tabular-nums text-muted">{count > 0 ? `${count} appt` : ""}</span>
+                  <span
+                    className={cn(
+                      "text-[10px] font-medium uppercase tracking-wide",
+                      isSel ? "text-white/70" : "text-faint",
+                    )}
+                  >
+                    {dow(d)}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-base font-semibold tabular-nums",
+                      isSel ? "text-white" : isToday ? "text-blue-royal" : "text-navy",
+                    )}
+                  >
+                    {dnum(d)}
+                  </span>
+                  <span
+                    className={cn(
+                      "mt-0.5 h-4 text-[10px] tabular-nums",
+                      isSel ? "text-white/70" : "text-muted",
+                    )}
+                  >
+                    {count > 0 ? `${count} appt` : ""}
+                  </span>
                 </button>
               );
             })}
           </div>
 
           {dayRows.length === 0 ? (
-            <EmptyState icon={CalendarDays} title="Nothing booked" description="No appointments on this day for the selected site." className="m-0" />
+            <EmptyState
+              icon={CalendarDays}
+              title="Nothing booked"
+              description="No appointments on this day for the selected site."
+              className="mt-4"
+            />
           ) : (
-            <ol className="space-y-2">
+            <div className="mt-2">
               {dayRows.map((a) => (
-                <li key={a.id} className="flex items-center gap-4 rounded-lg border border-line bg-card px-4 py-3">
-                  <div className="w-16 shrink-0 text-right">
-                    <p className="text-sm font-semibold tabular-nums text-navy">{hhmm(a.start)}</p>
-                    <p className="text-[11px] text-muted">{a.durationMin} min</p>
-                  </div>
-                  <div className="h-9 w-px shrink-0 bg-line" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-navy">{a.patientName}</p>
-                    <p className="truncate text-xs text-muted">
+                <div
+                  key={a.id}
+                  className="grid grid-cols-[46px_8px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line py-[11px] last:border-0"
+                >
+                  <span className="text-xs font-medium tabular-nums text-faint">{hhmm(a.start)}</span>
+                  <span
+                    aria-hidden
+                    title={STATE_LABEL[a.state] ?? a.state}
+                    className={cn("h-[7px] w-[7px] rounded-full", STATE_DOT[a.state] ?? "bg-line-strong")}
+                  />
+                  <span className="min-w-0 truncate">
+                    <span className="text-[13.5px] font-semibold text-navy">{a.patientName}</span>
+                    <span className="ml-2 text-[12.5px] text-muted">
                       {a.reason ?? "Appointment"}
                       {a.practitioner ? ` · ${a.practitioner}` : ""}
-                    </p>
-                  </div>
-                  <div className="hidden shrink-0 text-right sm:block">
-                    <p className="text-xs text-muted">{siteName(a.siteId)}</p>
-                  </div>
-                  <StatusPill tone={STATE_TONE[a.state] ?? "neutral"}>{STATE_LABEL[a.state] ?? a.state}</StatusPill>
-                </li>
+                    </span>
+                    <span className="sr-only">{STATE_LABEL[a.state] ?? a.state}</span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    {sites.length > 1 ? (
+                      <span className="hidden text-[11.5px] text-faint sm:inline">{siteName(a.siteId)}</span>
+                    ) : null}
+                    {a.state === "did_not_attend" ? (
+                      <span className="rounded-md border border-tint-red-line bg-tint-red px-2 py-[2.5px] text-[11.5px] font-medium text-status-red">
+                        No-show
+                      </span>
+                    ) : a.state === "cancelled" ? (
+                      <span className="text-[11.5px] font-medium text-faint">Cancelled</span>
+                    ) : (
+                      <span className="text-[11.5px] font-medium text-muted">{a.durationMin} min</span>
+                    )}
+                  </span>
+                </div>
               ))}
-            </ol>
+            </div>
           )}
         </>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="mt-4 overflow-x-auto">
+          {/* The week GRID stays; its chrome quiets to hairlines. */}
           <div className="grid min-w-[760px] grid-cols-7 gap-2">
             {weekDays.map((d) => {
               const list = apptsByDay.get(d) ?? [];
               const isToday = d === today;
               return (
-                <div key={d} className="flex flex-col rounded-lg border border-line bg-card-muted/30">
+                <div key={d} className="flex flex-col rounded-lg border border-line">
                   <button
                     type="button"
                     onClick={() => {
                       setDay(d);
                       setView("day");
                     }}
-                    className={cn(
-                      "flex flex-col items-center border-b border-line py-2 transition-colors hover:bg-card-muted",
-                      isToday && "bg-blue-dark/10",
-                    )}
+                    className="flex flex-col items-center border-b border-line py-2 transition-colors hover:bg-[#f7f9fc]"
                   >
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">{dow(d)}</span>
-                    <span className={cn("text-sm font-semibold tabular-nums", isToday ? "text-blue-royal" : "text-navy")}>{dnum(d)}</span>
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-faint">{dow(d)}</span>
+                    <span className={cn("text-sm font-semibold tabular-nums", isToday ? "text-blue-royal" : "text-navy")}>
+                      {dnum(d)}
+                    </span>
                   </button>
-                  <div className="flex flex-1 flex-col gap-1 p-1.5">
+                  <div className="flex flex-1 flex-col p-1.5">
                     {list.length === 0 ? (
-                      <span className="py-3 text-center text-[11px] text-muted">—</span>
+                      <span className="py-3 text-center text-[11px] text-faint">—</span>
                     ) : (
                       list.map((a) => (
                         <button
@@ -263,13 +311,13 @@ export function CalendarBoard({
                             setDay(d);
                             setView("day");
                           }}
-                          className="rounded-md border border-line bg-card px-2 py-1.5 text-left transition-colors hover:bg-card-muted"
+                          className="rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-[#f7f9fc]"
                         >
                           <span className="flex items-center gap-1.5">
-                            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATE_DOT[a.state] ?? "bg-muted")} />
+                            <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full", STATE_DOT[a.state] ?? "bg-line-strong")} />
                             <span className="text-[11px] font-medium tabular-nums text-navy">{hhmm(a.start)}</span>
                           </span>
-                          <span className="mt-0.5 block truncate text-[11px] text-ink">{a.patientName}</span>
+                          <span className="mt-0.5 block truncate text-[11px] text-muted">{a.patientName}</span>
                         </button>
                       ))
                     )}
@@ -280,18 +328,30 @@ export function CalendarBoard({
           </div>
         </div>
       )}
-    </SectionCard>
+    </section>
   );
 }
 
-function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function SegmentBtn({
+  active,
+  onClick,
+  className,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
-        active ? "border-blue-dark/30 bg-[#f0f4f9] text-side-ink" : "border-line-strong bg-card text-muted hover:bg-card-muted",
+        "pressable rounded-md px-3 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
+        active ? "bg-navy font-semibold text-white" : "text-muted hover:text-navy",
+        className,
       )}
     >
       {children}
@@ -305,7 +365,7 @@ function NavBtn({ children, onClick, ...rest }: React.ComponentProps<"button">) 
       type="button"
       onClick={onClick}
       {...rest}
-      className="flex h-7 w-7 items-center justify-center rounded-lg border border-line-strong bg-card text-muted hover:bg-card-muted hover:text-navy"
+      className="pressable flex h-7 w-7 items-center justify-center rounded-lg border border-line-strong bg-card text-muted hover:bg-card-muted hover:text-navy"
     >
       {children}
     </button>

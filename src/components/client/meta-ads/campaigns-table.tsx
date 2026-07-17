@@ -29,7 +29,7 @@ function CampaignRow({ campaign }: { campaign: Campaign }) {
   const isDraft = campaign.status === "draft";
 
   return (
-    <li className="rounded-xl border border-line bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+    <li className="border-b border-line py-4 first:pt-1 last:border-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -92,7 +92,7 @@ export function CampaignsTable({
           </Button>
         </EmptyState>
       ) : (
-        <ul className="space-y-3">
+        <ul>
           {campaigns.map((c) => (
             <CampaignRow key={c.id} campaign={c} />
           ))}

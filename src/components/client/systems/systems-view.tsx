@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Power, AlertTriangle } from "lucide-react";
+import { Loader2, Power } from "lucide-react";
 import { PageHeader, SectionCard } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 
@@ -90,16 +90,22 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
       />
 
       {rows ? (
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="inline-flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1 font-semibold text-success">
-            <span className="h-2 w-2 rounded-full bg-success" />
-            {running} of {total} running
-          </span>
+        <div className="flex flex-wrap gap-x-7 gap-y-4">
+          <div>
+            <p className="text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
+              <i aria-hidden className="mr-1.5 inline-block h-[7px] w-[7px] rounded-full bg-status-green align-[2px]" />
+              {running} of {total}
+            </p>
+            <p className="mt-0.5 text-[11px] font-medium text-muted">Systems running</p>
+          </div>
           {offCount > 0 ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-3 py-1 font-semibold text-warning">
-              <AlertTriangle size={13} />
-              {offCount} switched off
-            </span>
+            <div>
+              <p className="text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
+                <i aria-hidden className="mr-1.5 inline-block h-[7px] w-[7px] rounded-full bg-status-amber align-[2px]" />
+                {offCount}
+              </p>
+              <p className="mt-0.5 text-[11px] font-medium text-muted">Switched off</p>
+            </div>
           ) : null}
         </div>
       ) : null}

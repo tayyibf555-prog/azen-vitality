@@ -49,7 +49,7 @@ function AdCard({ item }: { item: AdLibraryItem }) {
   const perf = PERFORMANCE[item.estPerformance];
 
   return (
-    <li className="flex flex-col overflow-hidden rounded-xl border border-line bg-card shadow-[0_1px_2px_rgba(10,14,26,0.04)]">
+    <li className="flex flex-col overflow-hidden rounded-[10px] border border-line bg-card">
       {/* Creative thumbnail placeholder, by format */}
       <div className="relative flex h-28 items-center justify-center bg-card-muted text-muted">
         <FormatIcon size={24} />
@@ -91,7 +91,7 @@ function AdCard({ item }: { item: AdLibraryItem }) {
         </dl>
 
         {/* AI analysis panel */}
-        <div className="mt-auto rounded-lg border border-blue-dark/15 bg-blue-dark/[0.05] p-2.5">
+        <div className="mt-auto rounded-lg border border-tint-blue-line bg-tint-blue p-2.5">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
             <Sparkles size={12} /> Why it works
           </p>
@@ -100,9 +100,9 @@ function AdCard({ item }: { item: AdLibraryItem }) {
 
         {/* Compliance flag, if any */}
         {item.complianceFlag ? (
-          <div className="flex gap-2 rounded-lg border border-warning/25 bg-warning/10 px-2.5 py-2">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[#9a6700]" />
-            <p className="text-xs leading-relaxed text-[#9a6700]">{item.complianceFlag}</p>
+          <div className="flex gap-2 rounded-lg border border-tint-amber-line bg-tint-amber px-2.5 py-2">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-status-amber" />
+            <p className="text-xs leading-relaxed text-status-amber">{item.complianceFlag}</p>
           </div>
         ) : null}
       </div>
@@ -112,22 +112,20 @@ function AdCard({ item }: { item: AdLibraryItem }) {
 
 function OverviewPanel({ overview }: { overview: Overview }) {
   return (
-    <div className="space-y-4 rounded-xl border border-line bg-card-muted/50 p-4">
-      <div className="flex items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-card text-blue-dark shadow-sm">
-          <Sparkles size={15} />
-        </span>
-        <h4 className="text-sm font-semibold text-navy">AI overview of the library</h4>
-      </div>
+    <section className="space-y-4">
+      <h4 className="flex items-center gap-2 border-b border-line pb-2.5 text-title text-navy">
+        <Sparkles size={14} className="text-blue-royal" />
+        AI overview of the library
+      </h4>
 
       {overview.patterns.length > 0 ? (
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
             Patterns that are working
           </p>
-          <ul className="mt-2 grid gap-2.5 sm:grid-cols-2">
+          <ul className="mt-1 grid gap-x-8 sm:grid-cols-2">
             {overview.patterns.map((p, i) => (
-              <li key={i} className="rounded-lg border border-line bg-card px-3 py-2.5">
+              <li key={i} className="border-b border-line py-2.5 sm:[&:nth-last-child(-n+2)]:border-0 [&:last-child]:border-0">
                 <p className="text-sm font-semibold text-navy">{p.title}</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-ink">{p.insight}</p>
               </li>
@@ -154,14 +152,14 @@ function OverviewPanel({ overview }: { overview: Overview }) {
         ) : null}
 
         {overview.cautions.length > 0 ? (
-          <div className="rounded-lg border border-warning/25 bg-warning/10 p-3">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#9a6700]">
+          <div className="rounded-lg border border-tint-amber-line bg-tint-amber p-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-status-amber">
               <ShieldAlert size={13} /> Cautions
             </p>
             <ul className="mt-2 space-y-1.5">
               {overview.cautions.map((c, i) => (
-                <li key={i} className="flex gap-2 text-xs leading-relaxed text-[#9a6700]">
-                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-warning" />
+                <li key={i} className="flex gap-2 text-xs leading-relaxed text-status-amber">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-status-amber" />
                   {c}
                 </li>
               ))}
@@ -169,7 +167,7 @@ function OverviewPanel({ overview }: { overview: Overview }) {
           </div>
         ) : null}
       </div>
-    </div>
+    </section>
   );
 }
 

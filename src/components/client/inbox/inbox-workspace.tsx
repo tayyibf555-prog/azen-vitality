@@ -208,7 +208,7 @@ export function InboxWorkspace({
                   aria-current={selected ? "true" : undefined}
                   className={cn(
                     "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-dark/40",
-                    selected ? "bg-blue-dark/[0.06]" : "hover:bg-card-muted",
+                    selected ? "bg-tint-blue" : "hover:bg-[#f7f9fc]",
                   )}
                 >
                   <span
@@ -227,12 +227,12 @@ export function InboxWorkspace({
                         <span className="truncate text-sm font-semibold text-navy">{t.contactName}</span>
                         {t.unread ? (
                           <span
-                            className="h-2 w-2 shrink-0 rounded-full bg-blue-dark"
+                            className="h-[7px] w-[7px] shrink-0 rounded-full bg-status-blue"
                             aria-label="Awaiting reply"
                           />
                         ) : null}
                       </span>
-                      <time className="shrink-0 text-[11px] text-muted" dateTime={t.lastAt}>
+                      <time className="shrink-0 text-[11px] tabular-nums text-faint" dateTime={t.lastAt}>
                         {formatTime(t.lastAt)}
                       </time>
                     </span>
