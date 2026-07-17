@@ -1,5 +1,5 @@
-// Prompt builders + response parsing for AI landing-page generation. Pure (no
-// network), so the routes stay thin and the prompts are unit-testable.
+// Prompt builders + response parsing for AI landing-page generation (schema v2).
+// Pure (no network), so the routes stay thin and the prompts are unit-testable.
 //
 // Two variants are generated per page from two distinct creative directions
 // (confidence-led vs value-led), so the split test compares genuinely different
@@ -7,10 +7,18 @@
 // and the REAL catalogue price line, so a compliant reply is the path of least
 // resistance; the deterministic lint is still the hard gate afterwards.
 //
+// v2 additions the prompt must hold the line on:
+//   - the model writes the FULL conversion-page sections (hero with accent +
+//     checklist, pain points, about, how-it-works, suitability, 3-5 faqs)
+//   - it must NEVER invent proof claims: no ratings, review counts, stars,
+//     awards, press names ("as seen in"). Those render only from owner-verified
+//     practice configuration, outside the generated content.
+//   - it must NEVER emit a showcase3d section. 3D is owner-configured only.
+//
 // British English, GBP, no em-dashes.
 
 import type { CtaTarget, LandingPageContent, PricingLine } from "./content";
-import { LIMITS } from "./content";
+import { LIMITS, COUNTS } from "./content";
 import { getDefaultContent } from "./defaults";
 import type { Treatment } from "@/lib/treatments/catalog";
 
@@ -46,12 +54,14 @@ const HOUSE_RULES = [
 // The UK GDC/ASA copy rules, stated so the model writes compliant copy first time.
 const COMPLIANCE_RULES = [
   "No patient testimonials, reviews, ratings or star language of any kind.",
+  "No invented proof claims: never mention a Google rating, a review count, awards, 'award winning', being featured or seen in any publication, or patient numbers. Verified practice facts are displayed separately by the system; your copy must not contain any.",
   "No guarantees, promises or absolute claims (no 'guaranteed', 'risk free', '100%').",
   "No 'pain free' or 'painless' claims.",
   "No superlatives or ranking claims ('best', 'No 1', 'leading', 'world class', 'cheapest').",
   "Never mention NHS, private, funding, plans, membership or charge bands.",
   "Prices must be shown ONLY as the exact 'from' price provided, with the clinical-assessment caveat.",
   "Make clear that treatment suitability always depends on a clinical assessment.",
+  "Pain-point cards must be empathetic everyday frustrations, never shaming and never clinical claims or diagnoses.",
 ].join(" ");
 
 /** The single allowed price line for a treatment, from the catalogue (source of truth). */
@@ -59,16 +69,24 @@ export function focusPriceLine(t: Treatment): PricingLine {
   return { treatment: t.name, fromPriceGBP: t.priceFrom };
 }
 
-// Exemplar pool (guaranteed lint-clean defaults). We show a few as references of
-// tone and structure, excluding the focus treatment so the model does not simply
-// copy a default verbatim.
+// Exemplar pool (guaranteed lint-clean v2 defaults). We show a couple as
+// references of tone and structure, excluding the focus treatment so the model
+// does not simply copy a default verbatim. Two exemplars (not three) because a
+// full v2 object is much larger than v1; two is enough to pin tone + shape.
 const EXEMPLAR_KEYS = ["invisalign", "veneers", "hygiene", "whitening"] as const;
 
-function exemplarsFor(focusKey: string): LandingPageContent[] {
+/** Strip the fields the model must not echo (version, showcase3d) from an exemplar. */
+function exemplarView(c: LandingPageContent): Omit<LandingPageContent, "version" | "showcase3d"> {
+  const { version: _version, showcase3d: _showcase3d, ...rest } = c;
+  return rest;
+}
+
+function exemplarsFor(focusKey: string): Omit<LandingPageContent, "version" | "showcase3d">[] {
   return EXEMPLAR_KEYS.filter((k) => k !== focusKey)
-    .slice(0, 3)
+    .slice(0, 2)
     .map((k) => getDefaultContent(k, "booking"))
-    .filter((c): c is LandingPageContent => c !== null);
+    .filter((c): c is LandingPageContent => c !== null)
+    .map(exemplarView);
 }
 
 export interface VariantPromptInput {
@@ -81,13 +99,24 @@ export interface VariantPromptInput {
 }
 
 const SHAPE_INSTRUCTION = [
-  "Respond with ONLY a JSON object of exactly this shape:",
-  '{"hero":{"headline":"...","subhead":"..."},',
+  "Respond with ONLY a JSON object of exactly this shape (no extra keys, no showcase3d key):",
+  '{"hero":{"eyebrow":"...","headline":"...","headlineAccent":"...","subhead":"...","checklist":["...","...","...","..."]},',
   '"benefits":[{"title":"...","detail":"..."},{"title":"...","detail":"..."},{"title":"...","detail":"..."}],',
+  '"painPoints":{"items":[{"title":"...","body":"..."},...],"reassurance":"..."},',
+  '"about":{"body":"...","keyFacts":["...","..."]},',
+  '"howItWorks":{"steps":[{"title":"...","body":"..."},{"title":"...","body":"..."},{"title":"...","body":"..."},{"title":"...","body":"..."}]},',
+  '"suitability":{"heading":"...","items":[{"title":"...","body":"..."},...]},',
   '"pricing":{"lines":[{"treatment":"...","fromPriceGBP":0}],"caveat":"..."},',
-  '"faqs":[{"q":"...","a":"..."},{"q":"...","a":"..."},{"q":"...","a":"..."}],',
+  '"faqs":[{"q":"...","a":"..."},...],',
   '"cta":{"label":"...","target":"...","targetSlug":null}}',
-  `Exactly 3 benefits and exactly 3 faqs. headline <= ${LIMITS.headline} chars, subhead <= ${LIMITS.subhead} chars, benefit title <= ${LIMITS.benefitTitle}, benefit detail <= ${LIMITS.benefitDetail}, faq answer <= ${LIMITS.faqAnswer}, cta label <= ${LIMITS.ctaLabel}.`,
+  "Counts and rules:",
+  `- hero.checklist: exactly ${COUNTS.checklist} short ticked phrases (<= ${LIMITS.checklistItem} chars each).`,
+  `- hero.headlineAccent: the key quantified benefit phrase, and it MUST appear verbatim inside hero.headline (it is highlighted in colour). Example: headline 'Straighter teeth, no metal braces, from 3 months' with headlineAccent 'from 3 months'.`,
+  `- benefits: exactly 3. painPoints.items: ${COUNTS.minPainPoints} to ${COUNTS.maxPainPoints} empathetic everyday frustrations.`,
+  `- about.keyFacts: ${COUNTS.minKeyFacts} to ${COUNTS.maxKeyFacts} short facts. howItWorks.steps: exactly ${COUNTS.steps} (consultation with scan, custom plan, treatment, result and retention; adapt the wording to the treatment).`,
+  `- suitability: for clinical treatments use a 'what it can help with' heading and condition cards (crowded teeth, gaps, and so on, explained factually); for cosmetic treatments use an 'is it right for you' heading and suitability cards. ${COUNTS.minSuitability} to ${COUNTS.maxSuitability} items.`,
+  `- faqs: ${COUNTS.minFaqs} to ${COUNTS.maxFaqs}.`,
+  `Length caps (chars): eyebrow <= ${LIMITS.eyebrow}, headline <= ${LIMITS.headline}, headlineAccent <= ${LIMITS.headlineAccent}, subhead <= ${LIMITS.subhead}, benefit title <= ${LIMITS.benefitTitle}, benefit detail <= ${LIMITS.benefitDetail}, pain title <= ${LIMITS.painTitle}, pain body <= ${LIMITS.painBody}, reassurance <= ${LIMITS.painReassurance}, about body <= ${LIMITS.aboutBody}, key fact <= ${LIMITS.keyFact}, step title <= ${LIMITS.stepTitle}, step body <= ${LIMITS.stepBody}, suitability heading <= ${LIMITS.suitabilityHeading}, suitability title <= ${LIMITS.suitabilityTitle}, suitability body <= ${LIMITS.suitabilityBody}, faq answer <= ${LIMITS.faqAnswer}, cta label <= ${LIMITS.ctaLabel}.`,
   "Do not use double-quote characters inside any string value (it breaks the JSON); use single quotes if you must quote.",
 ].join("\n");
 
@@ -97,7 +126,7 @@ export function buildVariantPrompt(input: VariantPromptInput): { system: string;
   const line = focusPriceLine(treatment);
 
   const system = [
-    `You are an expert UK dental marketing copywriter writing a campaign landing page for ${practiceName}.`,
+    `You are an expert UK dental marketing copywriter writing a full conversion landing page for ${practiceName}.`,
     `The page is for one treatment: ${treatment.name}.`,
     `Creative direction for THIS variant (${direction.name}): ${direction.brief}`,
     "UK advertising rules for dentists (GDC and ASA/CAP) that you MUST follow:",
@@ -119,6 +148,7 @@ export function buildVariantPrompt(input: VariantPromptInput): { system: string;
 
   const user = [
     `Treatment: ${treatment.name}. ${treatment.summary}`,
+    `Typical visits: ${treatment.typicalVisits}.`,
     financeLine,
     uspLine,
     angle ? `Owner notes on angle / audience: ${angle}` : "Angle: choose the most persuasive compliant angle for this direction.",

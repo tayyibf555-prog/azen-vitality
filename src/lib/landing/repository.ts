@@ -1,5 +1,6 @@
 import { serviceClient } from "@/lib/supabase/server";
 import type { LandingPageContent } from "./content";
+import { upgradeContent } from "./upgrade";
 import type {
   LandingPage,
   LandingPageStatus,
@@ -12,6 +13,12 @@ import type { VariantKey } from "./winner";
 // bypassed like the other post-0012 modules). The public /go page reads a LIVE
 // page via getLivePageBySlug (or any-status for a token preview); the owner UI
 // and API go through the guarded list/detail/mutation helpers.
+//
+// SCHEMA UPGRADE AT READ TIME: stored variant content may be schema v1 (rows
+// created before the full conversion-page template, e.g. the seeded demo). Every
+// variant read maps its content through upgradeContent (pure, idempotent) using
+// the page's treatment key, so the rest of the app only ever sees v2. No DB
+// migration; old rows keep rendering with their own generated copy preserved.
 
 /** (client_id, slug) already exists. The API maps this to 409. */
 export class SlugTakenError extends Error {
@@ -65,12 +72,13 @@ function rowToPage(r: PageRow): LandingPage {
   };
 }
 
-function rowToVariant(r: VariantRow): LandingPageVariant {
+function rowToVariant(r: VariantRow, treatmentKey: string): LandingPageVariant {
   return {
     id: r.id,
     pageId: r.page_id,
     variantKey: r.variant_key === "b" ? "b" : "a",
-    content: r.content as LandingPageContent,
+    // v1 rows are upgraded to v2 here (pure, idempotent for v2 input).
+    content: upgradeContent(r.content, treatmentKey),
     status: r.status === "retired" ? "retired" : "active",
     createdAt: r.created_at,
   };
@@ -126,11 +134,11 @@ export async function insertPageWithVariants(input: InsertPageInput): Promise<La
     throw variantErr;
   }
 
-  const variants = (variantData as VariantRow[]).map(rowToVariant);
+  const variants = (variantData as VariantRow[]).map((r) => rowToVariant(r, page.treatment));
   return { page, variants };
 }
 
-async function variantsForPage(pageId: string): Promise<LandingPageVariant[]> {
+async function variantsForPage(pageId: string, treatmentKey: string): Promise<LandingPageVariant[]> {
   const db = serviceClient();
   const { data, error } = await db
     .from("landing_page_variant")
@@ -138,7 +146,7 @@ async function variantsForPage(pageId: string): Promise<LandingPageVariant[]> {
     .eq("page_id", pageId)
     .order("variant_key", { ascending: true });
   if (error) throw error;
-  return (data as VariantRow[]).map(rowToVariant);
+  return (data as VariantRow[]).map((r) => rowToVariant(r, treatmentKey));
 }
 
 async function pageBySlug(clientId: string, slug: string): Promise<LandingPage | null> {
@@ -160,7 +168,7 @@ export async function getPageBySlug(
 ): Promise<LandingPageWithVariants | null> {
   const page = await pageBySlug(clientId, slug);
   if (!page) return null;
-  return { page, variants: await variantsForPage(page.id) };
+  return { page, variants: await variantsForPage(page.id, page.treatment) };
 }
 
 /** A LIVE page by (client, slug) with its variants, or null. The public 404 path. */
@@ -187,7 +195,7 @@ export async function getPageById(
   if (error) throw error;
   if (!data) return null;
   const page = rowToPage(data as PageRow);
-  return { page, variants: await variantsForPage(page.id) };
+  return { page, variants: await variantsForPage(page.id, page.treatment) };
 }
 
 export async function listPages(clientId: string): Promise<LandingPage[]> {

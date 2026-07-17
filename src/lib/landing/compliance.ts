@@ -1,4 +1,4 @@
-// Deterministic COMPLIANCE lint for a landing-page content variant.
+// Deterministic COMPLIANCE lint for a landing-page content variant (schema v2).
 //
 // This is the hard, code-level gate that runs on every generated variant BEFORE
 // it can be stored as usable. It mirrors the conversational agent's output
@@ -6,12 +6,17 @@
 // compliant, but only a deterministic scanner can GUARANTEE that no banned
 // pattern reaches a public, paid ad-destination page.
 //
-// Two layers:
+// Three layers:
 //   1. Banned patterns  - UK GDC/ASA-sensitive wording a dental page must never
 //      carry: testimonials/review language, guarantees, pain-free claims,
 //      superlatives ("best", "No 1"), NHS/private/plan/band/funding words, and
 //      the house-style symbol bans (em/en-dash, dollar sign).
-//   2. Price cross-check - every advertised "from" price MUST exactly match the
+//   2. Proof claims     - ratings, review counts, star language, awards and
+//      press mentions ("as seen in") are OWNER-VERIFIED facts that render only
+//      from practice configuration (PracticeFacts), NEVER from generated copy.
+//      Any such wording inside content is rejected outright: there is no
+//      legitimate way for the model to know these numbers/names.
+//   3. Price cross-check - every advertised "from" price MUST exactly match the
 //      practice's real catalogue price for that treatment. Invented prices are
 //      the single highest-risk failure mode, so the real price list is injected
 //      and enforced here rather than trusted from the model.
@@ -28,6 +33,7 @@ export type LintCategory =
   | "superlative"
   | "funding"
   | "symbol"
+  | "proof"
   | "price";
 
 export interface LintFailure {
@@ -111,6 +117,23 @@ const SYMBOL_PATTERNS: RegExp[] = [
   /\$/, // dollar sign (GBP only)
 ];
 
+// --- Proof claims: owner-verified facts only, never generated. ---------------
+// Ratings/review-count/star language is largely covered by TESTIMONIAL_PATTERNS;
+// this category adds awards, press and numeric-rating shapes. The renderer's
+// proof row reads ONLY from PracticeFacts (practice configuration), so ANY
+// occurrence inside generated content is an invented claim and is rejected.
+const PROOF_PATTERNS: RegExp[] = [
+  /\baward(?:s|ed)?[ -]?(?:winning)?\b/i,
+  /\bas seen in\b/i,
+  /\bfeatured in\b/i,
+  /\bas featured\b/i,
+  /\bin the press\b/i,
+  /\bvoted\b/i,
+  /\baccredited by\b/i,
+  /\b\d(?:\.\d)?\s*(?:\/|out of)\s*5\b/i, // "4.9/5", "4.8 out of 5"
+  /\b\d[\d,]*\+?\s*(?:happy|satisfied)\s+patients\b/i, // "10,000 happy patients"
+];
+
 const BANNED: { category: Exclude<LintCategory, "price">; patterns: RegExp[] }[] = [
   { category: "testimonial", patterns: TESTIMONIAL_PATTERNS },
   { category: "guarantee", patterns: GUARANTEE_PATTERNS },
@@ -118,19 +141,43 @@ const BANNED: { category: Exclude<LintCategory, "price">; patterns: RegExp[] }[]
   { category: "superlative", patterns: SUPERLATIVE_PATTERNS },
   { category: "funding", patterns: FUNDING_PATTERNS },
   { category: "symbol", patterns: SYMBOL_PATTERNS },
+  { category: "proof", patterns: PROOF_PATTERNS },
 ];
 
-/** Flatten a content object into (field-path, text) pairs for scanning. */
+/** Flatten a v2 content object into (field-path, text) pairs for scanning. */
 function textFields(content: LandingPageContent): { where: string; text: string }[] {
   const out: { where: string; text: string }[] = [
+    { where: "hero.eyebrow", text: content.hero.eyebrow },
     { where: "hero.headline", text: content.hero.headline },
+    { where: "hero.headlineAccent", text: content.hero.headlineAccent },
     { where: "hero.subhead", text: content.hero.subhead },
+    { where: "painPoints.reassurance", text: content.painPoints.reassurance },
+    { where: "about.body", text: content.about.body },
+    { where: "suitability.heading", text: content.suitability.heading },
     { where: "pricing.caveat", text: content.pricing.caveat },
     { where: "cta.label", text: content.cta.label },
   ];
+  content.hero.checklist.forEach((c, i) => {
+    out.push({ where: `hero.checklist[${i}]`, text: c });
+  });
   content.benefits.forEach((b, i) => {
     out.push({ where: `benefits[${i}].title`, text: b.title });
     out.push({ where: `benefits[${i}].detail`, text: b.detail });
+  });
+  content.painPoints.items.forEach((p, i) => {
+    out.push({ where: `painPoints.items[${i}].title`, text: p.title });
+    out.push({ where: `painPoints.items[${i}].body`, text: p.body });
+  });
+  content.about.keyFacts.forEach((f, i) => {
+    out.push({ where: `about.keyFacts[${i}]`, text: f });
+  });
+  content.howItWorks.steps.forEach((s, i) => {
+    out.push({ where: `howItWorks.steps[${i}].title`, text: s.title });
+    out.push({ where: `howItWorks.steps[${i}].body`, text: s.body });
+  });
+  content.suitability.items.forEach((s, i) => {
+    out.push({ where: `suitability.items[${i}].title`, text: s.title });
+    out.push({ where: `suitability.items[${i}].body`, text: s.body });
   });
   content.pricing.lines.forEach((l, i) => {
     out.push({ where: `pricing.lines[${i}].treatment`, text: l.treatment });
@@ -139,6 +186,9 @@ function textFields(content: LandingPageContent): { where: string; text: string 
     out.push({ where: `faqs[${i}].q`, text: f.q });
     out.push({ where: `faqs[${i}].a`, text: f.a });
   });
+  if (content.showcase3d) {
+    out.push({ where: "showcase3d.caption", text: content.showcase3d.caption });
+  }
   return out;
 }
 
@@ -168,7 +218,7 @@ export function lintContent(content: LandingPageContent, opts: LintOptions = {})
   const resolvePrice = opts.resolvePrice ?? catalogPriceResolver;
   const failures: LintFailure[] = [];
 
-  // 1. Banned patterns across every text field.
+  // 1 + 2. Banned patterns (including proof claims) across every text field.
   for (const { where, text } of textFields(content)) {
     if (!text) continue;
     for (const { category, patterns } of BANNED) {
@@ -179,7 +229,7 @@ export function lintContent(content: LandingPageContent, opts: LintOptions = {})
     }
   }
 
-  // 2. Price cross-check: every "from" price must exactly match the real price.
+  // 3. Price cross-check: every "from" price must exactly match the real price.
   content.pricing.lines.forEach((line, i) => {
     const real = resolvePrice(line.treatment);
     if (real === null) {

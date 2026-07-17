@@ -4,10 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { trackLandingEvent, newSessionId } from "@/lib/landing/track";
 import type { VariantKey } from "@/lib/landing/winner";
 
-// Client wrapper around the (server-rendered) landing content. It owns the two
-// side effects the pure content renderer deliberately does not:
+// Client wrapper around the (server-rendered) landing content. It owns the side
+// effects the pure content renderer deliberately does not:
 //   1. fires the 'viewed' event on mount and wires 'cta_clicked' on the CTA,
-//   2. persists the sticky variant cookie when this was a fresh 50/50 assignment.
+//   2. persists the sticky variant cookie when this was a fresh 50/50 assignment,
+//   3. fires one PII-free scroll-depth event per page section ('section_<name>')
+//      the first time it becomes meaningfully visible, via IntersectionObserver
+//      over the renderer's [data-lp-section] markers. The funnel-event contract
+//      accepts arbitrary step strings, and the A/B counters aggregation only
+//      counts viewed/cta_clicked/lead, so these extra steps enrich the drop-off
+//      view without touching the split-test numbers.
 //
 // Keeping these here (not in LandingContent) is what lets LandingContent stay a
 // pure, function-prop-free component that renders on the server. All analytics go
@@ -53,6 +59,39 @@ export function LandingTracker({ clientSlug, landingSlug, variant, cookie, child
     const ctas = Array.from(root.querySelectorAll<HTMLElement>("[data-lp-cta]"));
     ctas.forEach((el) => el.addEventListener("click", onClick));
     return () => ctas.forEach((el) => el.removeEventListener("click", onClick));
+  }, [clientSlug, landingSlug, variant, sessionId]);
+
+  // Per-section scroll depth: fire 'section_<name>' ONCE per section per mount
+  // when ~30% of it enters the viewport. Section names come from the renderer's
+  // static data-lp-section attributes (safe snake_case labels, never user or
+  // model data), so events stay PII-free scalars. No-op where the API is absent.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || typeof IntersectionObserver === "undefined") return;
+    const sections = Array.from(root.querySelectorAll<HTMLElement>("[data-lp-section]"));
+    if (sections.length === 0) return;
+    const seen = new Set<string>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const name = (entry.target as HTMLElement).dataset.lpSection;
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          trackLandingEvent({
+            clientSlug,
+            landingSlug,
+            variant,
+            step: `section_${name}`,
+            sessionId,
+          });
+          observer.unobserve(entry.target);
+        }
+      },
+      { threshold: 0.3 },
+    );
+    sections.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
   }, [clientSlug, landingSlug, variant, sessionId]);
 
   return <div ref={containerRef}>{children}</div>;
