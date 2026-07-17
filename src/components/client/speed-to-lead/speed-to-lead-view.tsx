@@ -68,17 +68,17 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
       <PageHeader
         title="Leads"
         description="Every enquiry in one place, with where it came from. Qualified leads are texted within seconds; close-to-qualified ones are listed for the team to nurture."
+        stats={
+          <>
+            <StatCard label="New" value={newLeads.length} dot="bg-status-amber" />
+            <StatCard label="Contacted" value={contacted.length} dot="bg-status-blue" />
+            <StatCard label="Booked" value={booked.length} dot="bg-status-green" />
+            <StatCard label="Median response" value={medianResponseLabel(leads)} dot="bg-status-blue" />
+          </>
+        }
       />
 
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="New" value={newLeads.length} dot="bg-status-amber" hint="Awaiting first contact" />
-        <StatCard label="Contacted" value={contacted.length} dot="bg-status-blue" hint="First reply sent, in conversation" />
-        <StatCard label="Booked" value={booked.length} dot="bg-status-green" hint="Enquiry turned into a booking" />
-        <StatCard label="Median response" value={medianResponseLabel(leads)} dot="bg-status-blue" hint="Enquiry to first contact" />
-      </div>
-
       <Tabs
-        className="mt-5"
         tabs={[
           {
             key: "qualified",

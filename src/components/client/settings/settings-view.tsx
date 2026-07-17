@@ -268,34 +268,31 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
       <PageHeader
         title="Settings"
         description="Your integrations, messaging mode and go-live checklist in one place."
+        stats={
+          <>
+            <StatCard
+              label="Integrations connected"
+              value={`${connectedCount} of ${totalIntegrations}`}
+              dot="bg-status-blue"
+            />
+            <StatCard
+              label="Messaging mode"
+              value={dryRun ? "Test" : "Live"}
+              dot={dryRun ? "bg-status-amber" : "bg-status-green"}
+            />
+            <StatCard
+              label="Authentication"
+              value={authOn ? "Enforced" : "Pilot"}
+              dot={authOn ? "bg-status-green" : "bg-status-amber"}
+            />
+            <StatCard
+              label="Go-live checklist"
+              value={`${checklistDone} of ${checklist.length}`}
+              dot={checklistDone === checklist.length ? "bg-status-green" : "bg-status-amber"}
+            />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Integrations connected"
-          value={`${connectedCount} of ${totalIntegrations}`}
-          dot="bg-status-blue"
-          hint={`${totalIntegrations - connectedCount} still to connect`}
-        />
-        <StatCard
-          label="Messaging mode"
-          value={dryRun ? "Test" : "Live"}
-          dot={dryRun ? "bg-status-amber" : "bg-status-green"}
-          hint={dryRun ? "Recorded, not delivered" : "Messages are delivered"}
-        />
-        <StatCard
-          label="Authentication"
-          value={authOn ? "Enforced" : "Pilot"}
-          dot={authOn ? "bg-status-green" : "bg-status-amber"}
-          hint={authOn ? "Sign-in required" : "Open until go-live"}
-        />
-        <StatCard
-          label="Go-live checklist"
-          value={`${checklistDone} of ${checklist.length}`}
-          dot={checklistDone === checklist.length ? "bg-status-green" : "bg-status-amber"}
-          hint={checklistDone === checklist.length ? "Ready to go live" : "Items outstanding"}
-        />
-      </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <SectionCard

@@ -34,45 +34,41 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
       <PageHeader
         title="Notifications"
         description="The alerts that need attention now, pulled from compliance, no-shows, onboarding and new enquiries."
+        stats={
+          <>
+            <StatCard
+              label="High priority"
+              value={highCount}
+              dot="bg-status-red"
+            />
+            <StatCard label="Total" value={items.length} dot="bg-status-blue" />
+            <StatCard
+              label="Compliance"
+              value={byType.compliance ?? 0}
+              dot="bg-status-blue"
+            />
+            <StatCard
+              label="No-show risk"
+              value={byType.no_show ?? 0}
+              dot="bg-status-amber"
+            />
+            {(byType.lead ?? 0) > 0 ? (
+              <StatCard
+                label="New enquiries"
+                value={byType.lead ?? 0}
+                dot="bg-status-green"
+              />
+            ) : null}
+            {(byType.onboarding ?? 0) > 0 ? (
+              <StatCard
+                label="Onboarding"
+                value={byType.onboarding ?? 0}
+                dot="bg-status-amber"
+              />
+            ) : null}
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="High priority"
-          value={highCount}
-          dot="bg-status-red"
-          hint="Needs action now"
-        />
-        <StatCard label="Total" value={items.length} dot="bg-status-blue" hint="Across all sources" />
-        <StatCard
-          label="Compliance"
-          value={byType.compliance ?? 0}
-          dot="bg-status-blue"
-          hint="Audits, policies, training"
-        />
-        <StatCard
-          label="No-show risk"
-          value={byType.no_show ?? 0}
-          dot="bg-status-amber"
-          hint="High-risk appointments"
-        />
-        {(byType.lead ?? 0) > 0 ? (
-          <StatCard
-            label="New enquiries"
-            value={byType.lead ?? 0}
-            dot="bg-status-green"
-            hint="High-intent, to contact"
-          />
-        ) : null}
-        {(byType.onboarding ?? 0) > 0 ? (
-          <StatCard
-            label="Onboarding"
-            value={byType.onboarding ?? 0}
-            dot="bg-status-amber"
-            hint="Submissions to review"
-          />
-        ) : null}
-      </div>
 
       <NotificationsList items={items} />
     </>

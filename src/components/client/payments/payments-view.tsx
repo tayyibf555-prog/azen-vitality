@@ -63,13 +63,14 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
       <PageHeader
         title="Payments"
         description="Outstanding balances owed on unpaid invoices, live from Dentally. Ranked by what is owed."
+        stats={
+          <>
+            <StatCard label="Outstanding" value={gbp(totalOutstanding)} dot="bg-status-amber" />
+            <StatCard label="Patients" value={patientCount} dot="bg-status-blue" />
+            <StatCard label="Largest balance" value={gbp(largestBalance)} dot="bg-status-amber" />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="Outstanding" value={gbp(totalOutstanding)} dot="bg-status-amber" hint="Total owed" />
-        <StatCard label="Patients" value={patientCount} dot="bg-status-blue" hint="With a balance" />
-        <StatCard label="Largest balance" value={gbp(largestBalance)} dot="bg-status-amber" hint="Single account" />
-      </div>
 
       <SectionCard title="Outstanding balances" description="Highest owed first." bodyClassName="p-0">
         {rows.length === 0 ? (

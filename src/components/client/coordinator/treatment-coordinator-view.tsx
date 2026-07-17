@@ -57,37 +57,33 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
   return (
     <>
       <PageHeader
-        hero
         title="Treatment Coordinator"
         description="Recover accepted but incomplete treatment, ranked so the highest impact patient is always at the top."
+        stats={
+          <>
+            <StatCard
+              label="Recoverable value"
+              value={gbp(totalRecoverable)}
+              dot="bg-status-amber"
+            />
+            <StatCard
+              label="Open opportunities"
+              value={open.length}
+              dot="bg-status-blue"
+            />
+            <StatCard
+              label="Recovered to date"
+              value={gbp(recoveredToDate)}
+              dot="bg-status-green"
+            />
+            <StatCard
+              label="Average days stalled"
+              value={avgDaysStalled}
+              dot="bg-status-red"
+            />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Recoverable value"
-          value={gbp(totalRecoverable)}
-          dot="bg-status-amber"
-          hint="Outstanding across open plans"
-        />
-        <StatCard
-          label="Open opportunities"
-          value={open.length}
-          dot="bg-status-blue"
-          hint="Plans not yet completed"
-        />
-        <StatCard
-          label="Recovered to date"
-          value={gbp(recoveredToDate)}
-          dot="bg-status-green"
-          hint="Completed plan value"
-        />
-        <StatCard
-          label="Average days stalled"
-          value={avgDaysStalled}
-          dot="bg-status-red"
-          hint="Across stalled plans"
-        />
-      </div>
 
       {opportunities.length === 0 ? (
         <EmptyState

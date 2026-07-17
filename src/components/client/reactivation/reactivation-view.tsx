@@ -41,29 +41,36 @@ export async function ReactivationView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
-        hero
         title="Reactivation"
         description="Dormant patients ranked by recoverable value and worked through a multi step cadence, with replies picked up by the AI Booking Agent."
+        stats={
+          <>
+            <StatCard label="Dormant patients" value={dormant.length} dot="bg-status-blue" />
+            <StatCard label="Recoverable value" value={gbp(totalRecoverable)} dot="bg-status-amber" />
+            <StatCard label="In cadence" value={inCadence.length} dot="bg-status-blue" />
+            <StatCard label="Re-engaged" value={converted.length} dot="bg-status-green" />
+          </>
+        }
       />
 
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="Dormant patients" value={dormant.length} dot="bg-status-blue" hint="Open across all cohorts" />
-        <StatCard label="Recoverable value" value={gbp(totalRecoverable)} dot="bg-status-amber" hint="Across dormant patients" />
-        <StatCard label="In cadence" value={inCadence.length} dot="bg-status-blue" hint="Active outreach sequences" />
-        <StatCard label="Re-engaged" value={converted.length} dot="bg-status-green" hint="Booked back in" />
+      {/* Two-zone: the worklist takes the wide column, the owner's daily-cap
+          setting sits in the rail (stacks below on narrow widths). */}
+      <div className="grid items-start gap-x-11 gap-y-8 lg:grid-cols-[minmax(0,1fr)_288px]">
+        <div className="min-w-0">
+          {targets.length === 0 ? (
+            <EmptyState
+              icon={RotateCcw}
+              title="No dormant patients synced yet"
+              description="Run the reactivation sync to pull lapsed patients, overdue recalls and stalled plans into this worklist. This view is mock safe, so it stays empty until real data lands."
+            />
+          ) : (
+            <Worklist targets={targets} cadences={cadences} nowIso={new Date().toISOString()} />
+          )}
+        </div>
+        <aside className="space-y-7">
+          <DailyLimitCard clientSlug={clientSlug} />
+        </aside>
       </div>
-
-      <DailyLimitCard clientSlug={clientSlug} />
-
-      {targets.length === 0 ? (
-        <EmptyState
-          icon={RotateCcw}
-          title="No dormant patients synced yet"
-          description="Run the reactivation sync to pull lapsed patients, overdue recalls and stalled plans into this worklist. This view is mock safe, so it stays empty until real data lands."
-        />
-      ) : (
-        <Worklist targets={targets} cadences={cadences} nowIso={new Date().toISOString()} />
-      )}
     </>
   );
 }

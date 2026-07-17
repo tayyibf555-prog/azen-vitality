@@ -326,13 +326,23 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
   }
 
   const doneCount = ALL_ITEMS.filter((i) => checked[i.key]).length;
-  const fraction = TOTAL_ITEMS ? doneCount / TOTAL_ITEMS : 0;
 
   return (
     <>
       <PageHeader
         title="Getting started"
         description="Your go-live checklist. The platform, your data and every feature are already built and running, in read and review mode. This short list is only what we need from the practice to go fully live. Tick items off as you send them, the whole team shares the same list."
+        stats={
+          <>
+            <StatCard
+              label="Ticked off"
+              value={`${doneCount} / ${TOTAL_ITEMS}`}
+              dot={doneCount === TOTAL_ITEMS ? "bg-status-green" : "bg-status-blue"}
+            />
+            <StatCard label="Go-live gates" value={GATE_COUNT} dot="bg-status-amber" />
+            <StatCard label="Platform" value="Built" dot="bg-status-green" />
+          </>
+        }
       />
 
       <SectionCard bodyClassName="p-5">
@@ -352,22 +362,6 @@ export function GettingStartedView({ clientSlug }: { clientSlug: string }) {
           ))}
         </div>
       </SectionCard>
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          emphasis
-          label="Ticked off"
-          value={`${doneCount} / ${TOTAL_ITEMS}`}
-          dot={doneCount === TOTAL_ITEMS ? "bg-status-green" : "bg-status-blue"}
-          hint={
-            doneCount === TOTAL_ITEMS
-              ? "All items done"
-              : `${Math.round(fraction * 100)}% complete, items you have sent`
-          }
-        />
-        <StatCard label="Go-live gates" value={GATE_COUNT} dot="bg-status-amber" hint="Block messaging until cleared" />
-        <StatCard label="Platform" value="Built" dot="bg-status-green" hint="Data and features already live" />
-      </div>
 
       {SECTIONS.map((section) => (
         <SectionCard

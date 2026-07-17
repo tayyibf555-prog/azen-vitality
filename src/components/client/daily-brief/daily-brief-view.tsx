@@ -148,34 +148,34 @@ export async function DailyBriefView({ clientSlug }: { clientSlug: string }) {
 
   return (
     <>
-      <PageHeader title="Daily brief" description={`${longDate(now)}. ${greeting}`} />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Appointments today"
-          value={brief.appointmentsToday}
-          dot="bg-status-blue"
-          hint={scope.isAllSites ? "Across your sites" : scope.siteName ?? undefined}
-        />
-        <StatCard
-          label="To confirm"
-          value={noshowLine?.count ?? 0}
-          dot="bg-status-amber"
-          hint="High no-show risk"
-        />
-        <StatCard
-          label="Overnight"
-          value={overnightLine?.count ?? 0}
-          dot="bg-status-red"
-          hint="Missed after hours"
-        />
-        <StatCard
-          label="Outstanding"
-          value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)}
-          dot="bg-status-green"
-          hint="Owed across plans"
-        />
-      </div>
+      <PageHeader
+        title="Daily brief"
+        description={`${longDate(now)}. ${greeting}`}
+        stats={
+          <>
+            <StatCard
+              label="Appointments today"
+              value={brief.appointmentsToday}
+              dot="bg-status-blue"
+            />
+            <StatCard
+              label="To confirm"
+              value={noshowLine?.count ?? 0}
+              dot="bg-status-amber"
+            />
+            <StatCard
+              label="Overnight"
+              value={overnightLine?.count ?? 0}
+              dot="bg-status-red"
+            />
+            <StatCard
+              label="Outstanding"
+              value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)}
+              dot="bg-status-green"
+            />
+          </>
+        }
+      />
 
       {brief.sections.length === 0 ? (
         <EmptyState

@@ -39,17 +39,17 @@ export async function NoshowView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
-        hero
         title="No-show defence"
         description="Confirms appointments, scores no-show risk, and auto-fills cancellations from the waitlist."
+        stats={
+          <>
+            <StatCard label="Upcoming" value={upcoming.length} dot="bg-status-blue" />
+            <StatCard label="Confirmed" value={confirmed.length} dot="bg-status-green" />
+            <StatCard label="High risk" value={atRisk.length} dot="bg-status-red" />
+            <StatCard label="Waitlist" value={waiting.length} dot="bg-status-amber" />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="Upcoming" value={upcoming.length} dot="bg-status-blue" hint="Awaiting confirmation" />
-        <StatCard label="Confirmed" value={confirmed.length} dot="bg-status-green" hint="Patient confirmed" />
-        <StatCard label="High risk" value={atRisk.length} dot="bg-status-red" hint="Most likely to no-show" />
-        <StatCard label="Waitlist" value={waiting.length} dot="bg-status-amber" hint="Ready to fill a gap" />
-      </div>
 
       <NoshowTabs targets={targets} waitlist={waitlist} nowIso={nowIso} />
     </>

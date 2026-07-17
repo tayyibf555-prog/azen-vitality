@@ -51,24 +51,23 @@ export async function AgentView({ clientSlug, channel }: { clientSlug: string; c
             ? "Two way WhatsApp agent that books, reschedules and cancels for known patients, and hands clinical questions to your team. Live across every site."
             : "Two way SMS agent that books, reschedules and cancels for known patients, and hands clinical questions to your team. Live across every site."
         }
+        stats={
+          <>
+            <StatCard
+              label="Status"
+              value={allEnabled ? "Running" : "Paused"}
+              dot={allEnabled ? "bg-status-green" : "bg-status-amber"}
+            />
+            <StatCard label="Conversations" value={analytics.total} dot="bg-status-blue" />
+            <StatCard label="Booked" value={analytics.booked} dot="bg-status-green" />
+            <StatCard
+              label="Needs a human"
+              value={analytics.needsHuman}
+              dot="bg-status-red"
+            />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Status"
-          value={allEnabled ? "Running" : "Paused"}
-          dot={allEnabled ? "bg-status-green" : "bg-status-amber"}
-          hint={allEnabled ? "Answering replies" : "Routing to your team"}
-        />
-        <StatCard label="Conversations" value={analytics.total} dot="bg-status-blue" hint="Patients texted" />
-        <StatCard label="Booked" value={analytics.booked} dot="bg-status-green" hint="Appointments made" />
-        <StatCard
-          label="Needs a human"
-          value={analytics.needsHuman}
-          dot="bg-status-red"
-          hint="Waiting for your team"
-        />
-      </div>
 
       <AgentControls
         siteIds={siteIds}

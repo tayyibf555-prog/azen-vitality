@@ -267,54 +267,50 @@ export function OverviewDashboard({
     })
     .filter((e) => e.breaches.length > 0);
 
+  // The KPI figures sit inside the page header on the standalone Overview, but
+  // keep their band when embedded in Home (hideHero), matching Home's own stat row.
+  const statFigures = (
+    <>
+      <StatCard
+        label="Leads in"
+        value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
+        dot="bg-status-blue"
+      />
+      <StatCard
+        label="Consultations booked"
+        value={compact(allSites ? (metrics?.consultationsBooked ?? totalBooked) : totalBooked)}
+        dot="bg-status-blue"
+      />
+      {variant === "standalone" ? (
+        <StatCard
+          label="Revenue recovered"
+          value={gbp(allSites ? (metrics?.recoveredRevenue ?? totalRevenue) : totalRevenue)}
+          dot="bg-status-green"
+        />
+      ) : null}
+      <StatCard label="Cost per booking" value={gbp(avgCostPerBooking)} dot="bg-status-amber" />
+    </>
+  );
+
   return (
     <>
       {hideHero ? null : (
         <PageHeader
-          hero
           title="Overview"
           description={
             allSites
               ? "Your cross-site view of the funnel: what came in, what was booked, and the revenue recovered."
               : `${scopedSiteName}: what came in, what was booked, and the revenue recovered.`
           }
+          stats={statFigures}
         />
       )}
 
-      {/* One section-level note covers every figure below: the KPI cards, the
-          weekly revenue chart and the by-site table are all sample until the live
-          sources connect. Kept lightweight per-card via the "Sample" hints too. */}
+      {/* One note covers every figure below: the KPI cards, weekly revenue and the
+          by-site table are all sample until the live sources connect. */}
       <SampleNote>Sample data, not yet from your live sources. These figures are for the pilot only.</SampleNote>
 
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Leads in"
-          value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
-          dot="bg-status-blue"
-          hint={`Sample · ${allSites ? "across all sites, last 30 days" : `${scopedSiteName}, last 30 days`}`}
-        />
-        <StatCard
-          label="Consultations booked"
-          value={compact(allSites ? (metrics?.consultationsBooked ?? totalBooked) : totalBooked)}
-          dot="bg-status-blue"
-          hint="Sample figure"
-        />
-        {variant === "standalone" ? (
-          <StatCard
-            emphasis
-            label="Revenue recovered"
-            value={gbp(allSites ? (metrics?.recoveredRevenue ?? totalRevenue) : totalRevenue)}
-            dot="bg-status-green"
-            hint="Sample until live data connects"
-          />
-        ) : null}
-        <StatCard
-          label="Cost per booking"
-          value={gbp(avgCostPerBooking)}
-          dot="bg-status-amber"
-          hint="Sample · blended average"
-        />
-      </div>
+      {hideHero ? <div className="flex flex-wrap gap-x-7 gap-y-4">{statFigures}</div> : null}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <SectionCard

@@ -26,27 +26,25 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
   const high = responses.filter((r) => r.band === "high");
   const medium = responses.filter((r) => r.band === "medium");
   const low = responses.filter((r) => r.band === "low");
-  // High scorers that were actually fast-tracked into Speed-to-lead.
-  const contacted = high.filter((r) => r.leadId !== null).length;
 
   return (
     <>
       <PageHeader
         title="Smile Assessment"
         description="An embeddable quiz that scores each enquiry on intent and fit, fast-tracking high scorers to contact and recording the rest for nurture."
+        stats={
+          <>
+            <StatCard label="Total" value={responses.length} dot="bg-status-blue" />
+            <StatCard
+              label="High intent"
+              value={high.length}
+              dot="bg-status-green"
+            />
+            <StatCard label="Medium" value={medium.length} dot="bg-status-amber" />
+            <StatCard label="Low" value={low.length} dot="bg-line-strong" />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="Total" value={responses.length} dot="bg-status-blue" hint="Quiz submissions" />
-        <StatCard
-          label="High intent"
-          value={high.length}
-          dot="bg-status-green"
-          hint={`${contacted} fast-tracked to contact`}
-        />
-        <StatCard label="Medium" value={medium.length} dot="bg-status-amber" hint="Worth a follow-up" />
-        <StatCard label="Low" value={low.length} dot="bg-line-strong" hint="Nurture for later" />
-      </div>
 
       <SmileAssessmentWorkspace clientSlug={clientSlug} responses={responses} nowIso={nowIso} />
     </>

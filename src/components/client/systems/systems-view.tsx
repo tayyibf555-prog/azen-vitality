@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Power } from "lucide-react";
-import { PageHeader, SectionCard } from "@/components/primitives";
+import { PageHeader, SectionCard, StatCard } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 
 // Owner-only master control panel: one on/off switch per automated system. OFF is
@@ -84,31 +84,17 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
-        hero
         title="System controls"
         description="Your master on/off for every automated system. Turning one off is a full kill switch: it hides the module and stops all of its work, so nothing sends until you switch it back on."
+        stats={
+          rows ? (
+            <>
+              <StatCard label="Systems running" value={`${running} of ${total}`} dot="bg-status-green" />
+              {offCount > 0 ? <StatCard label="Switched off" value={offCount} dot="bg-status-amber" /> : null}
+            </>
+          ) : undefined
+        }
       />
-
-      {rows ? (
-        <div className="flex flex-wrap gap-x-7 gap-y-4">
-          <div>
-            <p className="text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
-              <i aria-hidden className="mr-1.5 inline-block h-[7px] w-[7px] rounded-full bg-status-green align-[2px]" />
-              {running} of {total}
-            </p>
-            <p className="mt-0.5 text-[11px] font-medium text-muted">Systems running</p>
-          </div>
-          {offCount > 0 ? (
-            <div>
-              <p className="text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
-                <i aria-hidden className="mr-1.5 inline-block h-[7px] w-[7px] rounded-full bg-status-amber align-[2px]" />
-                {offCount}
-              </p>
-              <p className="mt-0.5 text-[11px] font-medium text-muted">Switched off</p>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
 
       {rowError ? (
         <p className="rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">{rowError}</p>

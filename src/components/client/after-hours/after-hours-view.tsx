@@ -43,17 +43,17 @@ export async function AfterHoursView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
-        hero
         title="After-hours capture"
         description="Answers missed and overflow calls out of hours, follows up by text, and logs every one into a worklist the team clears in the morning."
+        stats={
+          <>
+            <StatCard label="New" value={newCount} dot="bg-status-amber" />
+            <StatCard label="Followed up" value={followedUp} dot="bg-status-blue" />
+            <StatCard label="Booked" value={booked} dot="bg-status-green" />
+            <StatCard label="Today" value={today} dot="bg-status-blue" />
+          </>
+        }
       />
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="New" value={newCount} dot="bg-status-amber" hint="Awaiting a follow-up" />
-        <StatCard label="Followed up" value={followedUp} dot="bg-status-blue" hint="Team reached back out" />
-        <StatCard label="Booked" value={booked} dot="bg-status-green" hint="Turned into an appointment" />
-        <StatCard label="Today" value={today} dot="bg-status-blue" hint="Captured today" />
-      </div>
 
       {captures.length === 0 ? (
         <EmptyState

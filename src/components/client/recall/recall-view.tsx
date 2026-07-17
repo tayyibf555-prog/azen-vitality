@@ -1,6 +1,7 @@
 import { CalendarClock } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
 import { Worklist } from "@/components/client/recall/worklist";
+import { RecallRail } from "@/components/client/recall/recall-rail";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listTargets, listCadences } from "@/lib/recall/repository";
@@ -40,27 +41,34 @@ export async function RecallView({ clientSlug }: { clientSlug: string }) {
   return (
     <>
       <PageHeader
-        hero
         title="Recall concierge"
         description="Books patients back in before their recall lapses, on an SMS and email cadence with consent respected."
+        stats={
+          <>
+            <StatCard label="Due soon" value={dueSoon.length} dot="bg-status-amber" />
+            <StatCard label="Overdue" value={overdue.length} dot="bg-status-red" />
+            <StatCard label="In cadence" value={inCadence.length} dot="bg-status-blue" />
+            <StatCard label="Booked back" value={booked.length} dot="bg-status-green" />
+          </>
+        }
       />
 
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard label="Due soon" value={dueSoon.length} dot="bg-status-amber" hint="Within the lead window" />
-        <StatCard label="Overdue" value={overdue.length} dot="bg-status-red" hint="Past due, inside the recall window" />
-        <StatCard label="In cadence" value={inCadence.length} dot="bg-status-blue" hint="Active outreach sequences" />
-        <StatCard label="Booked back" value={booked.length} dot="bg-status-green" hint="Recalls booked in" />
+      {/* Two-zone: the worklist takes the wide column, the cadence explainer sits
+          in the rail (stacks below on narrow widths). */}
+      <div className="grid items-start gap-x-11 gap-y-8 lg:grid-cols-[minmax(0,1fr)_288px]">
+        <div className="min-w-0">
+          {targets.length === 0 ? (
+            <EmptyState
+              icon={CalendarClock}
+              title="No recalls due yet"
+              description="Run the recall sync to pull due and overdue recall dates from Dentally into this worklist. This view is mock safe, so it stays empty until data lands."
+            />
+          ) : (
+            <Worklist targets={targets} cadences={cadences} nowIso={new Date().toISOString()} />
+          )}
+        </div>
+        <RecallRail />
       </div>
-
-      {targets.length === 0 ? (
-        <EmptyState
-          icon={CalendarClock}
-          title="No recalls due yet"
-          description="Run the recall sync to pull due and overdue recall dates from Dentally into this worklist. This view is mock safe, so it stays empty until data lands."
-        />
-      ) : (
-        <Worklist targets={targets} cadences={cadences} nowIso={new Date().toISOString()} />
-      )}
     </>
   );
 }

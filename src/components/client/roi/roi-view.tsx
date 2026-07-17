@@ -38,39 +38,36 @@ export async function RoiView({ clientSlug }: { clientSlug: string }) {
       <PageHeader
         title="ROI"
         description="How your patient-acquisition spend turns into booked patients and treatment revenue across every channel."
+        stats={
+          <>
+            <StatCard
+              label="Ad spend (30 days)"
+              value={money(s.spendGbp)}
+              dot="bg-status-amber"
+            />
+            <StatCard
+              label="New patients"
+              value={count(s.newPatients)}
+              dot="bg-status-blue"
+            />
+            <StatCard
+              label="Cost per new patient"
+              value={money(s.costPerAcquisitionGbp, true)}
+              dot="bg-status-blue"
+            />
+            <StatCard
+              label="Attributed revenue"
+              value={money(s.revenueGbp)}
+              dot="bg-status-green"
+            />
+          </>
+        }
       />
 
       {/* Whole section is sample: spend, cost per patient, attributed revenue, the
           multiplier, funnel, growth trend and channel breakdown all come from the
           mock until Meta and Dentally connect. One banner covers it. */}
       <SampleNote>Sample data, not yet from your live sources. Every figure on this page is a pilot estimate until your Meta and Dentally accounts connect.</SampleNote>
-
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Ad spend (30 days)"
-          value={money(s.spendGbp)}
-          dot="bg-status-amber"
-          hint="Across every paid channel"
-        />
-        <StatCard
-          label="New patients"
-          value={count(s.newPatients)}
-          dot="bg-status-blue"
-          hint={`From ${count(s.leads)} enquiries`}
-        />
-        <StatCard
-          label="Cost per new patient"
-          value={money(s.costPerAcquisitionGbp, true)}
-          dot="bg-status-blue"
-          hint="Spend divided by new patients"
-        />
-        <StatCard
-          label="Attributed revenue"
-          value={money(s.revenueGbp)}
-          dot="bg-status-green"
-          hint={`${s.returnX.toFixed(1)}x on spend`}
-        />
-      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <AcquisitionFunnel stages={s.funnel} />
