@@ -206,3 +206,36 @@ export function lintContent(content: LandingPageContent, opts: LintOptions = {})
 export function describeFailures(failures: LintFailure[]): string {
   return failures.map((f) => `- [${f.category}] ${f.where}: ${f.matched}`).join("\n");
 }
+
+/** A single banned-pattern hit in a free-text scan (no price/field context). */
+export interface BannedTextHit {
+  category: Exclude<LintCategory, "price">;
+  /** The offending phrase, as matched. */
+  matched: string;
+}
+
+/**
+ * Scan arbitrary free text against the SAME banned-pattern lists the landing lint
+ * uses (testimonials, guarantees, pain-free claims, superlatives, funding wording,
+ * banned symbols). No price cross-check (that needs field/structure context).
+ *
+ * This is the single source of truth for "which words are non-compliant for a UK
+ * dental practice", reused by the creative-analysis compliance watch-outs so a
+ * competitor's ad copy is scanned with exactly the same rules as our own pages.
+ * Returns at most one hit per category (the first match) so callers can raise one
+ * clear watch-out per issue.
+ */
+export function scanBannedText(text: string): BannedTextHit[] {
+  const hits: BannedTextHit[] = [];
+  if (!text) return hits;
+  for (const { category, patterns } of BANNED) {
+    for (const re of patterns) {
+      const m = re.exec(text);
+      if (m) {
+        hits.push({ category, matched: m[0] });
+        break; // one hit per category is enough for a watch-out
+      }
+    }
+  }
+  return hits;
+}

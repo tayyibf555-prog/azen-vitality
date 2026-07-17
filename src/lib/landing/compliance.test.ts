@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { lintContent, type PriceResolver } from "./compliance";
+import { lintContent, scanBannedText, type PriceResolver } from "./compliance";
 import { validateContent, type LandingPageContent } from "./content";
 import { getDefaultContent, DEFAULT_TREATMENT_KEYS } from "./defaults";
 
@@ -95,5 +95,20 @@ describe("lintContent", () => {
       const res = lintContent(content as LandingPageContent);
       expect(res.ok, `lint ${key}: ${JSON.stringify(res.failures)}`).toBe(true);
     }
+  });
+});
+
+describe("scanBannedText (reusable free-text scanner)", () => {
+  it("flags each banned category in arbitrary text", () => {
+    expect(scanBannedText("what our patients say").some((h) => h.category === "testimonial")).toBe(true);
+    expect(scanBannedText("we guarantee results").some((h) => h.category === "guarantee")).toBe(true);
+    expect(scanBannedText("a pain-free visit").some((h) => h.category === "pain")).toBe(true);
+    expect(scanBannedText("the best in town").some((h) => h.category === "superlative")).toBe(true);
+  });
+
+  it("returns nothing for clean copy and at most one hit per category", () => {
+    expect(scanBannedText("Clear aligners, subject to a clinical assessment.")).toEqual([]);
+    const many = scanBannedText("best best finest leading");
+    expect(many.filter((h) => h.category === "superlative").length).toBe(1);
   });
 });
