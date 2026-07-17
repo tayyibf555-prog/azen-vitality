@@ -21,6 +21,8 @@ function lead(p: Partial<SpeedToLeadLead>): SpeedToLeadLead {
     firstResponseAt: null,
     conversationId: null,
     updatedAt: "2026-06-26T09:00:00Z",
+    nurtureStep: 0,
+    nurtureNextAt: null,
     ...p,
   };
 }

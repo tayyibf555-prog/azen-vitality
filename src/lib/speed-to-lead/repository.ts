@@ -33,6 +33,8 @@ interface LeadRow {
   first_response_at: string | null;
   conversation_id: string | null;
   updated_at: string;
+  nurture_step: number | string | null;
+  nurture_next_at: string | null;
 }
 
 interface AttemptRow {
@@ -75,6 +77,8 @@ function rowToLead(r: LeadRow): SpeedToLeadLead {
     firstResponseAt: r.first_response_at,
     conversationId: r.conversation_id,
     updatedAt: r.updated_at,
+    nurtureStep: numOrNull(r.nurture_step) ?? 0,
+    nurtureNextAt: r.nurture_next_at,
   };
 }
 
@@ -369,6 +373,90 @@ export async function findEarlierOpenLead(
     if (data) return rowToLead(data as LeadRow);
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Nurture cadence.
+// ---------------------------------------------------------------------------
+
+/**
+ * Leads DUE for a nurture touch, in two shapes merged:
+ *   - ENTRY (touch 1): stage 'contacted', never nurtured (step 0, no next_at),
+ *     whose first contact is at least the entry delay old (first_response_at <=
+ *     entryCutoffIso), so a lead that replied or was contacted only moments ago is
+ *     not yet nurtured.
+ *   - SUBSEQUENT (touch 2/3): stage 'contacted', step 1 or 2, with a scheduled
+ *     nurture_next_at that has come due (<= nowIso).
+ * Both are age-guarded (created_at >= ageCutoffIso) so a very old lead is never
+ * nurtured, ordered oldest-first, and bounded by `limit`. The caller (the sweep)
+ * owns the timing constants and passes the cutoffs, so this stays a dumb query.
+ */
+export async function listNurtureDue(args: {
+  nowIso: string;
+  entryCutoffIso: string;
+  ageCutoffIso: string;
+  limit?: number;
+}): Promise<SpeedToLeadLead[]> {
+  const db = serviceClient();
+  const limit = args.limit ?? 50;
+
+  const entry = await db
+    .from("speed_to_lead_lead")
+    .select("*")
+    .eq("stage", "contacted")
+    .eq("nurture_step", 0)
+    .is("nurture_next_at", null)
+    .not("first_response_at", "is", null)
+    .lte("first_response_at", args.entryCutoffIso)
+    .gte("created_at", args.ageCutoffIso)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (entry.error) throw entry.error;
+
+  const subsequent = await db
+    .from("speed_to_lead_lead")
+    .select("*")
+    .eq("stage", "contacted")
+    .in("nurture_step", [1, 2])
+    .not("nurture_next_at", "is", null)
+    .lte("nurture_next_at", args.nowIso)
+    .gte("created_at", args.ageCutoffIso)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (subsequent.error) throw subsequent.error;
+
+  const rows = [...(entry.data as LeadRow[]), ...(subsequent.data as LeadRow[])]
+    .map(rowToLead)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return rows.slice(0, limit);
+}
+
+/** Advance the nurture schedule: set the touches-sent count and the next-due time. */
+export async function setNurtureSchedule(
+  id: string,
+  step: number,
+  nextAt: string | null,
+): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("speed_to_lead_lead")
+    .update({ nurture_step: step, nurture_next_at: nextAt, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+/**
+ * Terminal nurture completion after the final touch: retire the lead to
+ * 'nurture_done' and clear the schedule. `NURTURE_MAX_TOUCHES` is 3; inlined here to
+ * keep the repository free of a cadence import.
+ */
+export async function markNurtureDone(id: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("speed_to_lead_lead")
+    .update({ stage: "nurture_done", nurture_step: 3, nurture_next_at: null, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
 }
 
 // ---------------------------------------------------------------------------
