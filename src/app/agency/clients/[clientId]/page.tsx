@@ -4,10 +4,6 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
-  Users,
-  CalendarCheck,
-  PoundSterling,
-  Clock,
   Plug,
   RefreshCw,
   SearchX,
@@ -19,7 +15,6 @@ import {
   StatusPill,
   EmptyState,
   DataTable,
-  ProgressMeter,
   type Column,
 } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
@@ -87,14 +82,8 @@ export default function ClientDetailPage() {
     {
       key: "recall",
       header: "Recall recovery",
-      cell: (row) => (
-        <div className="flex min-w-[112px] items-center gap-2">
-          <ProgressMeter value={row.recallRecoveryRate} className="flex-1" />
-          <span className="w-9 shrink-0 text-right text-xs font-semibold tabular-nums text-navy">
-            {pct(row.recallRecoveryRate)}
-          </span>
-        </div>
-      ),
+      align: "right",
+      cell: (row) => <span className="tabular-nums">{pct(row.recallRecoveryRate)}</span>,
     },
     {
       key: "treatment",
@@ -136,8 +125,8 @@ export default function ClientDetailPage() {
         }
       />
 
-      {/* Dentally connection (compact meta strip) */}
-      <div className="flex flex-col gap-2 rounded-xl border border-line bg-card-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* Dentally connection (quiet hairline meta strip) */}
+      <div className="flex flex-col gap-2 border-b border-line pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <span className="flex items-center gap-2 font-semibold text-navy">
             <Plug size={16} className={client.dentally.connected ? "text-success" : "text-danger"} />
@@ -160,29 +149,29 @@ export default function ClientDetailPage() {
 
       {/* Client totals */}
       {metrics ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex flex-wrap gap-x-7 gap-y-4">
           <StatCard
             label="Leads in"
             value={metrics.leadsIn.toLocaleString("en-GB")}
-            icon={Users}
+            dot="bg-status-blue"
             hint="All sites"
           />
           <StatCard
             label="Consultations booked"
             value={metrics.consultationsBooked.toLocaleString("en-GB")}
-            icon={CalendarCheck}
+            dot="bg-status-blue"
             hint="Attributed via Dentally"
           />
           <StatCard
             label="Revenue recovered"
             value={gbp(metrics.recoveredRevenue)}
-            icon={PoundSterling}
+            dot="bg-status-green"
             hint="Recall and treatment"
           />
           <StatCard
             label="Hours saved"
             value={`${metrics.hoursSaved}`}
-            icon={Clock}
+            dot="bg-status-amber"
             hint="Coordinator time automated"
           />
         </div>

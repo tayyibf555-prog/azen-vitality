@@ -3,10 +3,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  TrendingUp,
-  CalendarCheck,
-  PoundSterling,
-  Target,
   Flame,
   ListChecks,
   ShieldAlert,
@@ -19,14 +15,12 @@ import {
   SampleBadge,
   SampleNote,
   DataTable,
-  BarChart,
-  ProgressMeter,
   Tabs,
   type Column,
   type Tone,
 } from "@/components/primitives";
 import { getClient, getClientMetrics, getSite, getSiteMetrics, LEADS, NOW } from "@/lib/mock";
-import type { Lead, SiteMetrics } from "@/lib/types";
+import type { Lead, SiteMetrics, MetricPoint } from "@/lib/types";
 import { gbp, compact, relativeTime } from "@/lib/utils";
 
 // The owner's proof-of-value view: is the platform paying off, and is any site
@@ -110,12 +104,7 @@ const SITE_COLUMNS: Column<SiteMetrics>[] = [
   {
     key: "recall",
     header: "Recall recovery",
-    cell: (m) => (
-      <div className="flex items-center justify-end gap-2">
-        <ProgressMeter value={m.recallRecoveryRate} className="w-20" />
-        <span className="w-9 text-right tabular-nums">{Math.round(m.recallRecoveryRate * 100)}%</span>
-      </div>
-    ),
+    cell: (m) => <span className="tabular-nums">{Math.round(m.recallRecoveryRate * 100)}%</span>,
     align: "right",
   },
   {
@@ -138,6 +127,18 @@ const SITE_COLUMNS: Column<SiteMetrics>[] = [
     key: "revenue",
     header: "Revenue recovered",
     cell: (m) => <span className="font-semibold text-navy tabular-nums">{gbp(m.recoveredRevenue)}</span>,
+    align: "right",
+  },
+];
+
+// The weekly revenue trend as a compact hairline table (the chart is retired; the
+// numbers carry it). Week label + the recovered figure, newest last.
+const TREND_COLUMNS: Column<MetricPoint>[] = [
+  { key: "label", header: "Week", cell: (t) => <span className="text-muted">{t.label}</span> },
+  {
+    key: "value",
+    header: "Recovered",
+    cell: (t) => <span className="font-semibold tabular-nums text-navy">{gbp(t.value)}</span>,
     align: "right",
   },
 ];
@@ -236,6 +237,11 @@ export function OverviewDashboard({
   const clientRevenue = metrics?.recoveredRevenue ?? 0;
   const revenueShare = allSites || clientRevenue <= 0 ? 1 : totalRevenue / clientRevenue;
   const trend = (metrics?.trend ?? []).map((t) => ({ ...t, value: Math.round(t.value * revenueShare) }));
+  // The chart is retired; the newest week reads as a headline numeral with a
+  // plain-English delta vs the previous week, computed from the same series.
+  const latestWeek = trend.length ? trend[trend.length - 1].value : 0;
+  const prevWeek = trend.length > 1 ? trend[trend.length - 2].value : null;
+  const weekDeltaPct = prevWeek && prevWeek > 0 ? Math.round(((latestWeek - prevWeek) / prevWeek) * 100) : null;
 
   // True only while the mock fixture stands in (live fetch still loading, empty,
   // or errored): liveLeads is never set to an empty array, so null is the tell.
@@ -279,17 +285,17 @@ export function OverviewDashboard({
           sources connect. Kept lightweight per-card via the "Sample" hints too. */}
       <SampleNote>Sample data, not yet from your live sources. These figures are for the pilot only.</SampleNote>
 
-      <div className={variant === "embedded" ? "grid grid-cols-3 gap-4" : "grid grid-cols-2 gap-4 lg:grid-cols-4"}>
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Leads in"
           value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
-          icon={TrendingUp}
+          dot="bg-status-blue"
           hint={`Sample · ${allSites ? "across all sites, last 30 days" : `${scopedSiteName}, last 30 days`}`}
         />
         <StatCard
           label="Consultations booked"
           value={compact(allSites ? (metrics?.consultationsBooked ?? totalBooked) : totalBooked)}
-          icon={CalendarCheck}
+          dot="bg-status-blue"
           hint="Sample figure"
         />
         {variant === "standalone" ? (
@@ -297,14 +303,14 @@ export function OverviewDashboard({
             emphasis
             label="Revenue recovered"
             value={gbp(allSites ? (metrics?.recoveredRevenue ?? totalRevenue) : totalRevenue)}
-            icon={PoundSterling}
+            dot="bg-status-green"
             hint="Sample until live data connects"
           />
         ) : null}
         <StatCard
           label="Cost per booking"
           value={gbp(avgCostPerBooking)}
-          icon={Target}
+          dot="bg-status-amber"
           hint="Sample · blended average"
         />
       </div>
@@ -317,7 +323,26 @@ export function OverviewDashboard({
           actions={<SampleBadge />}
         >
           {trend.length > 0 ? (
-            <BarChart data={trend} format={(v) => gbp(v)} height={200} />
+            <div className="space-y-4">
+              <div>
+                <p className="text-[26px] font-bold tabular-nums tracking-[-0.4px] text-navy">{gbp(latestWeek)}</p>
+                <p className="mt-0.5 text-[13px] text-muted">
+                  Most recent week
+                  {weekDeltaPct !== null && weekDeltaPct !== 0 ? (
+                    <>
+                      ,{" "}
+                      <span className={weekDeltaPct > 0 ? "font-medium text-status-green" : "font-medium text-status-red"}>
+                        {weekDeltaPct > 0 ? "up" : "down"} <span className="tabular-nums">{Math.abs(weekDeltaPct)}%</span>
+                      </span>{" "}
+                      on the previous week
+                    </>
+                  ) : weekDeltaPct === 0 ? (
+                    ", level with the previous week"
+                  ) : null}
+                </p>
+              </div>
+              <DataTable columns={TREND_COLUMNS} rows={trend} getRowKey={(t) => t.label} />
+            </div>
           ) : (
             <p className="text-sm text-muted">No trend data yet.</p>
           )}

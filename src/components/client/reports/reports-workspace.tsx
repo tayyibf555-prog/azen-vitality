@@ -4,13 +4,7 @@ import { useMemo, useState } from "react";
 import {
   Sparkles,
   Loader2,
-  FileText,
   ListChecks,
-  Lightbulb,
-  Coins,
-  UserPlus,
-  TrendingUp,
-  Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard } from "@/components/primitives";
@@ -39,38 +33,31 @@ const PERIODS: { key: ReportPeriod; label: string }[] = [
 ];
 
 // The snapshot numbers, always on screen so there is something to read before
-// (and alongside) the AI review. Mirrors the StatCard look but in a compact row.
+// (and alongside) the AI review: the inline dot-prefixed numeral row, not tiles.
 function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
-  const items: { label: string; value: string; icon: typeof Coins }[] = [
-    { label: "Spend", value: money(snapshot.spendGbp), icon: Coins },
-    { label: "New patients", value: String(snapshot.newPatients), icon: UserPlus },
-    { label: "Revenue", value: money(snapshot.revenueGbp), icon: TrendingUp },
-    { label: "Return on spend", value: `${snapshot.returnX.toFixed(1)}x`, icon: Gauge },
+  const items: { label: string; value: string; dot: string }[] = [
+    { label: "Spend", value: money(snapshot.spendGbp), dot: "bg-status-amber" },
+    { label: "New patients", value: String(snapshot.newPatients), dot: "bg-status-blue" },
+    { label: "Revenue", value: money(snapshot.revenueGbp), dot: "bg-status-green" },
+    { label: "Return on spend", value: `${snapshot.returnX.toFixed(1)}x`, dot: "bg-status-blue" },
   ];
   return (
     <div>
       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
         Snapshot, {snapshot.windowLabel}
       </p>
-      <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {items.map((it) => {
-          const Icon = it.icon;
-          return (
-            <div
-              key={it.label}
-              className="rounded-xl border border-line bg-card-muted/40 px-3.5 py-3"
-            >
-              <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
-                <Icon size={13} className="text-muted" /> {it.label}
-              </p>
-              <p className="mt-1 text-xl font-bold tracking-tight tabular-nums text-navy">
-                {it.value}
-              </p>
-            </div>
-          );
-        })}
+      <div className="mt-3 flex flex-wrap gap-x-7 gap-y-4">
+        {items.map((it) => (
+          <div key={it.label}>
+            <p className="text-[20px] font-bold tabular-nums tracking-[-0.3px] text-navy">
+              <i aria-hidden className={`mr-1.5 inline-block h-[7px] w-[7px] rounded-full align-[2px] ${it.dot}`} />
+              {it.value}
+            </p>
+            <p className="mt-0.5 text-[11px] font-medium text-muted">{it.label}</p>
+          </div>
+        ))}
       </div>
-      <p className="mt-2 text-xs text-muted">
+      <p className="mt-3 text-xs text-muted">
         Compliance readiness {snapshot.complianceScore}/100
         {snapshot.auditsOverdue > 0
           ? `, ${snapshot.auditsOverdue} audit${snapshot.auditsOverdue === 1 ? "" : "s"} overdue`
@@ -81,19 +68,16 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
   );
 }
 
-// The generated review, rendered once the model responds: headline, highlights,
-// the section cards, and a distinct recommendations list.
+// The generated review, rendered once the model responds, in the flat hairline
+// language: a titled hairline section, highlight bullets, each report section as
+// a 600-weight title over its body, and a numbered hairline recommendations list.
 function ReportPanel({ report, period }: { report: Report; period: ReportPeriod }) {
   return (
-    <div className="space-y-4 rounded-xl border border-line bg-card-muted/50 p-4 sm:p-5">
-      <div className="flex items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-card text-blue-dark shadow-sm">
-          <Sparkles size={15} />
-        </span>
-        <h4 className="text-sm font-semibold text-navy">
-          AI {period === "week" ? "weekly" : "monthly"} business review
-        </h4>
-      </div>
+    <section className="space-y-4">
+      <h4 className="flex items-center gap-2 border-b border-line pb-2.5 text-title text-navy">
+        <Sparkles size={14} className="text-blue-royal" />
+        AI {period === "week" ? "weekly" : "monthly"} business review
+      </h4>
 
       {report.headline ? (
         <p className="text-base font-semibold leading-snug text-navy">{report.headline}</p>
@@ -111,12 +95,10 @@ function ReportPanel({ report, period }: { report: Report; period: ReportPeriod 
       ) : null}
 
       {report.sections.length > 0 ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
           {report.sections.map((s, i) => (
-            <div key={i} className="rounded-lg border border-line bg-card px-3.5 py-3">
-              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
-                <FileText size={13} /> {s.title}
-              </p>
+            <div key={i} className="border-t border-line pt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-deep">{s.title}</p>
               <p className="mt-1.5 text-sm leading-relaxed text-ink">{s.body}</p>
             </div>
           ))}
@@ -124,26 +106,19 @@ function ReportPanel({ report, period }: { report: Report; period: ReportPeriod 
       ) : null}
 
       {report.recommendations.length > 0 ? (
-        <div>
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
-            <Lightbulb size={13} /> Recommendations
-          </p>
-          <ol className="mt-2 space-y-2">
+        <div className="border-t border-line pt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-deep">Recommendations</p>
+          <ol className="mt-1 divide-y divide-line">
             {report.recommendations.map((r, i) => (
-              <li
-                key={i}
-                className="flex items-start gap-2.5 rounded-lg border border-line bg-card px-3.5 py-2.5"
-              >
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#f0f4f9] text-[11px] font-semibold text-side-ink">
-                  {i + 1}
-                </span>
+              <li key={i} className="flex items-start gap-2.5 py-2.5">
+                <span className="mt-0.5 text-[13px] font-semibold tabular-nums text-faint">{i + 1}.</span>
                 <p className="text-sm font-medium leading-snug text-navy">{r}</p>
               </li>
             ))}
           </ol>
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }
 

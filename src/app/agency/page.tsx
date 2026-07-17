@@ -1,17 +1,14 @@
 import Link from "next/link";
 import {
-  Users,
-  CalendarCheck,
-  PoundSterling,
   Clock,
   Plug,
   RefreshCw,
   Building2,
 } from "lucide-react";
-import { PageHeader, SectionCard, StatCard, StatusPill, Sparkline } from "@/components/primitives";
+import { PageHeader, SectionCard, StatCard, StatusPill } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
 import { CLIENTS, CLIENT_METRICS, getClientMetrics, NOW } from "@/lib/mock";
-import { gbp, relativeTime } from "@/lib/utils";
+import { cn, gbp, relativeTime } from "@/lib/utils";
 import type { Client } from "@/lib/types";
 
 /** Aggregate headline figures across every client deployment. */
@@ -38,50 +35,51 @@ export default function AgencyCockpitPage() {
       />
 
       {/* Aggregate stats */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Leads in"
           value={totals.leadsIn.toLocaleString("en-GB")}
-          icon={Users}
-          delta={{ value: 12, goodWhenUp: true }}
+          dot="bg-status-blue"
           hint="Across all live sites"
         />
         <StatCard
           label="Consultations booked"
           value={totals.consultationsBooked.toLocaleString("en-GB")}
-          icon={CalendarCheck}
-          delta={{ value: 9, goodWhenUp: true }}
+          dot="bg-status-blue"
           hint="Attributed via Dentally"
         />
         <StatCard
           label="Revenue recovered"
           value={gbp(totals.recoveredRevenue)}
-          icon={PoundSterling}
-          delta={{ value: 18, goodWhenUp: true }}
+          dot="bg-status-green"
           hint="Recall and treatment recovery"
         />
         <StatCard
           label="Hours saved"
           value={`${totals.hoursSaved}`}
-          icon={Clock}
-          delta={{ value: 6, goodWhenUp: true }}
+          dot="bg-status-amber"
           hint="Coordinator time automated"
         />
       </div>
 
       {/* Clients */}
-      <SectionCard title="Clients" description="Active deployments under management.">
-        <div className="space-y-4">
+      <SectionCard title="Clients" description="Active deployments under management." bodyClassName="p-0">
+        <div className="divide-y divide-line">
           {CLIENTS.map((client) => {
             const metrics = getClientMetrics(client.id);
             const trendPoints = metrics?.trend.map((t) => t.value) ?? [];
+            const trendFirst = trendPoints[0] ?? 0;
+            const trendLast = trendPoints[trendPoints.length - 1] ?? 0;
+            // The sparkline is retired: the trend reads as a plain-English delta
+            // over the same series (first week to latest).
+            const trendPct = trendFirst > 0 ? Math.round(((trendLast - trendFirst) / trendFirst) * 100) : null;
             const statusTone =
               client.status === "live" ? "success" : client.status === "onboarding" ? "info" : "warning";
 
             return (
               <div
                 key={client.id}
-                className="grid grid-cols-1 gap-4 rounded-xl border border-line bg-card-muted/40 p-4 lg:grid-cols-12 lg:items-center"
+                className="grid grid-cols-1 gap-4 py-4 lg:grid-cols-12 lg:items-center"
               >
                 {/* Identity + health */}
                 <div className="min-w-0 space-y-2 lg:col-span-5">
@@ -128,8 +126,20 @@ export default function AgencyCockpitPage() {
                         {gbp(metrics.recoveredRevenue)}
                       </p>
                     </div>
-                    <div className="hidden flex-col items-center gap-1 xl:flex">
-                      <Sparkline points={trendPoints} />
+                    <div className="hidden flex-col items-end gap-0.5 xl:flex">
+                      {trendPct === null ? (
+                        <span className="text-sm text-muted">—</span>
+                      ) : (
+                        <span
+                          className={cn(
+                            "text-sm font-semibold",
+                            trendPct > 0 ? "text-status-green" : trendPct < 0 ? "text-status-red" : "text-muted",
+                          )}
+                        >
+                          {trendPct > 0 ? "Up" : trendPct < 0 ? "Down" : "Level"}
+                          {trendPct !== 0 ? <span className="tabular-nums"> {Math.abs(trendPct)}%</span> : null}
+                        </span>
+                      )}
                       <span className="text-[11px] text-muted">Revenue trend</span>
                     </div>
                   </div>

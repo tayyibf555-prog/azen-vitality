@@ -1,4 +1,3 @@
-import { Coins, UserPlus, Target, TrendingUp } from "lucide-react";
 import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
 import { getClient, getSites, getSiteMetrics } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
@@ -46,29 +45,29 @@ export async function RoiView({ clientSlug }: { clientSlug: string }) {
           mock until Meta and Dentally connect. One banner covers it. */}
       <SampleNote>Sample data, not yet from your live sources. Every figure on this page is a pilot estimate until your Meta and Dentally accounts connect.</SampleNote>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard
           label="Ad spend (30 days)"
           value={money(s.spendGbp)}
-          icon={Coins}
+          dot="bg-status-amber"
           hint="Across every paid channel"
         />
         <StatCard
           label="New patients"
           value={count(s.newPatients)}
-          icon={UserPlus}
+          dot="bg-status-blue"
           hint={`From ${count(s.leads)} enquiries`}
         />
         <StatCard
           label="Cost per new patient"
           value={money(s.costPerAcquisitionGbp, true)}
-          icon={Target}
+          dot="bg-status-blue"
           hint="Spend divided by new patients"
         />
         <StatCard
           label="Attributed revenue"
           value={money(s.revenueGbp)}
-          icon={TrendingUp}
+          dot="bg-status-green"
           hint={`${s.returnX.toFixed(1)}x on spend`}
         />
       </div>
