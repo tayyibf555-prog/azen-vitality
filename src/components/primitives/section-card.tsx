@@ -29,12 +29,12 @@ export function SectionCard({
   return (
     <section className={className}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-4 border-b border-line pb-2.5">
+        <header className="flex flex-col gap-2.5 border-b border-line pb-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <div className="min-w-0">
             {title ? <h3 className="text-title text-navy">{title}</h3> : null}
             {description ? <p className="mt-0.5 text-caption font-normal text-muted">{description}</p> : null}
           </div>
-          {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+          {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
         </header>
       )}
       <div className={cn("pt-4", bodyClassName)}>{children}</div>
