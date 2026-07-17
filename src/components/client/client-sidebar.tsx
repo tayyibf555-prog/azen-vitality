@@ -116,14 +116,18 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
           navOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-      {/* Client context */}
+      {/* Client context. On the light frame the mark sits on a white tile (the
+          premium logo-on-tint treatment); the mobile dark drawer keeps the
+          light-on-dark glyph. */}
       <div className="flex items-center gap-4 px-5 py-5">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/copilot-logo.png"
-          alt="Vitality Dental"
-          className="h-11 w-11 shrink-0 object-contain brightness-0 invert lg:filter-none"
-        />
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl lg:bg-white lg:shadow-chip lg:ring-1 lg:ring-navy/5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/copilot-logo.png"
+            alt="Vitality Dental"
+            className="h-11 w-11 object-contain brightness-0 invert lg:h-9 lg:w-9 lg:filter-none"
+          />
+        </span>
         <p className="truncate text-sm font-semibold text-on-navy lg:text-navy">{client ? client.name : "Vitality Dental"}</p>
       </div>
 
