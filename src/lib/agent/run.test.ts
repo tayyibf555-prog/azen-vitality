@@ -222,4 +222,70 @@ describe("co-pilot commit gate (finding #3)", () => {
     expect(dispatch).toHaveBeenCalledWith("launch_outreach_campaign", expect.objectContaining({ confirm: true }));
     expect(r.replyText).toContain("live");
   });
+
+  // The marketing commit tools (launch_landing_page / publish_meta_campaign) are in the
+  // SAME CONFIRM_COMMIT_TOOLS set, so a confirm:true set in the same turn as the request
+  // is refused, and a confirm answering a prior publish read-back proceeds.
+  it("REFUSES a launch_landing_page confirm:true set in the same turn as the request", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "launch_landing_page", { pageId: "page-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Shall I publish the Invisalign page live?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ published: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn([{ role: "user", content: "publish the invisalign landing page, yes do it" }], deps);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(r.replyText).toContain("publish");
+  });
+
+  it("ALLOWS a launch_landing_page confirm:true that answers a prior publish read-back", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "launch_landing_page", { pageId: "page-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("The Invisalign page is now live."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ published: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "publish the invisalign landing page" },
+        { role: "assistant", content: "This will publish the Invisalign page live at /go/vitality/invisalign-abcd. Shall I publish it?" },
+        { role: "user", content: "yes please" },
+      ],
+      deps,
+    );
+    expect(dispatch).toHaveBeenCalledWith("launch_landing_page", expect.objectContaining({ confirm: true }));
+    expect(r.replyText).toContain("live");
+  });
+
+  it("REFUSES a publish_meta_campaign confirm:true set in the same turn as the request", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "publish_meta_campaign", { campaignId: "meta-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Shall I publish the implant campaign to Meta?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ published: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn([{ role: "user", content: "publish the implant meta campaign now, go" }], deps);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(r.replyText).toContain("publish");
+  });
+
+  it("ALLOWS a publish_meta_campaign confirm:true that answers a prior publish read-back", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "publish_meta_campaign", { campaignId: "meta-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Your Meta account is not connected, so nothing has gone live."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ published: false, reason: "meta_not_connected" }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "publish the implant meta campaign" },
+        { role: "assistant", content: "This would take the implant campaign live on Meta. Shall I publish it?" },
+        { role: "user", content: "yes go ahead" },
+      ],
+      deps,
+    );
+    // The gate lets confirm:true through (it answered a read-back); the per-tool
+    // Meta-connection guard is what then keeps it from going live.
+    expect(dispatch).toHaveBeenCalledWith("publish_meta_campaign", expect.objectContaining({ confirm: true }));
+  });
 });
