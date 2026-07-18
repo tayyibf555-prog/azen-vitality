@@ -52,6 +52,12 @@ describe("buildAskPrompt", () => {
     expect(system).toMatch(/do not guess/i);
   });
 
+  it("system instructs to treat knowledge as the practice's own expertise and never attribute it to external sources", () => {
+    const { system } = buildAskPrompt("What is the refund policy?", []);
+    expect(system).toMatch(/never attribute advice to named consultants, programmes, courses or external sources/i);
+    expect(system).toMatch(/practice's own/i);
+  });
+
   it("user contains the question and a provided item's id+title", () => {
     const r = ranked({ id: "abc123", title: "Refund policy", body: "Refunds take 14 days." });
     const { user } = buildAskPrompt("What is the refund policy?", [r]);
