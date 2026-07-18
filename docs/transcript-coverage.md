@@ -1,7 +1,7 @@
 # Call transcript coverage ledger
 
 Every capability, promise and instruction from the Vitality x Azen call (16 Jul), tracked to done.
-All ✅ items below are built and gated; those from the latest wave await one deploy to go live on production.
+All ✅ items are LIVE ON PRODUCTION (deployed 18 Jul, real data only - every sample/mock row and figure purged).
 Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (brief written) · 🫵 needs you · 🏥 needs the client · 🚫 not planned (was represented honestly in the call).
 
 ## The platform demo claims
