@@ -1,13 +1,7 @@
 import { requireUser, requireOwnerRole, requireClientAccess } from "@/lib/auth/guard";
 import { getClient } from "@/lib/mock/clients";
-import {
-  funnelSummary,
-  funnelVariantSummary,
-  isFunnelSurface,
-  type FunnelVariantCounters,
-} from "@/lib/funnel/events";
-import { getPageBySlug, promoteWinner } from "@/lib/landing/repository";
-import { decideAutoPromotion } from "@/lib/landing/winner";
+import { funnelSummary, funnelVariantSummary, isFunnelSurface } from "@/lib/funnel/events";
+import { maybeAutoPromote } from "@/lib/landing/promote";
 
 export const dynamic = "force-dynamic";
 
@@ -78,10 +72,11 @@ export async function GET(request: Request): Promise<Response> {
       const landingSlug = url.searchParams.get("landing");
       if (!landingSlug) return bad("landing surface requires a ?landing=<slug>", 400);
       const variants = await funnelVariantSummary({ clientId, surface, fromIso, toIso, landingSlug });
-      // Lazy auto-promotion is evaluated here (see maybeAutoPromote): there is no
-      // cron slot for landing split tests yet, so the read path is where a winner
-      // gets promoted. It now judges on this page's own (scoped) counters.
-      // Best-effort — never fails the results read.
+      // Auto-promotion is evaluated here too (the shared maybeAutoPromote), so an
+      // owner opening the results card still promotes a settled winner immediately.
+      // The scheduled sweep (/api/landing-pages/promote-sweep) runs the IDENTICAL
+      // decision on a cadence, so promotion no longer depends on anyone viewing this
+      // card. Best-effort — never fails the results read.
       await maybeAutoPromote(clientId, landingSlug, variants);
       return Response.json({ ok: true, surface, from: fromIso, to: toIso, variants });
     }
@@ -90,37 +85,5 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ ok: true, surface, from: fromIso, to: toIso, steps });
   } catch {
     return bad("could not load the funnel summary", 500);
-  }
-}
-
-/**
- * Lazy auto-promotion for a landing split test.
- *
- * CONSTRAINT: there is no cron slot yet for landing split tests (the platform's
- * 24/7 sweeps are a fixed set), so the pure decideAutoPromotion decision — tested
- * in isolation — is evaluated here, on the owner's results read, instead of on a
- * schedule. When a LIVE page has auto-promote on and no winner yet, and the
- * decision says a variant has clearly won on a fair sample, promoteWinner records
- * the winner and retires the loser. It is idempotent: a page that already has a
- * winner is skipped, so repeated reads never re-promote. Wrapped so any promotion
- * error is swallowed and the results read still returns.
- */
-async function maybeAutoPromote(
-  clientId: string,
-  landingSlug: string | null,
-  variants: { a: FunnelVariantCounters; b: FunnelVariantCounters },
-): Promise<void> {
-  if (!landingSlug) return;
-  try {
-    const found = await getPageBySlug(clientId, landingSlug);
-    if (!found) return;
-    const { page } = found;
-    if (page.status !== "live" || !page.autoPromote || page.winnerVariant) return;
-    const decision = decideAutoPromotion({ a: variants.a, b: variants.b });
-    if (decision.promote && decision.winner) {
-      await promoteWinner(page.id, clientId, decision.winner);
-    }
-  } catch {
-    // Best-effort: a promotion failure must never break the results read.
   }
 }

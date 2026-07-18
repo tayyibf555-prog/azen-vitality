@@ -3,6 +3,7 @@ import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/g
 import type { AuthedUser } from "@/lib/auth/session";
 import { getPageById, setPageStatus, promoteWinner } from "@/lib/landing/repository";
 import { mintPreviewToken } from "@/lib/landing/preview-token";
+import { recordUsage } from "@/lib/telemetry";
 import type { LandingPage } from "@/lib/landing/types";
 
 export const dynamic = "force-dynamic";
@@ -89,6 +90,7 @@ export async function PATCH(
   switch (action) {
     case "publish":
       await setPageStatus(id, client.id, "live");
+      void recordUsage("landing", "landing_publish", { clientId: client.id, userEmail: auth?.email, role: auth?.role });
       return Response.json({ ok: true, status: "live" });
     case "archive":
       await setPageStatus(id, client.id, "archived");

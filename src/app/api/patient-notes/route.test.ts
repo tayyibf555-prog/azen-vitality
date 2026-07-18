@@ -33,6 +33,9 @@ vi.mock("@/lib/patient-notes/repository", () => ({
     return row;
   },
 }));
+// The route now fires a fire-and-forget usage event; stub the server-only seam so
+// this test does not pull in "server-only" (unresolved outside the Next bundler).
+vi.mock("@/lib/telemetry", () => ({ recordUsage: vi.fn() }));
 
 import { GET, POST } from "./route";
 

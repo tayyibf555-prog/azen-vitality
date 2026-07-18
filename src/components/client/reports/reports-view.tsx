@@ -4,6 +4,7 @@ import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { buildSnapshot } from "@/lib/reports/snapshot";
 import { ReportsWorkspace } from "./reports-workspace";
+import { UsageSection } from "./usage-section";
 
 // Reports section: AI-generated weekly and monthly business reviews for the
 // practice owner. The reviews are written from the practice's REAL enquiry and
@@ -53,6 +54,11 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
           description="Reports are written from your live enquiry and booking data. As enquiries start coming through, the figures appear here and the AI weekly and monthly reviews unlock. Nothing is shown until it is real."
         />
       )}
+
+      {/* Owner-only product usage. Independent of enquiry activity, so it renders
+          whether or not the AI report has unlocked. Reports is OWNER_ROLES-gated, so
+          this is never visible to a coordinator. */}
+      <UsageSection clientId={client.id} />
     </>
   );
 }
