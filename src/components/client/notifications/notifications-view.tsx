@@ -43,11 +43,6 @@ export async function NotificationsView({ clientSlug }: { clientSlug: string }) 
             />
             <StatCard label="Total" value={items.length} dot="bg-status-blue" />
             <StatCard
-              label="Compliance"
-              value={byType.compliance ?? 0}
-              dot="bg-status-blue"
-            />
-            <StatCard
               label="No-show risk"
               value={byType.no_show ?? 0}
               dot="bg-status-amber"

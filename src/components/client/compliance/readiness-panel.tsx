@@ -11,10 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, type Tone } from "@/components/primitives";
-import { KLOES, COMPLIANCE_DISCLAIMER } from "@/lib/compliance/knowledge";
-import { READINESS } from "@/lib/compliance/mock";
-import type { KloeSummary } from "@/lib/compliance/types";
-import { statusTone, statusLabel } from "./status";
+import { KLOES } from "@/lib/compliance/knowledge";
 
 interface Priority {
   action: string;
@@ -38,12 +35,7 @@ const URGENCY: Record<Priority["urgency"], { label: string; tone: Tone }> = {
   low: { label: "Low", tone: "neutral" },
 };
 
-// Resolve each fixed KLOE definition to the practice's current roll-up.
-const KLOE_SUMMARY_BY_KEY = new Map<KloeSummary["kloe"], KloeSummary>(
-  READINESS.kloes.map((k) => [k.kloe, k]),
-);
-
-// The AI assessment, a flat hairline section rendered above the KLOE table.
+// The AI assessment, a flat hairline section rendered above the KLOE reference.
 function AssessmentPanel({ assessment }: { assessment: Assessment }) {
   return (
     <section className="space-y-4">
@@ -104,39 +96,23 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
   );
 }
 
-// One KLOE row in the hairline table: the CQC question under the domain, with
-// the score numeral, open items and status on the right.
+// One KLOE row in the hairline reference: the CQC domain, the headline question and
+// a short description of what it covers for a dental practice. No score is shown:
+// readiness scoring builds from the practice's own records once they are added.
 function KloeRow({
   label,
   question,
-  summary,
+  description,
 }: {
   label: string;
   question: string;
-  summary: KloeSummary | undefined;
+  description: string;
 }) {
-  const score = summary?.score ?? 0;
-  const status = summary?.status ?? "not_started";
-  const openItems = summary?.openItems ?? 0;
-
   return (
-    <li className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line py-3.5 last:border-0">
-      <div className="min-w-0 max-w-xl flex-1 basis-64">
-        <h4 className="text-sm font-semibold text-navy">{label}</h4>
-        <p className="mt-0.5 text-xs leading-relaxed text-muted">{question}</p>
-      </div>
-      <div className="flex shrink-0 items-center gap-5">
-        <span className="text-xs font-medium text-muted">
-          {openItems} open {openItems === 1 ? "item" : "items"}
-        </span>
-        <span className="w-20 text-right text-[20px] font-bold tracking-[-0.3px] tabular-nums text-navy">
-          {score}
-          <span className="text-sm font-semibold text-muted">/100</span>
-        </span>
-        <StatusPill tone={statusTone(status)} className="shrink-0">
-          {statusLabel(status)}
-        </StatusPill>
-      </div>
+    <li className="border-b border-line py-3.5 last:border-0">
+      <h4 className="text-sm font-semibold text-navy">{label}</h4>
+      <p className="mt-0.5 text-xs font-medium leading-relaxed text-ink">{question}</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted">{description}</p>
     </li>
   );
 }
@@ -176,7 +152,7 @@ export function ReadinessPanel({ clientSlug }: { clientSlug: string }) {
     <div className="space-y-4">
       <SectionCard
         title="Inspection readiness"
-        description="Where the practice stands across the five CQC key lines of enquiry. Run the AI readiness check for a prioritised action plan and an inspection view."
+        description="The five CQC key lines of enquiry your practice is assessed against. Add your records, then run the AI readiness check for a prioritised action plan and an inspection view."
         actions={
           <Button variant="primary" size="sm" onClick={runCheck} disabled={loading}>
             {loading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
@@ -206,25 +182,21 @@ export function ReadinessPanel({ clientSlug }: { clientSlug: string }) {
             </p>
             <ul className="mt-1">
               {KLOES.map((k) => (
-                <KloeRow
-                  key={k.key}
-                  label={k.label}
-                  question={k.question}
-                  summary={KLOE_SUMMARY_BY_KEY.get(k.key)}
-                />
+                <KloeRow key={k.key} label={k.label} question={k.question} description={k.description} />
               ))}
             </ul>
           </div>
         </div>
       </SectionCard>
 
-      {/* Generated note + disclaimer, kept subtle at the foot of the readiness view. */}
+      {/* Honest note: readiness scoring builds from the practice's own records. */}
       <div className="flex gap-2.5 border-t border-line pt-4">
         <Info size={16} className="mt-0.5 shrink-0 text-muted" />
-        <div className="space-y-2 text-xs leading-relaxed text-muted">
-          <p className="text-ink">{READINESS.generatedNote}</p>
-          <p>{COMPLIANCE_DISCLAIMER}</p>
-        </div>
+        <p className="text-xs leading-relaxed text-muted">
+          A readiness score for each key line of enquiry builds from your practice&rsquo;s records
+          once your audits, policies and training are added. Until then this shows the framework you
+          are assessed against.
+        </p>
       </div>
     </div>
   );

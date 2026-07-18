@@ -5,7 +5,6 @@ import { MiniMonth } from "@/components/client/home/mini-month";
 import { NeedsAttention } from "@/components/client/home/needs-attention";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
-import { getSiteMetrics } from "@/lib/mock";
 import { getSessionUser } from "@/lib/auth/session";
 import { OWNER_ROLES } from "@/lib/nav";
 import { generateBrief } from "@/lib/daily-brief/generate";
@@ -125,9 +124,6 @@ export default async function ClientHomePage({
   const overnightLine = brief.sections.find((s) => s.key === "overnight")?.items[0];
   const moneyLine = brief.sections.find((s) => s.key === "money")?.items[0];
   const headline = brief.headline[0] ?? null;
-  // Scope the recovered-revenue figure to the selected site(s) (default N15) so it
-  // matches the rest of the dashboard rather than always summing every practice.
-  const recovered = getSiteMetrics(siteIds).reduce((sum, s) => sum + s.recoveredRevenue, 0);
   const briefHref = `/c/${clientSlug}/daily-brief`;
   // The full charts live one click away: owners get the overview console, the
   // coordinator view gets the reports module.
@@ -176,14 +172,6 @@ export default async function ClientHomePage({
       <div className="flex flex-wrap items-center gap-x-11 gap-y-4 rounded-[10px] border border-band-line bg-band px-6 py-5">
         <BandStat value={overnightLine?.count ?? 0} label="Overnight enquiries" />
         <BandStat value={moneyLine?.value !== undefined ? gbp(moneyLine.value) : gbp(0)} label="Outstanding balances" />
-        {isOwner ? (
-          <BandStat
-            value={gbp(recovered)}
-            label="Recovered this month"
-            hint="Pilot figure until live data connects"
-            valueClassName="text-status-green"
-          />
-        ) : null}
         <a href={reportsHref} className="ml-auto text-xs font-semibold text-blue-royal hover:underline">
           Reports →
         </a>

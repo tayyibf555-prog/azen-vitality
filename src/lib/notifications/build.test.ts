@@ -1,8 +1,8 @@
-// The notifications feed's honesty pass: every item built from pure mock data
-// (currently: compliance) must carry `sample: true` so the UI can show a visible
-// "Sample" tag (mirrors the SampleNote precedent elsewhere in the dashboard).
-// Real-sourced items (no-show, onboarding, lead) must stay untagged. The DB-backed
-// sources are mocked to deterministic values so the test is pure and fast.
+// The notifications feed is built from REAL sources only (no-show, onboarding,
+// lead). The fabricated compliance source has been removed, so no item is ever
+// sample-tagged: compliance notifications return once the practice's real records
+// are connected. The DB-backed sources are mocked to deterministic values so the
+// test is pure and fast.
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -23,19 +23,16 @@ vi.mock("@/lib/smile-assessment/repository", () => ({
 
 import { buildNotifications } from "./build";
 
-describe("buildNotifications sample-tagging", () => {
-  it("tags every compliance-sourced item as sample, and leaves every other source untagged", async () => {
+describe("buildNotifications is real-sourced and never fabricated", () => {
+  it("produces the real sources, no compliance items, and nothing sample-tagged", async () => {
     const items = await buildNotifications({ clientId: "vitality", clientSlug: "vitality", siteIds: ["site-cc"] });
 
+    // The mocked real sources each contribute at least one item.
+    expect(items.length).toBeGreaterThan(0);
+
+    // No fabricated compliance items, and nothing carries the sample tag.
     const compliance = items.filter((i) => i.type === "compliance");
-    const others = items.filter((i) => i.type !== "compliance");
-
-    // The compliance mock fixtures include at least one overdue/due-soon item,
-    // so this assertion is meaningful (not vacuously true over an empty array).
-    expect(compliance.length).toBeGreaterThan(0);
-    expect(others.length).toBeGreaterThan(0);
-
-    for (const item of compliance) expect(item.sample).toBe(true);
-    for (const item of others) expect(item.sample).toBeUndefined();
+    expect(compliance.length).toBe(0);
+    for (const item of items) expect(item.sample).toBeUndefined();
   });
 });

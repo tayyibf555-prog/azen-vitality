@@ -66,15 +66,23 @@ function CampaignRow({ campaign }: { campaign: Campaign }) {
 
 export function CampaignsTable({
   campaigns,
+  metaConnected = false,
   onCreate,
 }: {
   campaigns: Campaign[];
+  /** True only when the practice's Meta account is connected. Drives the honest
+   *  caption about where live performance figures come from. */
+  metaConnected?: boolean;
   onCreate: () => void;
 }) {
   return (
     <SectionCard
       title="Campaigns"
-      description="Your live, learning and paused campaigns, plus any drafts you have saved. Figures cover the last 30 days and are mock until your Meta account is connected."
+      description={
+        metaConnected
+          ? "Your live, learning and paused campaigns, plus any drafts you have saved. Performance figures cover the last 30 days."
+          : "The campaigns you have drafted. Live performance figures appear here once your Meta account is connected."
+      }
       actions={
         <Button variant="primary" size="sm" onClick={onCreate}>
           <Plus size={15} /> Create campaign

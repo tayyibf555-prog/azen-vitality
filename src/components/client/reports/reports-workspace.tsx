@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Sparkles,
   Loader2,
@@ -8,8 +8,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard } from "@/components/primitives";
-import { money } from "@/components/client/roi/format";
-import { buildSnapshot, type ReportPeriod, type ReportSnapshot } from "@/lib/reports/snapshot";
+import type { ReportPeriod, ReportSnapshot } from "@/lib/reports/snapshot";
+
+/** A first-response time in plain English ("42s" / "3m"). */
+function responseLabel(seconds: number | null): string {
+  if (seconds === null) return "-";
+  if (seconds < 90) return `${seconds}s`;
+  return `${Math.round(seconds / 60)}m`;
+}
 
 interface ReportSection {
   title: string;
@@ -32,19 +38,28 @@ const PERIODS: { key: ReportPeriod; label: string }[] = [
   { key: "month", label: "Month" },
 ];
 
-// The snapshot numbers, always on screen so there is something to read before
+// The real snapshot numbers, always on screen so there is something to read before
 // (and alongside) the AI review: the inline dot-prefixed numeral row, not tiles.
+// Every figure here is live activity, never an estimate.
 function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
   const items: { label: string; value: string; dot: string }[] = [
-    { label: "Spend", value: money(snapshot.spendGbp), dot: "bg-status-amber" },
-    { label: "New patients", value: String(snapshot.newPatients), dot: "bg-status-blue" },
-    { label: "Revenue", value: money(snapshot.revenueGbp), dot: "bg-status-green" },
-    { label: "Return on spend", value: `${snapshot.returnX.toFixed(1)}x`, dot: "bg-status-blue" },
+    { label: "Enquiries", value: String(snapshot.enquiries), dot: "bg-status-blue" },
+    { label: "Booked", value: String(snapshot.booked), dot: "bg-status-green" },
+    {
+      label: "Enquiry to booked",
+      value: `${Math.round(snapshot.enquiryToBookedRate * 100)}%`,
+      dot: "bg-status-blue",
+    },
+    {
+      label: "Avg first response",
+      value: responseLabel(snapshot.avgFirstResponseSeconds),
+      dot: "bg-status-amber",
+    },
   ];
   return (
     <div>
       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-        Snapshot, {snapshot.windowLabel}
+        Live snapshot, {snapshot.windowLabel}
       </p>
       <div className="mt-3 flex flex-wrap gap-x-7 gap-y-4">
         {items.map((it) => (
@@ -57,13 +72,11 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
           </div>
         ))}
       </div>
-      <p className="mt-3 text-xs text-muted">
-        Compliance readiness {snapshot.complianceScore}/100
-        {snapshot.auditsOverdue > 0
-          ? `, ${snapshot.auditsOverdue} audit${snapshot.auditsOverdue === 1 ? "" : "s"} overdue`
-          : ", no audits overdue"}
-        {snapshot.topChannel ? ` . Best channel: ${snapshot.topChannel.name} (${snapshot.topChannel.roiX}x)` : ""}
-      </p>
+      {snapshot.topSource ? (
+        <p className="mt-3 text-xs text-muted">
+          Most common source: {snapshot.topSource.source} ({snapshot.topSource.count})
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -122,14 +135,21 @@ function ReportPanel({ report, period }: { report: Report; period: ReportPeriod 
   );
 }
 
-export function ReportsWorkspace({ clientSlug }: { clientSlug: string }) {
+export function ReportsWorkspace({
+  clientSlug,
+  snapshots,
+}: {
+  clientSlug: string;
+  /** Real per-period snapshots, computed server-side from live activity. */
+  snapshots: Record<ReportPeriod, ReportSnapshot>;
+}) {
   const [period, setPeriod] = useState<ReportPeriod>("month");
   const [report, setReport] = useState<Report | null>(null);
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("month");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const snapshot = useMemo(() => buildSnapshot(period), [period]);
+  const snapshot = snapshots[period];
 
   async function generate() {
     if (loading) return;

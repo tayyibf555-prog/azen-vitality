@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
+import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { buildReportPrompt, cleanLine } from "@/lib/reports/ai";
 import { buildSnapshot, type ReportPeriod } from "@/lib/reports/snapshot";
@@ -19,11 +20,11 @@ interface Report {
   recommendations: string[];
 }
 
-// AI business review: reads the practice's current acquisition, conversion,
-// lifecycle and compliance numbers (from the period snapshot) and writes a
-// concise weekly or monthly review for the owner with recommendations. Authed
-// members only (it spends a model call). Reads the curated mock state today; swap
-// the snapshot's sources for real records later.
+// AI business review: reads the practice's REAL enquiry and booking activity (from
+// the period snapshot) and writes a concise weekly or monthly review for the owner
+// with recommendations. Authed members only (it spends a model call). When there is
+// too little live activity to write a reliable review, it returns an honest
+// awaiting response instead of narrating thin or invented numbers.
 export async function POST(request: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
@@ -44,7 +45,17 @@ export async function POST(request: Request): Promise<Response> {
   if (roleDenied) return roleDenied;
 
   const period: ReportPeriod = body.period === "week" ? "week" : "month";
-  const snapshot = buildSnapshot(period);
+  const siteIds = await getViewSiteIds(client.id);
+  const snapshot = await buildSnapshot(period, siteIds);
+  // No live activity narrative unless there is enough real activity to be reliable.
+  if (!snapshot.hasEnoughData) {
+    const pw = period === "week" ? "weekly" : "monthly";
+    return Response.json({
+      ok: false,
+      awaiting: true,
+      error: `There is not enough live activity yet to write a reliable ${pw} review. Your first report unlocks once more enquiries have come through.`,
+    });
+  }
   const { system, user } = buildReportPrompt(snapshot, period, client.name);
 
   try {
