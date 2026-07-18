@@ -236,7 +236,7 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
         <EmptyState
           icon={UserPlus}
           title="No submissions yet"
-          description="Share the onboarding link with new patients. As soon as someone completes the form, they will appear here ready for the team to review and register. This view is mock safe, so it stays empty until a submission arrives."
+          description="Share the onboarding link with new patients. As soon as someone completes the form, they will appear here ready for the team to review and register."
         />
       ) : (
         <>
