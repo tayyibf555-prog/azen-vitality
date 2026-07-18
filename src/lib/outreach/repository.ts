@@ -238,6 +238,26 @@ export async function listRunningCampaigns(): Promise<OutreachCampaign[]> {
   return (data as CampaignRow[]).map(rowToCampaign);
 }
 
+/**
+ * Campaigns still BUILDING their target list, for the cron build-continuation pass.
+ * A campaign created via the co-pilot runs a single bounded build tick at creation, so
+ * a large base is left mid-build; without this the only thing that finishes it is the
+ * Campaigns UI loop. The sweep advances these on the 24/7 schedule instead. Oldest-
+ * updated first so every building campaign gets a fair turn across ticks, bounded so one
+ * sweep never pulls an unbounded set.
+ */
+export async function listBuildingCampaigns(limit = 10): Promise<OutreachCampaign[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("outreach_campaign")
+    .select("*")
+    .eq("status", "building")
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data as CampaignRow[]).map(rowToCampaign);
+}
+
 export async function updateCampaign(
   id: string,
   fields: Partial<{

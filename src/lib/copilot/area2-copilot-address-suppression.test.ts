@@ -15,6 +15,12 @@ const searchPatients = vi.fn();
 
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
 vi.mock("@/lib/messaging/suppression", () => ({ isSuppressed: (...a: unknown[]) => isSuppressed(...a) }));
+// The manual send now consults + stamps the cross-module daily ledger; mock it so the
+// suppression paths under test stay deterministic (no real DB). Default: not contacted.
+vi.mock("@/lib/messaging/frequency", () => ({
+  wasContactedToday: async () => false,
+  recordContacted: async () => {},
+}));
 vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: (...a: unknown[]) => logCopilotAction(...a) }));
 vi.mock("@/lib/dentally/read", () => ({
   listPatients: (...a: unknown[]) => listPatients(...a),

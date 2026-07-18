@@ -98,6 +98,13 @@ export interface OutreachBuildCursor {
   candidates: number;
   /** Targets matched + enrolled so far (all sites). */
   matched: number;
+  /**
+   * Of the matched targets, how many have SMS consent on file (from the Dentally
+   * `use_sms` flag captured at build time). This is the CONTACTABLE reality: consent is
+   * applied at send time, so a matched-but-not-consented patient is enrolled + counted
+   * but never texted. Surfaced in the read-back so "N match" is not read as "N reached".
+   */
+  contactable?: number;
   /** Patients dropped ONLY because a set age/gender filter needed data not on file. */
   excludedMissingData?: number;
 }

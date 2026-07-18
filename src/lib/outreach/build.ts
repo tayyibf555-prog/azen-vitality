@@ -86,7 +86,7 @@ function mapAppointments(payload: { appointments: unknown[] }): AppointmentLike[
 }
 
 export function initBuildCursor(): OutreachBuildCursor {
-  return { siteIndex: 0, page: 1, pageOffset: 0, done: false, scanned: 0, candidates: 0, matched: 0, excludedMissingData: 0 };
+  return { siteIndex: 0, page: 1, pageOffset: 0, done: false, scanned: 0, candidates: 0, matched: 0, contactable: 0, excludedMissingData: 0 };
 }
 
 export interface BuildTickResult {
@@ -142,6 +142,7 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
   let scanned = cursor.scanned;
   let candidates = cursor.candidates;
   let matched = cursor.matched;
+  let contactable = cursor.contactable ?? 0;
   let excludedMissingData = cursor.excludedMissingData ?? 0;
   let appointmentReads = 0;
   let pagesThisRun = 0;
@@ -222,6 +223,9 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
         const m = matchAppointmentHistory(appts, campaign.filters, now);
         if (m.matched) {
           matched += 1;
+          // Consent is captured now (Dentally use_sms) but only ACTED on at send time,
+          // so track how many matches are actually contactable for an honest read-back.
+          if (patient.smsConsent) contactable += 1;
           enrol.push({
             campaignId,
             patientId: patient.id,
@@ -277,12 +281,14 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
       scanned,
       candidates,
       matched,
+      contactable,
       excludedMissingData,
     };
     const counts = {
       scanned,
       candidates,
       matched,
+      contactable,
       excludedMissingData,
       enrolled: (campaign.counts?.enrolled ?? 0) + inserted,
     };

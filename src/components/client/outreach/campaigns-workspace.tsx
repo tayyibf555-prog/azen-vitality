@@ -67,6 +67,8 @@ interface PreviewTarget {
 
 interface CampaignDetail {
   matched: number;
+  /** Of the matched, how many have SMS consent (contactable). null when not yet computed. */
+  contactable: number | null;
   previewLimit: number;
   excludedMissingData: number;
   targets: PreviewTarget[];
@@ -282,11 +284,13 @@ export function CampaignsWorkspace({
         matched?: number;
         previewLimit?: number;
         targets?: PreviewTarget[];
-        campaign?: { counts?: { excludedMissingData?: number } | null };
+        campaign?: { counts?: { excludedMissingData?: number; contactable?: number } | null };
       };
       if (res.ok && data.ok) {
+        const contactable = data.campaign?.counts?.contactable;
         setDetail({
           matched: data.matched ?? 0,
+          contactable: typeof contactable === "number" ? contactable : null,
           previewLimit: data.previewLimit ?? 100,
           excludedMissingData: data.campaign?.counts?.excludedMissingData ?? 0,
           targets: data.targets ?? [],
@@ -656,6 +660,12 @@ export function CampaignsWorkspace({
                       <span className="text-lg font-semibold tabular-nums text-navy">{detail.matched.toLocaleString("en-GB")}</span>{" "}
                       <span className="text-muted">patients matched</span>
                     </span>
+                    {detail.contactable !== null && detail.contactable < detail.matched ? (
+                      <span className="text-xs text-muted">
+                        <span className="font-semibold text-ink">{detail.contactable.toLocaleString("en-GB")}</span> have SMS
+                        consent and will be contacted; those without are not texted
+                      </span>
+                    ) : null}
                     {detail.excludedMissingData > 0 ? (
                       <span className="text-xs text-muted">
                         {detail.excludedMissingData.toLocaleString("en-GB")} not included (no recorded age or gender on file)

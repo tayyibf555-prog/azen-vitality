@@ -409,6 +409,14 @@ export async function listNurtureDue(args: {
     .not("first_response_at", "is", null)
     .lte("first_response_at", args.entryCutoffIso)
     .gte("created_at", args.ageCutoffIso)
+    // CONSENT POSTURE (GDPR): abandoned-booking leads are created on IMPLIED consent
+    // from the booking step - that basis covers the single booking-related first
+    // contact (still sent), but NOT enrolment into the ongoing 3-touch MARKETING
+    // nurture cadence. Exclude them from selection so they never occupy the bounded
+    // nurture scan. Genuine enquiry sources (smile-assessment, website, etc.) gave
+    // marketing-shaped consent and still nurture. One line to reverse if the practice
+    // decides abandoned bookings are fair game for nurture.
+    .neq("source", "abandoned-booking")
     .order("created_at", { ascending: true })
     .limit(limit);
   if (entry.error) throw entry.error;
@@ -421,6 +429,10 @@ export async function listNurtureDue(args: {
     .not("nurture_next_at", "is", null)
     .lte("nurture_next_at", args.nowIso)
     .gte("created_at", args.ageCutoffIso)
+    // Same consent-posture exclusion as the entry query above (an abandoned-booking
+    // lead can never be mid-cadence, but exclude here too so the policy holds on both
+    // selection paths and stays trivially reversible in one place).
+    .neq("source", "abandoned-booking")
     .order("created_at", { ascending: true })
     .limit(limit);
   if (subsequent.error) throw subsequent.error;

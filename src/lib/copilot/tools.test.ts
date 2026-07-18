@@ -4,12 +4,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // dry-run / disambiguation branching deterministically without real DB or network.
 const sendMessage = vi.fn();
 const isSuppressed = vi.fn();
+const wasContactedToday = vi.fn();
+const recordContacted = vi.fn();
 const logCopilotAction = vi.fn();
 const listPatients = vi.fn();
 const searchPatients = vi.fn();
 
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
 vi.mock("@/lib/messaging/suppression", () => ({ isSuppressed: (...a: unknown[]) => isSuppressed(...a) }));
+vi.mock("@/lib/messaging/frequency", () => ({
+  wasContactedToday: (...a: unknown[]) => wasContactedToday(...a),
+  recordContacted: (...a: unknown[]) => recordContacted(...a),
+}));
 vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: (...a: unknown[]) => logCopilotAction(...a) }));
 vi.mock("@/lib/dentally/read", () => ({
   listPatients: (...a: unknown[]) => listPatients(...a),
@@ -49,6 +55,8 @@ beforeEach(() => {
     );
   });
   isSuppressed.mockResolvedValue(false);
+  wasContactedToday.mockResolvedValue(false);
+  recordContacted.mockResolvedValue(undefined);
   sendMessage.mockResolvedValue({ providerMessageId: "dry-sms-1", provider: "dry-run", status: "dry_run" });
 });
 
@@ -98,6 +106,51 @@ describe("send_sms", () => {
   it("needs both a patient and a message", async () => {
     const out = JSON.parse(await dispatch("send_sms", { patient: "Cora", message: "" }));
     expect(out.sent).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+// Finding #4: a manual co-pilot send bypasses the shared drain, so it must consult AND
+// stamp the cross-module one-per-patient-per-day ledger itself — otherwise a manual text
+// silently stacks on top of an automated same-day send. Human-confirmed, so it MAY
+// override the fatigue cap, but only as a deliberate, surfaced choice (never silently).
+describe("send_sms cross-module daily ledger (finding #4)", () => {
+  it("stamps recordContacted after a successful confirmed send, keyed on the canonical address", async () => {
+    const out = JSON.parse(await dispatch("send_sms", { patient: "Cora", message: "Hi Cora.", confirm: true }));
+    expect(out.sent).toBe(true);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // Same key shape the drain uses (E.164 phone), so automated modules see this send.
+    expect(recordContacted).toHaveBeenCalledWith("site-cc", "+447700900001", expect.any(String), "copilot");
+  });
+
+  it("consults wasContactedToday and refuses a second same-day send without an override", async () => {
+    wasContactedToday.mockResolvedValue(true);
+    const out = JSON.parse(await dispatch("send_sms", { patient: "Cora", message: "Second today.", confirm: true }));
+    expect(out.sent).toBe(false);
+    expect(out.reason).toBe("already_contacted_today");
+    expect(out.requiresOverride).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();      // did not silently stack
+    expect(recordContacted).not.toHaveBeenCalled();  // nothing sent, nothing stamped
+    expect(logCopilotAction).toHaveBeenCalledWith(expect.objectContaining({ status: "blocked:already_contacted_today" }));
+  });
+
+  it("sends a deliberate second message when the owner overrides, and still records", async () => {
+    wasContactedToday.mockResolvedValue(true);
+    const out = JSON.parse(
+      await dispatch("send_sms", { patient: "Cora", message: "Override send.", confirm: true, override: true }),
+    );
+    expect(out.sent).toBe(true);
+    expect(out.overrode).toBe(true);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(recordContacted).toHaveBeenCalledWith("site-cc", "+447700900001", expect.any(String), "copilot");
+  });
+
+  it("surfaces already-contacted-today in the preview so the owner sees the stacking risk", async () => {
+    wasContactedToday.mockResolvedValue(true);
+    const out = JSON.parse(await dispatch("send_sms", { patient: "Cora", message: "Hi Cora." }));
+    expect(out.preview).toBe(true);
+    expect(out.alreadyContactedToday).toBe(true);
+    expect(out.note).toMatch(/already had a message today/i);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });

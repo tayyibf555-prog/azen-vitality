@@ -2,6 +2,7 @@ import { draftOutreach } from "@/lib/outreach/draft";
 import { stepDef, advanceAfter, OUTREACH_CADENCE } from "@/lib/outreach/cadence";
 import {
   listRunningCampaigns,
+  listBuildingCampaigns,
   listDueTargets,
   getTarget,
   listTouches,
@@ -11,9 +12,11 @@ import {
   advanceTarget,
   countContactedToday,
 } from "@/lib/outreach/repository";
+import { runOutreachBuildTickById } from "@/lib/outreach/build";
 import type { OutreachCampaign, OutreachTarget } from "@/lib/outreach/types";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import { dentallyReadKey } from "@/lib/dentally/read";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -35,6 +38,67 @@ function patientToRef(t: OutreachTarget): string {
 /** The outreach cadence is SMS-only, so a target must have SMS consent to be messaged. */
 function consented(t: OutreachTarget): boolean {
   return t.consent.sms;
+}
+
+// Build-continuation bounds. Each build tick is itself bounded (a handful of Dentally
+// reads), so these cap how much of the sweep's wall-clock the build pass may spend
+// before the send pass, and how many campaigns/ticks it advances per run. The lease
+// (310s) and maxDuration (300s) sit above the wall-clock budget so a build pass can
+// never run the request over.
+const BUILD_CONTINUATION_BUDGET_MS = 120_000;
+const MAX_BUILD_CAMPAIGNS_PER_TICK = 10;
+const MAX_BUILD_TICKS_PER_CAMPAIGN = 12;
+
+interface BuildContinuationSummary {
+  campaigns: number;
+  ticks: number;
+  completed: number;
+  skipped?: string;
+}
+
+/**
+ * UNGATED build-continuation pass. Advances any campaign left in status 'building' (e.g.
+ * one created via the co-pilot, which only runs a single tick at creation) so it reaches
+ * 'ready' on the 24/7 schedule WITHOUT the Campaigns UI loop. Building a patient list is
+ * NOT sending, so this deliberately runs even when the outreach SEND switch is off; the
+ * kill switch stays on the send section only. runOutreachBuildTickById reloads the
+ * campaign each call, so looping it walks the resumable cursor forward; a 403/429 stop or
+ * a failed tick ends that campaign's turn (it resumes next sweep). A build that completes
+ * flips itself to 'ready' via the existing build path. Never throws.
+ */
+async function continueBuilds(): Promise<BuildContinuationSummary> {
+  let building: OutreachCampaign[];
+  try {
+    building = await listBuildingCampaigns(MAX_BUILD_CAMPAIGNS_PER_TICK);
+  } catch (err) {
+    console.error("[outreach] build-continuation: listing building campaigns failed", err);
+    return { campaigns: 0, ticks: 0, completed: 0, skipped: "list failed" };
+  }
+  if (building.length === 0) return { campaigns: 0, ticks: 0, completed: 0 };
+  // runOutreachBuildTick assumes the Dentally read key is configured (its callers check
+  // first), so gate the whole pass on it rather than letting each tick fail.
+  if (!dentallyReadKey()) return { campaigns: building.length, ticks: 0, completed: 0, skipped: "no dentally key" };
+
+  const start = Date.now();
+  let ticks = 0;
+  let completed = 0;
+  for (const campaign of building) {
+    if (Date.now() - start > BUILD_CONTINUATION_BUDGET_MS) break;
+    for (let i = 0; i < MAX_BUILD_TICKS_PER_CAMPAIGN; i += 1) {
+      if (Date.now() - start > BUILD_CONTINUATION_BUDGET_MS) break;
+      try {
+        const res = await runOutreachBuildTickById(campaign.id);
+        ticks += 1;
+        if (res.done) { completed += 1; break; }   // flipped to 'ready' by the build path
+        if (!res.ok || res.stopped) break;          // paused/failed: resume next sweep
+      } catch (err) {
+        // A build blip on one campaign must never abort the pass (or the send pass).
+        console.error(`[outreach] build-continuation: tick failed for campaign ${campaign.id}`, err);
+        break;
+      }
+    }
+  }
+  return { campaigns: building.length, ticks, completed };
 }
 
 interface CampaignResult {
@@ -164,21 +228,30 @@ async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<Cam
 export async function POST(request: Request): Promise<Response> {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
 
-  // Owner kill switch, fail-closed on the send path: with outreach OFF (its default),
-  // nothing is drafted or queued. This is the primary gate on a system that seeds
-  // disabled and only runs during a supervised client test.
-  if (!(await isSystemEnabledForSend(CLIENT_ID, "outreach"))) {
-    return Response.json({ ok: true, skipped: "system off" });
-  }
-
-  // Never overlap with another outreach sweep: two runs would both see the same due
-  // targets and draft+queue duplicates. Lease OUTLIVES maxDuration (300s) so a slow
-  // run cannot be lapped; a crashed run self-heals ~10s after the platform kills it.
+  // Never overlap with another outreach sweep: two runs would both advance the same
+  // building cursor OR see the same due targets and draft+queue duplicates. The lease is
+  // acquired UP FRONT so the build-continuation pass is protected too. Lease OUTLIVES
+  // maxDuration (300s) so a slow run cannot be lapped; a crashed run self-heals ~10s
+  // after the platform kills it.
   if (!(await acquireCronLock("sweep-outreach", 310))) {
     return Response.json({ ok: true, skipped: "another run in progress" });
   }
 
   try {
+    // UNGATED build-continuation FIRST, BEFORE the send kill-switch: a co-pilot-created
+    // campaign is left mid-build and must finish on the schedule even when the outreach
+    // SEND switch is off. Building a list is not sending, so it is deliberately not gated
+    // by isSystemEnabledForSend (that gate stays on the send section below).
+    const build = await continueBuilds();
+
+    // Owner kill switch, fail-closed on the SEND path: with outreach OFF (its default),
+    // nothing is drafted or queued. This is the primary gate on a system that seeds
+    // disabled and only runs during a supervised client test. The build pass above has
+    // already run, so lists still finish while sending stays halted.
+    if (!(await isSystemEnabledForSend(CLIENT_ID, "outreach"))) {
+      return Response.json({ ok: true, build, skipped: "system off" });
+    }
+
     const now = new Date();
     const campaigns = await listRunningCampaigns();
     const results: CampaignResult[] = [];
@@ -198,6 +271,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     return Response.json({
       ok: true,
+      build,
       campaigns: campaigns.length,
       swept,
       drafted,

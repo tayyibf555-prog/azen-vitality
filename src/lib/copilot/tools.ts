@@ -18,6 +18,8 @@ import { getAgentAnalytics } from "@/lib/agent/repository";
 import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
+import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
+import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import type { MessageChannel } from "@/lib/messaging/types";
 import {
@@ -99,6 +101,7 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
         patient: { type: "string", description: "Patient name or phone number, to identify exactly one patient" },
         message: { type: "string", description: "The exact SMS text to send" },
         confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to preview without sending." },
+        override: { type: "boolean", description: "Set true ONLY to deliberately send a SECOND message to a patient already contacted today, after the owner has explicitly said to override the one-per-day limit. Omit otherwise." },
       },
       required: ["patient", "message"],
     },
@@ -114,6 +117,7 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
         subject: { type: "string" },
         message: { type: "string", description: "The email body" },
         confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to preview without sending." },
+        override: { type: "boolean", description: "Set true ONLY to deliberately send a SECOND message to a patient already contacted today, after the owner has explicitly said to override the one-per-day limit. Omit otherwise." },
       },
       required: ["patient", "subject", "message"],
     },
@@ -372,10 +376,21 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             });
           }
 
+          // Cross-module one-per-patient-per-day ledger. The co-pilot dispatches directly
+          // (not via the shared drain), so — like the drain — it must key on the CANONICAL
+          // address (E.164 / lowercased email) so the co-pilot and the automated modules
+          // stamp/read the SAME row for one handset. Falls back to the raw destination if
+          // normalisation fails (implausible number), so a send is still recorded.
+          const today = londonDayKey(new Date());
+          const ledgerAddress = (channel === "sms" ? toE164(to) : normaliseEmail(to)) ?? to;
+          const alreadyContactedToday = await wasContactedToday(p.siteId, ledgerAddress, today);
+
           // Two-step gate: without an explicit confirm this is a PREVIEW only. It
           // has verified the patient and consent but sends nothing. The owner must
           // confirm before a real send (this is enforced here, not just in the
-          // prompt, so a model that skips the confirmation cannot dispatch).
+          // prompt, so a model that skips the confirmation cannot dispatch). Surface an
+          // already-contacted-today state here too, so the owner sees the stacking risk
+          // in the read-back rather than being surprised at confirm.
           if (input.confirm !== true) {
             return JSON.stringify({
               sent: false,
@@ -384,7 +399,29 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
               channel,
               ...(channel === "email" ? { subject } : {}),
               message,
-              note: `Ready to send to ${p.name} (consent is in place, nothing sent yet). Show this to the owner and, only once they confirm, call ${name} again with confirm true.`,
+              alreadyContactedToday,
+              note:
+                (alreadyContactedToday
+                  ? `Heads up: ${p.name} has already had a message today, and the platform sends at most one a day. Sending this would be a second. Only proceed if the owner explicitly wants to override that; if they do, call ${name} again with confirm true AND override true. `
+                  : "") +
+                `Ready to send to ${p.name} (consent is in place, nothing sent yet). Show this to the owner and, only once they confirm, call ${name} again with confirm true.`,
+            });
+          }
+
+          // Confirmed. The one-per-day cap is a fatigue guard, not a safety gate, so a
+          // human-confirmed owner send MAY override it (mirroring how the Inbox human
+          // takeover bypasses the module kill switches) — but only as a DELIBERATE,
+          // surfaced choice. Without an explicit override, a patient already contacted
+          // today is NOT silently stacked on top of an automated same-day send.
+          if (alreadyContactedToday && input.override !== true) {
+            await logCopilotAction({ ...audit, status: "blocked:already_contacted_today" });
+            return JSON.stringify({
+              sent: false,
+              reason: "already_contacted_today",
+              requiresOverride: true,
+              patient: p.name,
+              channel,
+              message: `${p.name} has already been sent a message today. Across the whole platform a patient gets at most one message a day, so I have not sent a second. If you definitely want to text them again anyway, tell me to override and I will send it just this once.`,
             });
           }
 
@@ -396,15 +433,27 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           });
           const dryRun = result.provider === "dry-run";
           await logCopilotAction({ ...audit, status: dryRun ? "dry_run" : result.status });
+          // Stamp the cross-module daily ledger so the automated systems (recall,
+          // reactivation, no-show, outreach, nurture — all draining through the shared
+          // drain) treat this patient as contacted today and do not add a second message.
+          // Best-effort, exactly like the drain: a ledger-write failure never unsends the
+          // message that already went out. Recorded even in dry-run so the cap is honoured
+          // during the supervised test phase, matching the drain.
+          await recordContacted(p.siteId, ledgerAddress, today, "copilot");
           return JSON.stringify({
             sent: true,
             patient: p.name,
             channel,
             dryRun,
+            ...(alreadyContactedToday ? { overrode: true } : {}),
             status: result.status,
-            note: dryRun
-              ? "Recorded in test mode (dry run); it was not delivered to the patient. It will go out for real once the practice switches messaging live."
-              : "Sent.",
+            note:
+              (alreadyContactedToday
+                ? "This is a deliberate second message today (you asked me to override the one-a-day limit). "
+                : "") +
+              (dryRun
+                ? "Recorded in test mode (dry run); it was not delivered to the patient. It will go out for real once the practice switches messaging live."
+                : "Sent."),
           });
         }
 
@@ -511,6 +560,8 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // large base finishes over several ticks; report 'building' so the owner knows
           // the count will climb, or 'ready' if it completed in one pass. NEVER launches.
           let matched = 0;
+          let contactable = 0;
+          let contactableKnown = false;
           let excludedMissingData = 0;
           let buildStatus: "ready" | "building" | "paused" | "unavailable" = "building";
           let pauseReason: "rate-limit" | "error" | null = null;
@@ -519,6 +570,10 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           } else {
             const tick = await runOutreachBuildTick(campaign);
             matched = tick.counts.matched ?? 0;
+            if (typeof tick.counts.contactable === "number") {
+              contactable = tick.counts.contactable;
+              contactableKnown = true;
+            }
             excludedMissingData = tick.counts.excludedMissingData ?? 0;
             // Report honestly. A Dentally 403/429 stop (tick.stopped) or a failed tick
             // (!tick.ok) means the scan PAUSED before finishing: the cursor is preserved
@@ -552,6 +607,10 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             practitioner: practitionerName,
             dailyCap: campaign.dailyCap,
             matchedSoFar: matched,
+            // Honesty: matching a patient is not the same as reaching them. Consent is
+            // applied at send time, so surface how many of the matches actually have SMS
+            // consent (contactable) and are the real reachable audience.
+            ...(contactableKnown ? { contactableSoFar: contactable } : {}),
             // Honesty: how many records were dropped for missing age/gender when those
             // filters are in play, so the read-back can state it.
             ...(usesDemographics ? { excludedForMissingAgeOrGender: excludedMissingData } : {}),
@@ -566,6 +625,9 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
                       ? "The patient scan paused on a Dentally rate limit before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. Tell the owner it paused and will continue automatically, not that the count is rising right now. "
                       : "The patient scan hit a temporary problem before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. "
                     : "The build is still running; the matched count will keep climbing, so tell the owner it updates shortly. ") +
+              (contactableKnown && contactable < matched
+                ? `Of the ${matched} matched, ${contactable} have SMS consent and can be contacted; the rest are counted but are not texted (no SMS consent). `
+                : "") +
               (usesDemographics && excludedMissingData > 0
                 ? `${excludedMissingData} record(s) had no recorded age or gender on file and were not included. `
                 : "") +
@@ -591,15 +653,25 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             replied: 0,
             booked: 0,
           }));
+          // Contactable = matched targets WITH SMS consent (from the build). Matching a
+          // patient is not reaching them: consent is applied at send time, so surface the
+          // reachable reality rather than letting 'matched' read as 'will be texted'.
+          const contactable =
+            typeof campaign.counts?.contactable === "number" ? campaign.counts.contactable : null;
           const readback = {
             campaignId: campaign.id,
             name: campaign.name,
             segment: describeSegment(campaign.filters),
             matched: counts.built,
+            ...(contactable !== null ? { contactable } : {}),
             practitioner: campaign.practitionerName,
             dailyCap: campaign.dailyCap,
             status: campaign.status,
           };
+          const consentCaveat =
+            contactable !== null && contactable < counts.built
+              ? ` Of the ${counts.built} matched, ${contactable} have SMS consent and will be contacted; the rest are not texted.`
+              : "";
 
           // Two-step gate, identical to send_sms: without an explicit confirm this is a
           // READ-BACK only, nothing is launched. The prompt forbids setting confirm true
@@ -610,7 +682,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
               launched: false,
               preview: true,
               ...readback,
-              note: "Read this back to the owner (segment, matched count, clinician, daily cap). Nothing launched yet. Only once they confirm, call launch_outreach_campaign again with confirm true.",
+              note: `Read this back to the owner (segment, matched count, clinician, daily cap).${consentCaveat} Nothing launched yet. Only once they confirm, call launch_outreach_campaign again with confirm true.`,
             });
           }
 

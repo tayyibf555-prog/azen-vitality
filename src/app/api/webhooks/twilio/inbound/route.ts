@@ -295,6 +295,15 @@ export async function POST(request: Request): Promise<Response> {
   // precise address messaged. Best-effort: any lookup failure must never break the
   // webhook, so the whole block is guarded.
   let outreachInvite: AgentContext["outreachInvite"] | undefined;
+  // STOP opt-out also needs the outreach match's patient-ref (used in the STOP block
+  // below). A STOP from a number known ONLY via an outreach campaign - no
+  // reactivation/recall target and no resolved Dentally identity - must still be
+  // suppressed by patient:<id>, not by address alone. Capture it inside THIS
+  // best-effort lookup so a lookup failure leaves it null and the STOP still
+  // suppresses by address (opt-out is never broken), mirroring the recall/
+  // reactivation branches which likewise derive the ref from a matched target.
+  let outreachStopPatientRef: string | null = null;
+  let outreachStopSiteId: string | null = null;
   try {
     const outreachTarget = await findOutreachTargetByAddress(from);
     if (outreachTarget) {
@@ -317,6 +326,14 @@ export async function POST(request: Request): Promise<Response> {
       // campaign's clinician/angle. Only regress + prime when the matched target is
       // still in an active cadence state AND the correlating send is recent.
       const fullTarget = await getOutreachTarget(outreachTarget.targetId);
+      // Opt-out ref for the STOP block below: derived from the matched outreach
+      // target regardless of the linkage recency/status guard that follows (that
+      // guard governs agent-priming, NOT opt-out - a STOP is a global opt-out for the
+      // matched patient however stale the campaign).
+      if (fullTarget?.patientId) {
+        outreachStopPatientRef = `patient:${fullTarget.patientId}`;
+        outreachStopSiteId = fullTarget.siteId;
+      }
       const linkable =
         !!fullTarget &&
         OUTREACH_ACTIVE_STATES.has(fullTarget.status) &&
@@ -364,7 +381,11 @@ export async function POST(request: Request): Promise<Response> {
           ? `patient:${recallTarget.targetId.split(":")[1]}`
           : identity
             ? `patient:${identity.patientId}`
-            : null;
+            : // Outreach-only recipient (no reactivation/recall target, unresolved
+              // identity): fall back to the patient-ref captured from the outreach
+              // match above, so the STOP suppresses patient:<id> and not the address
+              // alone. Null when no outreach match either.
+              outreachStopPatientRef;
       // This webhook only ever receives phone channels; the same number gets both.
       const channels: MessageChannel[] = ["sms", "whatsapp"];
       const clientId = getSite(siteId)?.clientId ?? "vitality";
@@ -374,6 +395,7 @@ export async function POST(request: Request): Promise<Response> {
       suppressSites.add(siteId);
       if (target) suppressSites.add(target.siteId);
       if (recallTarget) suppressSites.add(recallTarget.siteId);
+      if (outreachStopSiteId) suppressSites.add(outreachStopSiteId);
       const refs = patientRef ? [from, patientRef] : [from];
       for (const sid of suppressSites) {
         for (const ch of channels) {
