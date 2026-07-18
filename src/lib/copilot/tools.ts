@@ -1,7 +1,26 @@
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import { getSite } from "@/lib/mock";
-import { getSites } from "@/lib/mock/clients";
+import { getSites, getClient } from "@/lib/mock/clients";
+import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { londonDayKey } from "@/lib/time/london";
+import { TREATMENTS, findTreatment } from "@/lib/treatments/catalog";
+import type { CtaTarget, LandingPageContent } from "@/lib/landing/content";
+import { generateBothVariants, type CallModel } from "@/lib/landing/generate-run";
+import { deriveSlug } from "@/lib/landing/slug";
+import {
+  insertPageWithVariants,
+  getPageById,
+  getPageBySlug,
+  setPageStatus,
+  SlugTakenError,
+} from "@/lib/landing/repository";
+import { mintPreviewToken } from "@/lib/landing/preview-token";
+import { scanBannedText } from "@/lib/landing/compliance";
+import { buildCopyPrompt, cleanCopy } from "@/lib/meta-ads/ai";
+import { CAMPAIGN_TEMPLATES } from "@/lib/meta-ads/knowledge";
+import type { CampaignObjective } from "@/lib/meta-ads/types";
+import { createMetaCampaign, getMetaCampaign, type MetaCampaignCopy } from "@/lib/meta-ads/repository";
+import { isMetaConnected } from "@/lib/meta-ads/connection";
 import {
   listPatients,
   searchPatients,
@@ -158,6 +177,65 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
       properties: {
         campaignId: { type: "string", description: "The id of the campaign to launch (from create_outreach_campaign or the list)." },
         confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed launch in their own reply. Omit or false to read back without launching." },
+      },
+      required: ["campaignId"],
+    },
+  },
+  {
+    name: "create_landing_page",
+    description:
+      "Create a campaign LANDING PAGE for a treatment: it generates TWO A/B content variants, runs them through the built-in compliance checks (real catalogue prices only, no testimonials, guarantees, pain-free claims, superlatives, awards, reviews or NHS/private wording), and saves them as a DRAFT page. It NEVER publishes: it returns the page id, the two preview links and a one-line summary of each variant. Use ONLY a treatment the owner named and, if they gave one, their angle; never invent prices, claims, testimonials or awards (the copy is written and compliance-checked automatically). Publishing the page live is a separate confirmed step (launch_landing_page).",
+    input_schema: {
+      type: "object",
+      properties: {
+        treatment: { type: "string", description: "The treatment the page is for: a catalogue key (e.g. 'invisalign') or a plain label (e.g. 'teeth straightening') that maps to one." },
+        angle: { type: "string", description: "Optional angle or audience note the owner gave, e.g. 'aimed at nervous patients' or 'focus on finance'. Only pass what the owner stated." },
+        ctaTarget: { type: "string", enum: ["assessment", "booking"], description: "Where the page's call to action sends visitors: the Smile Assessment funnel ('assessment', the default) or the booking page ('booking')." },
+      },
+      required: ["treatment"],
+    },
+  },
+  {
+    name: "launch_landing_page",
+    description:
+      "Publish a DRAFT landing page live at its public URL. TWO STEPS, exactly like launch_outreach_campaign: call first WITHOUT confirm to read back the page (its treatment, slug and the URL that will go live) and check nothing is published; then, ONLY after the owner clearly says yes in a later reply, call again with confirm true. It refuses if the page is already live or archived. Never set confirm true in the same turn as the owner's original request.",
+    input_schema: {
+      type: "object",
+      properties: {
+        pageId: { type: "string", description: "The id of the landing page to publish (from create_landing_page)." },
+        confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to read back without publishing." },
+      },
+      required: ["pageId"],
+    },
+  },
+  {
+    name: "create_meta_campaign",
+    description:
+      "Assemble a Meta (Facebook and Instagram) ad campaign DRAFT from the owner's stated details and save it, READY to publish. It writes UK-compliant ad copy automatically and pulls real 'from' prices from the price list when the owner wants pricing shown. It does NOT go live: publishing to Meta needs the practice's Meta account connected, so this always returns a ready, not-published campaign. Use ONLY the details the owner gave; never invent an audience, budget, radius or price. Returns the campaign id, a read-back of everything assembled (objective, radius, budget, audience, negatives, the generated headline and primary text, any linked landing page) and the honest not-live status.",
+    input_schema: {
+      type: "object",
+      properties: {
+        objective: { type: "string", enum: ["awareness", "leads", "traffic", "engagement", "retargeting"], description: "The campaign objective. Most dental campaigns are 'leads' (the default if unstated)." },
+        treatment: { type: "string", description: "The treatment or focus of the campaign (a catalogue key/label like 'implant', or a plain focus like 'new patients')." },
+        radiusMiles: { type: "number", description: "The targeting radius in miles around the practice the owner asked for." },
+        dailyBudgetGBP: { type: "number", description: "The daily budget in GBP the owner set." },
+        audienceNotes: { type: "string", description: "Plain-English audience notes the owner gave, e.g. 'adults 30 to 55 who have thought about implants'." },
+        transparentPricing: { type: "boolean", description: "Set true if the owner wants the real 'from' price shown in the ad. The price is pulled from the catalogue, never invented." },
+        negativeKeywords: { type: "array", items: { type: "string" }, description: "Words/phrases the owner wants to exclude from targeting or copy." },
+        attachLandingSlug: { type: "string", description: "Optional: the slug of a landing page (created with create_landing_page) to send this campaign's clicks to." },
+      },
+      required: ["treatment"],
+    },
+  },
+  {
+    name: "publish_meta_campaign",
+    description:
+      "The confirmed step to take an assembled Meta campaign live. TWO STEPS like launch_outreach_campaign: call first WITHOUT confirm to read the campaign back, then only after the owner clearly says yes call again with confirm true. It will REFUSE to go live until the practice's Meta account is connected (in Growth, Meta Ads), and it never claims a campaign is running when it is not. Never set confirm true in the same turn as the owner's request.",
+    input_schema: {
+      type: "object",
+      properties: {
+        campaignId: { type: "string", description: "The id of the Meta campaign to publish (from create_meta_campaign)." },
+        confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to read back without publishing." },
       },
       required: ["campaignId"],
     },
@@ -747,6 +825,456 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             ...readback,
             status: "running",
             note: `${campaign.name} is now live. It will contact up to ${campaign.dailyCap} patients a day, honouring consent, opt-outs and the one-message-per-patient-per-day cap.`,
+          });
+        }
+
+        case "create_landing_page": {
+          // WRAP the exact machinery the Landing pages tab uses (POST /api/landing-pages):
+          // generate BOTH variants -> validateContent -> the deterministic compliance lint
+          // (invented prices/testimonials/awards already rejected there; real prices come
+          // from the catalogue) -> persist a DRAFT page + its two variants. We do NOT
+          // reimplement or duplicate any of that; only the model call is provided here,
+          // identical to the route (Sonnet, thinking disabled per house rule).
+          const treatmentInput = String(input.treatment ?? "").trim();
+          if (!treatmentInput) return JSON.stringify({ created: false, error: "I need a treatment for the landing page." });
+          const treatment = TREATMENTS.find((t) => t.key === treatmentInput) ?? findTreatment(treatmentInput);
+          if (!treatment) {
+            return JSON.stringify({
+              created: false,
+              error: `I could not match "${treatmentInput}" to a treatment in the catalogue. Tell me which treatment the page is for.`,
+            });
+          }
+
+          const ctaRaw = String(input.ctaTarget ?? "").trim().toLowerCase();
+          const ctaTarget: CtaTarget = ctaRaw === "booking" ? "booking" : "assessment";
+          const angle = String(input.angle ?? "").trim() || undefined;
+
+          const client = getClient(clientId);
+          if (!client) return JSON.stringify({ created: false, error: "I could not resolve your practice." });
+          // View-scoped site: the page belongs to the site currently in view (the first
+          // scoped site), never across every client site, mirroring create_outreach_campaign.
+          const siteId = siteIds[0] ?? null;
+
+          const anthropic = new Anthropic({ maxRetries: 1 });
+          const callModel: CallModel = async (system, user) => {
+            const msg = await anthropic.messages.create(
+              { model: SONNET, thinking: NO_THINKING, max_tokens: 1500, system, messages: [{ role: "user", content: user }] },
+              { timeout: 25000 },
+            );
+            return msg.content
+              .filter((b): b is Anthropic.TextBlock => b.type === "text")
+              .map((b) => b.text)
+              .join("");
+          };
+
+          let variants;
+          try {
+            variants = await generateBothVariants({
+              treatment,
+              practiceName: client.name,
+              ctaTarget,
+              ctaTargetSlug: null,
+              angle,
+              callModel,
+            });
+          } catch {
+            return JSON.stringify({ created: false, error: "I could not generate the landing page just now. Please try again." });
+          }
+
+          // Persist as a DRAFT, retrying a fresh slug suffix on the rare collision
+          // (mirrors the route's 3-attempt loop). insertPageWithVariants forces status draft.
+          let stored: Awaited<ReturnType<typeof insertPageWithVariants>> | null = null;
+          for (let attempt = 0; attempt < 3 && !stored; attempt++) {
+            try {
+              stored = await insertPageWithVariants({
+                clientId,
+                siteId,
+                slug: deriveSlug(treatment.name),
+                treatment: treatment.key,
+                campaignRef: null,
+                autoPromote: true,
+                createdBy: actor,
+                variantA: variants.a.content,
+                variantB: variants.b.content,
+              });
+            } catch (e) {
+              if (e instanceof SlugTakenError) continue; // collision, try a new suffix
+              return JSON.stringify({ created: false, error: "I could not save the landing page just now." });
+            }
+          }
+          if (!stored) return JSON.stringify({ created: false, error: "I could not allocate a unique URL for the page. Please try again." });
+
+          await logCopilotAction({
+            clientId,
+            siteId,
+            actor,
+            action: "create_landing_page",
+            targetRef: `landing:${stored.page.id}`,
+            targetName: stored.page.slug,
+            channel: null,
+            body: `${treatment.name} landing page (draft), CTA to ${ctaTarget}`,
+            status: "created",
+          });
+
+          // Preview links: a DRAFT is only servable with a valid preview token, and the
+          // /go route honours ?v=a|b to show each variant. The token is null when no
+          // server key is configured, in which case the draft cannot be previewed until
+          // it is published.
+          const token = mintPreviewToken(stored.page.id);
+          const base = `/go/${client.slug}/${stored.page.slug}`;
+          const previewLinks = token
+            ? { a: `${base}?preview=${token}&v=a`, b: `${base}?preview=${token}&v=b` }
+            : null;
+
+          const summarise = (c: LandingPageContent) =>
+            `${c.hero.headline}: ${c.hero.subhead}`.replace(/\s+/g, " ").slice(0, 160);
+
+          return JSON.stringify({
+            created: true,
+            published: false,
+            status: "draft",
+            pageId: stored.page.id,
+            slug: stored.page.slug,
+            treatment: treatment.name,
+            ctaTarget,
+            site: siteId ? siteName(siteId) : null,
+            previewLinks,
+            variants: { a: summarise(variants.a.content), b: summarise(variants.b.content) },
+            note:
+              (token
+                ? "The page is saved as a DRAFT with two A/B variants. Give the owner both preview links so they can see each variant. "
+                : "The page is saved as a DRAFT with two A/B variants. A live preview link needs the preview key configured, so show the owner the two variant summaries for now. ") +
+              "Nothing is public yet. To publish it live, use launch_landing_page after the owner confirms.",
+          });
+        }
+
+        case "launch_landing_page": {
+          const pageId = String(input.pageId ?? "").trim();
+          if (!pageId) return JSON.stringify({ published: false, error: "I need the landing page id to publish it." });
+          // IDOR: getPageById scopes to THIS client, so another practice's page reads as
+          // not found.
+          const found = await getPageById(pageId, clientId);
+          if (!found) return JSON.stringify({ published: false, error: "No landing page of yours matches that id." });
+          // View-scope guard: never publish a page for a site outside the current view
+          // selection (mirrors the outreach scope discipline).
+          if (found.page.siteId && !siteIds.includes(found.page.siteId)) {
+            return JSON.stringify({
+              published: false,
+              error: "That page belongs to a site outside the one you have in view. Switch the site selector to it first, then publish.",
+            });
+          }
+
+          const client = getClient(clientId);
+          const clientSlug = client?.slug ?? clientId;
+          const publicUrl = `/go/${clientSlug}/${found.page.slug}`;
+          const readback = {
+            pageId: found.page.id,
+            slug: found.page.slug,
+            treatment: found.page.treatment,
+            status: found.page.status,
+            url: publicUrl,
+          };
+
+          // Two-step gate, identical to launch_outreach_campaign. The deterministic run.ts
+          // commit gate (launch_landing_page is in CONFIRM_COMMIT_TOOLS) ALSO makes a
+          // same-turn confirm inert; this per-tool preview is belt-and-braces.
+          if (input.confirm !== true) {
+            return JSON.stringify({
+              published: false,
+              preview: true,
+              ...readback,
+              note: `This will publish the ${found.page.treatment} landing page live at ${publicUrl}, visible to anyone with the link. Read that back to the owner. Nothing is live yet. Only once they clearly say yes, call launch_landing_page again with confirm true.`,
+            });
+          }
+
+          if (found.page.status === "live") {
+            return JSON.stringify({ published: false, ...readback, reason: "already_live", message: "That page is already live." });
+          }
+          if (found.page.status === "archived") {
+            return JSON.stringify({
+              published: false,
+              ...readback,
+              reason: "archived",
+              message: "That page is archived, so I have not published it. Create a fresh page if you want to run it again.",
+            });
+          }
+
+          await setPageStatus(found.page.id, clientId, "live");
+          await logCopilotAction({
+            clientId,
+            siteId: found.page.siteId,
+            actor,
+            action: "launch_landing_page",
+            targetRef: `landing:${found.page.id}`,
+            targetName: found.page.slug,
+            channel: null,
+            body: null,
+            status: "published",
+          });
+          return JSON.stringify({
+            published: true,
+            ...readback,
+            status: "live",
+            note: `The ${found.page.treatment} landing page is now live at ${publicUrl}. It serves an even A/B split until a winner is promoted.`,
+          });
+        }
+
+        case "create_meta_campaign": {
+          const treatmentInput = String(input.treatment ?? "").trim();
+          if (!treatmentInput) return JSON.stringify({ created: false, error: "I need the treatment or focus for the campaign." });
+          // A Meta campaign focus may be a catalogue treatment OR a free-text focus (e.g.
+          // "new patients"); keep the label, and only pull a real price when it maps to a
+          // catalogue treatment.
+          const treatment = TREATMENTS.find((t) => t.key === treatmentInput) ?? findTreatment(treatmentInput);
+          const treatmentLabel = treatment ? treatment.name : treatmentInput;
+
+          const objectiveRaw = String(input.objective ?? "").trim().toLowerCase();
+          const OBJECTIVES: readonly CampaignObjective[] = ["awareness", "leads", "traffic", "engagement", "retargeting"];
+          const objective: CampaignObjective = (OBJECTIVES as readonly string[]).includes(objectiveRaw)
+            ? (objectiveRaw as CampaignObjective)
+            : "leads";
+
+          const transparentPricing = input.transparentPricing === true;
+          // Real price from the catalogue ONLY (never invented). Null when pricing is off
+          // or the focus is not a single catalogue treatment.
+          const fromPriceGbp = transparentPricing && treatment ? treatment.priceFrom : null;
+
+          const radiusMiles = typeof input.radiusMiles === "number" && input.radiusMiles > 0 ? input.radiusMiles : null;
+          const dailyBudgetGbp = typeof input.dailyBudgetGBP === "number" && input.dailyBudgetGBP > 0 ? input.dailyBudgetGBP : null;
+          const audienceNotes = String(input.audienceNotes ?? "").trim() || null;
+          const negativeKeywords = Array.isArray(input.negativeKeywords)
+            ? (input.negativeKeywords as unknown[])
+                .filter((x): x is string => typeof x === "string")
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .slice(0, 50)
+            : [];
+
+          const client = getClient(clientId);
+          if (!client) return JSON.stringify({ created: false, error: "I could not resolve your practice." });
+          const siteId = siteIds[0] ?? null;
+
+          // Optionally attach a landing page created by create_landing_page (same client
+          // AND within the current view scope).
+          let landingSlug: string | null = null;
+          let landingUrl: string | null = null;
+          const attach = String(input.attachLandingSlug ?? "").trim();
+          if (attach) {
+            const page = await getPageBySlug(clientId, attach).catch(() => null);
+            if (page && (!page.page.siteId || siteIds.includes(page.page.siteId))) {
+              landingSlug = page.page.slug;
+              landingUrl = `/go/${client.slug}/${page.page.slug}`;
+            }
+          }
+
+          // WRAP the existing ad-copy generation: the SAME compliant prompt the Meta Ads
+          // tab uses (buildCopyPrompt bakes in GDC/ASA rules), a Sonnet call (thinking
+          // disabled), cleanCopy to strip dashes, then the SAME banned-word scanner the
+          // landing lint uses (scanBannedText) as a deterministic compliance gate. On a
+          // banned hit, regenerate once; if still non-compliant, fall back to the hand-
+          // written, known-compliant template copy for the treatment.
+          const offer = fromPriceGbp !== null ? `From £${fromPriceGbp}. Treatment is subject to a consultation.` : undefined;
+          const { system, user } = buildCopyPrompt({ treatment: treatmentLabel, offer, angle: audienceNotes ?? undefined, practiceName: client.name });
+          const anthropic = new Anthropic({ maxRetries: 1 });
+          const genOnce = async (): Promise<MetaCampaignCopy | null> => {
+            const msg = await anthropic.messages.create(
+              { model: SONNET, thinking: NO_THINKING, max_tokens: 600, system, messages: [{ role: "user", content: user }] },
+              { timeout: 25000 },
+            );
+            const text = msg.content
+              .filter((b): b is Anthropic.TextBlock => b.type === "text")
+              .map((b) => b.text)
+              .join("");
+            const m = text.match(/\{[\s\S]*\}/);
+            if (!m) return null;
+            let parsed: Record<string, unknown>;
+            try {
+              parsed = JSON.parse(m[0]) as Record<string, unknown>;
+            } catch {
+              return null;
+            }
+            const copy: MetaCampaignCopy = {
+              headline: cleanCopy(String(parsed.headline ?? "")),
+              primaryText: cleanCopy(String(parsed.primaryText ?? "")),
+              description: cleanCopy(String(parsed.description ?? "")),
+              cta: cleanCopy(String(parsed.cta ?? "")),
+              complianceNote: cleanCopy(String(parsed.complianceNote ?? "")),
+            };
+            if (!copy.headline || !copy.primaryText) return null;
+            // Deterministic compliance gate, reusing the landing lint's banned-pattern
+            // scanner: reject copy carrying any banned wording (testimonials, guarantees,
+            // pain-free/superlative claims, funding wording, banned symbols).
+            if (scanBannedText([copy.headline, copy.primaryText, copy.description, copy.cta].join("\n")).length > 0) {
+              return null;
+            }
+            return copy;
+          };
+
+          let copy: MetaCampaignCopy | null = null;
+          try {
+            copy = (await genOnce()) ?? (await genOnce());
+          } catch {
+            copy = null;
+          }
+          if (!copy) {
+            // Fallback to hand-written, UK-compliant template copy (guaranteed clean), so
+            // we never store non-compliant or empty copy.
+            const tpl =
+              (treatment && CAMPAIGN_TEMPLATES.find((t) => t.treatment.toLowerCase().includes(treatment.name.toLowerCase()))) ||
+              CAMPAIGN_TEMPLATES[0];
+            copy = {
+              headline: cleanCopy(tpl.copy.headline),
+              primaryText: cleanCopy(tpl.copy.primaryText),
+              description: cleanCopy(tpl.copy.description),
+              cta: cleanCopy(tpl.cta),
+              complianceNote: cleanCopy(tpl.complianceNote),
+            };
+          }
+
+          const campaignName = `${treatmentLabel} (${objective})`.slice(0, 80);
+          let campaign;
+          try {
+            campaign = await createMetaCampaign({
+              clientId,
+              siteId,
+              name: campaignName,
+              treatment: treatment?.key ?? treatmentLabel,
+              objective,
+              status: "draft",
+              radiusMiles,
+              dailyBudgetGbp,
+              audienceNotes,
+              transparentPricing,
+              fromPriceGbp,
+              negativeKeywords,
+              landingSlug,
+              copy,
+              createdBy: actor,
+            });
+          } catch {
+            return JSON.stringify({ created: false, error: "I could not save the campaign just now. Please try again." });
+          }
+
+          await logCopilotAction({
+            clientId,
+            siteId,
+            actor,
+            action: "create_meta_campaign",
+            targetRef: `meta_campaign:${campaign.id}`,
+            targetName: campaign.name,
+            channel: null,
+            body: `${treatmentLabel} / ${objective}${fromPriceGbp !== null ? ` / from £${fromPriceGbp}` : ""}`,
+            status: "created",
+          });
+
+          return JSON.stringify({
+            created: true,
+            published: false,
+            status: "ready_not_published",
+            campaignId: campaign.id,
+            name: campaign.name,
+            objective,
+            treatment: treatmentLabel,
+            site: siteId ? siteName(siteId) : null,
+            radiusMiles,
+            dailyBudgetGBP: dailyBudgetGbp,
+            audienceNotes,
+            negativeKeywords,
+            ...(fromPriceGbp !== null ? { fromPriceGBP: fromPriceGbp } : {}),
+            ...(landingSlug ? { landingPage: landingUrl } : {}),
+            adCopy: { headline: copy.headline, primaryText: copy.primaryText, description: copy.description, cta: copy.cta },
+            complianceNote: copy.complianceNote,
+            metaConnected: isMetaConnected(clientId),
+            note:
+              `The campaign is assembled and saved as a draft, READY to publish. Read the objective, radius, daily budget, audience, negative keywords and the generated headline and primary text back to the owner${fromPriceGbp !== null ? `, including the real from-price of £${fromPriceGbp} pulled from your price list` : ""}. ` +
+              (attach && !landingSlug ? "I could not find that landing page to attach, so none is linked; create one first if you want a custom destination. " : "") +
+              "IMPORTANT: it is NOT live. Going live needs the practice's Meta account connected in Growth, Meta Ads, and is a separate confirmed step (publish_meta_campaign). Never tell the owner it is running or live.",
+          });
+        }
+
+        case "publish_meta_campaign": {
+          const campaignId = String(input.campaignId ?? "").trim();
+          if (!campaignId) return JSON.stringify({ published: false, error: "I need the campaign id to publish it." });
+          const campaign = await getMetaCampaign(campaignId);
+          if (!campaign) return JSON.stringify({ published: false, error: "No campaign matches that id." });
+          // IDOR guard: only ever act on THIS client's campaigns.
+          if (campaign.clientId !== clientId) {
+            return JSON.stringify({ published: false, error: "That campaign belongs to another practice." });
+          }
+          // View-scope guard, mirroring the outreach launch discipline.
+          if (campaign.siteId && !siteIds.includes(campaign.siteId)) {
+            return JSON.stringify({
+              published: false,
+              error: "That campaign belongs to a site outside the one you have in view. Switch the site selector to it first.",
+            });
+          }
+
+          const readback = {
+            campaignId: campaign.id,
+            name: campaign.name,
+            objective: campaign.objective,
+            treatment: campaign.treatment,
+            dailyBudgetGBP: campaign.dailyBudgetGbp,
+            status: campaign.status,
+          };
+
+          // Two-step gate (publish_meta_campaign is in CONFIRM_COMMIT_TOOLS): without an
+          // explicit confirm this is a READ-BACK only.
+          if (input.confirm !== true) {
+            return JSON.stringify({
+              published: false,
+              preview: true,
+              ...readback,
+              note: "This would take the campaign live on Meta. Read it back to the owner. Nothing is published yet, and going live also needs the practice's Meta account connected. Only once the owner clearly says yes, call publish_meta_campaign again with confirm true.",
+            });
+          }
+
+          // HONESTY GATE: publishing to Meta needs the client's Meta account connected. No
+          // connection is built yet, so this ALWAYS refuses today and NEVER claims it went
+          // live.
+          if (!isMetaConnected(clientId)) {
+            await logCopilotAction({
+              clientId,
+              siteId: campaign.siteId,
+              actor,
+              action: "publish_meta_campaign",
+              targetRef: `meta_campaign:${campaign.id}`,
+              targetName: campaign.name,
+              channel: null,
+              body: null,
+              status: "blocked:meta_not_connected",
+            });
+            return JSON.stringify({
+              published: false,
+              ready: true,
+              reason: "meta_not_connected",
+              ...readback,
+              message:
+                "This campaign is ready, but I can't publish it to Meta yet: the practice's Meta account is not connected. Connect it in Growth, Meta Ads, then ask me again. Nothing has gone live.",
+            });
+          }
+
+          // Connected, but there is deliberately NO automatic Meta publish adapter (it is
+          // blocked on the Meta integration): we do not invent a publish path, so this stays
+          // honest and points the owner at the launch guide rather than claiming it went live.
+          await logCopilotAction({
+            clientId,
+            siteId: campaign.siteId,
+            actor,
+            action: "publish_meta_campaign",
+            targetRef: `meta_campaign:${campaign.id}`,
+            targetName: campaign.name,
+            channel: null,
+            body: null,
+            status: "blocked:publisher_not_built",
+          });
+          return JSON.stringify({
+            published: false,
+            ready: true,
+            reason: "publisher_not_built",
+            ...readback,
+            message:
+              "Your Meta account is connected, but going live is still done in Meta Ads Manager: follow the step-by-step launch guide in Growth, Meta Ads. I have not changed anything on Meta, so nothing has gone live automatically.",
           });
         }
 
