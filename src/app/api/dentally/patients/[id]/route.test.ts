@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   requireSiteAccess: vi.fn(),
   getPatientById: vi.fn(),
   getPatientDetail: vi.fn(),
+  numberHealthFor: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guard", () => ({
@@ -18,6 +19,9 @@ vi.mock("@/lib/auth/guard", () => ({
 vi.mock("@/lib/dentally/read", () => ({
   getPatientById: h.getPatientById,
   getPatientDetail: h.getPatientDetail,
+}));
+vi.mock("@/lib/messaging/number-health", () => ({
+  numberHealthFor: h.numberHealthFor,
 }));
 
 import { GET } from "./route";
@@ -43,6 +47,7 @@ beforeEach(() => {
   h.requireUser.mockResolvedValue(OWNER); // enforced by default
   h.requireSiteAccess.mockReturnValue(null); // caller holds the named site
   h.getPatientDetail.mockResolvedValue({ appointments: [], plans: [], notes: [], lifetimeSpend: 0 });
+  h.numberHealthFor.mockResolvedValue({ state: "unchecked", lineType: null });
 });
 
 describe("GET /api/dentally/patients/[id] site-scope guard", () => {
@@ -88,5 +93,33 @@ describe("GET /api/dentally/patients/[id] site-scope guard", () => {
     expect(res.status).toBe(200);
     expect(h.getPatientById).not.toHaveBeenCalled();
     expect(h.getPatientDetail).toHaveBeenCalledWith("p1", "site-cc");
+  });
+});
+
+describe("GET /api/dentally/patients/[id] number-health read-back", () => {
+  it("returns the number-health verdict, resolved from the patient's own number (never the URL)", async () => {
+    h.getPatientById.mockResolvedValue({ id: "p1", siteId: "site-cc", phone: "07700 900123" });
+    h.numberHealthFor.mockResolvedValue({ state: "mobile", lineType: "mobile" });
+    const res = await call("p1", "site-cc");
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(h.numberHealthFor).toHaveBeenCalledWith("07700 900123");
+    expect(body.numberHealth).toEqual({ state: "mobile", lineType: "mobile" });
+  });
+
+  it("does not compute a verdict when enforcement is off (auth null): numberHealth is null", async () => {
+    h.requireUser.mockResolvedValue(null);
+    const res = await call("p1", "site-cc");
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(h.numberHealthFor).not.toHaveBeenCalled();
+    expect(body.numberHealth).toBeNull();
+  });
+
+  it("never leaks a verdict for a mismatched-site patient (blocked before the lookup)", async () => {
+    h.getPatientById.mockResolvedValue({ id: "p2", siteId: "site-rv", phone: "07700 900123" });
+    const res = await call("p2", "site-cc");
+    expect(res.status).toBe(404);
+    expect(h.numberHealthFor).not.toHaveBeenCalled();
   });
 });

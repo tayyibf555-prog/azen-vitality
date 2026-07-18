@@ -12,8 +12,10 @@ import {
 } from "lucide-react";
 import type { PatientRecord, AppointmentRecord, PlanRecord, NoteRecord } from "@/lib/dentally/read";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
+import type { NumberHealth } from "@/lib/messaging/number-health";
 import { PatientNotesPanel } from "./patient-notes-panel";
 import { PatientStatusManager } from "./patient-status-manager";
+import { PatientNumberHealth } from "./patient-number-health";
 
 // The chip for a platform admin override (wins over Dentally's own active flag).
 const OVERRIDE_CHIP: Record<PatientAdminStatus, { tone: Tone; label: string }> = {
@@ -78,6 +80,7 @@ export function PatientsTable({
   clientSlug,
   initialFilter = "active",
   overrides = {},
+  lookups = {},
 }: {
   patients: PatientRecord[];
   nowIso: string;
@@ -86,6 +89,10 @@ export function PatientsTable({
   /** Platform admin overrides keyed by dentally patient id, for the site(s) in scope.
    *  Covers rows from the initial slice, search and filter alike (site-wide map). */
   overrides?: Record<string, PatientAdminStatus>;
+  /** Number-health verdicts keyed by dentally patient id, batched for the visible slice,
+   *  so a record opens with its deliverability chip already resolved. Rows beyond the
+   *  slice (search/filter) resolve theirs from the drawer's own detail fetch instead. */
+  lookups?: Record<string, NumberHealth>;
 }) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const searchParams = useSearchParams();
@@ -350,6 +357,7 @@ export function PatientsTable({
           now={now}
           onClose={() => setSelectedId(null)}
           initialOverride={overrides[selected.id] ?? null}
+          initialHealth={lookups[selected.id]}
         />
       ) : null}
     </>
@@ -367,7 +375,18 @@ function Stat({ icon: Icon, label, value }: { icon: typeof Phone; label: string;
   );
 }
 
-function Field({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
+function Field({
+  icon: Icon,
+  label,
+  value,
+  trailing,
+}: {
+  icon: typeof Phone;
+  label: string;
+  value: string;
+  /** Optional node rendered inline after the value (e.g. the number-health chip). */
+  trailing?: React.ReactNode;
+}) {
   return (
     <div className="flex items-start gap-3">
       <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f0f4f9] text-side-ink">
@@ -375,7 +394,10 @@ function Field({ icon: Icon, label, value }: { icon: typeof Phone; label: string
       </span>
       <div className="min-w-0">
         <p className="text-xs font-medium uppercase tracking-wide text-muted">{label}</p>
-        <p className="text-sm text-ink">{value}</p>
+        <p className="flex flex-wrap items-center gap-2 text-sm text-ink">
+          {value}
+          {trailing}
+        </p>
       </div>
     </div>
   );
@@ -402,11 +424,15 @@ function PatientDrawer({
   now,
   onClose,
   initialOverride,
+  initialHealth,
 }: {
   patient: PatientRecord;
   now: Date;
   onClose: () => void;
   initialOverride: PatientAdminStatus | null;
+  /** Number-health seeded from the list batch (instant paint); the drawer's own detail
+   *  fetch below confirms it and, for rows beyond the batched slice, resolves it. */
+  initialHealth?: NumberHealth;
 }) {
   useEscapeKey(onClose);
   // Platform override status, lifted here so the header chip and the body control stay in
@@ -420,6 +446,10 @@ function PatientDrawer({
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [lifetimeSpend, setLifetimeSpend] = useState(0);
   const [outstanding, setOutstanding] = useState(0);
+  // The number-health verdict from the drawer's own detail fetch. Authoritative once
+  // loaded (covers search/filter rows outside the batched list slice); until then the
+  // chip paints from initialHealth. null = the endpoint did not compute one (fall back).
+  const [numberHealth, setNumberHealth] = useState<NumberHealth | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -429,13 +459,14 @@ function PatientDrawer({
       cache: "no-store",
     })
       .then((r) => r.json())
-      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[]; notes?: NoteRecord[]; lifetimeSpend?: number; outstanding?: number }) => {
+      .then((d: { appointments?: AppointmentRecord[]; plans?: PlanRecord[]; notes?: NoteRecord[]; lifetimeSpend?: number; outstanding?: number; numberHealth?: NumberHealth | null }) => {
         if (!alive) return;
         setAppointments(d.appointments ?? []);
         setPlans(d.plans ?? []);
         setNotes(d.notes ?? []);
         setLifetimeSpend(d.lifetimeSpend ?? 0);
         setOutstanding(d.outstanding ?? 0);
+        setNumberHealth(d.numberHealth ?? null);
       })
       .catch(() => {})
       .finally(() => alive && setLoading(false));
@@ -503,7 +534,12 @@ function PatientDrawer({
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold text-navy">Details</h3>
                   <div className="space-y-3.5">
-                    <Field icon={Phone} label="Mobile" value={patient.phone ?? "Not on file"} />
+                    <Field
+                      icon={Phone}
+                      label="Mobile"
+                      value={patient.phone ?? "Not on file"}
+                      trailing={<PatientNumberHealth health={numberHealth ?? initialHealth} />}
+                    />
                     <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
                     <Field
                       icon={Cake}

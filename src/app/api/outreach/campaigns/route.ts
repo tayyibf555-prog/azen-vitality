@@ -47,6 +47,7 @@ function toListView(c: OutreachCampaign, counts: Awaited<ReturnType<typeof campa
       contacted: counts.contacted,
       replied: counts.replied,
       booked: counts.booked,
+      blocked: counts.blocked,
     },
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
@@ -120,7 +121,7 @@ export async function POST(request: Request): Promise<Response> {
   });
 
   return Response.json(
-    { ok: true, campaign: toListView(campaign, { built: 0, contacted: 0, replied: 0, booked: 0 }) },
+    { ok: true, campaign: toListView(campaign, { built: 0, contacted: 0, replied: 0, booked: 0, blocked: 0 }) },
     { status: 201 },
   );
 }
