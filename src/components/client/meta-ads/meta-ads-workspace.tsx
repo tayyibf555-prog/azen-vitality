@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Campaign, AdLibraryItem } from "@/lib/meta-ads/types";
 import { findTreatment } from "@/lib/treatments/catalog";
 import { LANDING_TREATMENT_KEYS } from "./landing-pages";
-import { CampaignsTable } from "./campaigns-table";
+import { CampaignsTable, type CampaignPublishState } from "./campaigns-table";
 import { CampaignBuilder } from "./campaign-builder";
 import { AdLibrary } from "./ad-library";
 import { LaunchGuide } from "./launch-guide";
@@ -27,12 +27,17 @@ export function MetaAdsWorkspace({
   clientSlug,
   practiceName,
   metaConnected = false,
+  publishStates,
 }: {
   clientSlug: string;
   practiceName: string;
   /** True only when the practice's Meta account is connected. Until then there are
    *  no live campaigns to show, so the table carries the owner's own drafts only. */
   metaConnected?: boolean;
+  /** Publish/insight state per saved campaign id, for campaigns pushed to Meta. Absent
+   *  until the Meta account connects and something publishes; drives the honest publish
+   *  status and the insight numbers on each campaign row. */
+  publishStates?: Record<string, CampaignPublishState>;
 }) {
   const [tab, setTab] = useState<TabKey>("campaigns");
   // Drafts the owner saves from the Create tab, newest first. Kept here so they
@@ -116,6 +121,7 @@ export function MetaAdsWorkspace({
           <CampaignsTable
             campaigns={campaigns}
             metaConnected={metaConnected}
+            publishStates={publishStates}
             onCreate={() => selectTab("create")}
           />
         ) : null}

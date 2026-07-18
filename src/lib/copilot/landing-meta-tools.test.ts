@@ -7,11 +7,14 @@ import { goodContent } from "@/lib/landing/test-fixtures";
 //   - launch_landing_page reads back without confirm and only publishes with confirm.
 //   - create_meta_campaign assembles a Meta draft (real prices, compliant copy) and is
 //     always honest that it is NOT live.
-//   - publish_meta_campaign refuses until the practice's Meta account is connected.
+//   - publish_meta_campaign refuses until the Meta account is connected, then publishes
+//     to Meta in PAUSED status (the owner activates it in Ads Manager) and records the
+//     outcome honestly (a Graph error leaves the campaign ready, never live).
 //
 // generate-run + the compliance lint + the treatment catalogue are REAL (so the lint is
-// genuinely exercised); the model, repositories, preview token and Meta-connection seam
-// are mocked so we test the branching deterministically without the network or a DB.
+// genuinely exercised); the model, repositories, preview token, the Meta-connection seam
+// and the publish adapter are mocked so we test the branching deterministically without
+// the network or a DB.
 
 const store = vi.hoisted(() => ({
   logged: [] as Record<string, unknown>[],
@@ -22,6 +25,18 @@ const store = vi.hoisted(() => ({
   pageBySlug: null as unknown, // getPageBySlug -> LandingPageWithVariants | null
   metaCampaign: null as unknown, // getMetaCampaign -> MetaCampaignDraft | null
   metaConnected: false,
+  // The result the mocked publish adapter returns (default: created on Meta, paused).
+  publishResult: {
+    ok: true,
+    metaCampaignRef: "camp_1" as string | null,
+    metaAdsetRef: "adset_1" as string | null,
+    metaAdRef: "ad_1" as string | null,
+    error: null as string | null,
+    note: null as string | null,
+    notes: [] as string[],
+    apiVersion: "v25.0",
+  },
+  publishRecorded: [] as Record<string, unknown>[], // recordPublishResult captures
   modelReply: "", // the FakeAnthropic reply text
   previewToken: "tok123" as string | null,
 }));
@@ -80,8 +95,23 @@ vi.mock("@/lib/meta-ads/repository", () => ({
     return { id: "meta-1", ...input };
   },
   getMetaCampaign: async () => store.metaCampaign,
+  recordPublishResult: async (id: string, result: Record<string, unknown>) => {
+    store.publishRecorded.push({ id, result });
+    return null;
+  },
 }));
-vi.mock("@/lib/meta-ads/connection", () => ({ isMetaConnected: () => store.metaConnected }));
+// The connection seam: isMetaConnected is the allow-list gate; metaConnection is the full
+// config (connected only when creds are also present). Both driven by store.metaConnected.
+vi.mock("@/lib/meta-ads/connection", () => ({
+  isMetaConnected: () => store.metaConnected,
+  metaConnection: () =>
+    store.metaConnected
+      ? { connected: true, accessToken: "tok", adAccountId: "act_1", pageId: "page_1" }
+      : { connected: false },
+}));
+// The real publish adapter is exercised in its own tests; here it is mocked so the
+// co-pilot branching is tested without any Meta call.
+vi.mock("@/lib/meta-ads/publish", () => ({ publishCampaign: async () => store.publishResult }));
 
 vi.mock("@anthropic-ai/sdk", () => {
   class FakeAnthropic {
@@ -112,6 +142,17 @@ beforeEach(() => {
   store.pageBySlug = null;
   store.metaCampaign = null;
   store.metaConnected = false;
+  store.publishResult = {
+    ok: true,
+    metaCampaignRef: "camp_1",
+    metaAdsetRef: "adset_1",
+    metaAdRef: "ad_1",
+    error: null,
+    note: null,
+    notes: [],
+    apiVersion: "v25.0",
+  };
+  store.publishRecorded = [];
   store.modelReply = "";
   store.previewToken = "tok123";
 });
@@ -330,13 +371,43 @@ describe("publish_meta_campaign (honesty gate: refuses until Meta connected)", (
     expect(store.logged.some((l) => l.status === "blocked:meta_not_connected")).toBe(true);
   });
 
-  it("even when Meta IS connected, stays honest (no auto-publisher) and never reports live", async () => {
+  it("when Meta IS connected, publishes to Meta in PAUSED status and records the result", async () => {
     store.metaCampaign = draftCampaign();
     store.metaConnected = true;
     const out = JSON.parse(await dispatch("publish_meta_campaign", { campaignId: "meta-1", confirm: true }));
+    // Created on Meta, but PAUSED: the owner activates it in Ads Manager. Never "live-spending".
+    expect(out.published).toBe(true);
+    expect(out.status).toBe("paused_on_meta");
+    expect(out.metaCampaignRef).toBe("camp_1");
+    expect(out.message).toMatch(/PAUSED/i);
+    expect(out.message).toMatch(/Ads Manager/i);
+    // The outcome was persisted and audited.
+    expect(store.publishRecorded).toHaveLength(1);
+    expect(store.publishRecorded[0]).toMatchObject({ id: "meta-1", result: { ok: true } });
+    expect(store.logged.some((l) => l.status === "published:paused_on_meta")).toBe(true);
+  });
+
+  it("when connected but Meta returns an error, stays honest: not live, campaign still ready", async () => {
+    store.metaCampaign = draftCampaign();
+    store.metaConnected = true;
+    store.publishResult = {
+      ok: false,
+      metaCampaignRef: "camp_1",
+      metaAdsetRef: null,
+      metaAdRef: null,
+      error: "Meta: Invalid parameter (code 100)",
+      note: null,
+      notes: [],
+      apiVersion: "v25.0",
+    };
+    const out = JSON.parse(await dispatch("publish_meta_campaign", { campaignId: "meta-1", confirm: true }));
     expect(out.published).toBe(false);
-    expect(out.reason).toBe("publisher_not_built");
-    expect(out.message).toMatch(/nothing has gone live/i);
+    expect(out.reason).toBe("publish_failed");
+    expect(out.error).toMatch(/Invalid parameter/);
+    expect(out.message).toMatch(/nothing is live/i);
+    // Recorded as a failure (status stays ready) and audited.
+    expect(store.publishRecorded[0]).toMatchObject({ id: "meta-1", result: { ok: false } });
+    expect(store.logged.some((l) => l.status === "error:publish_failed")).toBe(true);
   });
 
   it("will not act on another practice's campaign (cross-client IDOR guard)", async () => {

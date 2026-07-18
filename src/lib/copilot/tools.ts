@@ -19,8 +19,9 @@ import { scanBannedText } from "@/lib/landing/compliance";
 import { buildCopyPrompt, cleanCopy } from "@/lib/meta-ads/ai";
 import { CAMPAIGN_TEMPLATES } from "@/lib/meta-ads/knowledge";
 import type { CampaignObjective } from "@/lib/meta-ads/types";
-import { createMetaCampaign, getMetaCampaign, type MetaCampaignCopy } from "@/lib/meta-ads/repository";
-import { isMetaConnected } from "@/lib/meta-ads/connection";
+import { createMetaCampaign, getMetaCampaign, recordPublishResult, type MetaCampaignCopy } from "@/lib/meta-ads/repository";
+import { isMetaConnected, metaConnection } from "@/lib/meta-ads/connection";
+import { publishCampaign } from "@/lib/meta-ads/publish";
 import {
   listPatients,
   searchPatients,
@@ -1229,10 +1230,10 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             });
           }
 
-          // HONESTY GATE: publishing to Meta needs the client's Meta account connected. No
-          // connection is built yet, so this ALWAYS refuses today and NEVER claims it went
-          // live.
-          if (!isMetaConnected(clientId)) {
+          // HONESTY GATE: publishing to Meta needs the client's Meta account connected AND
+          // its credentials present. Until then this refuses and NEVER claims it went live.
+          const connection = metaConnection(clientId);
+          if (!connection.connected) {
             await logCopilotAction({
               clientId,
               siteId: campaign.siteId,
@@ -1254,9 +1255,42 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             });
           }
 
-          // Connected, but there is deliberately NO automatic Meta publish adapter (it is
-          // blocked on the Meta integration): we do not invent a publish path, so this stays
-          // honest and points the owner at the launch guide rather than claiming it went live.
+          // Connected: create the campaign, ad set, creative and ad on Meta, ALL in PAUSED
+          // status (budget safety). The owner reviews and activates it in Ads Manager; the
+          // platform never sets a campaign live-spending.
+          const result = await publishCampaign(campaign, connection);
+          await recordPublishResult(campaign.id, {
+            ok: result.ok,
+            metaCampaignRef: result.metaCampaignRef,
+            metaAdsetRef: result.metaAdsetRef,
+            metaAdRef: result.metaAdRef,
+            error: result.error,
+            note: result.note,
+          });
+
+          if (!result.ok) {
+            // Honest failure: Meta rejected a step. Nothing is live; the campaign stays ready.
+            await logCopilotAction({
+              clientId,
+              siteId: campaign.siteId,
+              actor,
+              action: "publish_meta_campaign",
+              targetRef: `meta_campaign:${campaign.id}`,
+              targetName: campaign.name,
+              channel: null,
+              body: null,
+              status: "error:publish_failed",
+            });
+            return JSON.stringify({
+              published: false,
+              ready: true,
+              reason: "publish_failed",
+              ...readback,
+              error: result.error,
+              message: `I tried to publish it to Meta but got an error: ${result.error} Nothing is live, and the campaign is still ready to retry.`,
+            });
+          }
+
           await logCopilotAction({
             clientId,
             siteId: campaign.siteId,
@@ -1266,15 +1300,17 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             targetName: campaign.name,
             channel: null,
             body: null,
-            status: "blocked:publisher_not_built",
+            status: "published:paused_on_meta",
           });
           return JSON.stringify({
-            published: false,
-            ready: true,
-            reason: "publisher_not_built",
+            published: true,
             ...readback,
+            status: "paused_on_meta",
+            metaCampaignRef: result.metaCampaignRef,
+            notes: result.notes,
             message:
-              "Your Meta account is connected, but going live is still done in Meta Ads Manager: follow the step-by-step launch guide in Growth, Meta Ads. I have not changed anything on Meta, so nothing has gone live automatically.",
+              "Created on Meta in PAUSED status. Tell the owner to review and activate it in Meta Ads Manager, and that nothing is spending until they do." +
+              (result.notes.length > 0 ? ` Also read these honestly to the owner: ${result.notes.join(" ")}` : ""),
           });
         }
 

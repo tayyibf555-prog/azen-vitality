@@ -13,6 +13,43 @@ const STATUS: Record<Campaign["status"], { label: string; tone: Tone }> = {
   draft: { label: "Draft", tone: "info" },
 };
 
+// The publish lifecycle of a SAVED campaign against Meta, distinct from the analytics
+// status above. Set by the publish adapter (co-pilot or the owner publish action):
+//   ready     - assembled and ready, not yet pushed to Meta
+//   published - created on Meta in PAUSED status (the client activates it in Ads Manager)
+//   error     - a publish attempt failed; publishError carries the honest reason
+// Empty for every campaign today (nothing publishes until the Meta account connects), so
+// the table renders exactly as before until real publish state is threaded in.
+export interface CampaignPublishState {
+  state: "ready" | "published" | "error";
+  publishedAt?: string | null;
+  publishError?: string | null;
+  /** The most recent insights snapshot, once the hourly sweep has captured any. */
+  insight?: {
+    spendGbp: number | null;
+    impressions: number | null;
+    clicks: number | null;
+    leads: number | null;
+  } | null;
+}
+
+const PUBLISH_STATUS: Record<CampaignPublishState["state"], { label: string; tone: Tone }> = {
+  ready: { label: "Ready to publish", tone: "info" },
+  published: { label: "Published (paused on Meta)", tone: "success" },
+  error: { label: "Publish error", tone: "danger" },
+};
+
+/** True when an insights snapshot carries at least one captured figure. */
+function hasInsightFigures(insight: CampaignPublishState["insight"]): boolean {
+  return Boolean(
+    insight &&
+      (insight.spendGbp !== null ||
+        insight.impressions !== null ||
+        insight.clicks !== null ||
+        insight.leads !== null),
+  );
+}
+
 // One metric cell: a small label over a larger, tabular-aligned value.
 function Metric({ label, value }: { label: string; value: string }) {
   return (
@@ -23,10 +60,12 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CampaignRow({ campaign }: { campaign: Campaign }) {
+function CampaignRow({ campaign, publish }: { campaign: Campaign; publish?: CampaignPublishState }) {
   const s = STATUS[campaign.status];
   const m = campaign.metrics;
   const isDraft = campaign.status === "draft";
+  const p = publish ? PUBLISH_STATUS[publish.state] : null;
+  const insightFigures = hasInsightFigures(publish?.insight);
 
   return (
     <li className="border-b border-line py-4 first:pt-1 last:border-0">
@@ -34,7 +73,7 @@ function CampaignRow({ campaign }: { campaign: Campaign }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold text-navy">{campaign.name}</span>
-            <StatusPill tone={s.tone}>{s.label}</StatusPill>
+            {p ? <StatusPill tone={p.tone}>{p.label}</StatusPill> : <StatusPill tone={s.tone}>{s.label}</StatusPill>}
           </div>
           <p className="mt-1 text-xs text-muted">
             <span className="text-ink">{campaign.treatment}</span>
@@ -46,7 +85,28 @@ function CampaignRow({ campaign }: { campaign: Campaign }) {
         </div>
       </div>
 
-      {isDraft ? (
+      {/* Publish state (persisted campaigns) takes precedence over the analytics status.
+          When Meta insights have been captured, they light the numbers; otherwise an
+          honest one-line state. Falls back to the original draft/metrics rendering for
+          campaigns with no publish state. */}
+      {publish ? (
+        insightFigures && publish.insight ? (
+          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-line pt-3 sm:grid-cols-4">
+            <Metric label="Spend" value={publish.insight.spendGbp === null ? "—" : money(publish.insight.spendGbp)} />
+            <Metric label="Impressions" value={publish.insight.impressions === null ? "—" : count(publish.insight.impressions)} />
+            <Metric label="Clicks" value={publish.insight.clicks === null ? "—" : count(publish.insight.clicks)} />
+            <Metric label="Leads" value={publish.insight.leads === null ? "—" : count(publish.insight.leads)} />
+          </dl>
+        ) : (
+          <p className="mt-3 border-t border-line pt-3 text-xs text-muted">
+            {publish.state === "published"
+              ? "Created on Meta in paused status. Review and activate it in Ads Manager. Performance figures appear here once it starts delivering."
+              : publish.state === "error"
+                ? `Publishing to Meta did not complete${publish.publishError ? `: ${publish.publishError}` : "."} Nothing is live; it is still ready to retry.`
+                : "Ready to publish to Meta."}
+          </p>
+        )
+      ) : isDraft ? (
         <p className="mt-3 border-t border-line pt-3 text-xs text-muted">
           Saved as a draft. Launch it in Meta to start collecting performance figures here.
         </p>
@@ -67,12 +127,16 @@ function CampaignRow({ campaign }: { campaign: Campaign }) {
 export function CampaignsTable({
   campaigns,
   metaConnected = false,
+  publishStates,
   onCreate,
 }: {
   campaigns: Campaign[];
   /** True only when the practice's Meta account is connected. Drives the honest
    *  caption about where live performance figures come from. */
   metaConnected?: boolean;
+  /** Publish/insight state per campaign id, for campaigns pushed to Meta. Absent today
+   *  (nothing publishes until the Meta account connects), so rows render unchanged. */
+  publishStates?: Record<string, CampaignPublishState>;
   onCreate: () => void;
 }) {
   return (
@@ -102,7 +166,7 @@ export function CampaignsTable({
       ) : (
         <ul>
           {campaigns.map((c) => (
-            <CampaignRow key={c.id} campaign={c} />
+            <CampaignRow key={c.id} campaign={c} publish={publishStates?.[c.id]} />
           ))}
         </ul>
       )}
