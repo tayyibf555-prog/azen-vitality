@@ -15,6 +15,7 @@ type Campaign = {
   messageAngle: string | null;
   practitionerName: string | null;
   dailyCap: number;
+  counts?: Record<string, number> | null;
 };
 
 const store = vi.hoisted(() => ({
@@ -124,6 +125,16 @@ describe("create_outreach_campaign", () => {
     expect(store.updated.some((u) => u.fields.status === "running")).toBe(false);
   });
 
+  it("surfaces the SMS-contactable count honestly, not just the matched total (finding #2)", async () => {
+    // 10 match the segment but only 7 have SMS consent; the read-back must say so, since
+    // consent is applied at send time and the other 3 are counted but never texted.
+    store.buildCounts = { matched: 10, contactable: 7, excludedMissingData: 0 };
+    const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
+    expect(out.matchedSoFar).toBe(10);
+    expect(out.contactableSoFar).toBe(7);
+    expect(out.note).toMatch(/7 have SMS consent/i);
+  });
+
   it("reports how many records were excluded for missing age/gender when those filters are used", async () => {
     store.buildCounts = { matched: 8, excludedMissingData: 3 };
     const out = JSON.parse(
@@ -220,6 +231,17 @@ describe("launch_outreach_campaign (two-step, mirrors send_sms)", () => {
     const out = JSON.parse(await dispatch("launch_outreach_campaign", { campaignId: "camp-1", confirm: false }));
     expect(out.launched).toBe(false);
     expect(store.updated).toHaveLength(0);
+  });
+
+  it("reads back the SMS-contactable count when the build recorded it (finding #2)", async () => {
+    // campaignStatusCounts (mocked) reports 42 matched; the build recorded 30 with SMS
+    // consent. The read-back must surface the reachable 30, not let 42 read as reachable.
+    store.campaign = launchCampaign({ counts: { built: 42, contactable: 30 } });
+    const out = JSON.parse(await dispatch("launch_outreach_campaign", { campaignId: "camp-1" }));
+    expect(out.preview).toBe(true);
+    expect(out.matched).toBe(42);
+    expect(out.contactable).toBe(30);
+    expect(out.note).toMatch(/30 have SMS consent/i);
   });
 
   it("launches with confirm true when ready + angle + outreach ON", async () => {

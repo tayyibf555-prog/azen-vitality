@@ -33,6 +33,15 @@ const MODEL = SONNET;
 // Appointment WRITES that must never happen without an explicit patient confirmation.
 const APPOINTMENT_MUTATIONS = new Set(["book", "reschedule", "cancel"]);
 
+// Co-pilot COMMIT steps that put a message or campaign in front of a real patient the
+// moment they fire: a send_sms / send_email with confirm:true, or a launch_outreach_
+// campaign with confirm:true. These run through this same loop (the owner co-pilot
+// dispatches via runAgentTurn), so they get the SAME deterministic latest-turn floor as
+// an appointment write: the prompt + each tool's own two-step already ask for a read-back,
+// and this makes a same-turn confirm inert regardless of what the model tries. The
+// per-tool guards (consent, suppression, toggle, IDOR, angle) stay as belt-and-braces.
+const CONFIRM_COMMIT_TOOLS = new Set(["send_sms", "send_email", "launch_outreach_campaign"]);
+
 // A patient must give a clear affirmative before the agent is allowed to WRITE an
 // appointment change. This is the deterministic floor beneath the prompt's "read it
 // back and get a clear yes" instruction: a booking/reschedule/cancel is never written
@@ -69,6 +78,16 @@ function latestPatientText(history: MessageParam[]): string {
 const PROPOSAL =
   /\b\d{1,2}[:.]\d{2}\b|\b\d{1,2}\s*(am|pm)\b|\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|shall i (book|go ahead|cancel|move)|would you like me to|book (that|this|you) in|does that (work|suit)|(can|may) i confirm|to confirm/i;
 
+// The send/launch equivalent of PROPOSAL: a co-pilot read-back that OFFERS to send a
+// message, launch a campaign, or override today's one-per-day cap. Kept as its OWN
+// pattern (not folded into PROPOSAL) so the co-pilot commit gate can recognise a send
+// read-back WITHOUT ever widening the stricter appointment-write proposal test above.
+// Deliberately OFFER-shaped ("shall I send", "send it?", "launch it", "override") rather
+// than any mention of a send word, so a prior turn that merely REFERS to a past send
+// ("I sent that yesterday") cannot be mistaken for an offer a later "yes" confirms.
+const SEND_PROPOSAL =
+  /shall i (send|text|email|message|launch|go ahead)|want me to (send|text|email|message|launch)|would you like me to (send|text|email|message|launch)|ready to (send|launch)|send (it|this|that|them)\??|launch (it|this|that|the campaign)|go live|happy for me to|override|to confirm|can i confirm/i;
+
 /** Text of the assistant message immediately before the final patient message. */
 function assistantTextBeforeLatestPatient(history: MessageParam[]): string {
   let lastUser = -1;
@@ -98,12 +117,20 @@ export async function runAgentTurn(
   const messages: MessageParam[] = [...history];
   const toolCalls: { name: string; input: Record<string, unknown> }[] = [];
   let escalated = false;
-  // Fixed for the whole turn: the patient's latest inbound is a clear affirmative
-  // AND it answers a concrete proposal the agent just made (read-back). Appointment
-  // writes (book/reschedule/cancel) are gated on BOTH below.
-  const patientConfirmed =
-    looksAffirmative(latestPatientText(history)) &&
-    PROPOSAL.test(assistantTextBeforeLatestPatient(history));
+  // Fixed for the whole turn. Compute the shared pieces once: the latest inbound text,
+  // the assistant read-back before it, and whether that inbound is a clear affirmative.
+  const latestInbound = latestPatientText(history);
+  const priorReadback = assistantTextBeforeLatestPatient(history);
+  const latestIsAffirmative = looksAffirmative(latestInbound);
+  // Appointment writes (book/reschedule/cancel) require an affirmative answering an
+  // APPOINTMENT proposal (a time/day/"shall I book"). Unchanged, and never widened.
+  const patientConfirmed = latestIsAffirmative && PROPOSAL.test(priorReadback);
+  // Co-pilot commit sends/launch (with confirm:true) require an affirmative answering a
+  // SEND/LAUNCH read-back (or an appointment one). Separate pattern so this can never
+  // loosen the appointment gate above; a same-turn confirm has no prior read-back to
+  // answer, so priorReadback is empty and this is false — exactly the case we refuse.
+  const commitConfirmed =
+    latestIsAffirmative && (SEND_PROPOSAL.test(priorReadback) || PROPOSAL.test(priorReadback));
 
   const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
   for (let round = 0; round < maxRounds; round++) {
@@ -189,6 +216,24 @@ export async function runAgentTurn(
           tool_use_id: tu.id,
           content: JSON.stringify({
             error: "Not confirmed. Read back the exact date, time, site and treatment and get a clear yes from the patient before this can be done.",
+          }),
+        });
+        continue;
+      }
+      // Same deterministic floor for the co-pilot's commit steps: a confirm:true send or
+      // launch is refused unless the owner's LATEST turn is an affirmative answering a
+      // prior read-back. A confirm set in the SAME turn as the original ask (no prior
+      // read-back to answer) is turned back into a read-back-and-ask, never the action.
+      // Only the COMMIT (confirm:true) is gated: a bare preview/read-back (no confirm) is
+      // always allowed, since that is how the read-back the owner then answers is produced.
+      if (CONFIRM_COMMIT_TOOLS.has(tu.name) && input.confirm === true && !commitConfirmed) {
+        console.warn(`[agent] ${tu.name} confirm blocked: latest owner turn is not an affirmative answering a read-back`);
+        results.push({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: JSON.stringify({
+            error:
+              "Not confirmed in this turn. Do not set confirm true in the same message as the request. Call this tool again WITHOUT confirm to read it back to the owner, then set confirm true only after they clearly say yes in a later reply.",
           }),
         });
         continue;

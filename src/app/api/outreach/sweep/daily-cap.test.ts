@@ -18,6 +18,9 @@ vi.mock("@/lib/outreach/repository", () => {
   let n = 0;
   return {
     listRunningCampaigns: vi.fn(async () => []),
+    // The sweep's build-continuation pass lists building campaigns; none here, so it is a
+    // no-op and the send-path behaviour under test is unchanged.
+    listBuildingCampaigns: vi.fn(async () => []),
     listDueTargets: vi.fn(async () => []),
     getTarget: vi.fn(async () => null),
     listTouches: vi.fn(async () => []),

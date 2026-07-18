@@ -121,3 +121,105 @@ describe("leaked tool-markup guard", () => {
     expect(r.replyText).toContain("which suits?");
   });
 });
+
+// Finding #3: the co-pilot's commit steps (send_sms / send_email / launch_outreach_
+// campaign with confirm:true) run through this same loop and get the SAME deterministic
+// latest-turn floor as an appointment write — a confirm in the SAME turn as the original
+// request is refused; a confirm answering a prior read-back proceeds.
+describe("co-pilot commit gate (finding #3)", () => {
+  it("REFUSES a send_sms confirm:true set in the same turn as the request (no prior read-back)", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "send_sms", { patient: "Cora", message: "Hi", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Here's the text for Cora. Shall I send it?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ sent: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    // Owner's first message asks AND says "yes, send it" in one breath: still no prior
+    // read-back to answer, so the send must be turned back into a read-back-and-ask.
+    const r = await runAgentTurn([{ role: "user", content: "Text Cora her results are in, yes send it now" }], deps);
+    expect(dispatch).not.toHaveBeenCalled(); // the send never dispatched
+    expect(r.replyText).toContain("send it");
+  });
+
+  it("ALLOWS a send_sms confirm:true that answers a prior send read-back", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "send_sms", { patient: "Cora", message: "Hi", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Sent."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ sent: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "text Cora a reminder" },
+        { role: "assistant", content: "Here's the reminder for Cora: 'Your check-up is due'. Want me to send it?" },
+        { role: "user", content: "yes please" },
+      ],
+      deps,
+    );
+    expect(dispatch).toHaveBeenCalledWith("send_sms", expect.objectContaining({ confirm: true }));
+    expect(r.replyText).toContain("Sent");
+  });
+
+  it("does NOT treat a prior turn that merely mentions a PAST send as an offer to confirm a fresh one", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "send_sms", { patient: "Sarah", message: "Results ready", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Here's Sarah's message. Shall I send it?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ sent: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    // Latest turn is affirmative-ish ("great"), but the prior assistant turn only REFERS
+    // to a past send — it does not OFFER Sarah's send — so confirm:true must be refused.
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "did you text John yesterday?" },
+        { role: "assistant", content: "Yes, I sent John's reminder yesterday." },
+        { role: "user", content: "great, now send Sarah her results" },
+      ],
+      deps,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(r.replyText).toContain("send it");
+  });
+
+  it("still ALLOWS a bare preview (no confirm) in the first turn — that is how the read-back is produced", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "send_sms", { patient: "Cora", message: "Hi" }))
+      .mockResolvedValueOnce(textMessage("Here's what I'd send Cora. Shall I go ahead?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ sent: false, preview: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    await runAgentTurn([{ role: "user", content: "text Cora a reminder" }], deps);
+    expect(dispatch).toHaveBeenCalledWith("send_sms", expect.objectContaining({ patient: "Cora" }));
+  });
+
+  it("REFUSES a launch_outreach_campaign confirm:true set in the same turn as the request", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "launch_outreach_campaign", { campaignId: "camp-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Shall I launch the hygiene campaign?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ launched: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn([{ role: "user", content: "launch the hygiene campaign, confirm" }], deps);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(r.replyText).toContain("launch");
+  });
+
+  it("ALLOWS a launch_outreach_campaign confirm:true that answers a prior read-back", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "launch_outreach_campaign", { campaignId: "camp-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("The hygiene campaign is now live."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ launched: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "launch the hygiene campaign" },
+        { role: "assistant", content: "That will text up to 25 a day of the 214 matched patients. Shall I launch it?" },
+        { role: "user", content: "yes go ahead" },
+      ],
+      deps,
+    );
+    expect(dispatch).toHaveBeenCalledWith("launch_outreach_campaign", expect.objectContaining({ confirm: true }));
+    expect(r.replyText).toContain("live");
+  });
+});

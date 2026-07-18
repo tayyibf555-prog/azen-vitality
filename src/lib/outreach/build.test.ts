@@ -149,6 +149,24 @@ describe("runOutreachBuildTick: no double-count across a re-scan (finding #2)", 
     expect(r2.counts.enrolled).toBe(100);
   });
 
+  it("counts only SMS-consented matches as contactable (finding #2)", async () => {
+    // 10 patients, all matching (filters mocked to pass); 6 have SMS consent, 4 do not.
+    // Matched counts everyone; contactable counts only the reachable (SMS-consented) ones.
+    const rows: unknown[] = [];
+    for (let i = 1; i <= 10; i++) {
+      rows.push({ id: String(i), first_name: "P", last_name: String(i), mobile_phone: "07700900000", use_sms: i <= 6 });
+    }
+    h.pages.set(1, rows);
+    h.pages.set(2, []);
+
+    const r = await runOutreachBuildTick(campaign());
+
+    expect(r.done).toBe(true);
+    expect(r.counts.matched).toBe(10);
+    expect(r.counts.contactable).toBe(6); // only the 6 with use_sms:true
+    expect(r.cursor?.contactable).toBe(6); // persisted on the cursor so it survives ticks
+  });
+
   it("a 429 mid-page rolls back the failed row's eager count and retries only it", async () => {
     // Small page so the resume completes in one further tick (no second budget stop).
     h.pages.set(1, makePage(1, 40));
