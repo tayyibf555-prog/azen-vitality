@@ -39,6 +39,14 @@ export interface MetaCampaignDraft {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  // Set by the publish adapter (0050) once the campaign is created on Meta in PAUSED
+  // status. All null until then (the not-connected default). publishError is honest:
+  // a Graph failure on publish, or a non-fatal note on success (e.g. radius fallback).
+  metaCampaignRef: string | null;
+  metaAdsetRef: string | null;
+  metaAdRef: string | null;
+  publishedAt: string | null;
+  publishError: string | null;
 }
 
 interface CampaignRow {
@@ -60,6 +68,11 @@ interface CampaignRow {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  meta_campaign_ref: string | null;
+  meta_adset_ref: string | null;
+  meta_ad_ref: string | null;
+  published_at: string | null;
+  publish_error: string | null;
 }
 
 function numOrNull(v: number | string | null | undefined): number | null {
@@ -111,6 +124,11 @@ function rowToCampaign(r: CampaignRow): MetaCampaignDraft {
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    metaCampaignRef: r.meta_campaign_ref ?? null,
+    metaAdsetRef: r.meta_adset_ref ?? null,
+    metaAdRef: r.meta_ad_ref ?? null,
+    publishedAt: r.published_at ?? null,
+    publishError: r.publish_error ?? null,
   };
 }
 
@@ -178,4 +196,126 @@ export async function listMetaCampaigns(clientId: string): Promise<MetaCampaignD
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data as CampaignRow[]).map(rowToCampaign);
+}
+
+/**
+ * The campaigns that are live on Meta (created in PAUSED status): status 'published'
+ * with a stored campaign ref. This is exactly the set the insights sweep pulls figures
+ * for. Optionally scoped to one client. Empty until something actually publishes.
+ */
+export async function listPublishedMetaCampaigns(clientId?: string): Promise<MetaCampaignDraft[]> {
+  const db = serviceClient();
+  let q = db
+    .from("meta_campaign")
+    .select("*")
+    .eq("status", "published")
+    .not("meta_campaign_ref", "is", null);
+  if (clientId) q = q.eq("client_id", clientId);
+  const { data, error } = await q.order("published_at", { ascending: false });
+  if (error) throw error;
+  return (data as CampaignRow[]).map(rowToCampaign);
+}
+
+/**
+ * The outcome of a publish attempt, written back onto the campaign row. On success the
+ * three Meta refs and publishedAt are set and status becomes 'published' (meaning:
+ * created on Meta, PAUSED). On failure the status is left as it was (never 'published')
+ * and publishError carries the honest Graph error; any refs that WERE created before the
+ * failure are still stored so the objects are not orphaned invisibly. `note` is a
+ * non-fatal honesty note on an otherwise-successful publish (e.g. radius fallback).
+ */
+export interface PublishResultWrite {
+  ok: boolean;
+  metaCampaignRef?: string | null;
+  metaAdsetRef?: string | null;
+  metaAdRef?: string | null;
+  error?: string | null;
+  note?: string | null;
+}
+
+/** Persist a publish attempt's outcome. Returns the updated campaign. */
+export async function recordPublishResult(
+  id: string,
+  result: PublishResultWrite,
+): Promise<MetaCampaignDraft | null> {
+  const db = serviceClient();
+  const nowIso = new Date().toISOString();
+  // Only advance to 'published' on success. On failure the status is deliberately left
+  // untouched (it stays 'ready'/'draft') so a Graph blip never marks a campaign live.
+  const patch: Record<string, unknown> = {
+    meta_campaign_ref: result.metaCampaignRef ?? null,
+    meta_adset_ref: result.metaAdsetRef ?? null,
+    meta_ad_ref: result.metaAdRef ?? null,
+    updated_at: nowIso,
+  };
+  if (result.ok) {
+    patch.status = "published";
+    patch.published_at = nowIso;
+    patch.publish_error = result.note ?? null;
+  } else {
+    patch.published_at = null;
+    patch.publish_error = result.error ?? "publish failed";
+  }
+  const { data, error } = await db
+    .from("meta_campaign")
+    .update(patch)
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToCampaign(data as CampaignRow) : null;
+}
+
+/** One captured insights snapshot for a published campaign (all money GBP). */
+export interface MetaCampaignInsight {
+  campaignId: string;
+  spendGbp: number | null;
+  impressions: number | null;
+  clicks: number | null;
+  leads: number | null;
+  raw?: unknown;
+}
+
+/** Insert one insights snapshot (the hourly sweep writes these). */
+export async function insertMetaCampaignInsight(insight: MetaCampaignInsight): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db.from("meta_campaign_insight").insert({
+    campaign_id: insight.campaignId,
+    spend_gbp: insight.spendGbp,
+    impressions: insight.impressions,
+    clicks: insight.clicks,
+    leads: insight.leads,
+    raw: insight.raw ?? null,
+  });
+  if (error) throw error;
+}
+
+/** The single, most-recent insights snapshot for a campaign, or null if none yet. */
+export async function latestInsightForCampaign(
+  campaignId: string,
+): Promise<MetaCampaignInsight | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("meta_campaign_insight")
+    .select("campaign_id, spend_gbp, impressions, clicks, leads")
+    .eq("campaign_id", campaignId)
+    .order("captured_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const r = data as {
+    campaign_id: string;
+    spend_gbp: number | string | null;
+    impressions: number | string | null;
+    clicks: number | string | null;
+    leads: number | string | null;
+  };
+  return {
+    campaignId: r.campaign_id,
+    spendGbp: numOrNull(r.spend_gbp),
+    impressions: numOrNull(r.impressions),
+    clicks: numOrNull(r.clicks),
+    leads: numOrNull(r.leads),
+  };
 }
