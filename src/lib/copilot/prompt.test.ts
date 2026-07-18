@@ -12,4 +12,12 @@ describe("buildCopilotSystemPrompt", () => {
     const scoped = buildCopilotSystemPrompt({ label: "N15 Vitality Dental", isAllSites: false });
     expect(scoped).toMatch(/never attribute advice to named consultants, programmes, courses or external sources/i);
   });
+
+  it("forbids quoting or naming the knowledge entry titles and the 'based on our playbook' framing", () => {
+    const system = buildCopilotSystemPrompt();
+    expect(system).toMatch(/never quote, list or name the knowledge entry titles/i);
+    expect(system).toMatch(/based on our playbook/i);
+    // the old instruction that told it to cite titles must be gone
+    expect(system).not.toMatch(/citing the titles/i);
+  });
 });

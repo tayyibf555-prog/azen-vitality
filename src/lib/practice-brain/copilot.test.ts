@@ -52,6 +52,13 @@ describe("buildAskPrompt", () => {
     expect(system).toMatch(/do not guess/i);
   });
 
+  it("system forbids naming or quoting the item titles inside the answer prose", () => {
+    const r = ranked({ id: "abc123", title: "Refund policy", body: "Refunds take 14 days." });
+    const { system } = buildAskPrompt("q", [r]);
+    expect(system).toMatch(/do not name or quote the item titles inside your answer text/i);
+    expect(system).toMatch(/citedIds field, not your prose/i);
+  });
+
   it("system instructs to treat knowledge as the practice's own expertise and never attribute it to external sources", () => {
     const { system } = buildAskPrompt("What is the refund policy?", []);
     expect(system).toMatch(/never attribute advice to named consultants, programmes, courses or external sources/i);
