@@ -2,6 +2,7 @@ import { ClientSidebar } from "@/components/client/client-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
 import { FeedbackWidget } from "@/components/platform/feedback-widget";
+import { UsageBeacon } from "@/components/platform/usage-beacon";
 import { guardPage } from "@/lib/auth/page-guard";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteSelection } from "@/lib/site-view";
@@ -54,6 +55,7 @@ export default async function ClientLayout({
       </div>
       <PlatformShortcuts />
       <FeedbackWidget />
+      <UsageBeacon />
     </div>
   );
 }

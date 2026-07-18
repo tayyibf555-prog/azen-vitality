@@ -6,6 +6,7 @@ import { runAgentTurn } from "@/lib/agent/run";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "@/lib/copilot/tools";
 import { buildCopilotSystemPrompt } from "@/lib/copilot/prompt";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { recordUsage } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,7 @@ export async function POST(request: Request): Promise<Response> {
       // "answer anything" replies headroom to avoid truncation.
       maxTokens: 1800,
     });
+    void recordUsage("co-pilot", "copilot_turn", { clientId: client.id, userEmail: auth?.email, role: auth?.role });
     return Response.json({ ok: true, reply: result.replyText || "Sorry, I could not respond just now." });
   } catch {
     return Response.json({ ok: false, error: "copilot unavailable" }, { status: 500 });

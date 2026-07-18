@@ -2,6 +2,7 @@ import { getClient } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess, requireSiteAccess } from "@/lib/auth/guard";
 import { getPatientById } from "@/lib/dentally/read";
 import { listNotes, createNote } from "@/lib/patient-notes/repository";
+import { recordUsage } from "@/lib/telemetry";
 import type { PatientNoteSource } from "@/lib/patient-notes/types";
 
 export const dynamic = "force-dynamic";
@@ -91,6 +92,8 @@ export async function POST(request: Request): Promise<Response> {
       body,
       source,
     });
+    // Action name only — never the note body or patient id (privacy).
+    void recordUsage("patients", "note_added", { clientId: client.id, userEmail: auth?.email, role: auth?.role });
     return Response.json({ ok: true, note });
   } catch {
     return Response.json({ ok: false, error: "could not save note" }, { status: 500 });
