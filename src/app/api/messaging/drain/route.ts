@@ -4,6 +4,7 @@ import { resolveRecipient } from "@/lib/messaging/resolve";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
 import { validateMobile } from "@/lib/messaging/lookup";
+import { validateEmail } from "@/lib/messaging/email-lookup";
 import { getChannelPref, resolvePreferredChannel } from "@/lib/messaging/channel-pref";
 import { isWhatsappConfigured } from "@/lib/messaging/providers/twilio";
 import { londonDayKey } from "@/lib/time/london";
@@ -232,13 +233,16 @@ async function drainSource(
       continue;
     }
 
-    // Twilio Lookup pre-send validation (dormant unless TWILIO_LOOKUP_ENABLED).
-    // A resolved number that is a landline or otherwise undeliverable is BLOCKED
-    // before the paid send: marked blocked exactly like a consent block (never
-    // failed), and, because we skip before wasContactedToday/recordContacted, it
-    // never consumes the recipient's daily cap. A Lookup API error fails OPEN
-    // (validateMobile returns valid), so an outage never halts genuine sends.
-    // Phone channels only; email is out of scope.
+    // Pre-send deliverability validation (both dormant by default). A resolved
+    // address that can never receive the message is BLOCKED before the paid send:
+    // marked blocked exactly like a consent block (never failed), and, because we
+    // skip before wasContactedToday/recordContacted, it never consumes the
+    // recipient's daily cap. Either validator fails OPEN on an API error, so an
+    // outage never halts genuine sends.
+    //   - Phone: Twilio Lookup (dormant unless TWILIO_LOOKUP_ENABLED). A landline or
+    //     otherwise undeliverable number is blocked.
+    //   - Email: NeverBounce (dormant unless NEVERBOUNCE_API_KEY + EMAIL_LOOKUP_ENABLED).
+    //     An invalid or disposable address is blocked; catchall/unknown pass.
     if (channel !== "email") {
       const check = await validateMobile(to);
       if (!check.valid) {
@@ -247,6 +251,17 @@ async function drainSource(
         console.warn(
           `[drain] ${source.name}: outbox ${row.id} resolved to ${to} which is not a deliverable ` +
             `mobile (${check.lineType ?? "invalid-number"}); blocked pre-send, not sent`,
+        );
+        continue;
+      }
+    } else {
+      const check = await validateEmail(to);
+      if (!check.valid) {
+        await source.markBlocked(row.id);
+        blocked += 1;
+        console.warn(
+          `[drain] ${source.name}: outbox ${row.id} resolved to ${to} which is not a deliverable ` +
+            `email (${check.verdict ?? "invalid-address"}); blocked pre-send, not sent`,
         );
         continue;
       }

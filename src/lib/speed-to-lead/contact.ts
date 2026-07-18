@@ -3,6 +3,7 @@ import { findOrCreateConversation, appendMessage } from "@/lib/agent/repository"
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { validateMobile } from "@/lib/messaging/lookup";
+import { validateEmail } from "@/lib/messaging/email-lookup";
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import { getClient, getSite } from "@/lib/mock/clients";
 import { latestResponseByLead } from "@/lib/smile-assessment/repository";
@@ -92,19 +93,32 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     return;
   }
 
-  // Twilio Lookup pre-send validation (dormant unless TWILIO_LOOKUP_ENABLED). For a
-  // phone channel, a landline or otherwise undeliverable number can never receive
-  // this SMS, so retire the lead to the terminal 'lost' stage (the same blocked/skip
-  // outcome as no-consent/suppressed above) rather than drafting and sending into a
-  // void or leaving it for the SLA sweep to re-pick forever. It is NEVER recorded as a
-  // failed send. A Lookup API error fails OPEN (validateMobile returns valid), so an
-  // outage never blocks a genuine first contact.
+  // Pre-send deliverability validation (both dormant by default). An address that
+  // can never receive this first contact means we retire the lead to the terminal
+  // 'lost' stage (the same blocked/skip outcome as no-consent/suppressed above)
+  // rather than drafting and sending into a void or leaving it for the SLA sweep to
+  // re-pick forever. It is NEVER recorded as a failed send, and either validator
+  // fails OPEN on an API error so an outage never blocks a genuine first contact.
+  //   - Phone: Twilio Lookup (dormant unless TWILIO_LOOKUP_ENABLED) - a landline or
+  //     otherwise undeliverable number.
+  //   - Email: NeverBounce (dormant unless NEVERBOUNCE_API_KEY + EMAIL_LOOKUP_ENABLED)
+  //     - an invalid or disposable address; catchall/unknown pass.
   if (lead.channel !== "email") {
     const check = await validateMobile(to);
     if (!check.valid) {
       console.warn(
         `[speed-to-lead] lead ${lead.id}: ${to} is not a deliverable mobile ` +
           `(${check.lineType ?? "invalid-number"}); retiring to 'lost' pre-send, not contacted`,
+      );
+      await setLeadStage(lead.id, "lost");
+      return;
+    }
+  } else {
+    const check = await validateEmail(to);
+    if (!check.valid) {
+      console.warn(
+        `[speed-to-lead] lead ${lead.id}: ${to} is not a deliverable email ` +
+          `(${check.verdict ?? "invalid-address"}); retiring to 'lost' pre-send, not contacted`,
       );
       await setLeadStage(lead.id, "lost");
       return;
