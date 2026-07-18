@@ -1,50 +1,33 @@
 "use client";
 
-import { ShieldCheck } from "lucide-react";
-import { SectionCard, StatusPill } from "@/components/primitives";
-import { MOCK_POLICIES } from "@/lib/compliance/mock";
-import type { PolicyDoc } from "@/lib/compliance/types";
-import { statusTone, statusLabel, statusWeight, fmtDate } from "./status";
+import { ShieldCheck, Info } from "lucide-react";
+import { SectionCard } from "@/components/primitives";
+import { POLICY_TEMPLATES } from "@/lib/compliance/knowledge";
+import type { PolicyTemplate } from "@/lib/compliance/types";
 
-// Policies grouped by category, with the categories carrying missing or
-// review-due policies surfaced first, and the same ordering inside each group.
-function groupByCategory(policies: PolicyDoc[]): { category: string; items: PolicyDoc[] }[] {
-  const groups = new Map<string, PolicyDoc[]>();
+// The required UK dental practice policies as REFERENCE templates, grouped by area.
+// This is the checklist of policies a CQC-registered practice should hold, with the
+// review cadence for each. Whether the practice holds each one, and when it was last
+// reviewed (and so the in-place/review-due/missing status), is added on top once the
+// practice's records are in, so nothing is invented here.
+function groupByCategory(policies: PolicyTemplate[]): { category: string; items: PolicyTemplate[] }[] {
+  const groups = new Map<string, PolicyTemplate[]>();
   for (const p of policies) {
     const list = groups.get(p.category) ?? [];
     list.push(p);
     groups.set(p.category, list);
   }
-
-  const sorted = [...groups.entries()].map(([category, items]) => ({
-    category,
-    items: [...items].sort(
-      (a, b) => statusWeight(a.status) - statusWeight(b.status) || a.name.localeCompare(b.name),
-    ),
-  }));
-
-  // Categories with the most attention-needing policy float to the top.
-  sorted.sort((a, b) => {
-    const aw = Math.min(...a.items.map((p) => statusWeight(p.status)));
-    const bw = Math.min(...b.items.map((p) => statusWeight(p.status)));
-    return aw - bw || a.category.localeCompare(b.category);
-  });
-  return sorted;
+  return [...groups.entries()]
+    .map(([category, items]) => ({
+      category,
+      items: [...items].sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => a.category.localeCompare(b.category));
 }
 
-const GROUPS = groupByCategory(MOCK_POLICIES);
+const GROUPS = groupByCategory(POLICY_TEMPLATES);
 
-function Legend() {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <StatusPill tone="danger">Missing</StatusPill>
-      <StatusPill tone="warning">Review due</StatusPill>
-      <StatusPill tone="success">In place</StatusPill>
-    </div>
-  );
-}
-
-function PolicyRow({ policy }: { policy: PolicyDoc }) {
+function PolicyRow({ policy }: { policy: PolicyTemplate }) {
   return (
     <li className="flex flex-col gap-2 border-b border-line py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
@@ -56,11 +39,9 @@ function PolicyRow({ policy }: { policy: PolicyDoc }) {
             </span>
           ) : null}
         </div>
-        <p className="mt-1 text-xs text-muted">Last reviewed {fmtDate(policy.lastReviewedAt)}</p>
+        <p className="mt-1 text-xs text-muted">Review cadence: {policy.reviewCadence}</p>
       </div>
-      <StatusPill tone={statusTone(policy.status)} className="shrink-0 self-start sm:self-auto">
-        {statusLabel(policy.status)}
-      </StatusPill>
+      <span className="shrink-0 self-start text-xs text-muted sm:self-auto">Add your document and review date</span>
     </li>
   );
 }
@@ -69,9 +50,15 @@ export function PoliciesList() {
   return (
     <SectionCard
       title="Policy library"
-      description="Your required practice policies, grouped by area. Missing and review-due policies are surfaced first so the gaps are easy to spot."
-      actions={<Legend />}
+      description="The practice policies a UK dental practice should hold, grouped by area, with the review cadence for each."
     >
+      <div className="mb-4 flex items-start gap-2.5 rounded-[10px] border border-line bg-card-muted/50 px-3.5 py-2.5">
+        <Info size={15} className="mt-0.5 shrink-0 text-muted" />
+        <p className="text-xs leading-relaxed text-muted">
+          This is the reference checklist. Add your own document and last-reviewed date for each to
+          track what is in place, due for review or missing.
+        </p>
+      </div>
       <div className="space-y-6">
         {GROUPS.map((group) => (
           <div key={group.category}>

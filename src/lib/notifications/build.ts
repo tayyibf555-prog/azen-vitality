@@ -1,7 +1,5 @@
 import "server-only";
 
-import { MOCK_AUDITS, MOCK_POLICIES, MOCK_TRAINING_RECORDS, MOCK_STAFF } from "@/lib/compliance/mock";
-import { TRAINING_REQUIREMENTS } from "@/lib/compliance/knowledge";
 import { listTargets as listNoshowTargets } from "@/lib/noshow/repository";
 import { countNewSubmissions } from "@/lib/onboarding/repository";
 import { listResponses } from "@/lib/smile-assessment/repository";
@@ -15,11 +13,10 @@ import type { NotificationItem } from "./types";
 // pulled together from existing module data and computed on read. There is no new
 // event store — exactly like the Daily brief and the Task queue.
 //
-// Resilience mirrors those two: EVERY source is wrapped in its own safe() builder
-// so one failing or empty module never breaks the whole feed. The compliance
-// source is pure mock (deterministic) and every item it produces carries
-// `sample: true`; the no-show, onboarding + smile-assessment sources read the
-// database (real, untagged), so they degrade to [] on any error.
+// Resilience: EVERY source is wrapped in its own safe() builder so one failing or
+// empty module never breaks the whole feed. Every source reads the database (real),
+// so each degrades to [] on any error. No fabricated items are produced: compliance
+// notifications return once the practice's real compliance records are connected.
 //
 // An email digest is intentionally out of scope here: the Daily brief already
 // emails the morning action list. This is the in-app feed only.
@@ -40,93 +37,9 @@ async function safe(load: () => Promise<NotificationItem[]>): Promise<Notificati
   }
 }
 
-/** A short, plain-date label for a due date, e.g. "5 Jun 2026". Guards bad input. */
-function dueDateLabel(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "soon";
-  return d.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "Europe/London",
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Source builders. Each returns NotificationItem[] (possibly empty).
 // ---------------------------------------------------------------------------
-
-/**
- * Compliance: every breached item (overdue audit, missing policy, expired
- * training) becomes a high notification; due-soon items become medium. Pure mock
- * state, so the ids and `at` are deterministic (we anchor `at` to each item's
- * due/expiry date). Stable ids `compliance:<itemId>`.
- */
-function complianceNotifications(slug: string): NotificationItem[] {
-  const href = `/c/${slug}/compliance`;
-  const out: NotificationItem[] = [];
-
-  for (const a of MOCK_AUDITS) {
-    if (a.status !== "overdue" && a.status !== "due_soon") continue;
-    const overdue = a.status === "overdue";
-    out.push({
-      id: `compliance:${a.id}`,
-      type: "compliance",
-      urgency: overdue ? "high" : "medium",
-      title: `${overdue ? "Overdue" : "Due soon"}: ${a.name}`,
-      detail: overdue
-        ? `${a.regulation} audit is past its due date (${dueDateLabel(a.dueAt)}). Clear this to protect CQC readiness.`
-        : `${a.regulation} audit is due on ${dueDateLabel(a.dueAt)}.`,
-      at: a.dueAt,
-      href,
-    });
-  }
-
-  for (const p of MOCK_POLICIES) {
-    if (p.status !== "missing" && p.status !== "review_due") continue;
-    const missing = p.status === "missing";
-    out.push({
-      id: `compliance:${p.id}`,
-      type: "compliance",
-      urgency: missing ? "high" : "medium",
-      title: `${missing ? "Missing" : "Review due"}: ${p.name}`,
-      detail: missing
-        ? `No ${p.category.toLowerCase()} document on file. Put this policy in place.`
-        : `${p.category} policy last reviewed ${p.lastReviewedAt ? dueDateLabel(p.lastReviewedAt) : "some time ago"}. A review is due.`,
-      // Missing policies have no review date; anchor to a fixed past instant so
-      // they still sort sensibly (high urgency carries them to the top regardless).
-      at: p.lastReviewedAt ?? "2026-01-01T00:00:00.000Z",
-      href,
-    });
-  }
-
-  const staffById = new Map(MOCK_STAFF.map((s) => [s.id, s]));
-  const reqById = new Map(TRAINING_REQUIREMENTS.map((r) => [r.id, r]));
-  for (const r of MOCK_TRAINING_RECORDS) {
-    if (r.status !== "overdue" && r.status !== "due_soon") continue;
-    const overdue = r.status === "overdue";
-    const staffName = staffById.get(r.staffId)?.name ?? "A staff member";
-    const reqName = reqById.get(r.requirementId)?.name ?? "Mandatory training";
-    const expiry = r.expiresAt ? dueDateLabel(r.expiresAt) : "soon";
-    out.push({
-      id: `compliance:${r.id}`,
-      type: "compliance",
-      urgency: overdue ? "high" : "medium",
-      title: `${overdue ? "Overdue" : "Due soon"}: ${staffName} / ${reqName}`,
-      detail: overdue
-        ? `Mandatory training expired ${expiry}. Book a refresher.`
-        : `Mandatory training expires ${expiry}.`,
-      at: r.expiresAt ?? "2026-01-01T00:00:00.000Z",
-      href,
-    });
-  }
-
-  // Every compliance item is built from pure mock data (MOCK_AUDITS,
-  // MOCK_POLICIES, MOCK_TRAINING_RECORDS): tag it "Sample" so it can never be
-  // mistaken for a real compliance breach, matching the SampleNote precedent
-  // used elsewhere in the dashboard (src/components/primitives/sample-badge.tsx).
-  return out.map((item) => ({ ...item, sample: true }));
-}
 
 /**
  * No-show risk: high-risk upcoming appointments still being defended (status
@@ -211,7 +124,6 @@ export async function buildNotifications(
   ctx: BuildNotificationsContext,
 ): Promise<NotificationItem[]> {
   const groups = await Promise.all([
-    safe(async () => complianceNotifications(ctx.clientSlug)),
     safe(() => noshowNotifications(ctx)),
     safe(() => onboardingNotifications(ctx)),
     safe(() => leadNotifications(ctx)),

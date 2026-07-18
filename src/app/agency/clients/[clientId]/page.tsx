@@ -7,30 +7,17 @@ import {
   Plug,
   RefreshCw,
   SearchX,
+  Info,
 } from "lucide-react";
 import {
   PageHeader,
   SectionCard,
-  StatCard,
   StatusPill,
   EmptyState,
-  DataTable,
-  type Column,
 } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
-import { getClient, getClientMetrics, getSite, getSiteMetrics, NOW } from "@/lib/mock";
-import { gbp, relativeTime } from "@/lib/utils";
-import type { SiteMetrics } from "@/lib/types";
-
-function pct(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
-
-function noShowTone(rate: number) {
-  if (rate >= 0.12) return "danger" as const;
-  if (rate >= 0.08) return "warning" as const;
-  return "success" as const;
-}
+import { getClient, getSite, NOW } from "@/lib/mock";
+import { relativeTime } from "@/lib/utils";
 
 export default function ClientDetailPage() {
   const { clientId } = useParams<{ clientId: string }>();
@@ -52,64 +39,11 @@ export default function ClientDetailPage() {
     );
   }
 
-  const metrics = getClientMetrics(client.id);
-  const siteMetrics = getSiteMetrics(client.siteIds);
-
-  const columns: Column<SiteMetrics>[] = [
-    {
-      key: "site",
-      header: "Site",
-      cell: (row) => <span className="font-semibold text-navy">{getSite(row.siteId)?.name ?? row.siteId}</span>,
-    },
-    {
-      key: "leadsIn",
-      header: "Leads in",
-      align: "right",
-      cell: (row) => <span className="tabular-nums">{row.leadsIn.toLocaleString("en-GB")}</span>,
-    },
-    {
-      key: "booked",
-      header: "Booked",
-      align: "right",
-      cell: (row) => <span className="tabular-nums">{row.consultationsBooked.toLocaleString("en-GB")}</span>,
-    },
-    {
-      key: "cpb",
-      header: "Cost per booking",
-      align: "right",
-      cell: (row) => <span className="tabular-nums">{gbp(row.costPerBooking)}</span>,
-    },
-    {
-      key: "recall",
-      header: "Recall recovery",
-      align: "right",
-      cell: (row) => <span className="tabular-nums">{pct(row.recallRecoveryRate)}</span>,
-    },
-    {
-      key: "treatment",
-      header: "Treatment recovery",
-      align: "right",
-      cell: (row) => <span className="tabular-nums">{pct(row.treatmentRecoveryRate)}</span>,
-    },
-    {
-      key: "noShow",
-      header: "No-show rate",
-      align: "right",
-      cell: (row) => <StatusPill tone={noShowTone(row.noShowRate)}>{pct(row.noShowRate)}</StatusPill>,
-    },
-    {
-      key: "recovered",
-      header: "Revenue recovered",
-      align: "right",
-      cell: (row) => <span className="font-semibold tabular-nums text-navy">{gbp(row.recoveredRevenue)}</span>,
-    },
-  ];
-
   return (
     <div className="space-y-6">
       <PageHeader
         title={client.name}
-        description="Cross-site performance and connection health for this deployment."
+        description="Cross-site structure and connection health for this deployment."
         actions={
           <>
             <Button asChild variant="ghost" size="sm">
@@ -143,58 +77,32 @@ export default function ClientDetailPage() {
         </div>
         <p className="flex items-center gap-2 text-xs text-muted">
           <RefreshCw size={14} className="shrink-0 text-muted" />
-          Polled every 15 minutes. Figures shown are mock data for now.
+          Polled every 15 minutes.
         </p>
       </div>
 
-      {/* Client totals */}
-      {metrics ? (
-        <div className="flex flex-wrap gap-x-7 gap-y-4">
-          <StatCard
-            label="Leads in"
-            value={metrics.leadsIn.toLocaleString("en-GB")}
-            dot="bg-status-blue"
-            hint="All sites"
-          />
-          <StatCard
-            label="Consultations booked"
-            value={metrics.consultationsBooked.toLocaleString("en-GB")}
-            dot="bg-status-blue"
-            hint="Attributed via Dentally"
-          />
-          <StatCard
-            label="Revenue recovered"
-            value={gbp(metrics.recoveredRevenue)}
-            dot="bg-status-green"
-            hint="Recall and treatment"
-          />
-          <StatCard
-            label="Hours saved"
-            value={`${metrics.hoursSaved}`}
-            dot="bg-status-amber"
-            hint="Coordinator time automated"
-          />
-        </div>
-      ) : null}
+      <div className="flex items-start gap-2.5 rounded-[10px] border border-line bg-card-muted/50 px-4 py-3">
+        <Info size={16} className="mt-0.5 shrink-0 text-muted" />
+        <p className="text-xs leading-relaxed text-muted">
+          Per-site performance (leads in, bookings, recovery and no-show rates) builds from this
+          client&rsquo;s live activity and appears on their dashboard as the sources connect.
+        </p>
+      </div>
 
       {/* Sites */}
-      <SectionCard
-        title="Sites"
-        description="Per-site breakdown across the network."
-      >
-        <DataTable
-          columns={columns}
-          rows={siteMetrics}
-          getRowKey={(row) => row.siteId}
-          maxRows={8}
-          empty={
-            <EmptyState
-              icon={SearchX}
-              title="No sites yet"
-              description="This client has no sites with reported metrics."
-            />
-          }
-        />
+      <SectionCard title="Sites" description="The sites in this deployment.">
+        {client.siteIds.length > 0 ? (
+          <ul className="divide-y divide-line">
+            {client.siteIds.map((id) => (
+              <li key={id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                <span className="font-semibold text-navy">{getSite(id)?.name ?? id}</span>
+                <span className="text-xs text-muted">Figures build from live activity</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState icon={SearchX} title="No sites yet" description="This client has no sites configured." />
+        )}
       </SectionCard>
     </div>
   );

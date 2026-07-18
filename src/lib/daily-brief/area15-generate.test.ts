@@ -150,13 +150,15 @@ describe("resilience: never throws the page", () => {
       "captures",
     ]);
     const brief = await generateBrief(ctxFor("client_owner", NOW));
-    // Compliance is a static source, so it may still populate; the diary/money/
-    // etc. sections degrade to empty. The key guarantee is no throw + a shape.
+    // With every repository down and no static/fabricated source feeding the
+    // brief, it degrades to a valid but genuinely empty shape. The key guarantee
+    // is no throw.
     expect(brief.generatedAt).toBe(NOW.toISOString());
     expect(brief.appointmentsToday).toBe(0);
     expect(Array.isArray(brief.sections)).toBe(true);
     expect(Array.isArray(brief.headline)).toBe(true);
-    // No diary/noshow/money section should have survived a total repo blackout.
+    // A total repo blackout leaves no sections at all.
+    expect(brief.sections).toHaveLength(0);
     const keys = brief.sections.map((s) => s.key);
     expect(keys).not.toContain("diary");
     expect(keys).not.toContain("money");
@@ -247,7 +249,6 @@ describe("composition from module shapes", () => {
       "reactivation",
       "after-hours",
       "payments",
-      "compliance",
     ]);
     for (const section of brief.sections) {
       for (const line of section.items) {
@@ -374,12 +375,11 @@ describe("role scoping and ordering", () => {
   });
 
   it("empty everything yields no sections and an empty headline", async () => {
-    // Force compliance out of the way is not possible (static), but with zero
-    // module data the dynamic sections must all be empty.
+    // With zero module data and no fabricated compliance source, the brief is
+    // honestly empty: no sections survive and the headline is empty. This is the
+    // "Nothing needs attention" state the Home page relies on being reachable.
     const brief = await generateBrief(ctxFor("client_owner", NOW));
-    for (const s of brief.sections) {
-      // Only compliance may appear (static mock); all others must be absent.
-      expect(["compliance"]).toContain(s.key);
-    }
+    expect(brief.sections).toHaveLength(0);
+    expect(brief.headline).toHaveLength(0);
   });
 });

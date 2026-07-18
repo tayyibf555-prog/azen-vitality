@@ -5,7 +5,6 @@ import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks, LayoutTemplate } 
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Campaign, AdLibraryItem } from "@/lib/meta-ads/types";
-import { MOCK_CAMPAIGNS } from "@/lib/meta-ads/mock";
 import { findTreatment } from "@/lib/treatments/catalog";
 import { LANDING_TREATMENT_KEYS } from "./landing-pages";
 import { CampaignsTable } from "./campaigns-table";
@@ -27,20 +26,28 @@ const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
 export function MetaAdsWorkspace({
   clientSlug,
   practiceName,
+  metaConnected = false,
 }: {
   clientSlug: string;
   practiceName: string;
+  /** True only when the practice's Meta account is connected. Until then there are
+   *  no live campaigns to show, so the table carries the owner's own drafts only. */
+  metaConnected?: boolean;
 }) {
   const [tab, setTab] = useState<TabKey>("campaigns");
   // Drafts the owner saves from the Create tab, newest first. Kept here so they
-  // survive tab switches and show alongside the mock campaigns.
+  // survive tab switches.
   const [drafts, setDrafts] = useState<Campaign[]>([]);
   // Treatment key seeded by "Recreate this" from the ad library, pre-selecting the
   // Landing pages generator. Cleared on any MANUAL tab click (see selectTab), so it
   // is only ever consumed by the one recreate navigation that set it.
   const [recreateTreatment, setRecreateTreatment] = useState<string | null>(null);
 
-  const campaigns = [...drafts, ...MOCK_CAMPAIGNS];
+  // The owner's own drafts, plus live campaigns once the Meta account is connected.
+  // No fabricated campaigns: when Meta is not connected there is nothing live to add,
+  // so the table shows the drafts (or its empty state) and never invented spend.
+  // Live campaigns wire in here when the Meta adapter lands.
+  const campaigns = [...drafts];
 
   function handleSaveDraft(draft: Campaign) {
     setDrafts((prev) => [draft, ...prev]);
@@ -106,7 +113,11 @@ export function MetaAdsWorkspace({
       {/* Panels */}
       <div role="tabpanel">
         {tab === "campaigns" ? (
-          <CampaignsTable campaigns={campaigns} onCreate={() => selectTab("create")} />
+          <CampaignsTable
+            campaigns={campaigns}
+            metaConnected={metaConnected}
+            onCreate={() => selectTab("create")}
+          />
         ) : null}
 
         {tab === "create" ? (

@@ -4,23 +4,19 @@ import {
   Plug,
   RefreshCw,
   Building2,
+  Info,
 } from "lucide-react";
 import { PageHeader, SectionCard, StatCard, StatusPill } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
-import { CLIENTS, CLIENT_METRICS, getClientMetrics, NOW } from "@/lib/mock";
-import { cn, gbp, relativeTime } from "@/lib/utils";
+import { CLIENTS, NOW } from "@/lib/mock";
+import { relativeTime } from "@/lib/utils";
 import type { Client } from "@/lib/types";
 
-/** Aggregate headline figures across every client deployment. */
-const totals = CLIENT_METRICS.reduce(
-  (acc, m) => ({
-    leadsIn: acc.leadsIn + m.leadsIn,
-    consultationsBooked: acc.consultationsBooked + m.consultationsBooked,
-    recoveredRevenue: acc.recoveredRevenue + m.recoveredRevenue,
-    hoursSaved: acc.hoursSaved + m.hoursSaved,
-  }),
-  { leadsIn: 0, consultationsBooked: 0, recoveredRevenue: 0, hoursSaved: 0 },
-);
+// Real, structural counts across the estate (deployments and connection state).
+// Performance figures (leads, bookings, revenue) build from live activity per
+// client and are not aggregated here until they are real.
+const totalSites = CLIENTS.reduce((acc, c) => acc + c.siteIds.length, 0);
+const connectedCount = CLIENTS.filter((c) => c.dentally.connected).length;
 
 function dentallyTone(client: Client) {
   return client.dentally.connected ? "success" : "danger";
@@ -31,48 +27,34 @@ export default function AgencyCockpitPage() {
     <div className="space-y-6">
       <PageHeader
         title="Agency cockpit"
-        description="Every Vitality deployment at a glance. Leads in, consultations booked and revenue recovered across all sites."
+        description="Every Vitality deployment at a glance: which sites are live and how their Dentally connection is holding."
       />
 
-      {/* Aggregate stats */}
+      {/* Structural counts (real). Performance aggregates build from live activity. */}
       <div className="flex flex-wrap gap-x-7 gap-y-4">
+        <StatCard label="Clients" value={CLIENTS.length} dot="bg-status-blue" hint="Under management" />
+        <StatCard label="Sites" value={totalSites} dot="bg-status-blue" hint="Across all clients" />
         <StatCard
-          label="Leads in"
-          value={totals.leadsIn.toLocaleString("en-GB")}
-          dot="bg-status-blue"
-          hint="Across all live sites"
-        />
-        <StatCard
-          label="Consultations booked"
-          value={totals.consultationsBooked.toLocaleString("en-GB")}
-          dot="bg-status-blue"
-          hint="Attributed via Dentally"
-        />
-        <StatCard
-          label="Revenue recovered"
-          value={gbp(totals.recoveredRevenue)}
+          label="Dentally connected"
+          value={connectedCount}
           dot="bg-status-green"
-          hint="Recall and treatment recovery"
+          hint={`of ${CLIENTS.length} clients`}
         />
-        <StatCard
-          label="Hours saved"
-          value={`${totals.hoursSaved}`}
-          dot="bg-status-amber"
-          hint="Coordinator time automated"
-        />
+      </div>
+
+      <div className="flex items-start gap-2.5 rounded-[10px] border border-line bg-card-muted/50 px-4 py-3">
+        <Info size={16} className="mt-0.5 shrink-0 text-muted" />
+        <p className="text-xs leading-relaxed text-muted">
+          Leads in, consultations booked and revenue recovered build from each client&rsquo;s live
+          activity and appear on their dashboard as the sources connect. They are not aggregated here
+          until they are real.
+        </p>
       </div>
 
       {/* Clients */}
       <SectionCard title="Clients" description="Active deployments under management." bodyClassName="p-0">
         <div className="divide-y divide-line">
           {CLIENTS.map((client) => {
-            const metrics = getClientMetrics(client.id);
-            const trendPoints = metrics?.trend.map((t) => t.value) ?? [];
-            const trendFirst = trendPoints[0] ?? 0;
-            const trendLast = trendPoints[trendPoints.length - 1] ?? 0;
-            // The sparkline is retired: the trend reads as a plain-English delta
-            // over the same series (first week to latest).
-            const trendPct = trendFirst > 0 ? Math.round(((trendLast - trendFirst) / trendFirst) * 100) : null;
             const statusTone =
               client.status === "live" ? "success" : client.status === "onboarding" ? "info" : "warning";
 
@@ -82,7 +64,7 @@ export default function AgencyCockpitPage() {
                 className="grid grid-cols-1 gap-4 py-4 lg:grid-cols-12 lg:items-center"
               >
                 {/* Identity + health */}
-                <div className="min-w-0 space-y-2 lg:col-span-5">
+                <div className="min-w-0 space-y-2 lg:col-span-8">
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h4 className="text-lg font-semibold tracking-tight text-navy">{client.name}</h4>
                     <StatusPill tone={statusTone}>
@@ -105,50 +87,8 @@ export default function AgencyCockpitPage() {
                   </div>
                 </div>
 
-                {/* Headline metrics */}
-                {metrics ? (
-                  <div className="flex items-center gap-6 lg:col-span-4">
-                    <div className="space-y-0.5">
-                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Leads in</p>
-                      <p className="text-lg font-bold tracking-tight tabular-nums text-navy">
-                        {metrics.leadsIn.toLocaleString("en-GB")}
-                      </p>
-                    </div>
-                    <div className="space-y-0.5">
-                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Booked</p>
-                      <p className="text-lg font-bold tracking-tight tabular-nums text-navy">
-                        {metrics.consultationsBooked.toLocaleString("en-GB")}
-                      </p>
-                    </div>
-                    <div className="space-y-0.5">
-                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Recovered</p>
-                      <p className="text-lg font-bold tracking-tight tabular-nums text-navy">
-                        {gbp(metrics.recoveredRevenue)}
-                      </p>
-                    </div>
-                    <div className="hidden flex-col items-end gap-0.5 xl:flex">
-                      {trendPct === null ? (
-                        <span className="text-sm text-muted">—</span>
-                      ) : (
-                        <span
-                          className={cn(
-                            "text-sm font-semibold",
-                            trendPct > 0 ? "text-status-green" : trendPct < 0 ? "text-status-red" : "text-muted",
-                          )}
-                        >
-                          {trendPct > 0 ? "Up" : trendPct < 0 ? "Down" : "Level"}
-                          {trendPct !== 0 ? <span className="tabular-nums"> {Math.abs(trendPct)}%</span> : null}
-                        </span>
-                      )}
-                      <span className="text-[11px] text-muted">Revenue trend</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="lg:col-span-4" />
-                )}
-
                 {/* Actions */}
-                <div className="flex shrink-0 items-center gap-2 lg:col-span-3 lg:justify-end">
+                <div className="flex shrink-0 items-center gap-2 lg:col-span-4 lg:justify-end">
                   <Button asChild variant="secondary" size="sm">
                     <Link href={`/agency/clients/${client.id}`}>View details</Link>
                   </Button>
@@ -170,8 +110,10 @@ export default function AgencyCockpitPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-8 sm:gap-y-3">
           <div className="flex items-center gap-2 text-sm">
             <Plug size={16} className="shrink-0 text-success" />
-            <span className="font-semibold text-navy">Dentally connected</span>
-            <span className="text-muted">all live clients authorised, no faults</span>
+            <span className="font-semibold text-navy">Dentally</span>
+            <span className="text-muted">
+              {connectedCount} of {CLIENTS.length} {CLIENTS.length === 1 ? "client" : "clients"} connected
+            </span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <RefreshCw size={16} className="shrink-0 text-muted" />
@@ -181,9 +123,9 @@ export default function AgencyCockpitPage() {
             </span>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <Clock size={16} className="shrink-0 text-warning" />
-            <span className="font-semibold text-navy">Mock data</span>
-            <span className="text-muted">representative fixtures until the production integration</span>
+            <Clock size={16} className="shrink-0 text-muted" />
+            <span className="font-semibold text-navy">Performance figures</span>
+            <span className="text-muted">build from each client&rsquo;s live activity</span>
           </div>
         </div>
       </SectionCard>

@@ -2,32 +2,30 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import {
-  Flame,
-  ListChecks,
-  ShieldAlert,
-} from "lucide-react";
+import { Flame, ListChecks, Inbox, Info } from "lucide-react";
 import {
   PageHeader,
   SectionCard,
   StatCard,
   StatusPill,
-  SampleBadge,
-  SampleNote,
+  EmptyState,
   DataTable,
-  Tabs,
   type Column,
   type Tone,
 } from "@/components/primitives";
-import { getClient, getClientMetrics, getSite, getSiteMetrics, LEADS, NOW } from "@/lib/mock";
-import type { Lead, SiteMetrics, MetricPoint } from "@/lib/types";
-import { gbp, compact, relativeTime } from "@/lib/utils";
+import { getClient, getSite } from "@/lib/mock";
+import type { Lead } from "@/lib/types";
+import { relativeTime } from "@/lib/utils";
 
-// The owner's proof-of-value view: is the platform paying off, and is any site
-// off target. Rendered standalone at /owner/[client]/overview and embedded as the
-// owner-only band on the client Home page. Every figure is computed or mock-
-// labelled — NEVER a hardcoded delta (an invented +12% an owner can falsify
-// against Dentally poisons trust in every real number).
+// The owner's proof-of-value view: what is actually coming in and what work is in
+// hand. The headline performance figures (leads over the month, bookings, revenue
+// recovered, cost per booking) build from live activity and light up as the Meta
+// and Dentally sources connect, so nothing here is invented: the enquiries and the
+// open-task count are live, and the rest is presented as an honest awaiting state.
+// Rendered standalone at /owner/[client]/overview and embedded as the owner band on
+// the client Home page.
+
+const NOW = new Date();
 
 const STAGE_TONE: Record<Lead["stage"], Tone> = {
   new: "info",
@@ -93,82 +91,22 @@ const ENQUIRY_COLUMNS: Column<Lead>[] = [
   },
 ];
 
-const SITE_COLUMNS: Column<SiteMetrics>[] = [
-  {
-    key: "site",
-    header: "Site",
-    cell: (m) => <span className="font-semibold text-navy">{getSite(m.siteId)?.name ?? m.siteId}</span>,
-  },
-  { key: "leads", header: "Leads in", cell: (m) => compact(m.leadsIn), align: "right" },
-  { key: "booked", header: "Booked", cell: (m) => compact(m.consultationsBooked), align: "right" },
-  { key: "cpb", header: "Cost / booking", cell: (m) => gbp(m.costPerBooking), align: "right" },
-  {
-    key: "recall",
-    header: "Recall recovery",
-    cell: (m) => <span className="tabular-nums">{Math.round(m.recallRecoveryRate * 100)}%</span>,
-    align: "right",
-  },
-  {
-    key: "treatment",
-    header: "Treatment recovery",
-    cell: (m) => <span className="tabular-nums">{Math.round(m.treatmentRecoveryRate * 100)}%</span>,
-    align: "right",
-  },
-  {
-    key: "noshow",
-    header: "No-show",
-    cell: (m) => (
-      <StatusPill tone={m.noShowRate > 0.13 ? "danger" : m.noShowRate > 0.1 ? "warning" : "success"}>
-        {Math.round(m.noShowRate * 100)}%
-      </StatusPill>
-    ),
-    align: "right",
-  },
-  {
-    key: "revenue",
-    header: "Revenue recovered",
-    cell: (m) => <span className="font-semibold text-navy tabular-nums">{gbp(m.recoveredRevenue)}</span>,
-    align: "right",
-  },
-];
-
-// The weekly revenue trend as a compact hairline table (the chart is retired; the
-// numbers carry it). Week label + the recovered figure, newest last.
-const TREND_COLUMNS: Column<MetricPoint>[] = [
-  { key: "label", header: "Week", cell: (t) => <span className="text-muted">{t.label}</span> },
-  {
-    key: "value",
-    header: "Recovered",
-    cell: (t) => <span className="font-semibold tabular-nums text-navy">{gbp(t.value)}</span>,
-    align: "right",
-  },
-];
-
-// Exception thresholds for the by-site strip: only sites breaching these speak.
-// Pilot values — tune with the practice once real Dentally data flows.
-const NOSHOW_MAX = 0.13;
-const RECALL_MIN = 0.45;
-
 export function OverviewDashboard({
   hideHero = false,
-  variant = "standalone",
   siteIds,
 }: {
   hideHero?: boolean;
-  /** "embedded" = the owner band on Home: revenue lives in the Home header card,
-   *  so the emphasised stat is dropped to avoid saying the same number twice. */
-  variant?: "standalone" | "embedded";
   /** The dashboard's selected site(s) (default N15); omitted → all of the
-   *  client's sites. Scopes the by-site breakdown so the band never names other
-   *  sites under a single-site header. */
+   *  client's sites. Scopes the site list so the band never names other sites
+   *  under a single-site header. */
   siteIds?: string[];
 }) {
   const params = useParams<{ client: string }>();
   const client = getClient(params.client);
 
-  // Live leads from Speed-to-lead (real enquiries arriving via intake / the quiz),
-  // so the "Recent enquiries" panel reflects what is actually coming in. Falls
-  // back to the mock when empty/erroring so the panel never blanks.
+  // Live leads from Speed-to-lead (real enquiries arriving via intake / the quiz).
+  // Never falls back to a fixture: an empty or errored fetch stays null and the
+  // panel shows an honest empty state, so no invented enquiry ever renders.
   const [liveLeads, setLiveLeads] = useState<Lead[] | null>(null);
   useEffect(() => {
     let active = true;
@@ -182,7 +120,7 @@ export function OverviewDashboard({
         }
       })
       .catch(() => {
-        // Keep the mock fallback on error.
+        // Keep the empty state on error.
       });
     return () => {
       active = false;
@@ -214,81 +152,24 @@ export function OverviewDashboard({
     return <PageHeader title="Overview" description="This client could not be found." />;
   }
 
-  const metrics = getClientMetrics(client.id);
-  // Scope the band to the dashboard's selected site (default N15); omitted → all
-  // sites. When a single site is selected the by-site breakdown, exceptions and
-  // headline totals all derive from that site, so nothing contradicts the header.
+  // Scope the site list to the dashboard's selected site (default N15); omitted →
+  // all of the client's sites.
   const scopedSiteIds = siteIds && siteIds.length ? siteIds : client.siteIds;
   const allSites = scopedSiteIds.length >= client.siteIds.length;
-  // Copy-ready name of the single selected site (null when All sites), so hints
-  // and subtitles name the site instead of claiming an all-sites scope.
   const scopedSiteName = allSites ? null : getSite(scopedSiteIds[0])?.name ?? null;
-  const siteMetrics = getSiteMetrics(scopedSiteIds);
 
-  const totalLeads = siteMetrics.reduce((a, s) => a + s.leadsIn, 0);
-  const totalBooked = siteMetrics.reduce((a, s) => a + s.consultationsBooked, 0);
-  const totalRevenue = siteMetrics.reduce((a, s) => a + s.recoveredRevenue, 0);
-  const avgCostPerBooking = siteMetrics.length
-    ? Math.round(siteMetrics.reduce((a, s) => a + s.costPerBooking, 0) / siteMetrics.length)
-    : 0;
-
-  // The weekly revenue trend is only held practice-wide; when a single site is
-  // selected, scale it by that site's share of recovered revenue so the chart
-  // matches the scoped figures rather than showing the whole group.
-  const clientRevenue = metrics?.recoveredRevenue ?? 0;
-  const revenueShare = allSites || clientRevenue <= 0 ? 1 : totalRevenue / clientRevenue;
-  const trend = (metrics?.trend ?? []).map((t) => ({ ...t, value: Math.round(t.value * revenueShare) }));
-  // The chart is retired; the newest week reads as a headline numeral with a
-  // plain-English delta vs the previous week, computed from the same series.
-  const latestWeek = trend.length ? trend[trend.length - 1].value : 0;
-  const prevWeek = trend.length > 1 ? trend[trend.length - 2].value : null;
-  const weekDeltaPct = prevWeek && prevWeek > 0 ? Math.round(((latestWeek - prevWeek) / prevWeek) * 100) : null;
-
-  // True only while the mock fixture stands in (live fetch still loading, empty,
-  // or errored): liveLeads is never set to an empty array, so null is the tell.
-  // Gates the sample-data caveat so invented enquiries never read as genuine.
-  const usingMockLeads = liveLeads === null;
-  const leads = [...(liveLeads ?? LEADS)].sort(
+  const leads = [...(liveLeads ?? [])].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
   const hotCount = leads.filter((l) => l.assessmentScore !== null && l.assessmentScore >= 75).length;
 
-  // Exceptions only: silence means on target.
-  const exceptions = siteMetrics
-    .map((m) => {
-      const breaches: string[] = [];
-      if (m.noShowRate > NOSHOW_MAX)
-        breaches.push(`No-shows ${Math.round(m.noShowRate * 100)}% (target under ${Math.round(NOSHOW_MAX * 100)}%)`);
-      if (m.recallRecoveryRate < RECALL_MIN)
-        breaches.push(
-          `Recall recovery ${Math.round(m.recallRecoveryRate * 100)}% (target over ${Math.round(RECALL_MIN * 100)}%)`,
-        );
-      return { site: getSite(m.siteId)?.name ?? m.siteId, breaches };
-    })
-    .filter((e) => e.breaches.length > 0);
-
-  // The KPI figures sit inside the page header on the standalone Overview, but
-  // keep their band when embedded in Home (hideHero), matching Home's own stat row.
+  // Real, live figures only: the enquiries currently in the pipeline, the hottest of
+  // them, and the open task count. Nothing here is a period estimate.
   const statFigures = (
     <>
-      <StatCard
-        label="Leads in"
-        value={compact(allSites ? (metrics?.leadsIn ?? totalLeads) : totalLeads)}
-        dot="bg-status-blue"
-      />
-      <StatCard
-        label="Consultations booked"
-        value={compact(allSites ? (metrics?.consultationsBooked ?? totalBooked) : totalBooked)}
-        dot="bg-status-blue"
-      />
-      {variant === "standalone" ? (
-        <StatCard
-          label="Revenue recovered"
-          value={gbp(allSites ? (metrics?.recoveredRevenue ?? totalRevenue) : totalRevenue)}
-          dot="bg-status-green"
-        />
-      ) : null}
-      <StatCard label="Cost per booking" value={gbp(avgCostPerBooking)} dot="bg-status-amber" />
+      <StatCard label="Live enquiries" value={leads.length} dot="bg-status-blue" />
+      <StatCard label="Hot leads" value={hotCount} dot="bg-status-green" />
+      <StatCard label="Open tasks" value={openTasks ?? 0} dot="bg-status-amber" />
     </>
   );
 
@@ -299,152 +180,74 @@ export function OverviewDashboard({
           title="Overview"
           description={
             allSites
-              ? "Your cross-site view of the funnel: what came in, what was booked, and the revenue recovered."
-              : `${scopedSiteName}: what came in, what was booked, and the revenue recovered.`
+              ? "Your proof-of-value view: the enquiries coming in and the work in hand. Headline performance figures build as your live sources connect."
+              : `${scopedSiteName}: the enquiries coming in and the work in hand. Headline performance figures build as your live sources connect.`
           }
           stats={statFigures}
         />
       )}
 
-      {/* One note covers every figure below: the KPI cards, weekly revenue and the
-          by-site table are all sample until the live sources connect. */}
-      <SampleNote>Sample data, not yet from your live sources. These figures are for the pilot only.</SampleNote>
-
       {hideHero ? <div className="flex flex-wrap gap-x-7 gap-y-4">{statFigures}</div> : null}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <SectionCard
-          title="Revenue recovered"
-          description={allSites ? "Recovered revenue per week across all sites" : `Recovered revenue per week at ${scopedSiteName}`}
-          className="lg:col-span-2"
-          actions={<SampleBadge />}
-        >
-          {trend.length > 0 ? (
-            <div className="space-y-4">
-              <div>
-                <p className="text-[26px] font-bold tabular-nums tracking-[-0.4px] text-navy">{gbp(latestWeek)}</p>
-                <p className="mt-0.5 text-[13px] text-muted">
-                  Most recent week
-                  {weekDeltaPct !== null && weekDeltaPct !== 0 ? (
-                    <>
-                      ,{" "}
-                      <span className={weekDeltaPct > 0 ? "font-medium text-status-green" : "font-medium text-status-red"}>
-                        {weekDeltaPct > 0 ? "up" : "down"} <span className="tabular-nums">{Math.abs(weekDeltaPct)}%</span>
-                      </span>{" "}
-                      on the previous week
-                    </>
-                  ) : weekDeltaPct === 0 ? (
-                    ", level with the previous week"
-                  ) : null}
-                </p>
-              </div>
-              <DataTable columns={TREND_COLUMNS} rows={trend} getRowKey={(t) => t.label} />
-            </div>
-          ) : (
-            <p className="text-sm text-muted">No trend data yet.</p>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="By site"
-          description="Exceptions only. Silence means on target."
-        >
-          {exceptions.length === 0 ? (
-            <p className="text-sm text-muted">
-              {allSites ? "All sites on target this month." : `${scopedSiteName} on target this month.`}
-            </p>
-          ) : (
-            <ul className="space-y-2.5">
-              {exceptions.map((e) => (
-                <li key={e.site} className="rounded-xl bg-warning/10 px-3.5 py-2.5">
-                  <p className="flex items-center gap-1.5 text-sm font-semibold text-warning">
-                    <ShieldAlert size={14} className="shrink-0" />
-                    {e.site}
-                  </p>
-                  <p className="mt-0.5 text-xs text-warning/90">{e.breaches.join(" · ")}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-3 border-t border-line pt-2.5 text-xs text-muted">
-            Full breakdown in the By site tab below.
-          </p>
-        </SectionCard>
+      {/* Honest awaiting note: the funnel and revenue figures have no live source
+          yet, so they are named here rather than invented. They light up the day the
+          Meta (spend and leads) and Dentally (bookings and revenue) sources connect. */}
+      <div className="flex items-start gap-2.5 rounded-[10px] border border-line bg-card-muted/50 px-4 py-3">
+        <Info size={16} className="mt-0.5 shrink-0 text-muted" />
+        <p className="text-xs leading-relaxed text-muted">
+          Leads over the month, consultations booked, revenue recovered and cost per booking build
+          from live activity and appear here as your Meta and Dentally sources connect. The
+          enquiries and open tasks below are live now.
+        </p>
       </div>
 
       <SectionCard
-        title="Funnel detail"
-        description={
-          allSites
-            ? "Recent enquiries and per-site performance across the funnel."
-            : `Recent enquiries and ${scopedSiteName} performance across the funnel.`
-        }
+        title="Recent enquiries"
+        description="Live enquiries arriving through intake and the smile assessment."
         bodyClassName="p-0"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill tone="success">
+              <Flame size={12} />
+              {hotCount} hot
+            </StatusPill>
+            {openTasks && openTasks > 0 ? (
+              <a
+                href={`/c/${client.slug}/task-queue`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-blue-dark/20 bg-blue-dark/10 px-2.5 py-0.5 text-xs font-semibold text-blue-dark transition-colors hover:bg-blue-dark/15"
+              >
+                <ListChecks size={12} />
+                {openTasks} {openTasks === 1 ? "task needs attention" : "tasks need attention"}
+              </a>
+            ) : null}
+          </div>
+        }
       >
-        <Tabs
-          className="p-5"
-          tabs={[
-            {
-              key: "enquiries",
-              label: "Recent enquiries",
-              content: usingMockLeads ? (
-                // Live speed-to-lead fetch returned nothing, so the mock fixture
-                // stands in; carry the same sample caption as the By site tab so
-                // fabricated enquiries never present as genuine.
-                <div className="space-y-3">
-                  <SampleNote>Sample data, not yet from your live sources.</SampleNote>
-                  <DataTable
-                    columns={ENQUIRY_COLUMNS}
-                    rows={leads}
-                    getRowKey={(l) => l.id}
-                    maxRows={6}
-                  />
-                </div>
-              ) : (
-                <DataTable
-                  columns={ENQUIRY_COLUMNS}
-                  rows={leads}
-                  getRowKey={(l) => l.id}
-                  maxRows={6}
-                />
-              ),
-            },
-            {
-              key: "site",
-              label: "By site",
-              content: (
-                // The by-site table is always sample, so its caption is scoped to
-                // this tab; the sibling "Recent enquiries" tab labels itself only
-                // when its own mock fallback is in use.
-                <div className="space-y-3">
-                  <SampleNote>Sample data, not yet from your live sources.</SampleNote>
-                  <DataTable
-                    columns={SITE_COLUMNS}
-                    rows={siteMetrics}
-                    getRowKey={(m) => m.siteId}
-                  />
-                </div>
-              ),
-            },
-          ]}
-          actions={
-            <>
-              <StatusPill tone="success">
-                <Flame size={12} />
-                {hotCount} hot
-              </StatusPill>
-              {openTasks && openTasks > 0 ? (
-                <a
-                  href={`/c/${client.slug}/task-queue`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-blue-dark/20 bg-blue-dark/10 px-2.5 py-0.5 text-xs font-semibold text-blue-dark transition-colors hover:bg-blue-dark/15"
-                >
-                  <ListChecks size={12} />
-                  {openTasks} {openTasks === 1 ? "task needs attention" : "tasks need attention"}
-                </a>
-              ) : null}
-            </>
-          }
-        />
+        <div className="p-5">
+          {leads.length > 0 ? (
+            <DataTable columns={ENQUIRY_COLUMNS} rows={leads} getRowKey={(l) => l.id} maxRows={6} />
+          ) : (
+            <EmptyState
+              icon={Inbox}
+              title="No live enquiries yet"
+              description="New enquiries from intake and the smile assessment will appear here as they arrive."
+            />
+          )}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Your sites"
+        description="Per-site figures build from live activity."
+      >
+        <ul className="divide-y divide-line">
+          {scopedSiteIds.map((id) => (
+            <li key={id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+              <span className="font-semibold text-navy">{getSite(id)?.name ?? id}</span>
+              <span className="text-xs text-muted">Awaiting live data</span>
+            </li>
+          ))}
+        </ul>
       </SectionCard>
     </>
   );

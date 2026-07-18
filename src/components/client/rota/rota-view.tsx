@@ -7,8 +7,7 @@ import { RotaWorkspace } from "./rota-workspace";
 //
 // Owners and managers set the staffing rules once. From each site's opening hours
 // and each staff member's availability, the rota is generated automatically, and
-// every staff member is texted their upcoming shifts. Messages are in test mode
-// until go-live.
+// every staff member is texted their upcoming shifts.
 //
 // The headline numbers depend on live shift + staff data, so the StatCards live in
 // the client workspace (which fetches them) rather than here, keeping them in sync
@@ -27,7 +26,7 @@ export async function RotaView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Staff Rota"
-        description="Set your staffing rules and the rota is generated automatically from each site's opening hours and staff availability, then every staff member is texted their upcoming shifts. Messages are in test mode until go-live."
+        description="Set your staffing rules and the rota is generated automatically from each site's opening hours and staff availability, then every staff member is texted their upcoming shifts."
       />
 
       <RotaWorkspace

@@ -1,70 +1,102 @@
-import { describe, it, expect } from "vitest";
+// The report snapshot reads REAL enquiry activity from the live store and computes
+// only genuine figures (enquiries, bookings, conversion, response time). No
+// fabricated numbers. The repository is mocked so the test is pure and fast.
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { LeadStage } from "@/lib/types";
+import type { SpeedToLeadLead } from "@/lib/speed-to-lead/types";
+
+const { listLeadsMock } = vi.hoisted(() => ({ listLeadsMock: vi.fn() }));
+vi.mock("@/lib/speed-to-lead/repository", () => ({ listLeads: listLeadsMock }));
+
 import { buildSnapshot } from "./snapshot";
-import { ROI_SUMMARY } from "@/lib/roi/mock";
-import { READINESS } from "@/lib/compliance/mock";
 
-describe("buildSnapshot is deterministic and consistent with the sources", () => {
-  it("the monthly snapshot mirrors the 30-day ROI totals", () => {
-    const m = buildSnapshot("month");
+/** ISO timestamp `days` before now. */
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** A lead carrying only the fields the snapshot reads (cast for the test). */
+function lead(p: {
+  createdAt: string;
+  stage?: LeadStage;
+  source?: string;
+  firstResponseAt?: string | null;
+}): SpeedToLeadLead {
+  return {
+    stage: "new",
+    source: "smile-assessment",
+    firstResponseAt: null,
+    ...p,
+  } as unknown as SpeedToLeadLead;
+}
+
+beforeEach(() => {
+  listLeadsMock.mockReset();
+});
+
+describe("buildSnapshot computes real activity only", () => {
+  it("counts enquiries, bookings and conversion in the monthly window", async () => {
+    listLeadsMock.mockResolvedValue([
+      ...Array.from({ length: 6 }, (_, i) => lead({ createdAt: daysAgo(i + 1), stage: "new" })),
+      ...Array.from({ length: 4 }, (_, i) => lead({ createdAt: daysAgo(i + 1), stage: "booked" })),
+      // Outside the 30-day window: must be excluded.
+      lead({ createdAt: daysAgo(45), stage: "booked" }),
+    ]);
+
+    const m = await buildSnapshot("month", ["site-cc"]);
     expect(m.period).toBe("month");
-    expect(m.spendGbp).toBe(Math.round(ROI_SUMMARY.spendGbp));
-    expect(m.newPatients).toBe(ROI_SUMMARY.newPatients);
-    expect(m.revenueGbp).toBe(Math.round(ROI_SUMMARY.revenueGbp));
-    expect(m.returnX).toBeCloseTo(ROI_SUMMARY.returnX, 1);
+    expect(m.enquiries).toBe(10);
+    expect(m.booked).toBe(4);
+    expect(m.enquiryToBookedRate).toBeCloseTo(0.4, 5);
+    expect(m.hasEnoughData).toBe(true); // 10 >= monthly minimum
   });
 
-  it("the weekly snapshot is a scaled-down version of the monthly one", () => {
-    const w = buildSnapshot("week");
-    const m = buildSnapshot("month");
+  it("scopes the weekly window to the last 7 days", async () => {
+    listLeadsMock.mockResolvedValue([
+      lead({ createdAt: daysAgo(1) }),
+      lead({ createdAt: daysAgo(2) }),
+      lead({ createdAt: daysAgo(3) }),
+      lead({ createdAt: daysAgo(20) }), // inside month, outside week
+    ]);
+
+    const w = await buildSnapshot("week", ["site-cc"]);
     expect(w.period).toBe("week");
-    expect(w.spendGbp).toBeLessThan(m.spendGbp);
-    expect(w.newPatients).toBeLessThan(m.newPatients);
-    expect(w.revenueGbp).toBeLessThan(m.revenueGbp);
-    // Ratios are scale-invariant, so return on spend is unchanged.
-    expect(w.returnX).toBe(m.returnX);
+    expect(w.enquiries).toBe(3);
+    expect(w.hasEnoughData).toBe(true); // 3 >= weekly minimum
   });
 
-  it("is deterministic: same period in, equal object out", () => {
-    expect(buildSnapshot("week")).toEqual(buildSnapshot("week"));
-    expect(buildSnapshot("month")).toEqual(buildSnapshot("month"));
+  it("averages the first-response time across contacted leads only", async () => {
+    listLeadsMock.mockResolvedValue([
+      // created 1 day ago, first response 60s later
+      lead({ createdAt: daysAgo(1), firstResponseAt: new Date(Date.parse(daysAgo(1)) + 60_000).toISOString() }),
+      // created 2 days ago, first response 120s later
+      lead({ createdAt: daysAgo(2), firstResponseAt: new Date(Date.parse(daysAgo(2)) + 120_000).toISOString() }),
+      // never contacted
+      lead({ createdAt: daysAgo(3), firstResponseAt: null }),
+    ]);
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+    expect(m.contacted).toBe(2);
+    expect(m.avgFirstResponseSeconds).toBe(90); // (60 + 120) / 2
   });
 
-  it("carries the compliance position straight from READINESS", () => {
-    const m = buildSnapshot("month");
-    expect(m.complianceScore).toBe(READINESS.overallScore);
-    expect(m.auditsOverdue).toBe(READINESS.auditsOverdue);
+  it("locks the report when there is too little live activity", async () => {
+    listLeadsMock.mockResolvedValue([
+      lead({ createdAt: daysAgo(1) }),
+      lead({ createdAt: daysAgo(2) }),
+    ]);
+    const m = await buildSnapshot("month", ["site-cc"]);
+    expect(m.enquiries).toBe(2);
+    expect(m.hasEnoughData).toBe(false); // below the monthly minimum
   });
 
-  it("only the monthly review carries a trend direction", () => {
-    expect(buildSnapshot("week").trendDirection).toBeNull();
-    expect(buildSnapshot("month").trendDirection).not.toBeNull();
-  });
-
-  it("names a top and a weakest paid channel by return on spend", () => {
-    const m = buildSnapshot("month");
-    expect(m.topChannel).not.toBeNull();
-    expect(m.weakestChannel).not.toBeNull();
-    // The best channel cannot have a lower return than the weakest one.
-    if (m.topChannel && m.weakestChannel) {
-      expect(m.topChannel.roiX).toBeGreaterThanOrEqual(m.weakestChannel.roiX);
-    }
-  });
-
-  it("defaults to the full practice (share 1) and matches an explicit share of 1", () => {
-    expect(buildSnapshot("month")).toEqual(buildSnapshot("month", 1));
-    expect(buildSnapshot("week")).toEqual(buildSnapshot("week", 1));
-  });
-
-  it("scales the acquisition figures by the share but not compliance", () => {
-    const full = buildSnapshot("month");
-    const half = buildSnapshot("month", 0.5);
-    expect(half.spendGbp).toBeLessThan(full.spendGbp);
-    expect(half.newPatients).toBeLessThan(full.newPatients);
-    expect(half.revenueGbp).toBeLessThan(full.revenueGbp);
-    // Compliance is point-in-time and must NOT be scaled.
-    expect(half.complianceScore).toBe(full.complianceScore);
-    expect(half.auditsOverdue).toBe(full.auditsOverdue);
-    // Return on spend is scale-invariant.
-    expect(half.returnX).toBe(full.returnX);
+  it("degrades to a zero snapshot when the store errors, never throwing", async () => {
+    listLeadsMock.mockRejectedValue(new Error("db down"));
+    const m = await buildSnapshot("month", ["site-cc"]);
+    expect(m.enquiries).toBe(0);
+    expect(m.booked).toBe(0);
+    expect(m.avgFirstResponseSeconds).toBeNull();
+    expect(m.topSource).toBeNull();
+    expect(m.hasEnoughData).toBe(false);
   });
 });

@@ -1,42 +1,43 @@
-import { PageHeader, StatCard, SampleNote } from "@/components/primitives";
+import { Plug } from "lucide-react";
+import { PageHeader } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
-import { ACCOUNT_SUMMARY } from "@/lib/meta-ads/mock";
-import { money, count } from "./format";
+import { isMetaConnected } from "@/lib/meta-ads/connection";
 import { MetaAdsWorkspace } from "./meta-ads-workspace";
 
 // Meta Ads section: plan, build and track Facebook and Instagram campaigns, with
-// AI ad copy, a launch guide, analytics and a winning-ads library. The data layer
-// is mock until the practice's Meta account is connected; every piece of copy is
-// built to UK GDC and ASA rules.
+// AI ad copy, a launch guide and a winning-ads library. Live campaign figures
+// (spend, leads, cost per lead, bookings) come from the practice's Meta account and
+// only appear once it is connected: isMetaConnected is the single seam. Until then
+// the account figures show an honest not-connected state, while the builder, the ad
+// copy generator, the landing pages, the reference library and the launch guide all
+// work now so the practice can be ready to launch the day Meta connects.
 export function MetaAdsView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
   if (!client) {
     return <PageHeader title="Meta Ads" description="This client could not be found." />;
   }
 
-  const s = ACCOUNT_SUMMARY;
+  const connected = isMetaConnected(client.id);
 
   return (
     <>
       <PageHeader
         title="Meta Ads"
-        description="Plan, build and track your Facebook and Instagram campaigns in one place, with AI-written ad copy, a launch guide, analytics and a library of winning dental ads."
-        stats={
-          <>
-            <StatCard label="Spend (last 30 days)" value={money(s.spendGbp)} dot="bg-status-amber" />
-            <StatCard label="Leads" value={count(s.leads)} dot="bg-status-blue" />
-            <StatCard label="Cost per lead" value={money(s.cplGbp, true)} dot="bg-status-blue" />
-            <StatCard label="Booked patients" value={count(s.bookings)} dot="bg-status-green" />
-          </>
-        }
+        description="Plan, build and track your Facebook and Instagram campaigns in one place, with AI-written ad copy, a launch guide and a library of winning dental ads."
       />
 
-      {/* Sample-data disclaimer for the header figures: spend, leads, cost per
-          lead and booked patients are all pilot estimates until the practice's
-          Meta account connects. */}
-      <SampleNote>Sample data, not yet from your live sources. Spend, leads and cost figures are pilot estimates until your Meta account connects.</SampleNote>
+      {connected ? null : (
+        <div className="flex items-start gap-2.5 rounded-[10px] border border-line bg-card-muted/50 px-4 py-3">
+          <Plug size={16} className="mt-0.5 shrink-0 text-muted" />
+          <p className="text-xs leading-relaxed text-muted">
+            Your Meta account is not connected yet. Campaign spend, leads, cost per lead and booked
+            patients appear here once it is linked. You can build campaigns, generate compliant ad
+            copy and prepare landing pages now, ready to launch the day it connects.
+          </p>
+        </div>
+      )}
 
-      <MetaAdsWorkspace clientSlug={clientSlug} practiceName={client.name} />
+      <MetaAdsWorkspace clientSlug={clientSlug} practiceName={client.name} metaConnected={connected} />
     </>
   );
 }
