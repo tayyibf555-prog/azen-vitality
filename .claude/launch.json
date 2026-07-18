@@ -8,6 +8,12 @@
       "port": 3000
     },
     {
+      "name": "azen-web-3001",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "3001"],
+      "port": 3001
+    },
+    {
       "name": "azen-prod",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["next", "start", "-p", "3000"],
