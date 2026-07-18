@@ -29,11 +29,11 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 | Capture people who abort booking (the dentology story) | ✅ | Two-step booking; abandoners become win-back leads |
 | Funnel bottleneck analytics ("where do they fall off") | ✅ | Recording on quiz + booking + landing pages incl. per-section views; presented as numbers/tables per the no-graphs design law |
 | Custom landing pages per campaign | ✅ | AI-generated, compliance-linted, real prices only |
-| Landing page A/B testing with winner promotion | ✅ | 50/50 sticky split, live demo page seeded |
+| Landing page A/B testing with winner promotion | ✅ | 50/50 sticky split; winners now auto-promote on a nightly schedule too (not just when results are viewed) |
 | Meta ads: campaign builder + AI ad copy + launch guide | ✅ | Built earlier; GDC/ASA-compliant copy |
 | Meta ad library of live competitor ads + scoring | ✅🏥 | Creative Intelligence built: click a creative for AI score, why-it-works, compliance watch-outs and est. cost-per-lead range. Live competitor data still needs the client's Meta account |
 | Publish campaigns to Meta / budget enforcement / metrics pulled back | ✅🏥 | BUILT dormant: real Graph v25 adapter (everything created PAUSED for client review), hourly insights pull-back ready; lights up the day Meta connects |
-| "Recreate this ad with your branding" as a downloadable image | 📋🫵 | UNBLOCKED: powering with the Higgsfield API. Brief ready; needs the HIGGSFIELD_API_KEY added to the environment (not pasted in chat) |
+| "Recreate this ad with your branding" as a downloadable image | ✅🫵 | BUILT dormant: docs-verified Higgsfield client, compliance-linted prompts, render history + download in the creative drawer. Lights up when HIGGSFIELD_API_KEY lands (then also capture the practice's real brand colours/logo) |
 | Nurture cycles for close-but-not-ready leads | ✅ | Built: 3 gentle touches (days 3/10/21), reply exits instantly, capped, opt-out safe, 60-day age guard |
 | A/B testing of outreach messages with conversion tracking | ✅ | LIVE: two message angles per campaign, deterministic 50/50, per-message sent/replied/booked counts read back honestly |
 
@@ -55,7 +55,7 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 |---|---|---|
 | Twilio cost estimate from their Dentally SMS bills | 🫵 | Your task with your Twilio contact |
 | Never pay for undeliverable texts (ClickSend point) | ✅ | LIVE: Lookup enabled in production; number-health chip on patient records + blocked count on campaigns |
-| Email validation (NeverBounce) before emailing | 📋 | Seam being built; email itself is not configured in prod yet |
+| Email validation (NeverBounce) before emailing | ✅ | BUILT dormant, exact mirror of phone Lookup (cache, fail-open, block-not-fail); double-gated on NEVERBOUNCE_API_KEY + EMAIL_LOOKUP_ENABLED |
 | WhatsApp/SMS preference form for patients | ✅ | Built: signed per-patient page; stop option routes through the real suppression machinery |
 
 ## Access and operations
@@ -66,7 +66,7 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 | Staff see much less ("only what they'd have in Dentally") | ⏸️ | Built + parked unmerged by owner decision: logins stay owner + practice manager for now; a merge away when wanted |
 | System controls stay owner-only | ✅ | Live |
 | Bug highlight → sent straight to us | ✅ | Feedback widget live; set FEEDBACK_WEBHOOK_URL to pipe into our chat |
-| "Everything is tracked" usage metrics | 📋 | Funnel surfaces tracked today; product-wide telemetry brief written |
+| "Everything is tracked" usage metrics | ✅ | LIVE: page + action usage by role (privacy-sane, no patient data), owner-only usage table on Reports |
 | Inactive patients: "WE decide who's excluded" | ✅ | Closed by the patient status control: owner/manager set active/inactive/do-not-contact per patient, written back to Dentally, excluded from all targeting |
 
 ## The website (separate project, not this platform)
