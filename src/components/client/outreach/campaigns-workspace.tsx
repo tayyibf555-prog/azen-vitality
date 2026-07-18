@@ -46,6 +46,13 @@ interface CampaignFilters {
   gender?: "female" | "male";
 }
 
+interface VariantCounts {
+  assigned: number;
+  sent: number;
+  replied: number;
+  booked: number;
+}
+
 interface CampaignListItem {
   id: string;
   name: string;
@@ -53,9 +60,13 @@ interface CampaignListItem {
   status: CampaignStatus;
   dailyCap: number;
   messageAngle: string | null;
+  /** Second message angle when this is a two-message A/B campaign; null otherwise. */
+  messageAngleB: string | null;
   practitionerName: string | null;
   filters: CampaignFilters;
   counts: { built: number; contacted: number; replied: number; booked: number; blocked: number };
+  /** Per-message sent/replied/booked read-back; present only for a two-message campaign. */
+  variants: { a: VariantCounts; b: VariantCounts } | null;
 }
 
 interface PreviewTarget {
@@ -814,6 +825,16 @@ export function CampaignsWorkspace({
                       <Count label="Booked" value={c.counts.booked} tone="success" />
                     </div>
 
+                    {/* Two-message A/B read-back: shown only when this campaign carries a
+                        second angle. Honest per-message counts (sent / replies / booked),
+                        never a claim that one message is auto-chosen or "learned". */}
+                    {c.messageAngleB && c.variants ? (
+                      <div className="mt-2.5 space-y-1 border-t border-line pt-2.5">
+                        <VariantLine label="A" angle={c.messageAngle} v={c.variants.a} />
+                        <VariantLine label="B" angle={c.messageAngleB} v={c.variants.b} />
+                      </div>
+                    ) : null}
+
                     {/* Deliverability read-back: messages the guardrails stopped BEFORE any
                         paid send. One honest total - the drain does not record a per-stop
                         reason - so the tooltip names the possibilities rather than inventing
@@ -849,5 +870,24 @@ function Count({ label, value, tone }: { label: string; value: number; tone?: "s
       </p>
       <p className="text-[11px] uppercase tracking-wide text-muted">{label}</p>
     </div>
+  );
+}
+
+// One line of the two-message read-back, e.g.
+// "Message A (a hygiene visit): 120 sent, 14 replies, 3 booked".
+// Plain counts, so the owner can read which message is converting without any claim that
+// the system picks a winner or learns from the split.
+function VariantLine({ label, angle, v }: { label: string; angle: string | null; v: VariantCounts }) {
+  const n = (x: number) => x.toLocaleString("en-GB");
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-1.5 text-[11px] text-muted">
+      <span className="font-semibold text-navy">Message {label}</span>
+      {angle ? <span className="text-ink">({angle})</span> : null}
+      <span className="tabular-nums">
+        <span className="font-semibold text-navy">{n(v.sent)}</span> sent,{" "}
+        <span className="font-semibold text-navy">{n(v.replied)}</span> {v.replied === 1 ? "reply" : "replies"},{" "}
+        <span className="font-semibold text-success">{n(v.booked)}</span> booked
+      </span>
+    </p>
   );
 }

@@ -14,7 +14,7 @@ const outreach = vi.hoisted(() => ({
   findTargetByAddress: vi.fn(),
   getCampaignIdForTarget: vi.fn(),
   insertInboundTouch: vi.fn(),
-  setTargetStatus: vi.fn(),
+  markOutreachReplied: vi.fn(),
   getTarget: vi.fn(),
   getCampaign: vi.fn(),
 }));
@@ -47,7 +47,7 @@ vi.mock("@/lib/outreach/repository", () => ({
   findTargetByAddress: (...a: unknown[]) => outreach.findTargetByAddress(...a),
   getCampaignIdForTarget: (...a: unknown[]) => outreach.getCampaignIdForTarget(...a),
   insertInboundTouch: (...a: unknown[]) => outreach.insertInboundTouch(...a),
-  setTargetStatus: (...a: unknown[]) => outreach.setTargetStatus(...a),
+  markOutreachReplied: (...a: unknown[]) => outreach.markOutreachReplied(...a),
   getTarget: (...a: unknown[]) => outreach.getTarget(...a),
   getCampaign: (...a: unknown[]) => outreach.getCampaign(...a),
 }));
@@ -130,7 +130,7 @@ beforeEach(() => {
   outreach.findTargetByAddress.mockResolvedValue({ targetId: "tgt-1", siteId: "site-cc" });
   outreach.getCampaignIdForTarget.mockResolvedValue("camp-1");
   outreach.insertInboundTouch.mockResolvedValue(undefined);
-  outreach.setTargetStatus.mockResolvedValue(undefined);
+  outreach.markOutreachReplied.mockResolvedValue(undefined);
   outreach.getCampaign.mockResolvedValue({
     id: "camp-1", messageAngle: "a hygiene review", practitionerName: "Dr Green", practitionerId: "prac-9",
   });
@@ -153,7 +153,8 @@ describe("inbound outreach reply-linkage guard", () => {
 
     expect(res.status).toBe(200);
     expect(outreach.insertInboundTouch).toHaveBeenCalledTimes(1); // reply recorded
-    expect(outreach.setTargetStatus).toHaveBeenCalledWith("tgt-1", "replied", expect.objectContaining({ nextDueAt: null }));
+    // Pause + stamp replied_at (once), via the dedicated idempotent marker.
+    expect(outreach.markOutreachReplied).toHaveBeenCalledWith("tgt-1");
     // Agent primed with the campaign clinician/angle.
     expect(contextOf().outreachInvite).toMatchObject({
       treatmentAngle: "a hygiene review", practitionerName: "Dr Green", practitionerId: "prac-9",
@@ -167,7 +168,7 @@ describe("inbound outreach reply-linkage guard", () => {
 
     expect(res.status).toBe(200);
     expect(outreach.insertInboundTouch).toHaveBeenCalledTimes(1); // still recorded (audit)
-    expect(outreach.setTargetStatus).not.toHaveBeenCalled(); // no regression of a booked target
+    expect(outreach.markOutreachReplied).not.toHaveBeenCalled(); // no regression of a booked target
     expect(outreach.getCampaign).not.toHaveBeenCalled();
     expect(contextOf().outreachInvite).toBeUndefined(); // agent NOT primed with a stale campaign
   });
@@ -177,7 +178,7 @@ describe("inbound outreach reply-linkage guard", () => {
 
     await inboundPOST(signed({ From: "+447700900001", Body: "ok", MessageSid: "SM3" }));
 
-    expect(outreach.setTargetStatus).not.toHaveBeenCalled();
+    expect(outreach.markOutreachReplied).not.toHaveBeenCalled();
     expect(contextOf().outreachInvite).toBeUndefined();
   });
 
@@ -188,7 +189,7 @@ describe("inbound outreach reply-linkage guard", () => {
     await inboundPOST(signed({ From: "+447700900001", Body: "hello again", MessageSid: "SM4" }));
 
     expect(outreach.insertInboundTouch).toHaveBeenCalledTimes(1); // recorded
-    expect(outreach.setTargetStatus).not.toHaveBeenCalled(); // stale: not regressed
+    expect(outreach.markOutreachReplied).not.toHaveBeenCalled(); // stale: not regressed
     expect(contextOf().outreachInvite).toBeUndefined();
   });
 

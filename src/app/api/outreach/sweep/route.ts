@@ -1,4 +1,5 @@
 import { draftOutreach } from "@/lib/outreach/draft";
+import { assignVariant } from "@/lib/outreach/variant";
 import { stepDef, advanceAfter, OUTREACH_CADENCE } from "@/lib/outreach/cadence";
 import {
   listRunningCampaigns,
@@ -182,11 +183,20 @@ async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<Cam
       continue;
     }
 
+    // A/B message test: when the campaign carries a second angle, deterministically
+    // assign this patient one variant and always keep it (same patient, same variant on
+    // every step and re-run). A single-angle campaign is all 'a'. The variant ONLY
+    // chooses which angle the draft is written from; consent, the daily cap, suppression
+    // and the drain are all untouched. Stamped on both the touch (per-variant "sent"
+    // count) and the target (per-variant assigned/replied/booked).
+    const hasVariantB = !!(campaign.messageAngleB && campaign.messageAngleB.trim());
+    const variant = assignVariant(campaign.id, target.patientId, hasVariantB);
+
     // Draft (guardrail-checked inside draftOutreach, with a safe fallback), approve,
     // advance, then queue. Advancing BEFORE the enqueue means a kill between here and
     // the enqueue skips this step next run rather than re-sending it (a skipped
     // message beats a double-send). Mirrors the recall sweep ordering.
-    const { body } = await draftOutreach(target, campaign, step.channel, step);
+    const { body } = await draftOutreach(target, campaign, step.channel, step, undefined, variant);
     const touch = await insertTouch({
       targetId: target.id,
       campaignId: campaign.id,
@@ -196,6 +206,7 @@ async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<Cam
       body,
       draftedBy: "claude",
       status: "draft",
+      variant,
     });
     r.drafted += 1;
 
@@ -207,6 +218,7 @@ async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<Cam
       status: adv.status === "exhausted" ? "exhausted" : "contacted",
       nextDueAt: adv.nextDueAt,
       endedAt: adv.endedAt,
+      variant,
     });
 
     // Leave the outbox row 'queued' so the shared drain delivers it via Twilio and

@@ -13,6 +13,7 @@ type Campaign = {
   status: string;
   filters: Record<string, unknown>;
   messageAngle: string | null;
+  messageAngleB?: string | null;
   practitionerName: string | null;
   dailyCap: number;
   counts?: Record<string, number> | null;
@@ -28,6 +29,10 @@ const store = vi.hoisted(() => ({
   buildDone: true,
   buildStopped: null as "403" | "429" | null,
   buildOk: true,
+  variantCounts: {
+    a: { assigned: 20, sent: 18, replied: 3, booked: 1 },
+    b: { assigned: 20, sent: 19, replied: 5, booked: 2 },
+  },
 }));
 
 vi.mock("@/lib/copilot/actions", () => ({
@@ -59,6 +64,7 @@ vi.mock("@/lib/outreach/repository", () => ({
       status: "draft",
       filters: input.filters ?? {},
       messageAngle: input.messageAngle ?? null,
+      messageAngleB: input.messageAngleB ?? null,
       practitionerName: input.practitionerName ?? null,
       dailyCap: input.dailyCap ?? 25,
     };
@@ -68,6 +74,7 @@ vi.mock("@/lib/outreach/repository", () => ({
     store.updated.push({ id, fields });
   },
   campaignStatusCounts: async () => ({ built: 42, contacted: 0, replied: 0, booked: 0 }),
+  campaignVariantCounts: async () => store.variantCounts,
 }));
 vi.mock("@/lib/outreach/build", () => ({
   runOutreachBuildTick: async () => ({
@@ -283,5 +290,54 @@ describe("launch_outreach_campaign (two-step, mirrors send_sms)", () => {
     const out = JSON.parse(await dispatch("launch_outreach_campaign", { campaignId: "camp-1", confirm: true }));
     expect(out.launched).toBe(false);
     expect(store.updated).toHaveLength(0);
+  });
+});
+
+describe("two-message A/B", () => {
+  it("create_outreach_campaign accepts a second angle and reads both back", async () => {
+    const out = JSON.parse(
+      await dispatch("create_outreach_campaign", {
+        messageAngle: "a hygiene visit",
+        messageAngleB: "time for your check-up",
+        treatmentContains: ["hygiene"],
+      }),
+    );
+    expect(out.created).toBe(true);
+    // Stored on the campaign...
+    expect(store.created[0].messageAngleB).toBe("time for your check-up");
+    // ...and named in the read-back so the owner sees both messages.
+    expect(out.messageAngle).toBe("a hygiene visit");
+    expect(out.messageAngleB).toBe("time for your check-up");
+    expect(out.abTest).toBe(true);
+    // Honest framing: a test, never a claim of learning.
+    expect(JSON.stringify(out).toLowerCase()).toContain("honest counting");
+    expect(JSON.stringify(out).toLowerCase()).not.toContain("learn");
+  });
+
+  it("a second angle with no primary angle is ignored (a second message needs a first)", async () => {
+    await dispatch("create_outreach_campaign", { messageAngleB: "time for your check-up" });
+    expect(store.created[0].messageAngleB ?? null).toBeNull();
+  });
+
+  it("launch preview names both angles and reads back per-message counts", async () => {
+    store.campaign = launchCampaign({ messageAngleB: "time for your check-up" });
+    const out = JSON.parse(await dispatch("launch_outreach_campaign", { campaignId: "camp-1" }));
+    expect(out.launched).toBe(false);
+    expect(out.preview).toBe(true);
+    expect(out.messageAngle).toBe("a hygiene visit");
+    expect(out.messageAngleB).toBe("time for your check-up");
+    // Honest per-message counts, straight from the variant read-back.
+    expect(out.messagePerformance.messageA).toMatchObject({ sent: 18, replied: 3, booked: 1 });
+    expect(out.messagePerformance.messageB).toMatchObject({ sent: 19, replied: 5, booked: 2 });
+    // Nothing is launched at the preview step.
+    expect(store.updated).toHaveLength(0);
+  });
+
+  it("a single-angle launch preview carries no per-message breakdown", async () => {
+    store.campaign = launchCampaign(); // no messageAngleB
+    const out = JSON.parse(await dispatch("launch_outreach_campaign", { campaignId: "camp-1" }));
+    expect(out.preview).toBe(true);
+    expect(out.messagePerformance).toBeUndefined();
+    expect(out.messageAngleB).toBeUndefined();
   });
 });

@@ -58,6 +58,7 @@ function campaign(dailyCap: number): OutreachCampaign {
     practitionerId: null,
     practitionerName: "Dr Patel",
     messageAngle: "hygiene clean",
+    messageAngleB: null,
     dailyCap,
     buildCursor: null,
     counts: null,
@@ -78,10 +79,13 @@ function target(i: number): OutreachTarget {
     matchedReason: "Scale & Polish 14 Mar 2025",
     status: "pending",
     consent: { sms: true, email: true, marketing: false },
+    variant: null,
     currentStep: 0,
     nextDueAt: new Date(Date.now() - 86_400_000).toISOString(), // due yesterday
     startedAt: "2026-07-01T00:00:00.000Z",
     endedAt: null,
+    repliedAt: null,
+    bookedAt: null,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
   };

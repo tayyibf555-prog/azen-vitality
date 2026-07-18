@@ -15,7 +15,7 @@ const outreach = vi.hoisted(() => ({
   findTargetByAddress: vi.fn(),
   getCampaignIdForTarget: vi.fn(),
   insertInboundTouch: vi.fn(),
-  setTargetStatus: vi.fn(),
+  markOutreachReplied: vi.fn(),
   getTarget: vi.fn(),
   getCampaign: vi.fn(),
 }));
@@ -53,7 +53,7 @@ vi.mock("@/lib/outreach/repository", () => ({
   findTargetByAddress: (...a: unknown[]) => outreach.findTargetByAddress(...a),
   getCampaignIdForTarget: (...a: unknown[]) => outreach.getCampaignIdForTarget(...a),
   insertInboundTouch: (...a: unknown[]) => outreach.insertInboundTouch(...a),
-  setTargetStatus: (...a: unknown[]) => outreach.setTargetStatus(...a),
+  markOutreachReplied: (...a: unknown[]) => outreach.markOutreachReplied(...a),
   getTarget: (...a: unknown[]) => outreach.getTarget(...a),
   getCampaign: (...a: unknown[]) => outreach.getCampaign(...a),
 }));
@@ -140,7 +140,7 @@ beforeEach(() => {
   outreach.findTargetByAddress.mockResolvedValue({ targetId: "tgt-1", siteId: "site-cc" });
   outreach.getCampaignIdForTarget.mockResolvedValue("camp-1");
   outreach.insertInboundTouch.mockResolvedValue(undefined);
-  outreach.setTargetStatus.mockResolvedValue(undefined);
+  outreach.markOutreachReplied.mockResolvedValue(undefined);
   outreach.getTarget.mockResolvedValue(outreachTarget());
   outreach.getCampaign.mockResolvedValue({
     id: "camp-1", messageAngle: "a hygiene review", practitionerName: "Dr Green", practitionerId: "prac-9",

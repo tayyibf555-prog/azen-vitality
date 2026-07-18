@@ -1,7 +1,13 @@
 import { getClient, getSites } from "@/lib/mock/clients";
 import { requireUser, requireOwnerRole, requireClientAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
-import { createCampaign, listCampaigns, campaignStatusCounts } from "@/lib/outreach/repository";
+import {
+  createCampaign,
+  listCampaigns,
+  campaignStatusCounts,
+  campaignVariantCounts,
+  type CampaignVariantBreakdown,
+} from "@/lib/outreach/repository";
 import type { OutreachCampaign } from "@/lib/outreach/types";
 import { parseFilters, parseDailyCap } from "@/lib/outreach/validate";
 
@@ -31,7 +37,11 @@ async function authorise(): Promise<AuthedUser | null | Response> {
   return user;
 }
 
-function toListView(c: OutreachCampaign, counts: Awaited<ReturnType<typeof campaignStatusCounts>>) {
+function toListView(
+  c: OutreachCampaign,
+  counts: Awaited<ReturnType<typeof campaignStatusCounts>>,
+  variants: CampaignVariantBreakdown | null,
+) {
   return {
     id: c.id,
     name: c.name,
@@ -41,6 +51,8 @@ function toListView(c: OutreachCampaign, counts: Awaited<ReturnType<typeof campa
     practitionerId: c.practitionerId,
     practitionerName: c.practitionerName,
     messageAngle: c.messageAngle,
+    // Only present for a two-message campaign; the UI shows the per-variant line only then.
+    messageAngleB: c.messageAngleB,
     dailyCap: c.dailyCap,
     counts: {
       built: counts.built,
@@ -49,6 +61,8 @@ function toListView(c: OutreachCampaign, counts: Awaited<ReturnType<typeof campa
       booked: counts.booked,
       blocked: counts.blocked,
     },
+    // Per-message A/B read-back (assigned/sent/replied/booked), null for single-angle.
+    variants,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   };
@@ -66,7 +80,16 @@ export async function GET(request: Request): Promise<Response> {
 
   const campaigns = await listCampaigns({ clientId: client.id });
   const withCounts = await Promise.all(
-    campaigns.map(async (c) => toListView(c, await campaignStatusCounts(c.id))),
+    campaigns.map(async (c) => {
+      // Only compute the per-variant breakdown for a two-message campaign; a single-angle
+      // campaign never shows the line, so skip the extra reads.
+      const hasVariantB = !!(c.messageAngleB && c.messageAngleB.trim());
+      const [counts, variants] = await Promise.all([
+        campaignStatusCounts(c.id),
+        hasVariantB ? campaignVariantCounts(c.id) : Promise.resolve(null),
+      ]);
+      return toListView(c, counts, variants);
+    }),
   );
   return Response.json({ ok: true, campaigns: withCounts });
 }
@@ -96,6 +119,9 @@ export async function POST(request: Request): Promise<Response> {
   // no send intent). It is REQUIRED before launch, validated in the PATCH launch
   // action, not here.
   const messageAngle = str(body.messageAngle, 120) ?? null;
+  // Optional SECOND angle turns the campaign into a two-message A/B test. Additive: null
+  // keeps it single-message. The angle only chooses which text a patient is drafted.
+  const messageAngleB = str(body.messageAngleB, 120) ?? null;
 
   // Site must be one the client actually owns (never a foreign Dentally site).
   const sites = getSites(client.id);
@@ -116,12 +142,18 @@ export async function POST(request: Request): Promise<Response> {
     practitionerId: str(body.practitionerId, 60) ?? null,
     practitionerName: str(body.practitionerName, 120) ?? null,
     messageAngle,
+    messageAngleB,
     dailyCap: capParse.dailyCap,
     createdBy: auth?.email ?? auth?.id ?? null,
   });
 
   return Response.json(
-    { ok: true, campaign: toListView(campaign, { built: 0, contacted: 0, replied: 0, booked: 0, blocked: 0 }) },
+    {
+      ok: true,
+      // A just-created campaign has no targets yet, so per-variant counts are all zero;
+      // pass null rather than compute empty reads.
+      campaign: toListView(campaign, { built: 0, contacted: 0, replied: 0, booked: 0, blocked: 0 }, null),
+    },
     { status: 201 },
   );
 }
