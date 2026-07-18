@@ -363,13 +363,21 @@ export interface CampaignStatusCounts {
   contacted: number;
   replied: number;
   booked: number;
+  /**
+   * Sends stopped BEFORE dispatch, so never charged: an undeliverable number (Twilio
+   * Lookup), missing consent/suppression, or the output safety guard. One honest total,
+   * NOT a per-reason breakdown - the drain records every pre-send stop the same way (see
+   * campaignBlockedCount).
+   */
+  blocked: number;
 }
 
 /**
  * Live headline counts for a campaign's list card: total enrolled ("built") plus the
- * contacted / replied / booked buckets. Uses head-count reads (COUNT with head:true)
- * so nothing but the numbers crosses the wire, run concurrently. Single-client pilot
- * scale: a handful of campaigns, so a few cheap counts per row is fine.
+ * contacted / replied / booked buckets and the blocked-before-sending total. Uses
+ * head-count reads (COUNT with head:true) so nothing but the numbers crosses the wire,
+ * run concurrently. Single-client pilot scale: a handful of campaigns, so a few cheap
+ * counts per row is fine.
  */
 export async function campaignStatusCounts(campaignId: string): Promise<CampaignStatusCounts> {
   const db = serviceClient();
@@ -380,13 +388,43 @@ export async function campaignStatusCounts(campaignId: string): Promise<Campaign
     if (error) throw error;
     return n ?? 0;
   };
-  const [built, contacted, replied, booked] = await Promise.all([
+  const [built, contacted, replied, booked, blocked] = await Promise.all([
     count(),
     count("contacted"),
     count("replied"),
     count("booked"),
+    campaignBlockedCount(campaignId),
   ]);
-  return { built, contacted, replied, booked };
+  return { built, contacted, replied, booked, blocked };
+}
+
+/**
+ * How many of a campaign's sends were BLOCKED BEFORE dispatch (never charged). The
+ * shared drain marks EVERY pre-send stop - undeliverable number (Twilio Lookup), missing
+ * consent/suppression, or the output safety guard - identically, by setting the outbox
+ * row to status='failed' with provider='suppressed' (see markOutboxBlocked). That
+ * provider marker is what distinguishes a deliberate block from a genuine provider send
+ * failure, which leaves provider null. There is NO per-reason column, so this is a
+ * single honest "blocked before sending" total, not a breakdown. Scoped to the campaign
+ * via the touch, because the outbox has no campaign_id but the touch does.
+ */
+export async function campaignBlockedCount(campaignId: string): Promise<number> {
+  const db = serviceClient();
+  const { data: touches, error: tErr } = await db
+    .from("outreach_touch")
+    .select("id")
+    .eq("campaign_id", campaignId);
+  if (tErr) throw tErr;
+  const touchIds = (touches as Array<{ id: string }>).map((t) => t.id);
+  if (touchIds.length === 0) return 0;
+  const { count, error } = await db
+    .from("outreach_outbox")
+    .select("id", { count: "exact", head: true })
+    .in("touch_id", touchIds)
+    .eq("status", "failed")
+    .eq("provider", "suppressed");
+  if (error) throw error;
+  return count ?? 0;
 }
 
 /**

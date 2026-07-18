@@ -63,7 +63,7 @@ vi.mock("@/lib/outreach/repository", () => ({
     };
   },
   listCampaigns: async () => [],
-  campaignStatusCounts: async () => ({ built: 0, contacted: 0, replied: 0, booked: 0 }),
+  campaignStatusCounts: async () => ({ built: 0, contacted: 0, replied: 0, booked: 0, blocked: 0 }),
   getCampaign: async () => store.campaign,
   updateCampaign: async (id: string, fields: Record<string, unknown>) => {
     store.updated.push({ id, fields });

@@ -5,6 +5,7 @@ import { listPatients, countPatients, type PatientRecord } from "@/lib/dentally/
 import { getPatientCounts } from "@/lib/patient-count/repository";
 import { listOverridesForSites } from "@/lib/patient-status/repository";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
+import { loadNumberHealthByPatient, type NumberHealth } from "@/lib/messaging/number-health";
 import { PatientsTable } from "./patients-table";
 
 /** A quiet big-numeral text stat for the header row (was a boxed stat card). */
@@ -59,9 +60,16 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
   }
 
   const nowIso = new Date().toISOString();
+  // The active slice shown in the table. Hoisted so its number-health verdicts are
+  // batched in ONE query here (mirroring the overrides load) and passed to the table,
+  // rather than each opened record fetching its own.
+  const activePatients = patients.filter((p) => p.active);
+  const lookups: Record<string, NumberHealth> = await loadNumberHealthByPatient(
+    activePatients.map((p) => ({ id: p.id, phone: p.phone })),
+  );
   // Recall count below is over the bounded slice, NOT the whole book, hence the
   // caption under the header.
-  const activeInSlice = patients.filter((p) => p.active).length;
+  const activeInSlice = activePatients.length;
   const dueRecall = patients.filter((p) => p.recallDueAt && p.recallDueAt <= nowIso).length;
 
   return (
@@ -103,11 +111,12 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
       </section>
 
       <PatientsTable
-        patients={patients.filter((p) => p.active)}
+        patients={activePatients}
         nowIso={nowIso}
         clientSlug={clientSlug}
         initialFilter="active"
         overrides={overrides}
+        lookups={lookups}
       />
     </>
   );

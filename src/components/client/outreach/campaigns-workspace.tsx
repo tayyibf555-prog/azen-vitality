@@ -14,6 +14,7 @@ import {
   Users,
   ChevronRight,
   AlertTriangle,
+  ShieldOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, DataTable, type Column, type Tone } from "@/components/primitives";
@@ -54,7 +55,7 @@ interface CampaignListItem {
   messageAngle: string | null;
   practitionerName: string | null;
   filters: CampaignFilters;
-  counts: { built: number; contacted: number; replied: number; booked: number };
+  counts: { built: number; contacted: number; replied: number; booked: number; blocked: number };
 }
 
 interface PreviewTarget {
@@ -812,6 +813,23 @@ export function CampaignsWorkspace({
                       <Count label="Replied" value={c.counts.replied} />
                       <Count label="Booked" value={c.counts.booked} tone="success" />
                     </div>
+
+                    {/* Deliverability read-back: messages the guardrails stopped BEFORE any
+                        paid send. One honest total - the drain does not record a per-stop
+                        reason - so the tooltip names the possibilities rather than inventing
+                        a split. Shown only when there is something to report. */}
+                    {c.counts.blocked > 0 ? (
+                      <p
+                        className="mt-2.5 flex cursor-help items-center justify-center gap-1.5 text-[11px] text-muted"
+                        title="Blocked before sending, so never charged. The reason is not itemised: an undeliverable number, missing consent, or a message-safety check."
+                      >
+                        <ShieldOff size={12} className="text-status-amber" />
+                        <span className="font-semibold tabular-nums text-navy">
+                          {c.counts.blocked.toLocaleString("en-GB")}
+                        </span>
+                        blocked before sending
+                      </p>
+                    ) : null}
                   </li>
                 );
               })}
