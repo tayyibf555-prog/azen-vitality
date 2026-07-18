@@ -31,7 +31,7 @@ export async function InboxView({ clientSlug }: { clientSlug: string }) {
     <div className="space-y-5">
       <PageHeader
         title="Conversations"
-        description="Every patient conversation across SMS, WhatsApp, after-hours and the lifecycle agents in one place, with the ability to take over and reply yourself. Messages are in test mode until go-live."
+        description="Every patient conversation across SMS, WhatsApp, after-hours and the lifecycle agents in one place, with the ability to take over and reply yourself."
       />
       <InboxWorkspace clientSlug={client.slug} initialThreads={threads} />
     </div>

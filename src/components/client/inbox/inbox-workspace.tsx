@@ -177,7 +177,7 @@ export function InboxWorkspace({
       <EmptyState
         icon={InboxIcon}
         title="No conversations yet"
-        description="Patient messages across SMS, WhatsApp, after-hours and the lifecycle agents will appear here as one thread per person. This view is mock safe, so it stays empty until messages arrive."
+        description="Patient messages across SMS, WhatsApp, after-hours and the lifecycle agents will appear here as one thread per person, as soon as the first one arrives."
       />
     );
   }
@@ -360,7 +360,7 @@ export function InboxWorkspace({
                 </button>
               </div>
               <p className="mt-1.5 text-[11px] text-muted">
-                Replies honour consent and opt-outs, and are in test mode until go-live.
+                Replies honour consent and opt-outs.
               </p>
             </div>
           </>

@@ -380,7 +380,7 @@ export function ReviewsWorkspace({
         ) : null}
         <p className="mt-4 text-xs text-muted">
           The review request sends automatically a few hours later or the next morning. Consent and
-          opt-outs are always respected, and messages are in test mode until go-live.
+          opt-outs are always respected.
         </p>
       </SectionCard>
 

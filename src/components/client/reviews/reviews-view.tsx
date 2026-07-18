@@ -11,8 +11,7 @@ import { ReviewsWorkspace, type SiteName } from "./reviews-workspace";
 // After each appointment, staff mark who attended; a Google review request is then
 // sent automatically a few hours later or the next morning through the consent-aware
 // messaging layer. Consent and opt-outs are always respected. Requesting Google
-// reviews is allowed and is kept separate from using testimonials in ads. Data is
-// mock and messages are in test mode until go-live.
+// reviews is allowed and is kept separate from using testimonials in ads.
 //
 // The server view derives the headline numbers by mirroring the read the
 // /api/reviews/today route does (today's appointments + their review requests), so
@@ -51,7 +50,7 @@ export async function ReviewsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Reviews"
-        description="After each appointment, mark who attended and a Google review request is sent automatically a few hours later or the next morning. Consent and opt-outs are always respected. Requesting Google reviews is allowed and is separate from using testimonials in ads. Data is mock and messages are in test mode until go-live."
+        description="After each appointment, mark who attended and a Google review request is sent automatically a few hours later or the next morning. Consent and opt-outs are always respected. Requesting Google reviews is allowed and is separate from using testimonials in ads."
         stats={
           <>
             <StatCard
