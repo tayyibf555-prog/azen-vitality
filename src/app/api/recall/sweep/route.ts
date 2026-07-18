@@ -19,6 +19,7 @@ import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,12 @@ export async function POST(request: Request) {
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
+  // Platform admin status: patients marked inactive / do_not_contact are excluded from
+  // recall. Loaded ONCE per sweep (spans sites) and checked per target before drafting,
+  // so no Anthropic draft is spent and no touch is queued. The cadence is left 'due'
+  // (not exhausted), so clearing the override lets recall resume naturally.
+  const excludedKeys = await loadExcludedTargetKeys();
+
   // Daily automated-contact cap: at most this many recall messages are queued per
   // Europe/London day, so enabling recall against the 51k-patient base can never
   // blast the whole due cohort in a day. Every queued recall message counts toward
@@ -115,10 +122,18 @@ export async function POST(request: Request) {
   let graduated = 0;
   let paused = 0;
   let capped = 0;
+  let suppressed = 0;
 
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
     if (!target) continue;
+
+    // Platform admin status excludes this patient from all outreach: skip without
+    // drafting/queueing, leaving the cadence due so it resumes if the override is lifted.
+    if (excludedKeys.has(excludedTargetKey(target.siteId, target.dentallyPatientId))) {
+      suppressed += 1;
+      continue;
+    }
 
     // Skip if an outbound touch is already pending (approved-but-unsent etc.):
     // the manual approve→send flow enqueues at approve and only advances the
@@ -218,6 +233,7 @@ export async function POST(request: Request) {
     exhausted,
     graduated,
     capped,
+    suppressed,
     dailyLimit,
     usedToday,
   });

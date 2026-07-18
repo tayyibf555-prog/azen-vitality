@@ -64,9 +64,20 @@ const FILTERS: { value: FilterValue; label: string }[] = [
   { value: "lost", label: "Lost" },
 ];
 
-export function Worklist({ leads, nowIso }: { leads: Lead[]; nowIso: string }) {
+export function Worklist({
+  leads,
+  nowIso,
+  doNotContactLeadIds = [],
+}: {
+  leads: Lead[];
+  nowIso: string;
+  /** Lead ids whose linked patient is marked do_not_contact - flagged for staff review
+   *  before acting. Resolved server-side by the lead's own linked patient id. */
+  doNotContactLeadIds?: string[];
+}) {
   const [filter, setFilter] = useState<FilterValue>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const dncSet = useMemo(() => new Set(doNotContactLeadIds), [doNotContactLeadIds]);
 
   // Newest first; uncontacted leads float to the top so the team sees the race.
   const ranked = useMemo(
@@ -89,7 +100,16 @@ export function Worklist({ leads, nowIso }: { leads: Lead[]; nowIso: string }) {
   const selected = useMemo(() => leads.find((l) => l.id === selectedId) ?? null, [leads, selectedId]);
 
   const columns: Column<Lead>[] = [
-    { key: "name", header: "Name", cell: (l) => <span className="font-semibold text-navy">{l.name}</span> },
+    {
+      key: "name",
+      header: "Name",
+      cell: (l) => (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <span className="font-semibold text-navy">{l.name}</span>
+          {dncSet.has(l.id) ? <StatusPill tone="danger">Marked do not contact</StatusPill> : null}
+        </span>
+      ),
+    },
     {
       key: "interest",
       header: "Interest",

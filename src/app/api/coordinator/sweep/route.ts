@@ -13,6 +13,7 @@ import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -65,14 +66,26 @@ export async function POST(request: Request) {
     statuses: [...OPEN_STATUSES],
   });
 
+  // Platform admin status: patients marked inactive / do_not_contact are excluded from
+  // coordinator follow-ups. Loaded ONCE per sweep and checked per opportunity before
+  // drafting, so no Anthropic draft is spent and nothing is queued.
+  const excludedKeys = await loadExcludedTargetKeys();
+
   let swept = 0;
   let drafted = 0;
   let autoSent = 0;
   let awaitingApproval = 0;
   let skipped = 0;
+  let suppressed = 0;
 
   for (const o of opportunities) {
     swept += 1;
+
+    // Platform admin status excludes this patient: skip before any draft.
+    if (excludedKeys.has(excludedTargetKey(o.siteId, o.dentallyPatientId))) {
+      suppressed += 1;
+      continue;
+    }
 
     // Derive the next cadence step from the touch history: count the outbound
     // touches that have actually been sent, and ask the cadence for the step after.
@@ -165,7 +178,7 @@ export async function POST(request: Request) {
     autoSent += 1;
   }
 
-  return Response.json({ ok: true, swept, drafted, autoSent, awaitingApproval, skipped });
+  return Response.json({ ok: true, swept, drafted, autoSent, awaitingApproval, skipped, suppressed });
   } finally {
     await releaseCronLock("sweep-coordinator");
   }

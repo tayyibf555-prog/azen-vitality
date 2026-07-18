@@ -18,6 +18,7 @@ import type { TouchChannel } from "@/lib/reactivation/types";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -50,17 +51,30 @@ export async function POST(request: Request) {
   try {
   const now = new Date();
 
+  // Platform admin status: patients marked inactive / do_not_contact are excluded from
+  // no-show confirmations too. Loaded ONCE per sweep and checked per target before
+  // drafting. Skipped (not exhausted) so reminders resume if the override is lifted while
+  // the appointment is still upcoming; a passed appointment exhausts the cadence anyway.
+  const excludedKeys = await loadExcludedTargetKeys();
+
   // A) Send due confirmations / reminders.
   const due = await listDueCadences(now.toISOString());
   let sent = 0;
   let ended = 0;
   let failedCadences = 0;
+  let suppressed = 0;
   for (const cadence of due) {
     // One bad cadence (a transient DB/LLM error) must not abort the whole sweep and
     // strand every later due cadence. Isolate each iteration: log and carry on.
     try {
       const target = await getTarget(cadence.targetId);
       if (!target) continue;
+
+      // Platform admin status excludes this patient from confirmations: skip before draft.
+      if (excludedKeys.has(excludedTargetKey(target.siteId, target.dentallyPatientId))) {
+        suppressed += 1;
+        continue;
+      }
 
       const appointmentStart = new Date(target.appointmentStartAt);
       // Stop once the patient has resolved (confirmed/cancelled) or the appointment
@@ -158,7 +172,7 @@ export async function POST(request: Request) {
     }
   }
 
-  return Response.json({ ok: true, swept: due.length, sent, ended, offersExpired, reoffered, failedCadences });
+  return Response.json({ ok: true, swept: due.length, sent, ended, offersExpired, reoffered, failedCadences, suppressed });
   } finally {
     await releaseCronLock("sweep-noshow");
   }

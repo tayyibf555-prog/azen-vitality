@@ -11,7 +11,16 @@ import {
   StickyNote, CalendarPlus, Activity, PoundSterling, Cake, NotebookPen,
 } from "lucide-react";
 import type { PatientRecord, AppointmentRecord, PlanRecord, NoteRecord } from "@/lib/dentally/read";
+import type { PatientAdminStatus } from "@/lib/patient-status/types";
 import { PatientNotesPanel } from "./patient-notes-panel";
+import { PatientStatusManager } from "./patient-status-manager";
+
+// The chip for a platform admin override (wins over Dentally's own active flag).
+const OVERRIDE_CHIP: Record<PatientAdminStatus, { tone: Tone; label: string }> = {
+  active: { tone: "success", label: "Active" },
+  inactive: { tone: "neutral", label: "Inactive" },
+  do_not_contact: { tone: "danger", label: "Do not contact" },
+};
 
 const APPT_STATE_TONE: Record<string, Tone> = {
   booked: "info",
@@ -68,11 +77,15 @@ export function PatientsTable({
   nowIso,
   clientSlug,
   initialFilter = "active",
+  overrides = {},
 }: {
   patients: PatientRecord[];
   nowIso: string;
   clientSlug: string;
   initialFilter?: PatientFilter;
+  /** Platform admin overrides keyed by dentally patient id, for the site(s) in scope.
+   *  Covers rows from the initial slice, search and filter alike (site-wide map). */
+  overrides?: Record<string, PatientAdminStatus>;
 }) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const searchParams = useSearchParams();
@@ -245,7 +258,9 @@ export function PatientsTable({
       key: "status",
       header: "Status",
       cell: (p) => {
-        const s = statusOf(p);
+        // A platform admin override wins over the Dentally-derived status chip.
+        const ov = overrides[p.id];
+        const s = ov ? OVERRIDE_CHIP[ov] : statusOf(p);
         return <StatusPill tone={s.tone}>{s.label}</StatusPill>;
       },
       align: "right",
@@ -329,7 +344,14 @@ export function PatientsTable({
         />
       </section>
 
-      {selected ? <PatientDrawer patient={selected} now={now} onClose={() => setSelectedId(null)} /> : null}
+      {selected ? (
+        <PatientDrawer
+          patient={selected}
+          now={now}
+          onClose={() => setSelectedId(null)}
+          initialOverride={overrides[selected.id] ?? null}
+        />
+      ) : null}
     </>
   );
 }
@@ -375,9 +397,24 @@ function ageFrom(dob: string | null, now: Date): number | null {
   return age;
 }
 
-function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now: Date; onClose: () => void }) {
+function PatientDrawer({
+  patient,
+  now,
+  onClose,
+  initialOverride,
+}: {
+  patient: PatientRecord;
+  now: Date;
+  onClose: () => void;
+  initialOverride: PatientAdminStatus | null;
+}) {
   useEscapeKey(onClose);
-  const s = statusOf(patient);
+  // Platform override status, lifted here so the header chip and the body control stay in
+  // sync within the session. Seeded from the list map; the manager confirms it against
+  // the server on open and updates this on change.
+  const [overrideStatus, setOverrideStatus] = useState<PatientAdminStatus | null>(initialOverride);
+  // The header chip reflects the override when set, else the Dentally-derived status.
+  const headerChip = overrideStatus ? OVERRIDE_CHIP[overrideStatus] : statusOf(patient);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [plans, setPlans] = useState<PlanRecord[]>([]);
   const [notes, setNotes] = useState<NoteRecord[]>([]);
@@ -423,7 +460,7 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
           <div className="min-w-0">
             <h2 className="truncate text-lg font-semibold text-navy">{patient.name}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <StatusPill tone={s.tone}>{s.label}</StatusPill>
+              <StatusPill tone={headerChip.tone}>{headerChip.label}</StatusPill>
               <StatusPill tone="neutral">{getSite(patient.siteId)?.name ?? patient.siteId}</StatusPill>
             </div>
           </div>
@@ -438,7 +475,16 @@ function PatientDrawer({ patient, now, onClose }: { patient: PatientRecord; now:
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <PatientStatusManager
+            siteId={patient.siteId}
+            patientId={patient.id}
+            dentallyActive={patient.active}
+            status={overrideStatus}
+            onChange={setOverrideStatus}
+            now={now}
+          />
+
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat icon={Clock} label="Last seen" value={lastSeen ? relativeTime(lastSeen, now) : "No record"} />
             <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
             <Stat icon={Activity} label="Visits" value={completed.length} />

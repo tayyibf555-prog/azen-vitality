@@ -128,6 +128,44 @@ export class DentallyClient {
   }
 
   /**
+   * Edit an existing patient (PUT /v1/patients/:id). Real Dentally documents an
+   * `active` boolean on the patient and its "Edit a patient" endpoint accepts `active`
+   * as an optional field in the wrapped `patient` body (partial update) - deleting a
+   * patient merely "sets the patient's active flag to false and can be undone by simply
+   * setting the active flag back to true". So active<->inactive is a genuine upstream
+   * write; there is no do-not-contact field, which the caller keeps platform-only.
+   *
+   * Mirrors updateAppointment exactly: wraps the fields in { patient }, tolerates a 204
+   * / empty body so a completed edit is never misreported as a failure, and surfaces a
+   * non-2xx as a DentallyError. Only reached through the gated write client
+   * (dentallyAgentClient), so it can never touch real Dentally until writes are enabled.
+   */
+  async updatePatient(id: string, fields: Record<string, unknown>) {
+    const url = this.buildUrl(`/v1/patients/${id}`);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${this.opts.apiKey}`, "User-Agent": this.userAgent,
+          "Content-Type": "application/json", Accept: "application/json",
+        },
+        body: JSON.stringify({ patient: fields }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (isAbortError(e)) throw new DentallyError(0, `request timed out after ${REQUEST_TIMEOUT_MS}ms: PUT /v1/patients/${id}`);
+      throw e;
+    }
+    if (!res.ok) throw new DentallyError(res.status, await res.text());
+    if (res.status === 204) return { patient: { id } };
+    const text = await res.text();
+    return text
+      ? (JSON.parse(text) as { patient: { id: string; active?: boolean } })
+      : { patient: { id } };
+  }
+
+  /**
    * Find patients by mobile phone number. Used to recognise an inbound SMS caller
    * and to reuse an existing patient on the public booking page. CALIBRATED live
    * 2026-07-11: Dentally IGNORES a `mobile_phone=` filter (returns an unfiltered

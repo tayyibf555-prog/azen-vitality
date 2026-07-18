@@ -6,6 +6,7 @@ import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listLeads } from "@/lib/speed-to-lead/repository";
 import { listResponses } from "@/lib/smile-assessment/repository";
+import { loadDoNotContactKeys, excludedTargetKey } from "@/lib/patient-status/repository";
 import { firstResponseSeconds, toDashboardLead } from "@/lib/speed-to-lead/types";
 import type { SpeedToLeadLead } from "@/lib/speed-to-lead/types";
 import type { AssessmentResponse } from "@/lib/smile-assessment/types";
@@ -48,7 +49,18 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
   }
 
   const siteIds = await getViewSiteIds(client.id);
-  const [leads, responses] = await Promise.all([loadLeads(siteIds), loadResponses(siteIds)]);
+  const [leads, responses, dncKeys] = await Promise.all([
+    loadLeads(siteIds),
+    loadResponses(siteIds),
+    loadDoNotContactKeys(siteIds),
+  ]);
+
+  // Flag leads whose LINKED patient is marked do_not_contact, using the lead's own
+  // patient-id linkage (the same identity path the contact path already uses). Leads
+  // with no linked patient id are skipped - no new phone-matching is built for this.
+  const doNotContactLeadIds = leads
+    .filter((l) => l.dentallyPatientId && dncKeys.has(excludedTargetKey(l.siteId, l.dentallyPatientId)))
+    .map((l) => l.id);
 
   const newLeads = leads.filter((l) => l.stage === "new");
   const contacted = leads.filter((l) => l.stage === "contacted" || l.stage === "qualifying");
@@ -93,7 +105,11 @@ export async function SpeedToLeadView({ clientSlug }: { clientSlug: string }) {
                     description="High-scoring Smile Assessments, missed calls and website enquiries land here the instant they arrive, already texted."
                   />
                 ) : (
-                  <Worklist leads={leads.map(toDashboardLead)} nowIso={new Date().toISOString()} />
+                  <Worklist
+                    leads={leads.map(toDashboardLead)}
+                    nowIso={new Date().toISOString()}
+                    doNotContactLeadIds={doNotContactLeadIds}
+                  />
                 )}
                 {qualifiedAwaiting.length > 0 ? (
                   <SectionCard

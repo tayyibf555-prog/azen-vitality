@@ -16,6 +16,7 @@ import { withinLapseWindow } from "@/lib/reactivation/normalise";
 import { getDailyContactLimit, countContactedToday } from "@/lib/reactivation/settings";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +59,12 @@ export async function POST(request: Request) {
   const now = new Date();
   const due = await listDueCadences(now.toISOString());
 
+  // Platform admin status: patients marked inactive / do_not_contact are excluded from
+  // reactivation. Loaded ONCE per sweep and checked per target before drafting, so no
+  // Anthropic draft is spent and nothing is queued. Left 'due' (not exhausted) so
+  // clearing the override lets the cadence resume.
+  const excludedKeys = await loadExcludedTargetKeys();
+
   // Owner-set daily contact cap: at most this many automated reactivation messages
   // are queued per Europe/London day. Every queued message counts toward the total
   // (auto or human-approved), so manual sends tighten the automated budget rather
@@ -71,10 +78,18 @@ export async function POST(request: Request) {
   let exhausted = 0;
   let paused = 0;
   let capped = 0;
+  let suppressed = 0;
 
   for (const cadence of due) {
     const target = await getTarget(cadence.targetId);
     if (!target) continue;
+
+    // Platform admin status excludes this patient from all outreach: skip without
+    // drafting/queueing, leaving the cadence due so it resumes if the override is lifted.
+    if (excludedKeys.has(excludedTargetKey(target.siteId, target.dentallyPatientId))) {
+      suppressed += 1;
+      continue;
+    }
 
     // Hard lapse ceiling re-check at SEND time: enrolled targets age in place (the
     // hourly sync only re-pulls patients Dentally marks updated, so pure aging never
@@ -197,6 +212,7 @@ export async function POST(request: Request) {
     paused,
     exhausted,
     capped,
+    suppressed,
     dailyLimit,
     usedToday,
   });
