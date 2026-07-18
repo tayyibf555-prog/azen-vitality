@@ -17,7 +17,7 @@ import {
 import {
   findTargetByAddress as findOutreachTargetByAddress,
   insertInboundTouch as insertOutreachInboundTouch,
-  setTargetStatus as setOutreachTargetStatus,
+  markOutreachReplied,
   getCampaignIdForTarget as getOutreachCampaignIdForTarget,
   getCampaign as getOutreachCampaign,
   getTarget as getOutreachTarget,
@@ -339,11 +339,11 @@ export async function POST(request: Request): Promise<Response> {
         OUTREACH_ACTIVE_STATES.has(fullTarget.status) &&
         outreachMatchRecent(fullTarget, Date.now());
       if (linkable) {
-        // Pause: 'replied' is excluded from the sweep's due set and clears next_due_at.
-        await setOutreachTargetStatus(outreachTarget.targetId, "replied", {
-          nextDueAt: null,
-          endedAt: new Date().toISOString(),
-        });
+        // Pause + attribute: 'replied' is excluded from the sweep's due set and clears
+        // next_due_at, and replied_at is stamped ONCE (durable, for the per-variant
+        // read-back). The active-state + recency guard above already ensures this runs
+        // once per target; markOutreachReplied's null guard is belt-and-braces.
+        await markOutreachReplied(outreachTarget.targetId);
         if (campaignId) {
           const campaign = await getOutreachCampaign(campaignId);
           if (campaign) {

@@ -49,6 +49,7 @@ function building(id = "camp-b1"): OutreachCampaign {
     practitionerId: null,
     practitionerName: null,
     messageAngle: "a hygiene visit",
+    messageAngleB: null,
     dailyCap: 25,
     buildCursor: null,
     counts: null,

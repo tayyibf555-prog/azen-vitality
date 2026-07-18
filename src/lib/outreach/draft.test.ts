@@ -21,6 +21,7 @@ function campaign(over: Partial<OutreachCampaign> = {}): OutreachCampaign {
     practitionerId: "p1",
     practitionerName: "Dr Patel",
     messageAngle: "hygiene appointment",
+    messageAngleB: null,
     dailyCap: 25,
     buildCursor: null,
     counts: null,
@@ -42,10 +43,13 @@ function target(over: Partial<OutreachTarget> = {}): OutreachTarget {
     matchedReason: "Scale & Polish 14 Mar 2025",
     status: "pending",
     consent: { sms: true, email: false, marketing: false },
+    variant: null,
     currentStep: 0,
     nextDueAt: null,
     startedAt: null,
     endedAt: null,
+    repliedAt: null,
+    bookedAt: null,
     createdAt: "",
     updatedAt: "",
     ...over,
@@ -133,5 +137,47 @@ describe("draftOutreach fallback behaviour", () => {
     const res = await draftOutreach(target(), campaign(), "sms", step, client as never);
     expect(res.usedFallback).toBe(true);
     expect(res.body).toBeTruthy();
+  });
+});
+
+describe("A/B variant drafting", () => {
+  const step = OUTREACH_CADENCE[0];
+  const ab = campaign({ messageAngle: "a hygiene visit", messageAngleB: "an implant review" });
+
+  it("variant 'b' writes the prompt from the second angle", async () => {
+    const create = vi.fn(async (_p: unknown) => ({ content: [{ type: "text", text: "Hi Jane, lovely to reach out." }] }));
+    const client = { messages: { create } };
+    const res = await draftOutreach(target(), ab, "sms", step, client as never, "b");
+    expect(res.usedFallback).toBe(false);
+    // The system + user prompt must carry the B angle, not the primary one.
+    const sent = JSON.stringify(create.mock.calls[0][0]);
+    expect(sent).toContain("an implant review");
+    expect(sent).not.toContain("a hygiene visit");
+  });
+
+  it("variant 'a' still writes the prompt from the primary angle", async () => {
+    const create = vi.fn(async (_p: unknown) => ({ content: [{ type: "text", text: "Hi Jane, lovely to reach out." }] }));
+    const client = { messages: { create } };
+    await draftOutreach(target(), ab, "sms", step, client as never, "a");
+    const sent = JSON.stringify(create.mock.calls[0][0]);
+    expect(sent).toContain("a hygiene visit");
+    expect(sent).not.toContain("an implant review");
+  });
+
+  it("the deterministic fallback for variant 'b' uses the second angle and stays guardrail-safe", () => {
+    const body = outreachFallbackBody(target(), ab, step, "b");
+    expect(body).toContain("an implant review");
+    expect(body).not.toContain("a hygiene visit");
+    expect(body).not.toMatch(/[—–]/);
+    expect(checkAgentReply(body, { includePrice: false }).ok).toBe(true);
+  });
+
+  it("a variant 'b' draft is held to the SAME guardrail (NHS wording trips it, falls back to the B angle)", async () => {
+    const client = { messages: { create: vi.fn(async () => ({ content: [{ type: "text", text: "Hi Jane, book your NHS implant review." }] })) } };
+    const res = await draftOutreach(target(), ab, "sms", step, client as never, "b");
+    expect(res.usedFallback).toBe(true);
+    expect(res.body.toLowerCase()).not.toContain("nhs");
+    // Fallback still carries the B angle, so the variant is preserved even on a block.
+    expect(res.body).toContain("an implant review");
   });
 });

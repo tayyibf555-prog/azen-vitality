@@ -46,6 +46,7 @@ import {
   getCampaign,
   updateCampaign,
   campaignStatusCounts,
+  campaignVariantCounts,
 } from "@/lib/outreach/repository";
 import { runOutreachBuildTick } from "@/lib/outreach/build";
 import { parseFilters, parseDailyCap, describeSegment } from "@/lib/outreach/validate";
@@ -144,7 +145,7 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
   {
     name: "create_outreach_campaign",
     description:
-      "Create a DRAFT segment outreach campaign (or just build a patient list to see how many match) and start scanning the patient base. It NEVER launches or sends anything: it defines the segment, kicks off the scan, and returns the campaign id, a plain-English read-back of the segment, the current matched count, and how many records were skipped for having no recorded age/gender when those filters are used. Use ONLY filter values the owner actually stated; do not invent dates, treatments, ages, gender or a practitioner. A message angle (what the invite is about, e.g. 'a hygiene visit') is OPTIONAL here, so the owner can build a list first; it is required later to launch. The build may take a moment; the matched count updates shortly.",
+      "Create a DRAFT segment outreach campaign (or just build a patient list to see how many match) and start scanning the patient base. It NEVER launches or sends anything: it defines the segment, kicks off the scan, and returns the campaign id, a plain-English read-back of the segment, the current matched count, and how many records were skipped for having no recorded age/gender when those filters are used. Use ONLY filter values the owner actually stated; do not invent dates, treatments, ages, gender or a practitioner. A message angle (what the invite is about, e.g. 'a hygiene visit') is OPTIONAL here, so the owner can build a list first; it is required later to launch. You may OPTIONALLY give a SECOND angle (messageAngleB) to test two different messages against each other: each patient is consistently sent one of the two, and the campaign then reports sent/replies/booked for each message so the owner can see which converts. Only set a second angle if the owner asks to try two messages. The build may take a moment; the matched count updates shortly.",
     input_schema: {
       type: "object",
       properties: {
@@ -163,6 +164,7 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
         gender: { type: "string", enum: ["female", "male"], description: "Restrict to female or male patients. Only set it if the owner said so; never guess." },
         practitionerName: { type: "string", description: "The clinician to invite patients to see (optional). Matched to the site's practitioners." },
         messageAngle: { type: "string", description: "What the invite is about, in plain words, e.g. 'a hygiene visit' or 'a check-up'. Optional at this stage (needed before launch)." },
+        messageAngleB: { type: "string", description: "OPTIONAL second message angle to A/B test against the first, e.g. a warmer 'we would love to see you again' vs a benefit-led 'time for your hygiene visit'. Only set it if the owner explicitly wants to try two messages. Leave unset for a single message." },
         dailyCap: { type: "number", description: "Max patients contacted per day for this campaign (1 to 100; defaults to 25)." },
       },
       required: [],
@@ -539,6 +541,10 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // messageAngle is OPTIONAL here: an owner can build a list to see how many
           // patients match without any send intent. It becomes required at launch.
           const messageAngle = String(input.messageAngle ?? "").trim() || null;
+          // Optional SECOND angle turns this into a two-message A/B test. Only honoured
+          // alongside a primary angle (a second message needs a first); ignored otherwise.
+          const messageAngleBRaw = String(input.messageAngleB ?? "").trim() || null;
+          const messageAngleB = messageAngle && messageAngleBRaw ? messageAngleBRaw : null;
 
           // Resolve the target site WITHIN the co-pilot's view scope (siteIds), never
           // across every client site: a campaign must not be built or launched against
@@ -618,6 +624,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             practitionerId,
             practitionerName,
             messageAngle: messageAngle ? messageAngle.slice(0, 120) : null,
+            messageAngleB: messageAngleB ? messageAngleB.slice(0, 120) : null,
             dailyCap: capParse.dailyCap,
             createdBy: actor,
           });
@@ -682,6 +689,8 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             site: siteName(siteId),
             segment: describeSegment(campaign.filters),
             messageAngle: campaign.messageAngle,
+            // Present only for a two-message test, so the read-back can name both angles.
+            ...(campaign.messageAngleB ? { messageAngleB: campaign.messageAngleB, abTest: true } : {}),
             practitioner: practitionerName,
             dailyCap: campaign.dailyCap,
             matchedSoFar: matched,
@@ -708,6 +717,9 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
                 : "") +
               (usesDemographics && excludedMissingData > 0
                 ? `${excludedMissingData} record(s) had no recorded age or gender on file and were not included. `
+                : "") +
+              (campaign.messageAngleB
+                ? "This is a two-message test: patients are split evenly between the two angles and each patient always gets the same one. Once it is live, the campaign reports how many were sent, replied and booked for each message, so the owner can see which converts. This is honest counting only, not automatic optimisation. "
                 : "") +
               (messageAngle
                 ? "Nothing has been launched; to go live, use launch_outreach_campaign after the owner confirms."
@@ -736,6 +748,12 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // reachable reality rather than letting 'matched' read as 'will be texted'.
           const contactable =
             typeof campaign.counts?.contactable === "number" ? campaign.counts.contactable : null;
+          // Two-message A/B: read back both angles and the honest per-message counts
+          // (assigned/sent/replied/booked). Counting only, never a claim of learning.
+          const variantBreakdown =
+            campaign.messageAngleB && campaign.messageAngleB.trim()
+              ? await campaignVariantCounts(campaign.id).catch(() => null)
+              : null;
           const readback = {
             campaignId: campaign.id,
             name: campaign.name,
@@ -745,11 +763,25 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             practitioner: campaign.practitionerName,
             dailyCap: campaign.dailyCap,
             status: campaign.status,
+            messageAngle: campaign.messageAngle,
+            ...(campaign.messageAngleB ? { messageAngleB: campaign.messageAngleB } : {}),
+            ...(variantBreakdown
+              ? {
+                  messagePerformance: {
+                    note: "Honest per-message counts, not automatic optimisation.",
+                    messageA: { angle: campaign.messageAngle, ...variantBreakdown.a },
+                    messageB: { angle: campaign.messageAngleB, ...variantBreakdown.b },
+                  },
+                }
+              : {}),
           };
           const consentCaveat =
             contactable !== null && contactable < counts.built
               ? ` Of the ${counts.built} matched, ${contactable} have SMS consent and will be contacted; the rest are not texted.`
               : "";
+          const abCaveat = campaign.messageAngleB
+            ? " This campaign tests two messages: patients are split evenly and each always gets the same one; results are reported per message as plain counts."
+            : "";
 
           // Two-step gate, identical to send_sms: without an explicit confirm this is a
           // READ-BACK only, nothing is launched. The prompt forbids setting confirm true
@@ -760,7 +792,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
               launched: false,
               preview: true,
               ...readback,
-              note: `Read this back to the owner (segment, matched count, clinician, daily cap).${consentCaveat} Nothing launched yet. Only once they confirm, call launch_outreach_campaign again with confirm true.`,
+              note: `Read this back to the owner (segment, matched count, clinician, daily cap${campaign.messageAngleB ? ", and both message angles" : ""}).${consentCaveat}${abCaveat} Nothing launched yet. Only once they confirm, call launch_outreach_campaign again with confirm true.`,
             });
           }
 

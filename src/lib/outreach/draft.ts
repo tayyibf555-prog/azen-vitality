@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CadenceStep } from "./cadence";
 import type { OutreachCampaign, OutreachTarget } from "./types";
+import type { Variant } from "./variant";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getSite } from "@/lib/mock/clients";
@@ -21,10 +22,17 @@ export function firstName(name: string): string {
   return trimmed.split(/\s+/)[0];
 }
 
-/** The treatment angle phrase, defaulting gently when the campaign left it blank. */
-function angle(campaign: OutreachCampaign): string {
-  const a = (campaign.messageAngle ?? "").trim();
-  return a || "an appointment";
+/**
+ * The treatment angle phrase for the given variant, defaulting gently when blank.
+ * Variant 'b' uses the campaign's second angle when set; everything else (and any
+ * missing angle) falls back to the primary angle, then to a neutral default. The rest
+ * of the draft path is identical for both variants, so only the phrase differs.
+ */
+function angle(campaign: OutreachCampaign, variant: Variant): string {
+  const b = (campaign.messageAngleB ?? "").trim();
+  const primary = (campaign.messageAngle ?? "").trim();
+  const chosen = variant === "b" && b ? b : primary;
+  return chosen || "an appointment";
 }
 
 export function buildOutreachPrompt(
@@ -32,6 +40,7 @@ export function buildOutreachPrompt(
   campaign: OutreachCampaign,
   channel: TouchChannel,
   step: CadenceStep,
+  variant: Variant,
   usps?: string[],
 ) {
   const withClinician = campaign.practitionerName
@@ -40,7 +49,7 @@ export function buildOutreachPrompt(
 
   const system = [
     "You are a warm, professional patient coordinator for a UK dental practice.",
-    `Write a short SMS inviting a patient back for ${angle(campaign)}. It has been a while since they were last in, and we would like to welcome them back.`,
+    `Write a short SMS inviting a patient back for ${angle(campaign, variant)}. It has been a while since they were last in, and we would like to welcome them back.`,
     withClinician,
     PURPOSE_TONE[step.purpose],
     "Rules:",
@@ -61,7 +70,7 @@ export function buildOutreachPrompt(
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
     `Patient: ${target.name}`,
-    `Invitation is for: ${angle(campaign)}`,
+    `Invitation is for: ${angle(campaign, variant)}`,
     campaign.practitionerName ? `Clinician to see: ${campaign.practitionerName}` : `Clinician: not specified`,
     target.matchedReason ? `Context (do not quote verbatim): last relevant visit was ${target.matchedReason}` : "",
   ]
@@ -80,9 +89,10 @@ export function outreachFallbackBody(
   target: OutreachTarget,
   campaign: OutreachCampaign,
   step: CadenceStep,
+  variant: Variant = "a",
 ): string {
   const name = firstName(target.name);
-  const what = angle(campaign);
+  const what = angle(campaign, variant);
   const site = getSite(target.siteId);
   const practice = site?.name ?? "the practice";
   const withClinician = campaign.practitionerName ? ` with ${campaign.practitionerName}` : "";
@@ -116,6 +126,11 @@ export interface DraftResult {
  * then guardrail-checks the result with checkAgentReply BEFORE it can be queued.
  * If the model call throws OR its output trips the guardrail, fall back to the
  * deterministic template so a step is never queued empty and never queues jargon.
+ *
+ * `variant` selects which message angle to write from ('b' uses the campaign's second
+ * angle when set). It only changes the angle phrase: the model call, the guardrail /
+ * compliance check and the deterministic fallback are identical for both variants, so a
+ * variant 'b' draft is held to exactly the same safety bar as 'a'.
  */
 export async function draftOutreach(
   target: OutreachTarget,
@@ -123,8 +138,9 @@ export async function draftOutreach(
   channel: TouchChannel,
   step: CadenceStep,
   client: Anthropic = new Anthropic(),
+  variant: Variant = "a",
 ): Promise<DraftResult> {
-  const fallback = outreachFallbackBody(target, campaign, step);
+  const fallback = outreachFallbackBody(target, campaign, step, variant);
   let usps: string[] = [];
   try {
     usps = await listActiveUspTexts(getSite(target.siteId)?.clientId ?? "");
@@ -133,7 +149,7 @@ export async function draftOutreach(
   }
 
   try {
-    const { system, user } = buildOutreachPrompt(target, campaign, channel, step, usps);
+    const { system, user } = buildOutreachPrompt(target, campaign, channel, step, variant, usps);
     const msg = await client.messages.create({
       model: SONNET,
       thinking: NO_THINKING,

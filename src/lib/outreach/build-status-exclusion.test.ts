@@ -57,6 +57,7 @@ function campaign(): OutreachCampaign {
     practitionerId: null,
     practitionerName: null,
     messageAngle: "a hygiene visit",
+    messageAngleB: null,
     dailyCap: 25,
     buildCursor: initBuildCursor(),
     counts: null,

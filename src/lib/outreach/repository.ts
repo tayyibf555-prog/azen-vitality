@@ -35,6 +35,7 @@ interface CampaignRow {
   practitioner_id: string | null;
   practitioner_name: string | null;
   message_angle: string | null;
+  message_angle_b: string | null;
   daily_cap: number | string;
   build_cursor: OutreachBuildCursor | null;
   counts: Record<string, number> | null;
@@ -53,10 +54,13 @@ interface TargetRow {
   matched_reason: string | null;
   status: string;
   consent: { sms?: boolean; email?: boolean; marketing?: boolean } | null;
+  variant: string | null;
   current_step: number | string;
   next_due_at: string | null;
   started_at: string | null;
   ended_at: string | null;
+  replied_at: string | null;
+  booked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -110,6 +114,7 @@ function rowToCampaign(r: CampaignRow): OutreachCampaign {
     practitionerId: r.practitioner_id,
     practitionerName: r.practitioner_name,
     messageAngle: r.message_angle,
+    messageAngleB: r.message_angle_b,
     dailyCap: num(r.daily_cap),
     buildCursor: r.build_cursor,
     counts: r.counts,
@@ -134,10 +139,13 @@ function rowToTarget(r: TargetRow): OutreachTarget {
       email: r.consent?.email ?? false,
       marketing: r.consent?.marketing ?? false,
     },
+    variant: r.variant === "a" || r.variant === "b" ? r.variant : null,
     currentStep: num(r.current_step),
     nextDueAt: r.next_due_at,
     startedAt: r.started_at,
     endedAt: r.ended_at,
+    repliedAt: r.replied_at,
+    bookedAt: r.booked_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -188,6 +196,7 @@ export async function createCampaign(input: {
   practitionerId?: string | null;
   practitionerName?: string | null;
   messageAngle?: string | null;
+  messageAngleB?: string | null;
   dailyCap?: number;
   createdBy?: string | null;
 }): Promise<OutreachCampaign> {
@@ -202,6 +211,7 @@ export async function createCampaign(input: {
       practitioner_id: input.practitionerId ?? null,
       practitioner_name: input.practitionerName ?? null,
       message_angle: input.messageAngle ?? null,
+      message_angle_b: input.messageAngleB ?? null,
       ...(input.dailyCap !== undefined ? { daily_cap: input.dailyCap } : {}),
       created_by: input.createdBy ?? null,
     })
@@ -268,6 +278,7 @@ export async function updateCampaign(
     practitionerId: string | null;
     practitionerName: string | null;
     messageAngle: string | null;
+    messageAngleB: string | null;
     filters: OutreachFilters;
   }>,
 ): Promise<void> {
@@ -280,6 +291,7 @@ export async function updateCampaign(
   if (fields.practitionerId !== undefined) row.practitioner_id = fields.practitionerId;
   if (fields.practitionerName !== undefined) row.practitioner_name = fields.practitionerName;
   if (fields.messageAngle !== undefined) row.message_angle = fields.messageAngle;
+  if (fields.messageAngleB !== undefined) row.message_angle_b = fields.messageAngleB;
   if (fields.filters !== undefined) row.filters = fields.filters;
   const { error } = await db.from("outreach_campaign").update(row).eq("id", id);
   if (error) throw error;
@@ -427,6 +439,72 @@ export async function campaignBlockedCount(campaignId: string): Promise<number> 
   return count ?? 0;
 }
 
+export interface VariantCounts {
+  /** Patients assigned to this message (a variant is stamped at draft time). */
+  assigned: number;
+  /** Distinct patients who had at least one message of this variant actually sent. */
+  sent: number;
+  /** Of those, how many replied (durable replied_at). */
+  replied: number;
+  /** Of those, how many booked (durable booked_at; 0 until booked attribution is wired). */
+  booked: number;
+}
+
+export interface CampaignVariantBreakdown {
+  a: VariantCounts;
+  b: VariantCounts;
+}
+
+/**
+ * Per-variant conversion read-back for a two-angle campaign: for each of message A and
+ * message B, how many patients were assigned it, how many were actually sent it, and how
+ * many then replied / booked. This is HONEST COUNTING, not optimisation: the split never
+ * shifts in response to these numbers.
+ *
+ * assigned / replied / booked come from the target's durable columns (variant, replied_at,
+ * booked_at); sent is the distinct set of targets with an actually-dispatched ('sent')
+ * outbound touch of that variant, so the funnel is per-patient (sent >= replied >= booked)
+ * and blocked-before-send messages are excluded from "sent" (they are still counted in the
+ * campaign-wide blocked total). Only meaningful when the campaign has a B angle; callers
+ * gate on that before showing it. Two bounded reads, matching campaignBlockedCount's style.
+ */
+export async function campaignVariantCounts(campaignId: string): Promise<CampaignVariantBreakdown> {
+  const db = serviceClient();
+  const blank = (): VariantCounts => ({ assigned: 0, sent: 0, replied: 0, booked: 0 });
+  const out: CampaignVariantBreakdown = { a: blank(), b: blank() };
+  const norm = (v: string): "a" | "b" => (v === "b" ? "b" : "a");
+
+  const { data: targets, error: tErr } = await db
+    .from("outreach_target")
+    .select("variant, replied_at, booked_at")
+    .eq("campaign_id", campaignId)
+    .in("variant", ["a", "b"]);
+  if (tErr) throw tErr;
+  for (const row of (targets ?? []) as Array<{ variant: string; replied_at: string | null; booked_at: string | null }>) {
+    const v = norm(row.variant);
+    out[v].assigned += 1;
+    if (row.replied_at) out[v].replied += 1;
+    if (row.booked_at) out[v].booked += 1;
+  }
+
+  const { data: touches, error: sErr } = await db
+    .from("outreach_touch")
+    .select("variant, target_id")
+    .eq("campaign_id", campaignId)
+    .eq("direction", "outbound")
+    .eq("status", "sent")
+    .in("variant", ["a", "b"]);
+  if (sErr) throw sErr;
+  const sentTargets: Record<"a" | "b", Set<string>> = { a: new Set(), b: new Set() };
+  for (const row of (touches ?? []) as Array<{ variant: string; target_id: string }>) {
+    sentTargets[norm(row.variant)].add(row.target_id);
+  }
+  out.a.sent = sentTargets.a.size;
+  out.b.sent = sentTargets.b.size;
+
+  return out;
+}
+
 /**
  * Targets whose next cadence step is due for a running campaign: an active cadence
  * status ('pending' = awaiting step 1, 'contacted' = mid-cadence) with next_due_at
@@ -460,22 +538,92 @@ export async function setTargetStatus(
   if (error) throw error;
 }
 
-/** Advance a target's cadence after a step has been queued. */
+/**
+ * Advance a target's cadence after a step has been queued. `variant` (optional) stamps
+ * the A/B variant chosen at draft time onto the target; it is deterministic per
+ * campaign+patient, so writing it on every drafted step is idempotent (always the same
+ * value). Omit it on the non-draft settle paths (excluded / cadence-exhausted) so a
+ * target that was never drafted keeps a null variant.
+ */
 export async function advanceTarget(
   id: string,
-  fields: { currentStep: number; status: OutreachTargetStatus; nextDueAt: string | null; endedAt: string | null },
+  fields: {
+    currentStep: number;
+    status: OutreachTargetStatus;
+    nextDueAt: string | null;
+    endedAt: string | null;
+    variant?: "a" | "b";
+  },
 ): Promise<void> {
   const db = serviceClient();
+  const update: Record<string, unknown> = {
+    current_step: fields.currentStep,
+    status: fields.status,
+    next_due_at: fields.nextDueAt,
+    ended_at: fields.endedAt,
+    updated_at: new Date().toISOString(),
+  };
+  if (fields.variant !== undefined) update.variant = fields.variant;
+  const { error } = await db.from("outreach_target").update(update).eq("id", id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Attribution. Durable, stamp-once markers used by the inbound reply/booking linkage
+// so the per-variant read-back is an honest funnel (sent >= replied >= booked). The
+// `.is(..., null)` guard makes each stamp idempotent at the DB layer: a second reply or
+// a retried webhook can never move the timestamp or double-count.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a target as having replied and stamp replied_at ONCE. Ends the cadence (clears
+ * next_due_at, sets ended_at) exactly as the prior 'replied' transition did, and only
+ * writes when replied_at is still null so the first reply time is preserved. The inbound
+ * webhook already gates this behind the active-cadence + recency guard; the null guard
+ * here is belt-and-braces so "once" holds regardless of caller.
+ */
+export async function markOutreachReplied(targetId: string): Promise<void> {
+  const db = serviceClient();
+  const nowIso = new Date().toISOString();
   const { error } = await db
     .from("outreach_target")
     .update({
-      current_step: fields.currentStep,
-      status: fields.status,
-      next_due_at: fields.nextDueAt,
-      ended_at: fields.endedAt,
-      updated_at: new Date().toISOString(),
+      status: "replied",
+      next_due_at: null,
+      ended_at: nowIso,
+      replied_at: nowIso,
+      updated_at: nowIso,
     })
-    .eq("id", id);
+    .eq("id", targetId)
+    .is("replied_at", null);
+  if (error) throw error;
+}
+
+/**
+ * Mark a target as booked and stamp booked_at ONCE. A booking is the strongest outcome,
+ * so this upgrades whatever the target's current status is (contacted / replied /
+ * exhausted) to 'booked'; replied_at (if set) is left intact so a reply-then-book patient
+ * is counted in BOTH the replied and booked funnels. Only writes when booked_at is null.
+ *
+ * NOTE: nothing calls this yet. A booking is recorded by the general booking agent (the
+ * inbound webhook marks the CONVERSATION 'booked' after the agent's book tool), which is
+ * outside outreach-owned code and outside the reply-linkage section this module touches.
+ * Wiring booked attribution is a one-line shared-file touch (see markOutreachBookedByAddress).
+ */
+export async function markOutreachBooked(targetId: string): Promise<void> {
+  const db = serviceClient();
+  const nowIso = new Date().toISOString();
+  const { error } = await db
+    .from("outreach_target")
+    .update({
+      status: "booked",
+      next_due_at: null,
+      ended_at: nowIso,
+      booked_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq("id", targetId)
+    .is("booked_at", null);
   if (error) throw error;
 }
 
@@ -544,6 +692,8 @@ export async function insertTouch(input: {
   body: string;
   draftedBy: DraftedBy;
   status?: TouchStatus;
+  /** The A/B variant this touch was drafted from ('a' for a single-angle campaign). */
+  variant?: "a" | "b";
 }): Promise<ReactivationTouch> {
   const db = serviceClient();
   const { data, error } = await db
@@ -557,6 +707,7 @@ export async function insertTouch(input: {
       body: input.body,
       drafted_by: input.draftedBy,
       ...(input.status ? { status: input.status } : {}),
+      ...(input.variant ? { variant: input.variant } : {}),
     })
     .select("*")
     .single();
@@ -738,6 +889,35 @@ export async function findTargetByAddress(
   if (tErr) throw tErr;
   if (!touch) return null;
   return { targetId: (touch as { target_id: string }).target_id, siteId: row.site_id };
+}
+
+/**
+ * READY-TO-WIRE booked attribution from an address. Given the number a booking
+ * confirmation went to (or the number the patient booked from), resolve the most recent
+ * outreach send to that address and, if it is a RECENT campaign send that has not already
+ * been attributed, mark the target booked (stamping booked_at once). Returns whether it
+ * attributed a booking.
+ *
+ * This is self-contained and safe to call from the one place a booking becomes known (the
+ * inbound webhook, once the agent's book tool has run and the conversation is marked
+ * 'booked') - a single line, no extra guards needed at the call site. It is NOT wired yet:
+ * that call site is the general booking-agent section of the inbound webhook, outside the
+ * outreach reply-linkage section, so wiring it is a shared-file touch left for scheduling.
+ */
+export async function markOutreachBookedByAddress(toAddress: string): Promise<boolean> {
+  const match = await findTargetByAddress(toAddress);
+  if (!match) return false;
+  const target = await getTarget(match.targetId);
+  if (!target) return false;
+  if (target.bookedAt) return false; // already attributed; stamp-once
+  // Recency guard mirrors the reply-linkage window so a booking long after a finished
+  // campaign is not mis-attributed to it.
+  const RECENT_MS = 30 * 24 * 60 * 60 * 1000;
+  const ts = target.updatedAt ?? target.startedAt ?? target.createdAt ?? null;
+  const t = ts ? Date.parse(ts) : NaN;
+  if (!Number.isFinite(t) || Date.now() - t > RECENT_MS) return false;
+  await markOutreachBooked(match.targetId);
+  return true;
 }
 
 export async function insertInboundTouch(input: {

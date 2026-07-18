@@ -119,6 +119,13 @@ export interface OutreachCampaign {
   practitionerId: string | null;
   practitionerName: string | null;
   messageAngle: string | null;
+  /**
+   * Optional SECOND message angle. When set, the campaign is a two-message A/B test:
+   * each patient is deterministically assigned one angle (see src/lib/outreach/variant.ts)
+   * and the detail reads back sent/replied/booked per angle. Null keeps the campaign
+   * single-message (everyone is variant 'a').
+   */
+  messageAngleB: string | null;
   dailyCap: number;
   buildCursor: OutreachBuildCursor | null;
   counts: Record<string, number> | null;
@@ -137,10 +144,19 @@ export interface OutreachTarget {
   matchedReason: string | null;
   status: OutreachTargetStatus;
   consent: { sms: boolean; email: boolean; marketing: boolean };
+  /**
+   * A/B variant, assigned at draft time for a two-angle campaign and never changed.
+   * Null until the target is first drafted, and always 'a' for a single-angle campaign.
+   */
+  variant: "a" | "b" | null;
   currentStep: number;       // last completed step; 0 = enrolled, none sent
   nextDueAt: string | null;  // ISO; null when terminal
   startedAt: string | null;
   endedAt: string | null;
+  /** Durable stamp of the FIRST reply tied to this target (once). Null until they reply. */
+  repliedAt: string | null;
+  /** Durable stamp of the booking attributed to this target (once). Null until booked. */
+  bookedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
