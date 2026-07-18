@@ -54,7 +54,7 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 | Transcript item | Status | Notes |
 |---|---|---|
 | Twilio cost estimate from their Dentally SMS bills | 🫵 | Your task with your Twilio contact |
-| Never pay for undeliverable texts (ClickSend point) | ✅ | Built: Twilio Lookup pre-send validation with 90-day cache; dormant behind a switch until we enable it |
+| Never pay for undeliverable texts (ClickSend point) | ✅ | LIVE: Lookup enabled in production; number-health chip on patient records + blocked count on campaigns |
 | Email validation (NeverBounce) before emailing | 📋 | Seam being built; email itself is not configured in prod yet |
 | WhatsApp/SMS preference form for patients | ✅ | Built: signed per-patient page; stop option routes through the real suppression machinery |
 
@@ -67,7 +67,7 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 | System controls stay owner-only | ✅ | Live |
 | Bug highlight → sent straight to us | ✅ | Feedback widget live; set FEEDBACK_WEBHOOK_URL to pipe into our chat |
 | "Everything is tracked" usage metrics | 📋 | Funnel surfaces tracked today; product-wide telemetry brief written |
-| Inactive patients: "WE decide who's excluded" | 🏥 | Needs a sit-down: define "inactive", then exclusions become owner-configurable settings |
+| Inactive patients: "WE decide who's excluded" | ✅ | Closed by the patient status control: owner/manager set active/inactive/do-not-contact per patient, written back to Dentally, excluded from all targeting |
 
 ## The website (separate project, not this platform)
 
