@@ -50,7 +50,7 @@ export function AgencySidebar() {
     <aside className="chrome-nav sticky top-0 flex h-screen w-[248px] shrink-0 flex-col text-on-navy lg:h-full">
       {/* Wordmark lockup */}
       <div className="flex items-center gap-3 px-5 py-6">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-dark text-base font-bold text-white lg:bg-white lg:text-blue-royal lg:shadow-chip lg:ring-1 lg:ring-navy/10">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-dark text-base font-bold text-white">
           A
         </span>
         <span className="flex flex-col leading-tight">
