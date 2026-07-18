@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   Info,
   AlertTriangle,
+  Film,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusPill, SampleBadge, ProgressMeter, type Tone } from "@/components/primitives";
@@ -86,7 +87,27 @@ function ScoreRing({ score, verdict }: { score: number; verdict: Verdict }) {
   );
 }
 
-function BrandedImage({
+interface RenderView {
+  id: string;
+  status: "pending" | "complete" | "failed" | "not_configured";
+  imageUrl: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+function renderDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+// "Recreate this ad with your branding": the Higgsfield-powered branded-still seam.
+// Key absent -> a quiet, honest chip (no dead button). Key present -> an angle-notes
+// input, an opt-in to show the real starting price, the generated still with a
+// download, and a history of past renders for this practice. AI video is flagged as a
+// second phase, honestly, with no control built for it yet.
+function RecreateWithBranding({
   clientSlug,
   creativeRef,
   available,
@@ -96,81 +117,176 @@ function BrandedImage({
   available: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [angleNotes, setAngleNotes] = useState("");
+  const [includePrice, setIncludePrice] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [renders, setRenders] = useState<RenderView[]>([]);
+
+  // Load the practice's past renders when the seam is active.
+  useEffect(() => {
+    if (!available) return;
+    let live = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/creative-recreate?clientSlug=${encodeURIComponent(clientSlug)}`);
+        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; renders?: RenderView[] };
+        if (live && data.ok && Array.isArray(data.renders)) setRenders(data.renders);
+      } catch {
+        // A missing history is not an error worth showing; the create flow still works.
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [available, clientSlug]);
 
   async function generate() {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/creative-image", {
+      const res = await fetch("/api/creative-recreate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientSlug, creativeRef }),
+        body: JSON.stringify({ clientSlug, creativeRef, angleNotes, includeFromPrice: includePrice }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
-        image?: { imageUrl: string };
+        status?: string;
+        render?: RenderView;
+        message?: string;
         error?: string;
       };
-      if (!res.ok || !data.ok || !data.image) {
-        throw new Error(data.error || "Image generation is unavailable right now.");
+      if (data.render) setRenders((prev) => [data.render as RenderView, ...prev]);
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || data.message || "Recreating this ad is unavailable right now.");
       }
-      setImageUrl(data.image.imageUrl);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Image generation is unavailable right now.");
+      setError(err instanceof Error ? err.message : "Recreating this ad is unavailable right now.");
     } finally {
       setBusy(false);
     }
   }
 
-  // Key absent: a quiet, honest explanatory state (no button).
-  if (!available) {
-    return (
-      <div className="flex items-start gap-2.5 rounded-xl border border-line bg-card-muted/50 p-3">
-        <ImagePlus size={16} className="mt-0.5 shrink-0 text-muted" />
-        <div>
-          <p className="text-sm font-semibold text-navy">Branded image</p>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted">
-            Image generation activates when the Higgsfield key is added. You will then be able to
-            generate an on-brand still for this creative here.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  const latest = renders.find((r) => r.status === "complete" && r.imageUrl) ?? null;
+  const history = renders.filter((r) => r.id !== latest?.id);
 
   return (
-    <div className="rounded-xl border border-line bg-card-muted/50 p-3">
+    <section className="rounded-xl border border-line bg-card-muted/50 p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-navy">Branded image</p>
-        <Button type="button" variant="secondary" size="sm" onClick={generate} disabled={busy}>
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
-          {busy ? "Generating..." : "Generate branded image"}
-        </Button>
+        <p className="text-sm font-semibold text-navy">Recreate with your branding</p>
+        {available ? <StatusPill tone="info">Ready</StatusPill> : null}
       </div>
-      {error ? (
-        <p className="mt-2 rounded-lg border border-warning/25 bg-warning/10 px-2.5 py-2 text-xs text-[#9a6700]">
-          {error}
-        </p>
-      ) : null}
-      {imageUrl ? (
-        <div className="mt-3 space-y-2">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={imageUrl}
-            alt="Generated branded creative"
-            className="w-full rounded-lg border border-line"
-          />
-          <Button asChild variant="ghost" size="sm">
-            <a href={imageUrl} download target="_blank" rel="noreferrer">
-              <Download size={14} /> Download
-            </a>
+      <p className="mt-0.5 text-xs leading-relaxed text-muted">
+        Generate an on-brand still of this idea using your practice name and colours. Nothing is
+        invented: no claims, no ratings, no stand-in patients.
+      </p>
+
+      {available ? (
+        <div className="mt-3 space-y-2.5">
+          <label className="block">
+            <span className="text-[11px] font-medium text-ink">Angle notes (optional)</span>
+            <input
+              type="text"
+              value={angleNotes}
+              onChange={(e) => setAngleNotes(e.target.value)}
+              maxLength={200}
+              placeholder="e.g. warm, family-friendly, daytime"
+              className="mt-1 w-full rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-ink">
+            <input
+              type="checkbox"
+              checked={includePrice}
+              onChange={(e) => setIncludePrice(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-line-strong text-blue-dark focus-visible:ring-blue-dark/40"
+            />
+            Show my real starting price on the image
+          </label>
+          <Button type="button" variant="primary" size="sm" onClick={generate} disabled={busy}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+            {busy ? "Creating..." : "Recreate with your branding"}
           </Button>
+
+          {error ? (
+            <p className="rounded-lg border border-warning/25 bg-warning/10 px-2.5 py-2 text-xs text-[#9a6700]">
+              {error}
+            </p>
+          ) : null}
+
+          {latest ? (
+            <div className="space-y-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={latest.imageUrl ?? ""}
+                alt="Generated branded creative"
+                className="w-full rounded-lg border border-line"
+              />
+              <Button asChild variant="ghost" size="sm">
+                <a href={latest.imageUrl ?? "#"} download target="_blank" rel="noreferrer">
+                  <Download size={14} /> Download
+                </a>
+              </Button>
+            </div>
+          ) : null}
+
+          {history.length > 0 ? (
+            <div className="border-t border-line pt-2.5">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
+                <ImagePlus size={12} /> Renders
+              </p>
+              <ul className="mt-1.5 space-y-1">
+                {history.map((r) => (
+                  <li
+                    key={r.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="tabular-nums text-muted">{renderDate(r.createdAt)}</span>
+                    <span className="flex items-center gap-2">
+                      <StatusPill
+                        tone={
+                          r.status === "complete"
+                            ? "success"
+                            : r.status === "failed"
+                              ? "danger"
+                              : "warning"
+                        }
+                      >
+                        {r.status === "not_configured" ? "not enabled" : r.status}
+                      </StatusPill>
+                      {r.status === "complete" && r.imageUrl ? (
+                        <a
+                          href={r.imageUrl}
+                          download
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-blue-deep underline-offset-2 hover:underline"
+                        >
+                          View
+                        </a>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-    </div>
+      ) : (
+        <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-line bg-card p-2.5">
+          <Info size={15} className="mt-0.5 shrink-0 text-blue-deep" />
+          <p className="text-xs leading-relaxed text-muted">
+            This activates when the Higgsfield key is added. You will then generate an on-brand still
+            here from your real practice details, ready to download and post.
+          </p>
+        </div>
+      )}
+
+      <p className="mt-3 flex items-center gap-1.5 border-t border-line pt-2 text-[11px] text-muted">
+        <Film size={12} className="shrink-0" /> AI video arrives as a second phase.
+      </p>
+    </section>
   );
 }
 
@@ -390,8 +506,8 @@ export function CreativeDetail({
                 </section>
               ) : null}
 
-              {/* Branded image seam */}
-              <BrandedImage clientSlug={clientSlug} creativeRef={ad.id} available={imageAvailable} />
+              {/* Recreate with your branding (Higgsfield seam) */}
+              <RecreateWithBranding clientSlug={clientSlug} creativeRef={ad.id} available={imageAvailable} />
             </>
           ) : null}
         </div>

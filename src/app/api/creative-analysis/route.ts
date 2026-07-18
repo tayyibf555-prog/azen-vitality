@@ -5,7 +5,7 @@ import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/g
 import { MOCK_AD_LIBRARY } from "@/lib/meta-ads/mock";
 import { resolveAnalysis, type CallModel } from "@/lib/creative/resolve";
 import { creativeAnalysisCache } from "@/lib/creative/cache";
-import { higgsfieldConfigured } from "@/lib/creative/higgsfield";
+import { isHiggsfieldConfigured } from "@/lib/higgsfield/client";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -72,8 +72,8 @@ export async function POST(request: Request): Promise<Response> {
       cached,
       // The library is not yet from a live Meta connection.
       sample: true,
-      // Drives the "Generate branded image" state in the detail view.
-      imageGen: { available: higgsfieldConfigured() },
+      // Drives the "Recreate with your branding" state in the detail view.
+      imageGen: { available: isHiggsfieldConfigured() },
     });
   } catch {
     return Response.json({ ok: false, error: "analysis unavailable" }, { status: 500 });
