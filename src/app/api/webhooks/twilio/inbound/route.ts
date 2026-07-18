@@ -18,6 +18,7 @@ import {
   findTargetByAddress as findOutreachTargetByAddress,
   insertInboundTouch as insertOutreachInboundTouch,
   markOutreachReplied,
+  markOutreachBookedByAddress,
   getCampaignIdForTarget as getOutreachCampaignIdForTarget,
   getCampaign as getOutreachCampaign,
   getTarget as getOutreachTarget,
@@ -613,6 +614,12 @@ export async function POST(request: Request): Promise<Response> {
         handoverReason = result.escalated ? "escalated" : "no_reply";
       } else if (booked) {
         await setConversationStatus(conversation.id, "booked");
+        // Outreach A/B attribution: stamp booked_at when this number belongs to a
+        // recent outreach target (self-guarded: stamp-once + 30-day recency; no-op
+        // otherwise). Best-effort - attribution must never break the patient's reply.
+        try {
+          await markOutreachBookedByAddress(from);
+        } catch {}
       }
     }
   } catch {
