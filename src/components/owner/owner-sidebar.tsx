@@ -6,7 +6,7 @@ import { NavProgressBar } from "@/components/platform/nav-progress";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { Gauge, Wand2, BrainCircuit, LogOut, Search } from "lucide-react";
-import { categoriesForRole } from "@/lib/nav";
+import { categoriesForRole, canRoleAccessModule } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { SidebarShortcuts, useModKey } from "@/components/platform/sidebar-shortcuts";
@@ -87,11 +87,21 @@ export function OwnerSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[] 
   // Same two-level rail + panel as the client shell, with an extra owner-only
   // "Manage" category first: the Management command view, the co-pilot chat and
   // the Practice brain. Co-pilot lives here, so it is deduped out of Operations.
-  const manageEntries: Entry[] = [
-    { key: "management", label: "Management", icon: Gauge, href: base },
-    { key: "co-pilot", label: "Co-pilot", icon: Wand2, href: hrefFor("co-pilot") },
-    { key: "practice-brain", label: "Practice brain", icon: BrainCircuit, href: hrefFor("practice-brain") },
-  ];
+  //
+  // Practice brain and the co-pilot are owner-only, so drop them for any non-owner
+  // role via the single source of truth (canRoleAccessModule) — defence in depth on
+  // top of the /owner layout guard that already bounces coordinators, and the one
+  // place the owner sidebar would otherwise hard-code an owner-only entry. The
+  // Management view is the owner-overview base path (no module slug), so it is kept
+  // for the roles that render this shell; a null role (dev / enforcement off) shows
+  // everything, matching the categoriesForRole fallback above.
+  const manageEntries: Entry[] = (
+    [
+      { key: "management", label: "Management", icon: Gauge, href: base },
+      { key: "co-pilot", label: "Co-pilot", icon: Wand2, href: hrefFor("co-pilot") },
+      { key: "practice-brain", label: "Practice brain", icon: BrainCircuit, href: hrefFor("practice-brain") },
+    ] satisfies Entry[]
+  ).filter((e) => e.key === "management" || !user?.role || canRoleAccessModule(user.role, e.key));
   const railCategories: { key: string; label: string; icon: LucideIcon; entries: Entry[] }[] = [
     { key: "manage", label: "Manage", icon: Gauge, entries: manageEntries },
     ...categories.map((c) => ({

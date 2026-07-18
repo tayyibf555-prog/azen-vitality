@@ -135,6 +135,18 @@ describe("canRoleAccessModule", () => {
     expect(canRoleAccessModule("client_owner", "practice-brain")).toBe(true);
   });
 
+  it("owner-sidebar Manage rail: hides Practice brain AND Co-pilot from a coordinator, keeps them for owner/agency", () => {
+    // The owner sidebar hard-codes a "Manage" rail (Management, Co-pilot, Practice
+    // brain) and filters it with canRoleAccessModule, so its owner-only entries
+    // never render for a coordinator (defence in depth on top of the /owner layout
+    // guard). These assert the exact predicate that rail uses.
+    for (const slug of ["practice-brain", "co-pilot"]) {
+      expect(canRoleAccessModule("client_coordinator", slug)).toBe(false);
+      expect(canRoleAccessModule("client_owner", slug)).toBe(true);
+      expect(canRoleAccessModule("agency_admin", slug)).toBe(true);
+    }
+  });
+
   it("allows shared modules for every role", () => {
     for (const slug of ALL_ROLE) {
       expect(canRoleAccessModule("client_coordinator", slug)).toBe(true);
