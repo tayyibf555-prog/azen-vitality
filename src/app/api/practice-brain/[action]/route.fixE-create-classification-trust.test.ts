@@ -11,6 +11,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { signSession } from "@/lib/practice-brain/session";
 
+// route.ts imports guard.ts, which does `import "server-only"` (unresolvable in the
+// node test env). Stub it; the owner-write gate is a no-op here anyway (auth is not
+// enforced without a service-role key), so the create classification-trust
+// assertions below are unchanged.
+vi.mock("server-only", () => ({}));
+
 vi.mock("@/lib/rate-budget", () => ({
   consumeBudget: vi.fn(async () => true),
 }));

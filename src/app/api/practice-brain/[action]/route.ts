@@ -5,6 +5,7 @@ import { visibleNodes } from "@/lib/practice-brain/clearance";
 import { askCopilot } from "@/lib/practice-brain/copilot";
 import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { signSession, verifySession } from "@/lib/practice-brain/session";
+import { requireUser, requireOwnerRole } from "@/lib/auth/guard";
 import type { ClassificationResult, Tier } from "@/lib/practice-brain/types";
 import {
   createItem, ensureBranch, listActiveNodes, listBranchNames, listNeedsReview, listOpenGaps, logKnowledgeGap, logQa, resolveGap, resolveReview, setQaFeedback, verifyCredential,
@@ -101,6 +102,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     const session = verifySession(req.cookies.get(COOKIE)?.value, secret);
     if (!session) return fail("Locked. Unlock Practice Brain first.", 401);
     const maxTier = session.maxTier as Tier;
+
+    // Owner-only WRITES. The brain is a password-gated PORTAL: unlock + the read
+    // actions (tree, ask, needs-review, gaps, qa-feedback, classify) are protected
+    // by the per-tier password alone, with no platform login, by design — this
+    // route is excluded from the login proxy and never gates reads on requireUser.
+    // But WRITING into the shared knowledge base (which the co-pilot then treats as
+    // authoritative grounding) is owner business, so the content-mutating actions
+    // additionally require a platform session with an owner/agency role, the same
+    // owner-only gate the page + nav enforce. This is IN ADDITION to the unlock
+    // cookie above. No-op when auth enforcement is off (requireUser returns null,
+    // requireOwnerRole passes null through), so the un-enforced demo is unchanged.
+    const MUTATING_ACTIONS = new Set(["create", "learn", "resolve-gap", "resolve-review"]);
+    if (MUTATING_ACTIONS.has(action)) {
+      const authed = await requireUser();
+      if (authed instanceof Response) return fail("Sign in as the practice owner to change the brain.", 401);
+      if (requireOwnerRole(authed)) return fail("Only the practice owner or agency can change the practice brain.", 403);
+    }
 
     if (action === "tree") {
       const all = await listActiveNodes(CLIENT_ID);
