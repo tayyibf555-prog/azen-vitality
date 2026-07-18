@@ -10,7 +10,7 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 |---|---|---|
 | Getting-started checklist unlocks real data | ✅ | Live; Blerta (manager) can now see and tick it |
 | Co-pilot fully live, Ctrl+J | ✅ | Now a bottom ask-bar with starter prompts |
-| Practice brain live, tiered passwords | ✅ | Pilot passwords documented; rotate after handover |
+| Practice brain live, tiered passwords | ✅ | Now OWNER-ONLY (nav+page+API role-gated; non-owner tier passwords deleted); rotate the owner password at handover |
 | Train it on the Chris Barrow zip | 🫵 | Mechanism ready (practice brain ingestion). Send me the zip file and I load it |
 | Calendar / diary live from Dentally | ✅ | N15 live, all sites synced |
 | Patient records, notes, treatment plans, history | ✅ | Live, 51k patients |
@@ -32,10 +32,10 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 | Landing page A/B testing with winner promotion | ✅ | 50/50 sticky split, live demo page seeded |
 | Meta ads: campaign builder + AI ad copy + launch guide | ✅ | Built earlier; GDC/ASA-compliant copy |
 | Meta ad library of live competitor ads + scoring | ✅🏥 | Creative Intelligence built: click a creative for AI score, why-it-works, compliance watch-outs and est. cost-per-lead range. Live competitor data still needs the client's Meta account |
-| Publish campaigns to Meta / budget enforcement / metrics pulled back | 📋 | Adapter brief written; activates only once Meta is connected |
+| Publish campaigns to Meta / budget enforcement / metrics pulled back | ✅🏥 | BUILT dormant: real Graph v25 adapter (everything created PAUSED for client review), hourly insights pull-back ready; lights up the day Meta connects |
 | "Recreate this ad with your branding" as a downloadable image | 📋🫵 | UNBLOCKED: powering with the Higgsfield API. Brief ready; needs the HIGGSFIELD_API_KEY added to the environment (not pasted in chat) |
 | Nurture cycles for close-but-not-ready leads | ✅ | Built: 3 gentle touches (days 3/10/21), reply exits instantly, capped, opt-out safe, 60-day age guard |
-| A/B testing of outreach messages with conversion tracking | 📋 | Variant tagging + attribution brief written; "self-learning" language retired |
+| A/B testing of outreach messages with conversion tracking | ✅ | LIVE: two message angles per campaign, deterministic 50/50, per-message sent/replied/booked counts read back honestly |
 
 ## The campaigns machinery (the Shaq test)
 
@@ -63,7 +63,7 @@ Legend: ✅ built and verified · 🔨 being built right now · 📋 queued (bri
 | Transcript item | Status | Notes |
 |---|---|---|
 | Manager sees everything | ✅ | Blerta's coordinator login live |
-| Staff see much less ("only what they'd have in Dentally") | 📋 | Third role tier brief written; lands after the design branch merges |
+| Staff see much less ("only what they'd have in Dentally") | ⏸️ | Built + parked unmerged by owner decision: logins stay owner + practice manager for now; a merge away when wanted |
 | System controls stay owner-only | ✅ | Live |
 | Bug highlight → sent straight to us | ✅ | Feedback widget live; set FEEDBACK_WEBHOOK_URL to pipe into our chat |
 | "Everything is tracked" usage metrics | 📋 | Funnel surfaces tracked today; product-wide telemetry brief written |
