@@ -3,6 +3,8 @@ import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { listPatients, countPatients, type PatientRecord } from "@/lib/dentally/read";
 import { getPatientCounts } from "@/lib/patient-count/repository";
+import { listOverridesForSites } from "@/lib/patient-status/repository";
+import type { PatientAdminStatus } from "@/lib/patient-status/types";
 import { PatientsTable } from "./patients-table";
 
 /** A quiet big-numeral text stat for the header row (was a boxed stat card). */
@@ -32,14 +34,19 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
   let patients: PatientRecord[] = [];
   let exactTotal: number | null = null;
   let exactActive: number | null = null;
+  // Platform admin overrides for the sites in scope (few rows - manually set only). Built
+  // into a patientId -> status map so the table paints the right chip on any loaded row.
+  const overrides: Record<string, PatientAdminStatus> = {};
   try {
-    const [slice, metaTotal, counts] = await Promise.all([
+    const [slice, metaTotal, counts, overrideRows] = await Promise.all([
       listPatients(scope.siteIds, { maxPages: 3 }),
       countPatients(scope.siteIds),
       getPatientCounts(scope.siteIds).catch(() => []),
+      listOverridesForSites(scope.siteIds),
     ]);
     patients = slice;
     exactTotal = metaTotal;
+    for (const o of overrideRows) overrides[o.patientId] = o.status;
     // The nightly book scan gives the EXACT active number (Dentally's live
     // meta.total ignores active/archived filters). Only trust it when every
     // in-scope site has been counted, so a half-covered "All sites" view never
@@ -100,6 +107,7 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
         nowIso={nowIso}
         clientSlug={clientSlug}
         initialFilter="active"
+        overrides={overrides}
       />
     </>
   );

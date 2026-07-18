@@ -2,6 +2,7 @@ import { DentallyError } from "@/lib/dentally/client";
 import { dentallyFromEnv } from "@/lib/dentally/read";
 import { dentallySiteId } from "@/lib/mock/clients";
 import { getCampaign, updateCampaign, insertTargets, type NewTarget } from "./repository";
+import { loadExcludedPatientIds } from "@/lib/patient-status/repository";
 import { prefilterOutcome, matchAppointmentHistory, type AppointmentLike } from "./filters";
 import type { OutreachBuildCursor, OutreachCampaign } from "./types";
 import { normaliseGender, type Gender } from "@/lib/patient/demographics";
@@ -137,6 +138,12 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
   const now = new Date();
   const siteId = campaign.siteId;
 
+  // Platform admin status: patients marked inactive / do_not_contact are excluded from
+  // EVERY build. Loaded ONCE per tick for this campaign's site (not per patient), then
+  // checked cheaply before the prefilter. Fail-open (empty set) on a read blip; a
+  // do_not_contact patient is still blocked at the send choke point by suppression.
+  const excludedIds = await loadExcludedPatientIds(siteId);
+
   let page = cursor.page;
   let pageOffset = cursor.pageOffset ?? 0;
   let scanned = cursor.scanned;
@@ -180,6 +187,10 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
         scanned += 1;
         const patient = mapPatient(rawPatients[idx], siteId);
         if (!patient.id) continue;
+        // Platform admin override wins over Dentally's own active flag: an inactive /
+        // do_not_contact patient is dropped here, before the prefilter, exactly like a
+        // prefilter rejection (counted as scanned, never a candidate).
+        if (excludedIds.has(patient.id)) continue;
         // Cheap pre-filter, now including the age/gender demographic gates. A patient
         // dropped ONLY for a missing age/gender the filter needs is counted, so the
         // read-back can state how many records had no such data on file.
