@@ -1,4 +1,5 @@
 import { requireUser, requireClientAccess, requireSiteAccess } from "@/lib/auth/guard";
+import { recordUsage } from "@/lib/telemetry";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getPatientById } from "@/lib/dentally/read";
 import { getSite } from "@/lib/mock/clients";
@@ -97,6 +98,11 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       status,
       reason,
       actorEmail: gate.auth?.email ?? null,
+    });
+    void recordUsage("patients", "status_change", {
+      clientId: getSite(gate.siteId)?.clientId ?? "unknown",
+      userEmail: gate.auth?.email ?? null,
+      role: gate.auth?.role ?? null,
     });
     return Response.json({ ok: true, status: result.status, dentally: result.dentally });
   } catch (err) {

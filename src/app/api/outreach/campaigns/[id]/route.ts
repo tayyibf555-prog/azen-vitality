@@ -10,6 +10,7 @@ import {
 } from "@/lib/outreach/repository";
 import { runOutreachBuildTick } from "@/lib/outreach/build";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { recordUsage } from "@/lib/telemetry";
 import type { OutreachCampaign } from "@/lib/outreach/types";
 
 export const dynamic = "force-dynamic";
@@ -104,7 +105,7 @@ export async function PATCH(
   const { id } = await params;
   const guard = await loadGuarded(id);
   if (guard instanceof Response) return guard;
-  const { campaign } = guard;
+  const { auth, campaign } = guard;
 
   let body: Record<string, unknown>;
   try {
@@ -156,6 +157,11 @@ export async function PATCH(
         );
       }
       await updateCampaign(campaign.id, { status: "running" });
+      void recordUsage("outreach", "campaign_launch", {
+        clientId: campaign.clientId,
+        userEmail: auth?.email ?? null,
+        role: auth?.role ?? null,
+      });
       return Response.json({ ok: true, status: "running" });
     }
 

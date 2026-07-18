@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   listAudit: vi.fn(),
 }));
 
+vi.mock("@/lib/telemetry", () => ({ recordUsage: vi.fn(async () => undefined) }));
+
 vi.mock("@/lib/auth/guard", () => ({
   requireUser: h.requireUser,
   requireClientAccess: h.requireClientAccess,
