@@ -335,7 +335,7 @@ export const CLIENT_NAV: NavGroup[] = [
         // Not owner-only (unlike its Operations siblings): the practice coordinator
         // is normally the one who works through this checklist day to day, so both
         // the owner and the coordinator may see and tick it. No `roles` = every role.
-        note: "The go-live checklist: the eleven items we need from the practice (with three go-live gates that block patient messaging) to move the platform from read-and-review mode to fully live, with per-item detail on what each means and how to do it.",
+        note: "The go-live checklist: the thirteen items we need from the practice (with three go-live gates that block patient messaging) to move the platform from read-and-review mode to fully live, with per-item detail on what each means and how to do it.",
       },
       { slug: "settings", label: "Settings", icon: Settings, status: "live", roles: OWNER_ROLES, note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
     ],
@@ -480,7 +480,7 @@ export function categoriesForRole(
  * Slugs that are NOT in CLIENT_NAV but still render under an owner shell and must
  * stay owner-only when reached by direct URL (e.g. the owner-only Practice brain).
  */
-const EXTRA_OWNER_ONLY_SLUGS = new Set<string>(["practice-brain"]);
+export const EXTRA_OWNER_ONLY_SLUGS = new Set<string>(["practice-brain"]);
 
 /**
  * Whether a role may access a module by its slug — the single source of truth for
