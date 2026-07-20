@@ -6,6 +6,7 @@ import {
   NAV_CATEGORIES,
   NAV_HIDDEN_SLUGS,
   NAV_SWITCH_EXEMPT_SLUGS,
+  EXTRA_OWNER_ONLY_SLUGS,
   categoriesForRole,
 } from "./nav";
 
@@ -133,6 +134,19 @@ describe("canRoleAccessModule", () => {
   it("blocks the coordinator from the owner-shell practice-brain", () => {
     expect(canRoleAccessModule("client_coordinator", "practice-brain")).toBe(false);
     expect(canRoleAccessModule("client_owner", "practice-brain")).toBe(true);
+  });
+
+  it("keeps 'Getting started' open to the coordinator (not owner-only) so it shows in their login too", () => {
+    // The practice manager / coordinator works through this go-live checklist day to
+    // day, so it must never be gated to owners. Lock both the predicate and the reason
+    // it is open: the slug carries no owner `roles` and is not in the owner-only escape
+    // hatch, so it stays reachable for the coordinator by nav and by direct URL.
+    expect(canRoleAccessModule("client_coordinator", "getting-started")).toBe(true);
+    expect(canRoleAccessModule("client_owner", "getting-started")).toBe(true);
+    expect(canRoleAccessModule("agency_admin", "getting-started")).toBe(true);
+    expect(EXTRA_OWNER_ONLY_SLUGS.has("getting-started")).toBe(false);
+    const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "getting-started");
+    expect(item?.roles).toBeUndefined();
   });
 
   it("owner-sidebar Manage rail: hides Practice brain AND Co-pilot from a coordinator, keeps them for owner/agency", () => {

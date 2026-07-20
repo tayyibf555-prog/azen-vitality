@@ -7,8 +7,8 @@ import { getClient } from "@/lib/mock/clients";
 import { cn } from "@/lib/utils";
 
 // The go-live checklist: what the practice needs to provide before the platform
-// stops being read-and-review only and starts contacting patients. The 11 items /
-// 3 go-live gates mirror the prepared onboarding sheet exactly. Owners can now TICK
+// stops being read-and-review only and starts contacting patients. The 13 items /
+// 3 go-live gates mirror the prepared onboarding sheet. Owners can now TICK
 // items off; ticks persist per practice (shared between owners) via
 // /api/getting-started. Owner/staff facing, never patient facing.
 
@@ -125,7 +125,7 @@ const SECTIONS: ChecklistSection[] = [
           },
           {
             lead: "How to do it.",
-            body: "Send whatever you already have, a price list, your services page, an existing FAQ, or fill in the short questionnaire we provide. The more you share, the sharper and safer the answers.",
+            body: "Send whatever you already have, a price list, your services page, an existing FAQ, or fill in the short questionnaire we provide. The more you share, the sharper and safer the answers. The general practice-management know-how is already loaded, so this is only your practice-specific facts: your prices, hours, sites and dentists.",
           },
         ],
         tags: ["practice"],
@@ -161,6 +161,39 @@ const SECTIONS: ChecklistSection[] = [
           },
         ],
         tags: ["practice"],
+      },
+      {
+        key: "brand-assets",
+        name: "Brand assets: logo and colours",
+        why: "Your logo and brand colours, so landing pages, recreated ads and emails look like your practice and not a generic template.",
+        detail: [
+          {
+            lead: "What it means for you.",
+            body: "Everything a patient sees (campaign landing pages, ad images we recreate for you, emails) currently uses placeholder colours. Your real logo and brand colours make all of it unmistakably yours.",
+          },
+          {
+            lead: "How to do it.",
+            body: "Send your logo, ideally a PNG or SVG on a transparent background, plus your brand colours as hex codes if you have them. If not, point us at your website or brand guide and we will pull them.",
+          },
+        ],
+        tags: ["practice"],
+      },
+      {
+        key: "landing-3d",
+        name: "3D model for landing pages",
+        why: "Optional. If you want an interactive 3D showcase on a campaign landing page, for example a clear-aligner or implant model, send the 3D file.",
+        detail: [
+          {
+            lead: "What it means for you.",
+            body: "Some campaign landing pages can feature a spin-around 3D model as a showcase. Purely optional and only where it suits the treatment.",
+          },
+          {
+            lead: "How to do it.",
+            body: "If you have a 3D model file (.glb or .gltf) send it over. If not, skip this: the pages work perfectly without it.",
+          },
+        ],
+        tags: ["practice", "optional"],
+        optionalLabel: "If you want the 3D showcase",
       },
     ],
   },
@@ -219,20 +252,23 @@ const SECTIONS: ChecklistSection[] = [
       },
       {
         key: "meta-access",
-        name: "Meta Ads account access",
-        why: "If you want us to run and track Facebook and Instagram campaigns, grant access to your ad account so we can report real return on spend.",
+        name: "Meta / Facebook business access",
+        why: "Add us to your Meta (Facebook and Instagram) Business account. One connection unlocks three things you asked for: WhatsApp booking, live competitor ad data, and running and measuring your own campaigns. It is not only for ads.",
         detail: [
           {
             lead: "What it means for you.",
-            body: "Only needed if you would like us to run and measure paid Facebook and Instagram ads. Campaigns then run under your own business, and the platform shows what each pound of spend brings back.",
+            body: "The same single connection to your Facebook and Instagram business account switches on WhatsApp messaging to patients, brings in live ad data, and lets the platform build, run and report on campaigns under your own business. Nothing posts or spends without your say-so.",
           },
           {
             lead: "How to do it.",
-            body: "Add us as a partner or user on your Meta Business account (or share the relevant access). If you are not doing ads yet, simply skip this one and come back to it later.",
+            body: "Add us as a partner or user on your Meta Business account, or share the relevant access, and we handle the technical setup from there.",
+          },
+          {
+            lead: "One thing to plan for.",
+            body: "If this is a brand new ad account, Meta needs a paid warm-up period first. We start with a small daily budget and ramp up gradually over a couple of weeks. A cold account that jumps straight to a large budget gets flagged and restricted, so building its spending history slowly is deliberate, then we scale.",
           },
         ],
-        tags: ["practice", "optional"],
-        optionalLabel: "If running ads",
+        tags: ["practice"],
       },
     ],
   },
