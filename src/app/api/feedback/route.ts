@@ -17,10 +17,12 @@ function isSeverity(v: unknown): v is FeedbackSeverity {
 }
 
 // POST /api/feedback  { clientSlug, pagePath, note, severity }  -> save a quick
-// in-app report from the floating "Report an issue" widget (mounted in the c/
-// and owner/ authed shells). requireUser gates it like every other authed write;
-// the author's id/email/role are always stamped from the verified session, never
-// trusted from the body (mirrors patient-notes' authorId/authorName).
+// in-app change request from the floating "Request a change" widget (mounted in
+// the c/ and owner/ authed shells). The row is ALWAYS stored first; the webhook
+// notify below is best-effort on top, so requests are captured from day one even
+// before FEEDBACK_WEBHOOK_URL is configured. requireUser gates it like every
+// other authed write; the author's id/email/role are always stamped from the
+// verified session, never trusted from the body (mirrors patient-notes').
 export async function POST(request: Request): Promise<Response> {
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
