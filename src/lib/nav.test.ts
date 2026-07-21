@@ -169,6 +169,33 @@ describe("canRoleAccessModule", () => {
   });
 });
 
+describe("landing-pages (Growth) nav visibility", () => {
+  it("is a live Growth module gated to exactly the roles Meta Ads is gated to", () => {
+    const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "landing-pages");
+    const metaAds = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "meta-ads");
+    expect(item).toBeDefined();
+    expect(item?.status).toBe("live");
+    // Same role gating as its sibling Meta Ads: whoever sees Meta Ads sees this.
+    expect(item?.roles).toEqual(metaAds?.roles);
+  });
+
+  it("is reachable by exactly the roles that can reach Meta Ads (owner + agency, not coordinator)", () => {
+    for (const role of ["client_owner", "agency_admin", "client_coordinator"] as const) {
+      expect(canRoleAccessModule(role, "landing-pages")).toBe(canRoleAccessModule(role, "meta-ads"));
+    }
+    expect(canRoleAccessModule("client_owner", "landing-pages")).toBe(true);
+    expect(canRoleAccessModule("agency_admin", "landing-pages")).toBe(true);
+    expect(canRoleAccessModule("client_coordinator", "landing-pages")).toBe(false);
+  });
+
+  it("shows in the owner's Growth rail category and is hidden from the coordinator's", () => {
+    const ownerGrowth = categoriesForRole("client_owner").find((c) => c.key === "growth");
+    expect(ownerGrowth?.items.map((i) => i.slug)).toContain("landing-pages");
+    const coordGrowth = categoriesForRole("client_coordinator").find((c) => c.key === "growth");
+    expect(coordGrowth?.items.map((i) => i.slug) ?? []).not.toContain("landing-pages");
+  });
+});
+
 describe("outreach (Campaigns) nav visibility", () => {
   it("shows Campaigns to the owner in the Growth rail category", () => {
     const growth = categoriesForRole("client_owner").find((c) => c.key === "growth");

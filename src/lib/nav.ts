@@ -34,6 +34,7 @@ import {
   Rocket,
   CalendarPlus,
   Send,
+  LayoutTemplate,
 } from "lucide-react";
 
 export type ModuleStatus = "live" | "placeholder";
@@ -134,6 +135,18 @@ export const CLIENT_NAV: NavGroup[] = [
         status: "live",
         roles: OWNER_ROLES,
         note: "Plan, build and track Facebook and Instagram ad campaigns: ready-to-launch templates, AI ad copy, a step-by-step launch guide, performance analytics, and a library of winning dental ads with an AI creative overview. UK GDC and ASA compliant. Campaign data is mock until the Meta account is connected.",
+      },
+      {
+        slug: "landing-pages",
+        label: "Landing pages",
+        icon: LayoutTemplate,
+        status: "live",
+        // Same gating as its sibling Meta Ads (owner-only): whoever sees Meta Ads
+        // sees this. The pages themselves are generated inside the Meta Ads
+        // workspace; this section is the owner's place to PREVIEW every page and
+        // read which is converting.
+        roles: OWNER_ROLES,
+        note: "Preview every campaign landing page (drafts open with a preview link) and see how each is performing: total views, the A/B split with per-variant conversion, and which variant is winning, so the best-performing pages are obvious. Pages are created in Meta Ads; this is where you watch and preview them.",
       },
       {
         slug: "smile-assessment",
@@ -410,7 +423,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "growth",
     label: "Growth",
     icon: TrendingUp,
-    slugs: ["meta-ads", "smile-assessment", "speed-to-lead", "booking", "outreach", "power-dialler", "usps", "roi"],
+    slugs: ["meta-ads", "landing-pages", "smile-assessment", "speed-to-lead", "booking", "outreach", "power-dialler", "usps", "roi"],
   },
   {
     key: "operations",
