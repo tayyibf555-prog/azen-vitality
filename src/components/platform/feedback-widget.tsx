@@ -2,22 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { useParams, usePathname } from "next/navigation";
-import { MessageSquarePlus, Bug, Lightbulb, HelpCircle, Loader2, X, Check } from "lucide-react";
+import { MessageSquarePlus, PencilLine, Lightbulb, HelpCircle, Loader2, X, Check } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import { cn } from "@/lib/utils";
 import { FEEDBACK_SEVERITIES, type FeedbackSeverity } from "@/lib/feedback/types";
+import { FEEDBACK_WIDGET_COPY } from "@/lib/feedback/copy";
 
-// A small, quiet "Report an issue" pill mounted once in each authed shell
+// A small, quiet "Request a change" pill mounted once in each authed shell
 // (alongside PlatformShortcuts in the c/[client] and owner/[client] layouts).
 // Bottom-LEFT so it never overlaps the co-pilot ask-bar, which docks bottom-
 // centre when opened (src/components/platform/copilot-chat.tsx). Opens a compact
-// modal: pick a severity, write a note, the current page is auto-captured. On
-// success the modal closes and a transient toast confirms, then fades.
+// modal: pick a type, write the change you would like, the current page is auto-
+// captured. On success the modal closes and a transient toast confirms, then fades.
 
+// The three request types map onto the stored FeedbackSeverity values (unchanged
+// plumbing): a change to something (bug), a new idea (idea), or a question.
 const SEVERITY_META: Record<FeedbackSeverity, { label: string; icon: LucideIcon }> = {
-  bug: { label: "Bug", icon: Bug },
+  bug: { label: "Change", icon: PencilLine },
   idea: { label: "Idea", icon: Lightbulb },
   question: { label: "Question", icon: HelpCircle },
 };
@@ -98,7 +101,7 @@ export function FeedbackWidget() {
           className="fixed bottom-4 left-4 z-40 inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-card px-3 py-1.5 text-xs font-semibold text-muted shadow-[0_2px_8px_rgba(10,14,26,0.10)] transition-colors hover:bg-card-muted hover:text-navy"
         >
           <MessageSquarePlus size={14} />
-          Report an issue
+          {FEEDBACK_WIDGET_COPY.trigger}
         </button>
       ) : null}
 
@@ -113,10 +116,8 @@ export function FeedbackWidget() {
           <div className="relative z-10 w-full max-w-md rounded-2xl border border-line bg-card p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold text-navy">Report an issue</h3>
-                <p className="mt-0.5 text-xs text-muted">
-                  Reporting from <span className="font-medium text-ink">{pathname}</span>
-                </p>
+                <h3 className="text-base font-semibold text-navy">{FEEDBACK_WIDGET_COPY.heading}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted">{FEEDBACK_WIDGET_COPY.helper}</p>
               </div>
               <button
                 type="button"
@@ -154,10 +155,14 @@ export function FeedbackWidget() {
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value.slice(0, MAX_NOTE))}
-              placeholder="What happened, or what would help?"
+              placeholder={FEEDBACK_WIDGET_COPY.placeholder}
               rows={4}
               className="mt-3 w-full resize-none rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
             />
+
+            <p className="mt-2 text-[11px] text-muted">
+              Tagged to <span className="font-medium text-ink">{pathname}</span> so we know where you are.
+            </p>
 
             {error ? <p className="mt-2 text-xs font-medium text-danger">{error}</p> : null}
 
@@ -177,7 +182,7 @@ export function FeedbackWidget() {
       {toast ? (
         <div className="fixed bottom-4 left-4 z-[70] flex items-center gap-2 rounded-full border border-success/25 bg-success/10 px-3.5 py-2 text-xs font-semibold text-success shadow-[0_4px_12px_rgba(10,14,26,0.12)]">
           <Check size={14} />
-          Sent to the team, thank you
+          {FEEDBACK_WIDGET_COPY.success}
         </div>
       ) : null}
     </>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bug, Lightbulb, HelpCircle, Check, Loader2, MessageSquareOff } from "lucide-react";
+import { PencilLine, Lightbulb, HelpCircle, Check, Loader2, MessageSquareOff } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   PageHeader,
@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/utils";
 import type { FeedbackItem, FeedbackSeverity } from "@/lib/feedback/types";
 
-// Agency console: every in-app "Report an issue" submission across every
+// Agency console: every in-app "Request a change" submission across every
 // client, newest first, with a mark-as-done action. Fully client-rendered
 // (fetches GET /api/feedback on mount) since the agency shell already gates
 // every /agency/* page to agency_admin via guardPage (src/app/agency/layout.tsx);
@@ -26,8 +26,10 @@ interface Row extends FeedbackItem {
   clientName: string;
 }
 
+// Request types, mapped onto the stored FeedbackSeverity values (unchanged
+// plumbing): a change to something (bug), a new idea (idea), or a question.
 const SEVERITY_META: Record<FeedbackSeverity, { label: string; icon: LucideIcon; tone: Tone }> = {
-  bug: { label: "Bug", icon: Bug, tone: "danger" },
+  bug: { label: "Change", icon: PencilLine, tone: "warning" },
   idea: { label: "Idea", icon: Lightbulb, tone: "info" },
   question: { label: "Question", icon: HelpCircle, tone: "neutral" },
 };
@@ -89,7 +91,7 @@ export function FeedbackList() {
     },
     {
       key: "severity",
-      header: "Severity",
+      header: "Type",
       cell: (r) => {
         const meta = SEVERITY_META[r.severity] ?? SEVERITY_META.bug;
         const Icon = meta.icon;
@@ -138,11 +140,11 @@ export function FeedbackList() {
     <>
       <PageHeader
         title="Feedback"
-        description="Every in-app 'Report an issue' submission across every client, newest first."
+        description="Every in-app change request across every client, newest first."
       />
 
       <SectionCard
-        title="Reports"
+        title="Requests"
         description={loading ? "Loading..." : `${open.length} open, ${rows.length} total`}
       >
         {loadError ? (
@@ -150,8 +152,8 @@ export function FeedbackList() {
         ) : !loading && rows.length === 0 ? (
           <EmptyState
             icon={MessageSquareOff}
-            title="No feedback yet"
-            description="Reports from the 'Report an issue' widget will appear here."
+            title="No requests yet"
+            description="Requests from the 'Request a change' widget will appear here."
           />
         ) : (
           <DataTable

@@ -137,7 +137,27 @@ describe("POST /api/feedback", () => {
     expect(store.webhookCalls[0][1]).toBe("Vitality Dental");
   });
 
-  it("still returns ok:true even if the webhook notifier throws (defence in depth at the call site)", async () => {
+  it("persists the request even when the webhook is dormant (FEEDBACK_WEBHOOK_URL unset -> notifier is a no-op)", async () => {
+    // Mirror notifyFeedbackWebhook's real behaviour when the URL is unset: it
+    // does nothing. The row must still be saved, so requests are captured from
+    // day one, before FEEDBACK_WEBHOOK_URL is ever configured. (webhook.test.ts
+    // proves the notifier itself no-ops-without-throwing when the URL is unset.)
+    vi.doMock("@/lib/feedback/webhook", () => ({ notifyFeedbackWebhook: () => {} }));
+    vi.resetModules();
+    const { POST: postWithDormantWebhook } = await import("./route");
+    const res = await postWithDormantWebhook(
+      postReq({ clientSlug: "vitality", pagePath: "/c/vitality", note: "please tweak the header" }),
+    );
+    const data = (await res.json()) as { ok: boolean };
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(store.created).toHaveLength(1);
+    expect(store.created[0]).toMatchObject({ note: "please tweak the header" });
+    vi.doUnmock("@/lib/feedback/webhook");
+    vi.resetModules();
+  });
+
+  it("still returns ok:true (and has already saved the row) even if the webhook notifier throws", async () => {
     vi.doMock("@/lib/feedback/webhook", () => ({
       notifyFeedbackWebhook: () => {
         throw new Error("boom");
@@ -147,6 +167,10 @@ describe("POST /api/feedback", () => {
     const { POST: postWithThrowingWebhook } = await import("./route");
     const res = await postWithThrowingWebhook(postReq({ clientSlug: "vitality", pagePath: "/c/vitality", note: "x" }));
     expect(res.status).toBe(200);
+    // The save happens before the (throwing) notifier runs, so it is never lost.
+    expect(store.created).toHaveLength(1);
+    vi.doUnmock("@/lib/feedback/webhook");
+    vi.resetModules();
   });
 });
 
