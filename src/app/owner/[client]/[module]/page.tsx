@@ -8,6 +8,9 @@ import { RecallView } from "@/components/client/recall/recall-view";
 import { NoshowView } from "@/components/client/noshow/noshow-view";
 import { SmileAssessmentView } from "@/components/client/smile-assessment/smile-assessment-view";
 import { MetaAdsView } from "@/components/client/meta-ads/meta-ads-view";
+import { LandingPagesView } from "@/components/client/landing-pages/landing-pages-view";
+import { BookingView } from "@/components/client/booking/booking-view";
+import { OutreachCampaignsView } from "@/components/client/outreach/campaigns-view";
 import { RoiView } from "@/components/client/roi/roi-view";
 import { ReportsView } from "@/components/client/reports/reports-view";
 import { ComplianceView } from "@/components/client/compliance/compliance-view";
@@ -178,6 +181,18 @@ export default async function OwnerModulePage({
 
   if (module === "getting-started") {
     return <GettingStartedView clientSlug={client} />;
+  }
+
+  if (module === "landing-pages") {
+    return <LandingPagesView clientSlug={client} />;
+  }
+
+  if (module === "booking") {
+    return <BookingView clientSlug={client} />;
+  }
+
+  if (module === "outreach") {
+    return <OutreachCampaignsView clientSlug={client} />;
   }
 
   if (module !== "" && CLIENT_MODULE_SLUGS.includes(module)) {
