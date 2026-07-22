@@ -1,4 +1,5 @@
-import { ExternalLink, LayoutTemplate, Trophy } from "lucide-react";
+import { LayoutTemplate, Trophy } from "lucide-react";
+import { LandingPreview } from "./landing-preview";
 import { PageHeader, SectionCard, StatCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
@@ -167,28 +168,11 @@ function PageCard({ row }: { row: LandingPageOverview }) {
           </div>
           <p className="mt-1 truncate font-mono text-xs text-muted">{row.path}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-4">
-          <div className="text-right">
-            <div className="text-[22px] font-bold tabular-nums tracking-[-0.4px] text-navy">
-              {row.totalViews.toLocaleString("en-GB")}
-            </div>
-            <p className="text-[11px] font-medium text-muted">Views (30d)</p>
+        <div className="shrink-0 text-right">
+          <div className="text-[22px] font-bold tabular-nums tracking-[-0.4px] text-navy">
+            {row.totalViews.toLocaleString("en-GB")}
           </div>
-          {row.previewPath ? (
-            <a
-              href={row.previewPath}
-              target="_blank"
-              rel="noreferrer"
-              className="pressable inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-3 py-1.5 text-xs font-semibold text-navy transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
-            >
-              <ExternalLink size={14} />
-              {page.status === "draft" ? "Preview draft" : "Preview"}
-            </a>
-          ) : (
-            <span className="text-xs text-faint">
-              {page.status === "archived" ? "Archived" : "Preview unavailable"}
-            </span>
-          )}
+          <p className="text-[11px] font-medium text-muted">Views (30d)</p>
         </div>
       </div>
 
@@ -201,6 +185,14 @@ function PageCard({ row }: { row: LandingPageOverview }) {
             ? row.decision.reason
             : `Not enough data to call a winner yet. ${row.decision.reason}`}
       </p>
+
+      {row.previewPath ? (
+        <LandingPreview url={row.previewPath} title={row.treatmentName} isDraft={page.status === "draft"} />
+      ) : (
+        <p className="mt-3 text-xs text-faint">
+          Live preview unavailable{page.status === "archived" ? " for archived pages" : ""}.
+        </p>
+      )}
     </li>
   );
 }
