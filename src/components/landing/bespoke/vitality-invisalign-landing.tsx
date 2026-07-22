@@ -310,6 +310,33 @@ export function VitalityInvisalignLanding({
         </div>
       </section>
 
+      {/* ---- MEET YOUR ALIGNERS (product showcase) ----------------------- */}
+      <section className="lt" data-lp-section="aligners">
+        <div className="wrap">
+          <div className="align-band">
+            <div className="align-media">
+              <img src="/landing/invisalign/aligners.jpg" alt={C.aligners.alt} loading="lazy" />
+            </div>
+            <div className="align-copy">
+              <div className="eyebrow">{C.aligners.eyebrow}</div>
+              <h2>{C.aligners.title}</h2>
+              <p className="align-intro">{C.aligners.intro}</p>
+              <ul className="align-feats">
+                {C.aligners.features.map((f, i) => (
+                  <li key={f.title}>
+                    <span className="an">{String(i + 1).padStart(2, "0")}</span>
+                    <div>
+                      <h4>{f.title}</h4>
+                      <p>{f.body}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ---- CONDITIONS TREATED (3D models) ------------------------------- */}
       <section className="lt alt" data-lp-section="conditions">
         <div className="wrap">

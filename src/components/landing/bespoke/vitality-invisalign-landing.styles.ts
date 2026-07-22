@@ -185,4 +185,16 @@ export const VITALITY_INVISALIGN_CSS = `
 .vd-landing .success .tick{width:52px;height:52px;border-radius:50%;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;margin:0 auto 14px}
 .vd-landing .success h3{color:var(--navy);font-size:22px;margin-bottom:8px}
 .vd-landing .success p{color:var(--tx-soft);font-size:14px}
+
+/* Meet your aligners: product image + numbered feature callouts */
+.vd-landing .align-band{display:grid;grid-template-columns:1.05fr .95fr;gap:50px;align-items:center}
+.vd-landing .align-media img{width:100%;border-radius:18px;display:block;box-shadow:0 20px 50px rgba(11,32,73,.18)}
+.vd-landing .align-copy h2{font-size:36px;line-height:1.12;margin-top:12px;color:var(--navy)}
+.vd-landing .align-intro{color:var(--tx-soft);font-size:16px;margin-top:14px;max-width:440px}
+.vd-landing .align-feats{list-style:none;margin:26px 0 0;padding:0;display:grid;gap:18px}
+.vd-landing .align-feats li{display:flex;gap:15px;align-items:flex-start}
+.vd-landing .align-feats .an{flex:0 0 auto;width:38px;height:38px;border-radius:999px;display:grid;place-items:center;background:var(--blue-soft);color:var(--blue);font-weight:800;font-size:12.5px;font-variant-numeric:tabular-nums}
+.vd-landing .align-feats h4{font-size:16px;color:var(--navy);margin:3px 0 3px}
+.vd-landing .align-feats p{color:var(--tx-soft);font-size:14.5px;line-height:1.5}
+@media(max-width:820px){.vd-landing .align-band{grid-template-columns:1fr;gap:26px}}
 `;

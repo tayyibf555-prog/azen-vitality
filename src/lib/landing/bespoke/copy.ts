@@ -99,6 +99,14 @@ export interface InvisalignLandingCopy {
     stepsEyebrow: string;
     steps: TitledPair[];
   };
+  aligners: {
+    eyebrow: string;
+    title: string;
+    intro: string;
+    /** Alt text for the aligner product image. */
+    alt: string;
+    features: TitledPair[];
+  };
   conditions: {
     head: CenterHeadCopy;
     items: (TitledPair & { key: string; alt: string })[];
@@ -272,6 +280,27 @@ export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
       {
         title: "Reveal your smile",
         body: "Treatment complete. You receive retainers to hold your result, a straight smile that lasts, as long as you wear them.",
+      },
+    ],
+  },
+
+  aligners: {
+    eyebrow: "Meet your aligners",
+    title: "Clear aligners, made just for you",
+    intro: "A full series of custom aligners, worn in order, each one moving your teeth a little closer to the finish.",
+    alt: "A clear Invisalign aligner lifting out of its case",
+    features: [
+      {
+        title: "Clear and discreet",
+        body: "Thin, transparent aligners that most people will not notice you are wearing day to day.",
+      },
+      {
+        title: "Removable",
+        body: "Take them out to eat, drink, brush and floss, then simply pop them back in.",
+      },
+      {
+        title: "Custom made",
+        body: "Each set is made from a 3D scan of your teeth, for a precise and comfortable fit.",
       },
     ],
   },
