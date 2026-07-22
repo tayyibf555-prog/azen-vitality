@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { deriveLandingOverview, summariseLandingOverview, type LandingOverviewInput } from "./overview";
+import {
+  deriveLandingOverview,
+  summariseLandingOverview,
+  groupRowsByTreatment,
+  type LandingOverviewInput,
+} from "./overview";
 import { decideAutoPromotion, MIN_VIEWS } from "./winner";
 import type { LandingPage } from "./types";
 import type { FunnelVariantCounters } from "@/lib/funnel/events";
@@ -175,5 +180,31 @@ describe("summariseLandingOverview", () => {
   it("handles an empty section", () => {
     expect(derive([])).toEqual([]);
     expect(summariseLandingOverview([])).toEqual({ pages: 0, live: 0, drafts: 0, totalViews: 0 });
+  });
+});
+
+describe("groupRowsByTreatment", () => {
+  it("groups rows by treatment, preserving the ranked order and each group's count", () => {
+    const rows = derive([
+      { page: makePage({ id: "i1", slug: "invisalign-1", treatment: "invisalign", status: "live" }), summary: { a: counters(50, 5, 1), b: counters(40, 4, 0) }, previewToken: null },
+      { page: makePage({ id: "b1", slug: "bonding-1", treatment: "bonding", status: "draft" }), summary: { a: counters(0, 0, 0), b: counters(0, 0, 0) }, previewToken: "tok" },
+      { page: makePage({ id: "i2", slug: "invisalign-2", treatment: "invisalign", status: "draft" }), summary: { a: counters(0, 0, 0), b: counters(0, 0, 0) }, previewToken: "tok2" },
+    ]);
+    const groups = groupRowsByTreatment(rows);
+    // The live invisalign page ranks first, so invisalign leads; bonding follows.
+    expect(groups.map((g) => g.key)).toEqual(["invisalign", "bonding"]);
+    expect(groups.map((g) => g.name)).toEqual(["Invisalign", "bonding"]);
+    expect(groups.map((g) => g.rows.length)).toEqual([2, 1]);
+  });
+
+  it("returns one group for a single treatment, and nothing for no rows", () => {
+    expect(groupRowsByTreatment([])).toEqual([]);
+    const rows = derive([
+      { page: makePage(), summary: { a: counters(10, 1, 0), b: counters(10, 1, 0) }, previewToken: null },
+    ]);
+    const groups = groupRowsByTreatment(rows);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe("invisalign");
+    expect(groups[0].rows).toHaveLength(1);
   });
 });

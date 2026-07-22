@@ -1,6 +1,15 @@
 import { LayoutTemplate, Trophy } from "lucide-react";
 import { LandingPreview } from "./landing-preview";
-import { PageHeader, SectionCard, StatCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
+import {
+  PageHeader,
+  SectionCard,
+  StatCard,
+  StatusPill,
+  EmptyState,
+  Tabs,
+  type TabItem,
+  type Tone,
+} from "@/components/primitives";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { TREATMENTS } from "@/lib/treatments/catalog";
@@ -11,6 +20,7 @@ import type { LandingPage, LandingPageStatus } from "@/lib/landing/types";
 import {
   deriveLandingOverview,
   summariseLandingOverview,
+  groupRowsByTreatment,
   type LandingOverviewInput,
   type LandingPageOverview,
   type VariantStat,
@@ -106,6 +116,29 @@ export async function LandingPagesView({ clientSlug }: { clientSlug: string }) {
   const rows = await loadOverview(client.id, clientSlug, scope.siteIds, scope.isAllSites);
   const totals = summariseLandingOverview(rows);
 
+  // Group the pages under one tab per treatment (Invisalign, Composite bonding, ...)
+  // so each treatment's pages sit together. An "All" tab leads only when there are
+  // two or more treatments, otherwise it just duplicates the single treatment tab.
+  const groups = groupRowsByTreatment(rows);
+  const treatmentTabs: TabItem[] = groups.map((group) => ({
+    key: group.key,
+    label: group.name,
+    badge: group.rows.length,
+    content: <PageGroup title={`${group.name} pages`} rows={group.rows} />,
+  }));
+  const tabs: TabItem[] =
+    groups.length > 1
+      ? [
+          {
+            key: "all",
+            label: "All",
+            badge: rows.length,
+            content: <PageGroup title="All landing pages" rows={rows} />,
+          },
+          ...treatmentTabs,
+        ]
+      : treatmentTabs;
+
   return (
     <>
       <PageHeader
@@ -131,18 +164,27 @@ export async function LandingPagesView({ clientSlug }: { clientSlug: string }) {
           }
         />
       ) : (
-        <SectionCard
-          title="Your landing pages"
-          description="Ranked so the best-performing live pages come first. Preview any page in a new tab; drafts open with a private preview link."
-        >
-          <ul className="space-y-3">
-            {rows.map((row) => (
-              <PageCard key={row.page.id} row={row} />
-            ))}
-          </ul>
-        </SectionCard>
+        <Tabs tabs={tabs} />
       )}
     </>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+
+/** One treatment's pages (the body of a tab): the ranked list of PageCards. */
+function PageGroup({ title, rows }: { title: string; rows: LandingPageOverview[] }) {
+  return (
+    <SectionCard
+      title={title}
+      description="Ranked so the best-performing live pages come first. Preview any page inline, or open it in a new tab; drafts use a private preview link."
+    >
+      <ul className="space-y-3">
+        {rows.map((row) => (
+          <PageCard key={row.page.id} row={row} />
+        ))}
+      </ul>
+    </SectionCard>
   );
 }
 

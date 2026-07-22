@@ -159,3 +159,33 @@ export function summariseLandingOverview(rows: LandingPageOverview[]): LandingOv
     totalViews: rows.reduce((sum, r) => sum + r.totalViews, 0),
   };
 }
+
+/** One treatment's landing pages, for the per-treatment tabs in the section. */
+export interface LandingTreatmentGroup {
+  /** Catalogue treatment key (e.g. "invisalign", "bonding"). */
+  key: string;
+  /** Display name (e.g. "Invisalign", "Composite bonding"). */
+  name: string;
+  rows: LandingPageOverview[];
+}
+
+/**
+ * Group the ranked rows by treatment for the section's tabs, preserving the
+ * incoming order: the first time a treatment appears fixes its tab position (so
+ * the treatment with the best-performing live page leads) and its display name.
+ */
+export function groupRowsByTreatment(rows: LandingPageOverview[]): LandingTreatmentGroup[] {
+  const groups: LandingTreatmentGroup[] = [];
+  const byKey = new Map<string, LandingTreatmentGroup>();
+  for (const row of rows) {
+    const key = row.page.treatment;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, name: row.treatmentName, rows: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  return groups;
+}
