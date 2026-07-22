@@ -10,6 +10,8 @@ import type { LandingPageVariant } from "@/lib/landing/types";
 import type { VariantKey } from "@/lib/landing/winner";
 import { LandingContent } from "@/components/landing/landing-content";
 import { LandingTracker } from "@/components/landing/landing-tracker";
+import { getBespokeTemplate } from "@/lib/landing/bespoke/registry";
+import { VitalityInvisalignLanding } from "@/components/landing/bespoke/vitality-invisalign-landing";
 
 // Public campaign landing page (/go/<client>/<slug>). The ad destination for a
 // custom landing page: it loads the LIVE page, assigns the visitor a sticky 50/50
@@ -36,6 +38,15 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   const { client, slug } = await params;
   const record = getClient(client);
   if (!record) return { title: "Vitality Dental" };
+  // Bespoke pages have a fixed, hand-authored title (the design does not render
+  // from the DB content the generic metadata reads).
+  const bespoke = getBespokeTemplate(record.id, slug);
+  if (bespoke) {
+    return {
+      title: `Invisalign | ${record.name}`,
+      description: bespoke.variants.a.heroSubhead,
+    };
+  }
   try {
     const found = await getLivePageBySlug(record.id, slug);
     const headline = found?.variants[0]?.content.hero.headline;
@@ -118,7 +129,22 @@ export default async function LandingPageRoute({
   // Serve the variant we will actually render (pickVariant may fall back).
   variant = chosen.variantKey;
 
-  const content = (
+  // A registered bespoke (hand-designed) template renders its own server component
+  // INSTEAD of the generic renderer. Everything around it is unchanged: the same
+  // sticky A/B variant, the same preview banner path, and the same LandingTracker
+  // wrapper (the bespoke component emits the same data-lp-section / data-lp-cta
+  // markers the tracker relies on). The bespoke component reads its per-variant copy
+  // from the registry, not from chosen.content.
+  const bespoke = getBespokeTemplate(record.id, slug);
+  const content = bespoke ? (
+    <VitalityInvisalignLanding
+      variant={variant}
+      clientSlug={client}
+      landingSlug={slug}
+      siteId={found.page.siteId}
+      practiceName={record.name}
+    />
+  ) : (
     <LandingContent
       content={chosen.content}
       practiceName={record.name}
