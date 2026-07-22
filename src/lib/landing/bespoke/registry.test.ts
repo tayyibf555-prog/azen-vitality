@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getBespokeTemplate, bespokeVariantCopy } from "./registry";
-import { INVISALIGN_LANDING_COPY } from "./copy";
+import { INVISALIGN_LANDING_COPY, BONDING_LANDING_COPY } from "./copy";
 import { scanBannedText } from "@/lib/landing/compliance";
 
 // Two guarantees for the bespoke Invisalign landing:
@@ -32,18 +32,34 @@ describe("bespoke registry", () => {
     expect(t?.variants.b).toBeDefined();
   });
 
+  it("returns the vitality/bonding template", () => {
+    const t = getBespokeTemplate("vitality", "bonding");
+    expect(t).not.toBeNull();
+    expect(t?.templateId).toBe("vitality-bonding");
+    expect(t?.treatment).toBe("bonding");
+    expect(t?.variants.a).toBeDefined();
+    expect(t?.variants.b).toBeDefined();
+    // The A/B surface really differs between the variants.
+    expect(t?.variants.a.heroHeadline).not.toBe(t?.variants.b.heroHeadline);
+    expect(t?.variants.a.ctaLabel).not.toBe(t?.variants.b.ctaLabel);
+  });
+
   it("returns null for any other (client, slug)", () => {
     expect(getBespokeTemplate("vitality", "veneers")).toBeNull();
     expect(getBespokeTemplate("vitality", "invisalign-demo")).toBeNull();
+    expect(getBespokeTemplate("vitality", "bonding-demo")).toBeNull();
     expect(getBespokeTemplate("other", "invisalign")).toBeNull();
+    expect(getBespokeTemplate("other", "bonding")).toBeNull();
     expect(getBespokeTemplate("", "")).toBeNull();
   });
 
   it("the hero accent is a verbatim substring of the headline for both variants", () => {
-    const t = getBespokeTemplate("vitality", "invisalign")!;
-    for (const key of ["a", "b"] as const) {
-      const v = bespokeVariantCopy(t, key);
-      expect(v.heroHeadline.toLowerCase()).toContain(v.heroAccent.toLowerCase());
+    for (const slug of ["invisalign", "bonding"]) {
+      const t = getBespokeTemplate("vitality", slug)!;
+      for (const key of ["a", "b"] as const) {
+        const v = bespokeVariantCopy(t, key);
+        expect(v.heroHeadline.toLowerCase()).toContain(v.heroAccent.toLowerCase());
+      }
     }
   });
 });
@@ -54,6 +70,32 @@ describe("bespoke copy compliance", () => {
   // The full corpus of user-visible strings on the bespoke page.
   const strings = [
     ...collectStrings(INVISALIGN_LANDING_COPY),
+    ...collectStrings(template.variants.a),
+    ...collectStrings(template.variants.b),
+  ];
+
+  it("has a non-trivial corpus to scan", () => {
+    expect(strings.length).toBeGreaterThan(60);
+  });
+
+  it("finds zero banned-pattern hits across every visible string", () => {
+    const hits: { text: string; category: string; matched: string }[] = [];
+    for (const text of strings) {
+      for (const hit of scanBannedText(text)) {
+        hits.push({ text, category: hit.category, matched: hit.matched });
+      }
+    }
+    // Surface every offending string so a failure is actionable.
+    expect(hits, JSON.stringify(hits, null, 2)).toEqual([]);
+  });
+});
+
+describe("bespoke bonding copy compliance", () => {
+  const template = getBespokeTemplate("vitality", "bonding")!;
+
+  // The full corpus of user-visible strings on the bespoke bonding page.
+  const strings = [
+    ...collectStrings(BONDING_LANDING_COPY),
     ...collectStrings(template.variants.a),
     ...collectStrings(template.variants.b),
   ];

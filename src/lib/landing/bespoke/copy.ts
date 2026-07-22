@@ -417,3 +417,366 @@ export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
       "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
   },
 };
+
+// ---------------------------------------------------------------------------
+// COMPOSITE BONDING
+// ---------------------------------------------------------------------------
+// Static, user-visible COPY for the bespoke Vitality Dental composite bonding
+// landing page. Adapts the Invisalign layout to bonding, kept in the same module
+// so the SAME compliance test enumerates every visible string and asserts
+// scanBannedText finds zero hits.
+//
+// COMPLIANCE (UK GDC/ASA + house style), same rules as the Invisalign copy:
+//   - NO testimonials, patient quotes, star ratings or review counts (Vitality has
+//     no owner-verified rating). The patient-story + before/after sections are
+//     LABELLED PLACEHOLDERS, because there are no real bonding photos yet.
+//   - No em/en-dashes, no "$" (GBP only), no NHS/private/"payment plan"/"band"
+//     funding words, no superlatives (best / leading / cheapest), no guarantees.
+//   - Clinical claims kept modest and honest: bonding is "usually one visit" with
+//     "minimal preparation"; it "can chip or stain over time". NO "no drilling ever",
+//     "permanent" or "painless" claims.
+//   - Pricing uses the real catalogue figure (Composite bonding from GBP 180) plus
+//     the "0% finance available" line. No invented numbers.
+// British English throughout. Per-variant hero + CTA copy is the A/B surface and
+// lives in registry.ts, NOT here.
+
+export interface BondingLandingCopy {
+  header: HeaderCopy;
+  /** Shared hero eyebrow (the accented headline + subhead are the A/B surface, in registry.ts). */
+  heroEyebrow: string;
+  heroPills: string[];
+  /** Small factual trust chips (value + label). No ratings, reviews or awards. */
+  trust: { value: string; label: string }[];
+  form: FormCopy;
+  /** "What composite bonding fixes": six line-icon cards (paired with icons by index). */
+  fixes: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+    banner: { lead: string; accent: string; tail: string };
+  };
+  treatment: {
+    head: SplitHeadCopy;
+    aboutTitle: string;
+    aboutBody: string;
+    keyFactsTitle: string;
+    keyFacts: string[];
+    stepsEyebrow: string;
+    /** Four steps: consult, shade match, shaping, polish. */
+    steps: TitledPair[];
+  };
+  /** Three benefit cards (paired with icons by index). */
+  benefits: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  suitability: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  /** Placeholder patient-story slots (no real photos yet). */
+  stories: {
+    head: SplitHeadCopy;
+    placeholderTitle: string;
+    placeholderNote: string;
+  };
+  /** Placeholder before/after slots (no real photos yet) + kept consent disclaimer. */
+  beforeAfter: {
+    head: CenterHeadCopy;
+    placeholderTitle: string;
+    placeholderNote: string;
+    capTitle: string;
+    capNote: string;
+    disclaimer: string;
+  };
+  why: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  pricing: {
+    head: CenterHeadCopy;
+    priceEyebrow: string;
+    priceLabel: string;
+    financeChip: string;
+    financeNote: string;
+    fineprint: string;
+    getTitle: string;
+    getItems: TitledPair[];
+  };
+  footer: {
+    brand: string;
+    tagline: string;
+    builtBy: string;
+    compliance: string;
+  };
+}
+
+export const BONDING_LANDING_COPY: BondingLandingCopy = {
+  header: {
+    brand: "VITALITY DENTAL",
+    brandSub: "NORTH LONDON",
+    locations: "N15, Vitality Dental group",
+  },
+
+  heroEyebrow: "Repair chips, gaps and worn edges",
+
+  heroPills: [
+    "Tooth coloured",
+    "Usually one visit",
+    "0% finance available",
+    "Minimal preparation",
+  ],
+
+  // Factual, non-proof chips (finance, the real from-price, location). No rating,
+  // review or award claim, so they need no owner verification.
+  trust: [
+    { value: "0%", label: "Finance available" },
+    { value: "£180", label: "Treatment from" },
+    { value: "N15", label: "North London" },
+  ],
+
+  form: {
+    eyebrow: "Free consultation",
+    heading: "See if composite bonding is right for you",
+    subheading: "Book free. No commitment, and no pressure.",
+    nameLabel: "Full name",
+    namePlaceholder: "Your full name",
+    phoneLabel: "Mobile number",
+    phonePlaceholder: "07700 900123",
+    emailLabel: "Email address",
+    emailPlaceholder: "you@example.com",
+    contactHint: "Add a mobile number or an email so the team can reach you.",
+    channelLabel: "How should we reach you?",
+    channelWhatsApp: "WhatsApp",
+    channelSms: "SMS",
+    channelEmail: "Email",
+    messageLabel: "Your message (optional)",
+    messagePlaceholder: "Anything you would like us to know",
+    consentLabel: "I agree to be contacted about my enquiry.",
+    submitFallback: "Book my free consultation",
+    fineprint: "Your details are only used to arrange your consultation.",
+    successTitle: "Thanks, your enquiry is in.",
+    successBody: "The team will be in touch shortly to arrange your free consultation.",
+    errorGeneric: "Something went wrong. Please try again, or call the practice.",
+    errorName: "Please enter your name.",
+    errorContact: "Please add a mobile number or an email address.",
+    errorConsent: "Please tick the box so we can contact you about your enquiry.",
+  },
+
+  fixes: {
+    head: {
+      eyebrow: "What it fixes",
+      title: "What composite bonding can tidy up",
+    },
+    items: [
+      {
+        title: "Chipped teeth",
+        body: "A small chip on a front tooth can be built back up with tooth coloured material and shaped to match.",
+      },
+      {
+        title: "Gaps and spacing",
+        body: "Minor gaps between the front teeth can be closed or narrowed, for a more even looking smile.",
+      },
+      {
+        title: "Uneven or worn edges",
+        body: "Edges that have worn down or sit unevenly can be reshaped so the smile looks more balanced.",
+      },
+      {
+        title: "Small or peg shaped teeth",
+        body: "A tooth that looks small next to its neighbours can be gently built up to a more even size.",
+      },
+      {
+        title: "Minor discolouration on a tooth",
+        body: "A single mark or patch of discolouration on a tooth can often be masked with bonding material.",
+      },
+      {
+        title: "Rounded or squared edges",
+        body: "The shape of an edge can be softened or squared to suit the look you are after, all by hand.",
+      },
+    ],
+    banner: {
+      lead: "Composite bonding shapes tooth coloured material onto your teeth, ",
+      accent: "usually in a single visit",
+      tail: ", with minimal preparation of the tooth.",
+    },
+  },
+
+  treatment: {
+    head: {
+      eyebrow: "The treatment",
+      title: "Composite bonding, shaped by hand in one appointment",
+      intro:
+        "Composite bonding uses a tooth coloured resin that your dentist shapes directly onto the tooth, then sets firm and polishes, so small chips, gaps and uneven edges can be tidied up with minimal preparation.",
+    },
+    aboutTitle: "What is composite bonding?",
+    aboutBody:
+      "Composite bonding is a tooth coloured resin that is applied to the tooth, shaped by hand, then set firm and polished so it blends with your natural teeth. It is used to repair small chips, close minor gaps, and reshape uneven or worn edges. It usually needs little preparation of the tooth underneath, and in many cases it can be done in a single visit. Over time bonding can chip or stain and may need a small repair or refresh, which your dentist will talk through with you.",
+    keyFactsTitle: "Key facts",
+    keyFacts: [
+      "Usually one visit",
+      "Tooth coloured resin",
+      "Minimal preparation",
+      "0% finance available",
+      "Free initial consultation",
+    ],
+    stepsEyebrow: "How it works",
+    steps: [
+      {
+        title: "Free consultation",
+        body: "We look at the teeth you would like to change, talk through what bonding can and cannot do, and check it suits you.",
+      },
+      {
+        title: "Shade match",
+        body: "Your dentist matches the resin to the colour of your natural teeth, so the finished result blends in.",
+      },
+      {
+        title: "Shaping",
+        body: "The tooth coloured material is applied and shaped directly onto the tooth, then set firm, building up the area a little at a time.",
+      },
+      {
+        title: "Polish and finish",
+        body: "The bonding is smoothed and polished so it feels comfortable and blends with the teeth around it.",
+      },
+    ],
+  },
+
+  benefits: {
+    head: {
+      eyebrow: "Why consider it",
+      title: "A simple way to refine your smile",
+    },
+    items: [
+      {
+        title: "Kept simple",
+        body: "Small chips, gaps and uneven edges tidied up with minimal preparation of the tooth.",
+      },
+      {
+        title: "Often one visit",
+        body: "Many bonding cases are completed in a single appointment, so there is little disruption to your day.",
+      },
+      {
+        title: "Spread the cost",
+        body: "0% finance is available, so you can spread the cost of your treatment.",
+      },
+    ],
+  },
+
+  suitability: {
+    head: {
+      eyebrow: "Is it right for you",
+      title: "When composite bonding is a good fit",
+    },
+    items: [
+      {
+        title: "Small cosmetic changes",
+        body: "Bonding suits small, cosmetic changes to the shape, edges or colour of a tooth.",
+      },
+      {
+        title: "One or a few teeth",
+        body: "It works well when you want to tidy up one tooth or a small number of teeth at the front.",
+      },
+      {
+        title: "Healthy teeth and gums",
+        body: "Bonding is added to healthy teeth, so any decay or gum concerns are treated first.",
+      },
+      {
+        title: "Assessed case by case",
+        body: "A dentist checks whether bonding, or another option, is the right fit for what you would like to change.",
+      },
+    ],
+  },
+
+  stories: {
+    head: {
+      eyebrow: "Patient stories",
+      title: "Real patients, real results",
+      intro:
+        "We are adding consented photos of real Vitality Dental bonding cases. In the meantime, your dentist can show you examples at your consultation.",
+    },
+    placeholderTitle: "Your consented bonding case here",
+    placeholderNote: "Real patient photos will appear here once added, with written consent.",
+  },
+
+  beforeAfter: {
+    head: {
+      eyebrow: "Results",
+      title: "Before and after",
+      intro:
+        "Every case is different, and your dentist will talk through what composite bonding can realistically achieve for your teeth.",
+    },
+    placeholderTitle: "Your consented bonding case here",
+    placeholderNote: "Before and after photos will be added once the practice has consented cases to show.",
+    capTitle: "Before and after",
+    capNote: "Photo coming soon",
+    disclaimer:
+      "Individual results vary. Before and after images will be of genuine Vitality Dental patients, shown with their written consent.",
+  },
+
+  why: {
+    head: {
+      eyebrow: "Why Vitality Dental",
+      title: "Cosmetic dentistry, done properly",
+    },
+    items: [
+      {
+        title: "Clinically assessed",
+        body: "Every case is assessed by a GDC registered dentist before any treatment begins.",
+      },
+      {
+        title: "Clinician-led care",
+        body: "You are treated by an experienced clinician who plans and carries out your bonding personally.",
+      },
+      {
+        title: "Shade matched by hand",
+        body: "The resin is matched and shaped to your natural teeth, so the result blends in.",
+      },
+      {
+        title: "North London, easy to reach",
+        body: "Based at N15, convenient and welcoming, with flexible appointment times around your schedule.",
+      },
+      {
+        title: "0% interest-free finance",
+        body: "Spread the cost with no added interest. Start today without paying everything upfront.",
+      },
+      {
+        title: "Honest, unrushed advice",
+        body: "We talk through what bonding can and cannot do, so you can decide what is right for you.",
+      },
+    ],
+  },
+
+  pricing: {
+    head: {
+      eyebrow: "Pricing",
+      title: "Clear pricing, no surprises.",
+      intro:
+        "The cost of composite bonding depends on how many teeth are treated and how much shaping is involved. Your exact price is confirmed at your free consultation.",
+    },
+    priceEyebrow: "Composite bonding starts from",
+    priceLabel: "£180",
+    financeChip: "0% finance available",
+    financeNote:
+      "Spread the cost with no added interest. Your exact price is confirmed after a clinical assessment, and is always the real catalogue price, never an invented figure.",
+    fineprint: "Your details are only used to arrange your consultation.",
+    getTitle: "What you get",
+    getItems: [
+      { title: "Shade matched by hand", body: "Material matched to the colour of your natural teeth." },
+      {
+        title: "Free initial consultation",
+        body: "No cost, no commitment. See if bonding is right for you.",
+      },
+      {
+        title: "0% interest-free finance",
+        body: "Start today without paying everything upfront.",
+      },
+      { title: "Usually one visit", body: "Many cases are completed in a single appointment." },
+    ],
+  },
+
+  footer: {
+    brand: "Vitality Dental",
+    tagline: "Composite bonding, N15 North London",
+    builtBy: "Built by Azen",
+    compliance:
+      "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
+  },
+};

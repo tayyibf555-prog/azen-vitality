@@ -48,6 +48,18 @@ const LIVE_PAGE = {
   variants: [],
 };
 
+// A second live bespoke page (composite bonding), to prove the endpoint derives the
+// treatment interest + source from the resolved page rather than hardcoding.
+const BONDING_PAGE = {
+  page: {
+    ...LIVE_PAGE.page,
+    id: "page-2",
+    slug: "bonding",
+    treatment: "bonding",
+  },
+  variants: [],
+};
+
 function post(body: unknown): Promise<Response> {
   return POST(
     new Request("http://test/api/landing-lead", {
@@ -94,8 +106,8 @@ describe("landing lead endpoint — happy path", () => {
         phone: "+447700900123", // normalised to E.164
         email: null,
         channel: "sms",
-        treatmentInterest: "Invisalign",
-        source: "landing:invisalign",
+        treatmentInterest: "Invisalign", // derived from the live page's treatment key
+        source: "landing:invisalign", // derived from the live page's slug
         consent: { sms: true, marketing: true },
       }),
     );
@@ -123,6 +135,27 @@ describe("landing lead endpoint — happy path", () => {
     expect(vi.mocked(insertLead)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(insertFunnelEvents)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(contactLead)).not.toHaveBeenCalled();
+  });
+
+  it("derives treatment interest + source from the resolved live page (bonding)", async () => {
+    vi.mocked(getLivePageBySlug).mockResolvedValue(BONDING_PAGE);
+
+    const res = await post(validBody({ landingSlug: "bonding" }));
+    expect(res.status).toBe(200);
+
+    // The catalogue treatment NAME for key "bonding" is "Composite bonding"; the
+    // source is "landing:" + the page slug. Neither is hardcoded to Invisalign.
+    expect(vi.mocked(insertLead)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        treatmentInterest: "Composite bonding",
+        source: "landing:bonding",
+      }),
+    );
+
+    // The funnel `lead` event carries the bonding slug too.
+    expect(vi.mocked(insertFunnelEvents)).toHaveBeenCalledWith([
+      expect.objectContaining({ step: "lead", meta: { variant: "b", landingSlug: "bonding" } }),
+    ]);
   });
 
   it("accepts an email-only enquiry on the email channel", async () => {

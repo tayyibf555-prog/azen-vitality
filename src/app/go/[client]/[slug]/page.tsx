@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ComponentType } from "react";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { getClient } from "@/lib/mock/clients";
@@ -12,6 +13,25 @@ import { LandingContent } from "@/components/landing/landing-content";
 import { LandingTracker } from "@/components/landing/landing-tracker";
 import { getBespokeTemplate } from "@/lib/landing/bespoke/registry";
 import { VitalityInvisalignLanding } from "@/components/landing/bespoke/vitality-invisalign-landing";
+import { VitalityBondingLanding } from "@/components/landing/bespoke/vitality-bonding-landing";
+
+// The props every bespoke landing component takes. The /go seam passes these
+// identically regardless of which template renders.
+type BespokeLandingProps = {
+  variant: VariantKey;
+  clientSlug: string;
+  landingSlug: string;
+  siteId?: string | null;
+  practiceName: string;
+};
+
+// templateId -> the ONE bespoke server component that renders it. Adding a bespoke
+// page is: register it (registry.ts), author its component, and list it here. The
+// registry drives which (client, slug) is bespoke; this map drives which design.
+const BESPOKE_COMPONENTS: Record<string, ComponentType<BespokeLandingProps>> = {
+  "vitality-invisalign": VitalityInvisalignLanding,
+  "vitality-bonding": VitalityBondingLanding,
+};
 
 // Public campaign landing page (/go/<client>/<slug>). The ad destination for a
 // custom landing page: it loads the LIVE page, assigns the visitor a sticky 50/50
@@ -39,11 +59,13 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   const record = getClient(client);
   if (!record) return { title: "Vitality Dental" };
   // Bespoke pages have a fixed, hand-authored title (the design does not render
-  // from the DB content the generic metadata reads).
+  // from the DB content the generic metadata reads). The title uses the catalogue
+  // treatment NAME, so it is "Invisalign | ..." / "Composite bonding | ..." etc.
   const bespoke = getBespokeTemplate(record.id, slug);
   if (bespoke) {
+    const treatmentName = TREATMENTS.find((t) => t.key === bespoke.treatment)?.name ?? record.name;
     return {
-      title: `Invisalign | ${record.name}`,
+      title: `${treatmentName} | ${record.name}`,
       description: bespoke.variants.a.heroSubhead,
     };
   }
@@ -130,14 +152,15 @@ export default async function LandingPageRoute({
   variant = chosen.variantKey;
 
   // A registered bespoke (hand-designed) template renders its own server component
-  // INSTEAD of the generic renderer. Everything around it is unchanged: the same
-  // sticky A/B variant, the same preview banner path, and the same LandingTracker
-  // wrapper (the bespoke component emits the same data-lp-section / data-lp-cta
-  // markers the tracker relies on). The bespoke component reads its per-variant copy
-  // from the registry, not from chosen.content.
+  // INSTEAD of the generic renderer, picked by templateId. Everything around it is
+  // unchanged: the same sticky A/B variant, the same preview banner path, and the
+  // same LandingTracker wrapper (each bespoke component emits the same
+  // data-lp-section / data-lp-cta markers the tracker relies on). The bespoke
+  // component reads its per-variant copy from the registry, not from chosen.content.
   const bespoke = getBespokeTemplate(record.id, slug);
-  const content = bespoke ? (
-    <VitalityInvisalignLanding
+  const BespokeComponent = bespoke ? BESPOKE_COMPONENTS[bespoke.templateId] : undefined;
+  const content = BespokeComponent ? (
+    <BespokeComponent
       variant={variant}
       clientSlug={client}
       landingSlug={slug}

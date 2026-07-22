@@ -1,4 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
+import { TREATMENTS } from "@/lib/treatments/catalog";
 import { getLivePageBySlug } from "@/lib/landing/repository";
 import { consumeBudget } from "@/lib/rate-budget";
 import { insertFunnelEvents, isValidSessionId } from "@/lib/funnel/events";
@@ -16,11 +17,12 @@ import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 
 export const dynamic = "force-dynamic";
 
-// PUBLIC lead-capture endpoint for the bespoke Invisalign landing page's embedded
-// consultation form. A visitor's enquiry POSTs JSON here; we record a Speed-to-lead
-// lead (feeding the worklist), emit the funnel `lead` event (feeding the A/B Leads
-// column), then best-effort first-contact the lead inside the request so they hear
-// back quickly.
+// PUBLIC lead-capture endpoint for the bespoke landing pages' embedded consultation
+// form (Invisalign, composite bonding, and any future bespoke page). A visitor's
+// enquiry POSTs JSON here; we record a Speed-to-lead lead (feeding the worklist),
+// emit the funnel `lead` event (feeding the A/B Leads column), then best-effort
+// first-contact the lead inside the request so they hear back quickly. The lead's
+// treatment interest + source are derived from the resolved LIVE page, never hardcoded.
 //
 // ABUSE POSTURE (mirrors the smile-assessment + speed-to-lead intake routes): this
 // is unauthenticated and a lead can trigger a real first contact to a caller-
@@ -134,14 +136,23 @@ export async function POST(request: Request): Promise<Response> {
     const leadConsent: LeadConsent = { marketing: consent };
     leadConsent[channel] = true;
 
+    // Derive the treatment interest + source from the resolved LIVE page rather than
+    // hardcoding, so every landing page (bespoke or generic) records the right
+    // interest. invisalign -> "Invisalign" / "landing:invisalign"; bonding ->
+    // "Composite bonding" / "landing:bonding". An unknown treatment key falls back to
+    // the key itself so the lead is never dropped.
+    const treatmentInterest =
+      TREATMENTS.find((t) => t.key === found.page.treatment)?.name ?? found.page.treatment;
+    const source = `landing:${found.page.slug}`;
+
     const lead = await insertLead({
       siteId,
       name,
       email: email ?? null,
       phone: phone ?? null,
       channel,
-      treatmentInterest: "Invisalign",
-      source: "landing:invisalign",
+      treatmentInterest,
+      source,
       consent: leadConsent,
     });
 

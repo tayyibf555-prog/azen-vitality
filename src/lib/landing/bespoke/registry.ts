@@ -47,7 +47,8 @@ export interface BespokeTemplate {
 
 // Keyed by clientId (the resolved id, e.g. "vitality"), then slug. The public
 // route and the component both resolve the clientId before looking up, so a client
-// whose slug differs from its id still matches.
+// whose slug differs from its id still matches. Each templateId maps (in the /go
+// render seam) to the ONE bespoke server component that renders it.
 const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
   vitality: {
     invisalign: {
@@ -69,6 +70,30 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           heroSubhead:
             "A discreet way to straighten your teeth at Vitality Dental, with a free initial consultation and a friendly, unrushed team. No brackets, no wires, no one needs to know.",
           ctaLabel: "Check if I am suitable",
+        },
+      },
+    },
+    // Composite bonding (seeded DRAFT; goes live once the practice supplies real
+    // bonding photos). Same machinery as invisalign, its own bespoke component.
+    bonding: {
+      templateId: "vitality-bonding",
+      treatment: "bonding",
+      variants: {
+        // Variant A leads on the outcome (a tidier smile) + the single-visit timeline.
+        a: {
+          heroHeadline: "A tidier smile, often in a single visit",
+          heroAccent: "a single visit",
+          heroSubhead:
+            "Composite bonding at Vitality Dental. Tooth coloured material shaped onto your teeth to smooth away chips, close small gaps and refine uneven edges, usually in one appointment.",
+          ctaLabel: "Book my free consultation",
+        },
+        // Variant B leads on the concern (chips and gaps) with minimal preparation.
+        b: {
+          heroHeadline: "Fix chips and gaps with minimal preparation",
+          heroAccent: "minimal preparation",
+          heroSubhead:
+            "A quick, gentle way to reshape your teeth at Vitality Dental. Composite bonding smooths chips and closes small gaps with minimal preparation, plus a free initial consultation.",
+          ctaLabel: "Check if bonding suits me",
         },
       },
     },
