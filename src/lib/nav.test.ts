@@ -170,29 +170,30 @@ describe("canRoleAccessModule", () => {
 });
 
 describe("landing-pages (Growth) nav visibility", () => {
-  it("is a live Growth module gated to exactly the roles Meta Ads is gated to", () => {
+  it("is a live Growth module visible to owners, agency and the practice manager (coordinator)", () => {
     const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "landing-pages");
-    const metaAds = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "meta-ads");
     expect(item).toBeDefined();
     expect(item?.status).toBe("live");
-    // Same role gating as its sibling Meta Ads: whoever sees Meta Ads sees this.
-    expect(item?.roles).toEqual(metaAds?.roles);
+    // Read-only preview section, so the practice manager (coordinator) sees it too;
+    // creating/launching pages stays owner-only in the sibling Meta Ads module.
+    expect(new Set(item?.roles)).toEqual(
+      new Set(["agency_admin", "client_owner", "client_coordinator"]),
+    );
   });
 
-  it("is reachable by exactly the roles that can reach Meta Ads (owner + agency, not coordinator)", () => {
-    for (const role of ["client_owner", "agency_admin", "client_coordinator"] as const) {
-      expect(canRoleAccessModule(role, "landing-pages")).toBe(canRoleAccessModule(role, "meta-ads"));
-    }
+  it("is reachable by all client roles, while its sibling Meta Ads stays owner-only", () => {
     expect(canRoleAccessModule("client_owner", "landing-pages")).toBe(true);
     expect(canRoleAccessModule("agency_admin", "landing-pages")).toBe(true);
-    expect(canRoleAccessModule("client_coordinator", "landing-pages")).toBe(false);
+    expect(canRoleAccessModule("client_coordinator", "landing-pages")).toBe(true);
+    // Decoupled from Meta Ads, which remains owner-only: the coordinator cannot reach it.
+    expect(canRoleAccessModule("client_coordinator", "meta-ads")).toBe(false);
   });
 
-  it("shows in the owner's Growth rail category and is hidden from the coordinator's", () => {
+  it("shows in the Growth rail for the owner AND the coordinator", () => {
     const ownerGrowth = categoriesForRole("client_owner").find((c) => c.key === "growth");
     expect(ownerGrowth?.items.map((i) => i.slug)).toContain("landing-pages");
     const coordGrowth = categoriesForRole("client_coordinator").find((c) => c.key === "growth");
-    expect(coordGrowth?.items.map((i) => i.slug) ?? []).not.toContain("landing-pages");
+    expect(coordGrowth?.items.map((i) => i.slug)).toContain("landing-pages");
   });
 });
 

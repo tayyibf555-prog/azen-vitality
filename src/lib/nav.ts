@@ -141,11 +141,12 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Landing pages",
         icon: LayoutTemplate,
         status: "live",
-        // Same gating as its sibling Meta Ads (owner-only): whoever sees Meta Ads
-        // sees this. The pages themselves are generated inside the Meta Ads
-        // workspace; this section is the owner's place to PREVIEW every page and
-        // read which is converting.
-        roles: OWNER_ROLES,
+        // Owner, agency AND the practice manager (coordinator) can see this. Unlike
+        // its sibling Meta Ads (owner-only, where pages are generated and launched),
+        // this section is READ-ONLY: preview every page and read which is converting.
+        // The practice manager runs the day-to-day marketing checks, so they get it
+        // too; creating and launching pages stays in the owner-only Meta Ads workspace.
+        roles: [...OWNER_ROLES, "client_coordinator"],
         note: "Preview every campaign landing page (drafts open with a preview link) and see how each is performing: total views, the A/B split with per-variant conversion, and which variant is winning, so the best-performing pages are obvious. Pages are created in Meta Ads; this is where you watch and preview them.",
       },
       {
