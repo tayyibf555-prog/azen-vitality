@@ -16,17 +16,27 @@ import {
   Calendar,
   CheckCircle2,
   Lock,
+  ShieldAlert,
+  BadgeCheck,
+  X,
 } from "lucide-react";
 import { SectionCard, StatCard, StatusPill, EmptyState, type Tone } from "@/components/primitives";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { OnboardingStatus } from "@/lib/onboarding/types";
 
 // Internal staff worklist for new-patient onboarding submissions. Fetches the
 // auth-gated /api/onboarding/list (newest first), renders a scannable worklist, and
 // expands a row to the full submission (contact, address, medical intake, dental,
-// documents). Staff can mark a submission reviewed or registered via
-// /api/onboarding/status. Documents show name/type/size only — the list route strips
-// raw storage paths, so there is no download here (documents are stored securely).
+// documents). Staff can mark a submission reviewed via /api/onboarding/status.
+//
+// Registering a patient is a SEPARATE, deliberate action: "Register in Dentally" opens a
+// confirm dialogue summarising every field that will be created, dedupe-checks Dentally
+// via /api/onboarding/register, and only then creates the patient for real and flips the
+// row to "registered" — this is the ONE-CLICK human approval the design calls for, so
+// (unlike "Mark reviewed") it is never a bare, no-consequence status flip. Documents show
+// name/type/size only — the list route strips raw storage paths, so there is no download
+// here (documents are stored securely).
 
 // Mirrors the sanitised submission shape the /list route returns (files carry only
 // metadata — never a storage path).
@@ -124,12 +134,47 @@ function bytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function fmtDob(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+// Shape of a likely-existing Dentally record, as returned by /api/onboarding/register
+// when it finds a plausible duplicate (matches src/app/api/onboarding/register/route.ts).
+interface RegisterMatch {
+  id: string;
+  name: string;
+  dateOfBirth: string | null;
+  site: string;
+  matchedOn: string;
+}
+
+interface RegisterResponse {
+  ok: boolean;
+  created?: boolean;
+  duplicate?: boolean;
+  match?: RegisterMatch;
+  patientId?: string;
+  dryRun?: boolean;
+  error?: string;
+}
+
 export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [updating, setUpdating] = useState<Record<string, boolean>>({});
+  // The submission currently in the "Register in Dentally" confirm dialogue, if any.
+  const [registerTarget, setRegisterTarget] = useState<Submission | null>(null);
+  // Dentally patient ids for submissions registered THIS session, keyed by submission id.
+  // Response-only (no onboarding_submission column exists to persist it), so this is a
+  // transient, in-session note; it is not lost on close, only on a full page reload.
+  const [registeredIds, setRegisteredIds] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -180,6 +225,14 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
     } finally {
       setUpdating((prev) => ({ ...prev, [id]: false }));
     }
+  }
+
+  /** Called by RegisterDialog once /api/onboarding/register has actually created the
+   *  patient: flips the row to registered locally (matching the server) and remembers
+   *  the new Dentally id so it stays visible in the row after the dialogue closes. */
+  function handleRegistered(id: string, patientId: string) {
+    setSubmissions((prev) => prev.map((s) => (s.id === id ? { ...s, status: "registered" } : s)));
+    setRegisteredIds((prev) => ({ ...prev, [id]: patientId }));
   }
 
   const counts = useMemo(() => {
@@ -287,6 +340,15 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
                             </span>
                           </>
                         ) : null}
+                        {registeredIds[s.id] ? (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span className="inline-flex items-center gap-1 text-success">
+                              <BadgeCheck size={11} aria-hidden />
+                              Dentally ID {registeredIds[s.id]}
+                            </span>
+                          </>
+                        ) : null}
                       </span>
                     </span>
                   </button>
@@ -299,7 +361,7 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
                         <button
                           type="button"
                           onClick={() => updateStatus(s.id, "reviewed")}
-                          disabled={busy || s.status === "reviewed"}
+                          disabled={busy || s.status === "reviewed" || s.status === "registered"}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-3 py-1.5 text-sm font-semibold text-muted transition-colors hover:bg-card-muted hover:text-ink disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
                         >
                           {busy ? (
@@ -309,19 +371,22 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
                           )}
                           Mark reviewed
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => updateStatus(s.id, "registered")}
-                          disabled={busy || s.status === "registered"}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-success/25 bg-success/10 px-3 py-1.5 text-sm font-semibold text-success transition-colors hover:bg-success/15 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/40"
-                        >
-                          {busy ? (
-                            <Loader2 size={15} className="animate-spin" aria-hidden />
-                          ) : (
+                        {s.status === "registered" ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-success/25 bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
+                            <CheckCircle2 size={15} aria-hidden />
+                            Registered in Dentally
+                            {registeredIds[s.id] ? ` · ID ${registeredIds[s.id]}` : ""}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setRegisterTarget(s)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-success/25 bg-success/10 px-3 py-1.5 text-sm font-semibold text-success transition-colors hover:bg-success/15 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/40"
+                          >
                             <UserPlus size={15} aria-hidden />
-                          )}
-                          Mark registered
-                        </button>
+                            Register in Dentally
+                          </button>
+                        )}
                       </div>
                     </div>
                   ) : null}
@@ -333,6 +398,14 @@ export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
       )}
       <style>{`@keyframes assessEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
       </SectionCard>
+
+      {registerTarget ? (
+        <RegisterDialog
+          submission={registerTarget}
+          onClose={() => setRegisterTarget(null)}
+          onRegistered={handleRegistered}
+        />
+      ) : null}
     </div>
   );
 }
@@ -349,20 +422,7 @@ function SubmissionDetail({ submission: s }: { submission: Submission }) {
       <DetailGroup title="Contact" icon={Mail}>
         <Field label="Email" value={s.email} icon={Mail} />
         <Field label="Mobile" value={s.phone} icon={Phone} />
-        <Field
-          label="Date of birth"
-          value={
-            s.dateOfBirth
-              ? new Date(s.dateOfBirth).toLocaleDateString("en-GB", {
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                  timeZone: "UTC",
-                })
-              : null
-          }
-          icon={Calendar}
-        />
+        <Field label="Date of birth" value={s.dateOfBirth ? fmtDob(s.dateOfBirth) : null} icon={Calendar} />
       </DetailGroup>
 
       <DetailGroup title="Address" icon={MapPin}>
@@ -481,5 +541,223 @@ function ConsentChip({ label, on }: { label: string; on: boolean }) {
     >
       {label}: {on ? "Yes" : "No"}
     </span>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Register in Dentally: confirm -> dedupe-check -> create (one click, human-  */
+/* approved). Talks to POST /api/onboarding/register (submissionId, force?).   */
+/* ------------------------------------------------------------------------- */
+
+type RegisterPhase =
+  | { kind: "confirm" }
+  | { kind: "working" }
+  | { kind: "duplicate"; match: RegisterMatch }
+  | { kind: "success"; patientId: string; dryRun: boolean }
+  | { kind: "error"; message: string };
+
+function RegisterDialog({
+  submission: s,
+  onClose,
+  onRegistered,
+}: {
+  submission: Submission;
+  onClose: () => void;
+  onRegistered: (submissionId: string, patientId: string) => void;
+}) {
+  const [phase, setPhase] = useState<RegisterPhase>({ kind: "confirm" });
+  const working = phase.kind === "working";
+  const name = fullName(s);
+
+  // Escape closes, except mid-request (nothing to interrupt safely).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !working) onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, working]);
+
+  async function submit(force: boolean) {
+    setPhase({ kind: "working" });
+    try {
+      const res = await fetch("/api/onboarding/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ submissionId: s.id, ...(force ? { force: true } : {}) }),
+      });
+      const json = (await res.json().catch(() => null)) as RegisterResponse | null;
+      if (!json) {
+        setPhase({ kind: "error", message: "Could not reach the server. Please try again." });
+        return;
+      }
+      if (!res.ok || json.ok === false) {
+        setPhase({ kind: "error", message: json.error ?? "Could not register this patient." });
+        return;
+      }
+      if (json.duplicate && json.match) {
+        setPhase({ kind: "duplicate", match: json.match });
+        return;
+      }
+      if (json.created && json.patientId) {
+        onRegistered(s.id, json.patientId);
+        setPhase({ kind: "success", patientId: json.patientId, dryRun: Boolean(json.dryRun) });
+        return;
+      }
+      setPhase({ kind: "error", message: "Unexpected response from the server." });
+    } catch {
+      setPhase({ kind: "error", message: "Could not reach the server. Please try again." });
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={working ? undefined : onClose}
+        className="absolute inset-0 bg-navy/40 backdrop-blur-[1px]"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Register ${name} in Dentally`}
+        className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-line bg-card shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
+              <UserPlus size={12} aria-hidden />
+              Register in Dentally
+            </p>
+            <p className="mt-1 truncate text-sm font-semibold text-navy">{name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={working}
+            aria-label="Close"
+            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-card-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+          >
+            <X size={16} aria-hidden />
+          </button>
+        </div>
+
+        <div className="px-5 py-4">
+          {phase.kind === "confirm" || phase.kind === "working" ? (
+            <>
+              <p className="text-sm text-muted">
+                This checks Dentally for an existing match, then creates a new patient with
+                exactly these details:
+              </p>
+              <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3.5 text-sm">
+                <SummaryRow label="Name" value={name} />
+                <SummaryRow
+                  label="Date of birth"
+                  value={s.dateOfBirth ? fmtDob(s.dateOfBirth) : "Not captured"}
+                />
+                <SummaryRow label="Mobile" value={s.phone ?? "Not provided"} />
+                <SummaryRow label="Email" value={s.email ?? "Not provided"} />
+                <SummaryRow
+                  label="Consent to contact"
+                  value={
+                    s.consent
+                      ? [s.consent.sms ? "SMS" : null, s.consent.email ? "Email" : null].filter(Boolean).join(", ") ||
+                        "None given"
+                      : "Not captured"
+                  }
+                />
+              </dl>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={working}>
+                  Cancel
+                </Button>
+                <Button type="button" variant="primary" size="sm" onClick={() => submit(false)} disabled={working}>
+                  {working ? (
+                    <Loader2 size={15} className="animate-spin" aria-hidden />
+                  ) : (
+                    <UserPlus size={15} aria-hidden />
+                  )}
+                  Confirm &amp; register
+                </Button>
+              </div>
+            </>
+          ) : phase.kind === "duplicate" ? (
+            <>
+              <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3.5 py-3 text-sm">
+                <ShieldAlert size={16} className="mt-0.5 shrink-0 text-status-amber" aria-hidden />
+                <div>
+                  <p className="font-semibold text-navy">A patient who looks like this already exists</p>
+                  <p className="mt-1 text-muted">
+                    {phase.match.name}
+                    {phase.match.dateOfBirth ? ` (born ${fmtDob(phase.match.dateOfBirth)})` : ""} at{" "}
+                    {phase.match.site}, matched on {phase.match.matchedOn}.
+                  </p>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-muted">
+                Nothing has been created. Only continue if you are sure this is a different person.
+              </p>
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={working}>
+                  Cancel
+                </Button>
+                <Button type="button" variant="primary" size="sm" onClick={() => submit(true)} disabled={working}>
+                  {working ? <Loader2 size={15} className="animate-spin" aria-hidden /> : null}
+                  Create anyway, this is a different person
+                </Button>
+              </div>
+            </>
+          ) : phase.kind === "success" ? (
+            <>
+              <div className="flex items-start gap-2 rounded-lg border border-success/20 bg-success/10 px-3.5 py-3 text-sm">
+                <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-success" aria-hidden />
+                <div>
+                  <p className="font-semibold text-success">Registered in Dentally</p>
+                  <p className="mt-1 text-ink">
+                    Dentally patient ID: <span className="font-mono">{phase.patientId}</span>
+                  </p>
+                  {phase.dryRun ? (
+                    <p className="mt-1 text-muted">
+                      Recorded in test mode; it will write to the real practice system once the
+                      Dentally write key is enabled.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <Button type="button" variant="primary" size="sm" onClick={onClose}>
+                  Done
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3.5 py-3 text-sm text-danger"
+              >
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+                <span>{phase.message}</span>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+                  Close
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="truncate pl-3 text-right font-medium text-ink">{value}</dd>
+    </div>
   );
 }
