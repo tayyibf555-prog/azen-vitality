@@ -219,3 +219,15 @@ describe("bespoke hygiene copy compliance", () => {
     expect(corpus).not.toContain("spread the cost");
   });
 });
+
+describe("price-led headline split (owner rule)", () => {
+  // Owner rule: exactly ONE variant may lead with a price. Variant A stays
+  // outcome-led (no GBP figure in its headline); the price angle lives in B only.
+  it("variant A headlines never contain a price; variant B headlines do", () => {
+    for (const slug of ["invisalign", "bonding", "hygiene"]) {
+      const tpl = getBespokeTemplate("vitality", slug)!;
+      expect(tpl.variants.a.heroHeadline).not.toMatch(/£/);
+      expect(tpl.variants.b.heroHeadline).toMatch(/£/);
+    }
+  });
+});
