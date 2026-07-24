@@ -34,12 +34,15 @@ export interface PromotionDecision {
   reason: string;
 }
 
-// Both variants need a fair sample before any call is made.
-export const MIN_VIEWS = 100;
+// Both variants need a fair sample before any call is made. Raised from 100 to 800
+// after a CRO review found ~100 views per variant could auto-promote a "winner" on
+// statistical noise; 800 is the floor for BOTH the lead-rate and CTA-rate paths.
+export const MIN_VIEWS = 800;
 // The leader must beat the other by at least this much, relative (25%).
 export const MIN_RELATIVE_LIFT = 0.25;
-// Below this combined lead count, leads are "sparse" and we judge on CTA rate.
-export const SPARSE_LEADS_THRESHOLD = 10;
+// A LEAD-RATE promotion needs at least this many COMBINED leads; below it, leads are
+// "sparse" and we fall back to the denser CTA rate (which still meets MIN_VIEWS).
+export const SPARSE_LEADS_THRESHOLD = 20;
 
 function rate(numerator: number, views: number): number {
   return views > 0 ? numerator / views : 0;

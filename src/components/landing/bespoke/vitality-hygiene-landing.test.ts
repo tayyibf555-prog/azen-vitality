@@ -58,8 +58,8 @@ describe("VitalityHygieneLanding", () => {
     expect(a).toContain("Book my hygiene visit");
 
     const b = render("b");
-    expect(b).toContain('<span class="acc">professional clean</span>');
-    expect(b).toContain("Book a hygiene appointment");
+    expect(b).toContain('<span class="acc">£75</span>');
+    expect(b).toContain("Book my scale and polish");
   });
 
   it("shows the real catalogue price and the consent checkbox copy", () => {

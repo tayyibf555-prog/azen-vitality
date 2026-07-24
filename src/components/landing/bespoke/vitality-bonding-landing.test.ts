@@ -66,8 +66,8 @@ describe("VitalityBondingLanding", () => {
     expect(a).toContain("Book my free consultation");
 
     const b = render("b");
-    expect(b).toContain('<span class="acc">minimal preparation</span>');
-    expect(b).toContain("Check if bonding suits me");
+    expect(b).toContain('<span class="acc">from £180</span>');
+    expect(b).toContain("Book my free bonding consultation");
   });
 
   it("shows the real catalogue price and the consent checkbox copy", () => {

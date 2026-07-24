@@ -56,8 +56,8 @@ describe("VitalityInvisalignLanding", () => {
     expect(a).toContain("Book my free consultation");
 
     const b = render("b");
-    expect(b).toContain('<span class="acc">clear aligners</span>');
-    expect(b).toContain("Check if I am suitable");
+    expect(b).toContain('<span class="acc">0% finance</span>');
+    expect(b).toContain("Book my free consultation");
   });
 
   it("shows the real catalogue price and the consent checkbox copy", () => {

@@ -44,15 +44,16 @@ function landingPage(overrides: Partial<LandingPage>): LandingPage {
   };
 }
 
-// A clear win for A (both variants have a fair sample; A's lead rate is far higher).
+// A clear win for A (both variants clear the 800-view floor; A's lead rate is far
+// higher, and 25 combined leads keep this on the lead-rate signal).
 const CLEAR_WIN: { a: VariantCounters; b: VariantCounters } = {
-  a: { views: 200, ctaClicks: 40, leads: 20 },
-  b: { views: 200, ctaClicks: 10, leads: 5 },
+  a: { views: 1000, ctaClicks: 40, leads: 20 },
+  b: { views: 1000, ctaClicks: 10, leads: 5 },
 };
-// Too close to call (relative lift well under the 25% gate).
+// Too close to call (relative lift well under the 25% gate), also above the floor.
 const TOO_CLOSE: { a: VariantCounters; b: VariantCounters } = {
-  a: { views: 200, ctaClicks: 22, leads: 11 },
-  b: { views: 200, ctaClicks: 20, leads: 10 },
+  a: { views: 1000, ctaClicks: 22, leads: 11 },
+  b: { views: 1000, ctaClicks: 20, leads: 10 },
 };
 
 function arrangePages(pages: LandingPage[]) {

@@ -63,13 +63,14 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
             "Invisalign clear aligners at Vitality Dental. Virtually invisible, fully removable, and planned around your life. A confident, straighter smile without a single wire.",
           ctaLabel: "Book my free consultation",
         },
-        // Variant B leads on the method (clear aligners) and a suitability CTA.
+        // Variant B is the price/finance objection-breaker: it leads on the entry
+        // price and 0% finance (the cost objection), against the outcome-led A.
         b: {
-          heroHeadline: "A straighter smile with clear aligners",
-          heroAccent: "clear aligners",
+          heroHeadline: "Straighten your teeth from £2,500, with 0% finance",
+          heroAccent: "0% finance",
           heroSubhead:
-            "A discreet way to straighten your teeth at Vitality Dental, with a free initial consultation and a friendly, unrushed team. No brackets, no wires, no one needs to know.",
-          ctaLabel: "Check if I am suitable",
+            "Invisalign clear aligners at Vitality Dental, mapped in 3D so you see your result before you start. Spread the cost with 0% finance, and book a free, unhurried consultation.",
+          ctaLabel: "Book my free consultation",
         },
       },
     },
@@ -87,13 +88,14 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
             "Composite bonding at Vitality Dental. Tooth coloured material shaped onto your teeth to smooth away chips, close small gaps and refine uneven edges, usually in one appointment.",
           ctaLabel: "Book my free consultation",
         },
-        // Variant B leads on the concern (chips and gaps) with minimal preparation.
+        // Variant B is the price objection-breaker: it leads on the entry price
+        // (the cost objection), against the outcome-led A.
         b: {
-          heroHeadline: "Fix chips and gaps with minimal preparation",
-          heroAccent: "minimal preparation",
+          heroHeadline: "Repair a chipped tooth from £180",
+          heroAccent: "from £180",
           heroSubhead:
-            "A quick, gentle way to reshape your teeth at Vitality Dental. Composite bonding smooths chips and closes small gaps with minimal preparation, plus a free initial consultation.",
-          ctaLabel: "Check if bonding suits me",
+            "Composite bonding at Vitality Dental shapes tooth coloured material onto the tooth to smooth chips, close small gaps and even up edges, usually in one visit. Book a free, no pressure consultation.",
+          ctaLabel: "Book my free bonding consultation",
         },
       },
     },
@@ -112,13 +114,14 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
             "A professional scale and polish with the hygienist at Vitality Dental. We lift plaque, tartar and everyday staining, and leave your teeth feeling fresh and clean.",
           ctaLabel: "Book my hygiene visit",
         },
-        // Variant B leads on gum health (the reason to keep on top of a clean).
+        // Variant B is the price objection-breaker: it leads on the flat scale and
+        // polish price (the cost objection), against the outcome-led A. No finance.
         b: {
-          heroHeadline: "Healthier gums start with a professional clean",
-          heroAccent: "professional clean",
+          heroHeadline: "A professional scale and polish, £75",
+          heroAccent: "£75",
           heroSubhead:
-            "A gentle, thorough hygiene visit at Vitality Dental. Removing built up plaque and tartar helps keep your gums healthy, and your smile feeling fresh.",
-          ctaLabel: "Book a hygiene appointment",
+            "A thorough hygiene visit with the hygienist at Vitality Dental, usually about 30 minutes. We lift plaque, tartar and everyday staining, and leave your teeth feeling fresh and clean.",
+          ctaLabel: "Book my scale and polish",
         },
       },
     },
