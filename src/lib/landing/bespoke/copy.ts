@@ -546,7 +546,6 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
 
   heroPills: [
     "Tooth coloured",
-    "Usually one visit",
     "0% finance available",
     "Minimal preparation",
   ],

@@ -347,4 +347,8 @@ export const VITALITY_INVISALIGN_CSS = `
   .vd-landing.vd-js section[data-reveal] :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*{opacity:1!important;transform:none!important}
   .vd-landing .pcard:hover,.vd-landing .step:hover,.vd-landing .cond:hover,.vd-landing .getcard:hover,.vd-landing .faq-item:hover,.vd-landing .bacard:hover,.vd-landing .btn-blue:hover,.vd-landing .cond:hover .img img,.vd-landing .story:hover .ph img,.vd-landing .align-band:hover .align-media img{transform:none!important}
 }
+/* A cards6 grid with EXACTLY four cards lays out 2x2 (centred) instead of 3+1. */
+@media(min-width:821px){
+.vd-landing .cards6:has(> :nth-child(4):last-child){grid-template-columns:repeat(2,1fr);max-width:860px;margin-left:auto;margin-right:auto}
+}
 `;
