@@ -57,8 +57,8 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
       variants: {
         // Variant A leads on the outcome + timeline.
         a: {
-          heroHeadline: "Straighter teeth, no metal braces, from 3 months",
-          heroAccent: "from 3 months",
+          heroHeadline: "A straighter smile with clear aligners",
+          heroAccent: "clear aligners",
           heroSubhead:
             "Invisalign clear aligners at Vitality Dental. Virtually invisible, fully removable, and planned around your life. A confident, straighter smile without a single wire.",
           ctaLabel: "Book my free consultation",
