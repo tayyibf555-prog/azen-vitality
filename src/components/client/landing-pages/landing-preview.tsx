@@ -63,7 +63,7 @@ export function LandingPreview({
             {open ? "Hide" : "Preview"}
           </button>
           <a
-            href={url}
+            href={src}
             target="_blank"
             rel="noreferrer"
             className="pressable inline-flex items-center gap-1 rounded-md border border-line-strong bg-card px-2 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
