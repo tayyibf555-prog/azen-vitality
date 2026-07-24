@@ -1,7 +1,37 @@
 import { describe, it, expect } from "vitest";
 import { getBespokeTemplate, bespokeVariantCopy } from "./registry";
-import { INVISALIGN_LANDING_COPY, BONDING_LANDING_COPY, HYGIENE_LANDING_COPY } from "./copy";
+import {
+  INVISALIGN_LANDING_COPY,
+  BONDING_LANDING_COPY,
+  HYGIENE_LANDING_COPY,
+  WHITENING_LANDING_COPY,
+  VENEERS_LANDING_COPY,
+  IMPLANT_LANDING_COPY,
+  CHECKUP_LANDING_COPY,
+  type TreatmentLandingCopy,
+} from "./copy";
 import { scanBannedText } from "@/lib/landing/compliance";
+
+// The four remaining treatments share one shape + one renderer, so they are scanned
+// together here (slug -> its shared corpus).
+const REMAINING_CORPORA: { slug: string; templateId: string; copy: TreatmentLandingCopy }[] = [
+  { slug: "whitening", templateId: "vitality-whitening", copy: WHITENING_LANDING_COPY },
+  { slug: "veneers", templateId: "vitality-veneers", copy: VENEERS_LANDING_COPY },
+  { slug: "implant", templateId: "vitality-implant", copy: IMPLANT_LANDING_COPY },
+  { slug: "checkup", templateId: "vitality-checkup", copy: CHECKUP_LANDING_COPY },
+];
+
+// Every bespoke slug (the three original pages + the four remaining), used by the
+// substring + price-led rules below.
+const ALL_BESPOKE_SLUGS = [
+  "invisalign",
+  "bonding",
+  "hygiene",
+  "whitening",
+  "veneers",
+  "implant",
+  "checkup",
+];
 
 // Two guarantees for the bespoke Invisalign landing:
 //   (a) the registry resolves the template for vitality/invisalign and nothing else;
@@ -56,19 +86,36 @@ describe("bespoke registry", () => {
     expect(t?.variants.a.ctaLabel).not.toBe(t?.variants.b.ctaLabel);
   });
 
+  it("returns the four remaining templates (whitening, veneers, implant, checkup)", () => {
+    for (const { slug, templateId } of REMAINING_CORPORA) {
+      const t = getBespokeTemplate("vitality", slug);
+      expect(t, slug).not.toBeNull();
+      expect(t?.templateId).toBe(templateId);
+      expect(t?.treatment).toBe(slug);
+      expect(t?.variants.a).toBeDefined();
+      expect(t?.variants.b).toBeDefined();
+      // The A/B surface really differs between the variants (headline AND CTA).
+      expect(t?.variants.a.heroHeadline).not.toBe(t?.variants.b.heroHeadline);
+      expect(t?.variants.a.ctaLabel).not.toBe(t?.variants.b.ctaLabel);
+    }
+  });
+
   it("returns null for any other (client, slug)", () => {
-    expect(getBespokeTemplate("vitality", "veneers")).toBeNull();
+    // Non-bespoke catalogue treatments still fall through to the generic renderer.
+    expect(getBespokeTemplate("vitality", "root-canal")).toBeNull();
+    expect(getBespokeTemplate("vitality", "dentures")).toBeNull();
     expect(getBespokeTemplate("vitality", "invisalign-demo")).toBeNull();
     expect(getBespokeTemplate("vitality", "bonding-demo")).toBeNull();
     expect(getBespokeTemplate("vitality", "hygiene-demo")).toBeNull();
+    expect(getBespokeTemplate("vitality", "whitening-demo")).toBeNull();
     expect(getBespokeTemplate("other", "invisalign")).toBeNull();
-    expect(getBespokeTemplate("other", "bonding")).toBeNull();
-    expect(getBespokeTemplate("other", "hygiene")).toBeNull();
+    expect(getBespokeTemplate("other", "whitening")).toBeNull();
+    expect(getBespokeTemplate("other", "checkup")).toBeNull();
     expect(getBespokeTemplate("", "")).toBeNull();
   });
 
   it("the hero accent is a verbatim substring of the headline for both variants", () => {
-    for (const slug of ["invisalign", "bonding", "hygiene"]) {
+    for (const slug of ALL_BESPOKE_SLUGS) {
       const t = getBespokeTemplate("vitality", slug)!;
       for (const key of ["a", "b"] as const) {
         const v = bespokeVariantCopy(t, key);
@@ -176,14 +223,62 @@ describe("bespoke hygiene copy compliance", () => {
   });
 });
 
+// The four remaining bespoke corpora, each scanned together with its A/B variant copy,
+// exactly like the three describe blocks above. One loop keeps them all enforced.
+describe.each(REMAINING_CORPORA)("bespoke $slug copy compliance", ({ slug, copy }) => {
+  const template = getBespokeTemplate("vitality", slug)!;
+  const strings = [
+    ...collectStrings(copy),
+    ...collectStrings(template.variants.a),
+    ...collectStrings(template.variants.b),
+  ];
+
+  it("has a non-trivial corpus to scan", () => {
+    expect(strings.length).toBeGreaterThan(60);
+  });
+
+  it("finds zero banned-pattern hits across every visible string", () => {
+    const hits: { text: string; category: string; matched: string }[] = [];
+    for (const text of strings) {
+      for (const hit of scanBannedText(text)) {
+        hits.push({ text, category: hit.category, matched: hit.matched });
+      }
+    }
+    expect(hits, JSON.stringify(hits, null, 2)).toEqual([]);
+  });
+});
+
+// Checkup has NO finance (catalogue financeAvailable is false), so its corpus must
+// carry no finance/interest wording anywhere, like the hygiene page.
+describe("bespoke checkup copy carries no finance wording", () => {
+  const template = getBespokeTemplate("vitality", "checkup")!;
+  const corpus = [
+    ...collectStrings(CHECKUP_LANDING_COPY),
+    ...collectStrings(template.variants.a),
+    ...collectStrings(template.variants.b),
+  ]
+    .join(" \n ")
+    .toLowerCase();
+
+  it("has no finance / interest / spread-the-cost wording", () => {
+    expect(corpus).not.toContain("finance");
+    expect(corpus).not.toContain("0%");
+    expect(corpus).not.toContain("0 percent");
+    expect(corpus).not.toContain("interest-free");
+    expect(corpus).not.toContain("spread the cost");
+  });
+});
+
 describe("price-led headline split (owner rule)", () => {
   // Owner rule: exactly ONE variant may lead with a price. Variant A stays
   // outcome-led (no GBP figure in its headline); the price angle lives in B only.
+  // Enforced across every bespoke slug, including the four remaining pages (checkup
+  // is price-led in B via its flat catalogue price, just without any finance wording).
   it("variant A headlines never contain a price; variant B headlines do", () => {
-    for (const slug of ["invisalign", "bonding", "hygiene"]) {
+    for (const slug of ALL_BESPOKE_SLUGS) {
       const tpl = getBespokeTemplate("vitality", slug)!;
-      expect(tpl.variants.a.heroHeadline).not.toMatch(/£/);
-      expect(tpl.variants.b.heroHeadline).toMatch(/£/);
+      expect(tpl.variants.a.heroHeadline, `${slug} A`).not.toMatch(/£/);
+      expect(tpl.variants.b.heroHeadline, `${slug} B`).toMatch(/£/);
     }
   });
 });

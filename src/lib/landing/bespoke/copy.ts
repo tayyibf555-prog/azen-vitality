@@ -1201,3 +1201,1160 @@ export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
       "Our dentists and hygienists are GDC registered. Treatment suitability always depends on a clinical assessment.",
   },
 };
+
+// ---------------------------------------------------------------------------
+// SHARED SHAPE FOR THE REMAINING FOUR TREATMENTS
+// ---------------------------------------------------------------------------
+// Static, user-visible COPY for the four remaining catalogue treatments that get a
+// bespoke landing page: whitening, veneers, implant and checkup. They share ONE
+// layout (a blend of the bonding + hygiene designs) so they share ONE interface and
+// ONE renderer (components/landing/bespoke/vitality-treatment-landing.tsx), with a
+// thin per-slug component supplying its corpus + authored icons. Kept in this module
+// so the SAME registry compliance test enumerates every visible string and asserts
+// scanBannedText finds zero hits, exactly as for the three pages above.
+//
+// COMPLIANCE (UK GDC/ASA + house style), same rules as the other bespoke copy:
+//   - NO testimonials, patient quotes, star ratings or review counts. The patient
+//     story + before/after sections are LABELLED PLACEHOLDERS (there are no real
+//     photos yet), with the consent disclaimer kept.
+//   - No em/en-dashes, no "$" (GBP only), no NHS/private/"payment plan"/"band"
+//     funding words, no superlatives (best / leading / cheapest), no guarantees, no
+//     pain-free claims.
+//   - Clinical claims kept modest and honest per treatment: whitening "brightens" the
+//     natural teeth (never permanent or guaranteed); veneers "improve the shape and
+//     colour"; an implant is "a long lasting way to replace a missing tooth" (the
+//     catalogue phrasing, never "permanent"); a checkup helps "catch anything early".
+//   - Finance wording appears ONLY where the catalogue says financeAvailable is true
+//     (whitening, veneers, implant). Checkup has NO finance, so its corpus carries no
+//     0%/interest/"spread the cost" wording anywhere, like the hygiene page.
+//   - Pricing uses the real catalogue "from" figure for each treatment (whitening 350,
+//     veneers 450, implant 2,400, checkup 60). No invented numbers.
+// British English throughout. Per-variant hero + CTA copy is the A/B surface and lives
+// in registry.ts, NOT here.
+
+export interface TreatmentLandingCopy {
+  header: HeaderCopy;
+  /** Shared hero eyebrow (the accented headline + subhead are the A/B surface, in registry.ts). */
+  heroEyebrow: string;
+  heroPills: string[];
+  /** Small factual trust chips (value + label). No ratings, reviews or awards. */
+  trust: { value: string; label: string }[];
+  form: FormCopy;
+  /** "Sound familiar?" empathy grid: six line-icon cards (paired with icons by index) + banner. */
+  painPoints: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+    banner: { lead: string; accent: string; tail: string };
+  };
+  treatment: {
+    head: SplitHeadCopy;
+    aboutTitle: string;
+    aboutBody: string;
+    keyFactsTitle: string;
+    keyFacts: string[];
+    stepsEyebrow: string;
+    /** Four steps. */
+    steps: TitledPair[];
+  };
+  /** "What it helps with": six line-icon cards (paired with icons by index). */
+  helps: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  /** Placeholder patient-story slots (no real photos yet). */
+  stories: {
+    head: SplitHeadCopy;
+    placeholderTitle: string;
+    placeholderNote: string;
+  };
+  /** Placeholder before/after slots (no real photos yet) + kept consent disclaimer. */
+  beforeAfter: {
+    head: CenterHeadCopy;
+    placeholderTitle: string;
+    placeholderNote: string;
+    capTitle: string;
+    capNote: string;
+    disclaimer: string;
+  };
+  why: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  pricing: {
+    head: CenterHeadCopy;
+    priceEyebrow: string;
+    priceLabel: string;
+    /** Finance chip + note: present ONLY where the catalogue says financeAvailable is true. */
+    financeChip?: string;
+    financeNote?: string;
+    /** Finance-free note (the checkup equivalent of the finance note above). */
+    priceNote?: string;
+    fineprint: string;
+    getTitle: string;
+    getItems: TitledPair[];
+  };
+  faq: {
+    head: CenterHeadCopy;
+    items: { q: string; a: string }[];
+  };
+  footer: {
+    brand: string;
+    tagline: string;
+    builtBy: string;
+    compliance: string;
+  };
+}
+
+// Shared, identical-across-treatments form fields. The five treatment-specific fields
+// (eyebrow, heading, subheading, messagePlaceholder, submitFallback, fineprint,
+// successBody) are supplied per corpus via bespokeForm().
+const BESPOKE_FORM_BASE = {
+  nameLabel: "Full name",
+  namePlaceholder: "Your full name",
+  phoneLabel: "Mobile number",
+  phonePlaceholder: "07700 900123",
+  emailLabel: "Email address",
+  emailPlaceholder: "you@example.com",
+  contactHint: "Add a mobile number or an email so the team can reach you.",
+  channelLabel: "How should we reach you?",
+  channelWhatsApp: "WhatsApp",
+  channelSms: "SMS",
+  channelEmail: "Email",
+  messageLabel: "Your message (optional)",
+  consentLabel: "I agree to be contacted about my enquiry.",
+  successTitle: "Thanks, your enquiry is in.",
+  errorGeneric: "Something went wrong. Please try again, or call the practice.",
+  errorName: "Please enter your name.",
+  errorContact: "Please add a mobile number or an email address.",
+  errorConsent: "Please tick the box so we can contact you about your enquiry.",
+} as const;
+
+function bespokeForm(over: {
+  eyebrow: string;
+  heading: string;
+  subheading: string;
+  messagePlaceholder: string;
+  submitFallback: string;
+  fineprint: string;
+  successBody: string;
+}): FormCopy {
+  return { ...BESPOKE_FORM_BASE, ...over };
+}
+
+// ---------------------------------------------------------------------------
+// WHITENING (teeth whitening, from GBP 350, finance available)
+// ---------------------------------------------------------------------------
+export const WHITENING_LANDING_COPY: TreatmentLandingCopy = {
+  header: { brand: "VITALITY DENTAL" },
+
+  heroEyebrow: "Brighten your smile",
+
+  heroPills: ["Brighter smile", "Home or in chair", "0% finance available", "Often a single visit"],
+
+  trust: [
+    { value: "0%", label: "Finance available" },
+    { value: "£350", label: "Whitening from" },
+  ],
+
+  form: bespokeForm({
+    eyebrow: "Free consultation",
+    heading: "See if teeth whitening is right for you",
+    subheading: "Book free. No commitment, and no pressure.",
+    messagePlaceholder: "Tell us what you would like to brighten, or ask a question",
+    submitFallback: "Book my free consultation",
+    fineprint: "Your details are only used to arrange your consultation.",
+    successBody: "The team will be in touch shortly to arrange your free consultation.",
+  }),
+
+  painPoints: {
+    head: {
+      eyebrow: "Sound familiar?",
+      title: "You would love a brighter smile",
+      intro:
+        "Most people who ask about whitening have wanted a brighter smile for a while. Everyday food and drink dull teeth over time.",
+    },
+    items: [
+      {
+        title: "Tea, coffee and red wine",
+        body: "Everyday cups and glasses leave your teeth looking duller than they used to.",
+      },
+      {
+        title: "Teeth look yellow in photos",
+        body: "You notice the colour of your teeth in photos, and it holds you back from smiling fully.",
+      },
+      {
+        title: "Brushing does not shift it",
+        body: "However well you brush at home, the shade of your teeth has not really changed.",
+      },
+      {
+        title: "Kits from the shop disappoint",
+        body: "Kits and pastes from the shop have not made much of a difference to the colour.",
+      },
+      {
+        title: "A big event coming up",
+        body: "A wedding, a holiday or a special occasion, and you would like your smile to look its brightest.",
+      },
+      {
+        title: "Teeth dull with age",
+        body: "Teeth naturally lose some brightness over the years, and you would like to freshen yours up.",
+      },
+    ],
+    banner: {
+      lead: "Professional whitening lifts everyday staining ",
+      accent: "for a brighter smile",
+      tail: ", using a safe, dentist led approach.",
+    },
+  },
+
+  treatment: {
+    head: {
+      eyebrow: "The treatment",
+      title: "Professional whitening, guided by a dentist",
+      intro:
+        "Whitening uses a dentist led gel to gently lift staining and brighten your teeth, with a home kit, an in chair treatment, or both, planned around the shade you would like.",
+    },
+    aboutTitle: "What is teeth whitening?",
+    aboutBody:
+      "Teeth whitening is a safe way to brighten your smile, carried out or supervised by a dentist. It uses a whitening gel that gently lifts the everyday staining that builds up on your teeth from food, drink and time. You can whiten at home with custom trays worn for a set period each day, have an in chair treatment at the practice, or combine the two. Your dentist checks your teeth and gums first, then plans the approach and target shade with you. Whitening brightens your natural teeth, and your shade can be topped up over time. It does not change the colour of fillings, crowns or veneers.",
+    keyFactsTitle: "Key facts",
+    keyFacts: [
+      "Home or in chair",
+      "Dentist led",
+      "Brightens natural teeth",
+      "0% finance available",
+      "Free initial consultation",
+    ],
+    stepsEyebrow: "How it works",
+    steps: [
+      {
+        title: "Free consultation",
+        body: "We check your teeth and gums, talk through the shade you would like, and confirm whitening suits you.",
+      },
+      {
+        title: "Custom trays or in chair",
+        body: "We take a scan or impression for custom trays, or plan your in chair treatment at the practice.",
+      },
+      {
+        title: "Whiten gradually",
+        body: "You whiten at home over a set period, or in the chair, building towards the shade you are after.",
+      },
+      {
+        title: "See your result",
+        body: "We look over your result together, and share simple tips to help keep your smile looking bright.",
+      },
+    ],
+  },
+
+  helps: {
+    head: {
+      eyebrow: "What it helps with",
+      title: "What professional whitening helps with",
+    },
+    items: [
+      {
+        title: "Everyday staining",
+        body: "Lifts the surface staining that tea, coffee, wine and food leave behind over time.",
+      },
+      {
+        title: "A duller shade",
+        body: "Brightens teeth that have lost some of their natural brightness over the years.",
+      },
+      {
+        title: "A lift before an event",
+        body: "A brighter smile for a wedding, a holiday or a special occasion.",
+      },
+      {
+        title: "A confidence boost",
+        body: "Many people feel happier smiling fully once their teeth look a little brighter.",
+      },
+      {
+        title: "A dentist led approach",
+        body: "Whitening planned and supervised by a dentist, rather than an off the shelf kit.",
+      },
+      {
+        title: "A result you can top up",
+        body: "Your shade can be refreshed over time with the trays your dentist provides.",
+      },
+    ],
+  },
+
+  stories: {
+    head: {
+      eyebrow: "Patient stories",
+      title: "Real patients, real results",
+      intro:
+        "We are adding consented photos of real Vitality Dental whitening results. In the meantime, your dentist can show you examples at your consultation.",
+    },
+    placeholderTitle: "Your consented whitening result here",
+    placeholderNote: "Real patient photos will appear here once added, with written consent.",
+  },
+
+  beforeAfter: {
+    head: {
+      eyebrow: "Results",
+      title: "Before and after",
+      intro:
+        "Every smile starts from a different shade, and your dentist will talk through what whitening can realistically achieve for you.",
+    },
+    placeholderTitle: "Your consented whitening result here",
+    placeholderNote: "Before and after photos will be added once the practice has consented cases to show.",
+    capTitle: "Before and after",
+    capNote: "Photo coming soon",
+    disclaimer:
+      "Individual results vary. Before and after images will be of genuine Vitality Dental patients, shown with their written consent.",
+  },
+
+  why: {
+    head: { eyebrow: "Why Vitality Dental", title: "Whitening, done properly" },
+    items: [
+      {
+        title: "Dentist led",
+        body: "Every whitening plan is checked by a GDC registered dentist before treatment begins.",
+      },
+      {
+        title: "Clinician-led care",
+        body: "You are looked after by an experienced clinician who plans your whitening personally.",
+      },
+      {
+        title: "Home or in chair",
+        body: "Whiten at home with custom trays, in the chair, or a combination of the two.",
+      },
+      {
+        title: "Easy to get to",
+        body: "Convenient and welcoming, with flexible appointment times around your schedule.",
+      },
+      {
+        title: "0% interest-free finance",
+        body: "Spread the cost with no added interest. Start today without paying everything upfront.",
+      },
+      {
+        title: "Honest, unrushed advice",
+        body: "We talk through what whitening can and cannot do, so you know what to expect.",
+      },
+    ],
+  },
+
+  pricing: {
+    head: {
+      eyebrow: "Pricing",
+      title: "Clear pricing, no surprises.",
+      intro:
+        "The cost of whitening depends on whether you choose a home kit, an in chair treatment, or both. Your exact price is confirmed at your free consultation.",
+    },
+    priceEyebrow: "Teeth whitening starts from",
+    priceLabel: "£350",
+    financeChip: "0% finance available",
+    financeNote:
+      "Spread the cost with no added interest. Your exact price is confirmed after a clinical assessment, and is always the real catalogue price, never an invented figure.",
+    fineprint: "Your details are only used to arrange your consultation.",
+    getTitle: "What you get",
+    getItems: [
+      { title: "Dentist led whitening", body: "Planned and supervised by a GDC registered dentist." },
+      {
+        title: "Free initial consultation",
+        body: "No cost, no commitment. See if whitening is right for you.",
+      },
+      { title: "0% interest-free finance", body: "Start today without paying everything upfront." },
+      { title: "Custom fitted trays", body: "Made to fit your teeth for even, comfortable whitening at home." },
+    ],
+  },
+
+  faq: {
+    head: {
+      eyebrow: "Good to know",
+      title: "Teeth whitening questions",
+      intro: "A few common questions about professional whitening.",
+    },
+    items: [
+      {
+        q: "Is teeth whitening safe?",
+        a: "Whitening carried out or supervised by a dentist is a safe way to brighten your teeth. Your dentist checks your teeth and gums first and plans a suitable approach with you.",
+      },
+      {
+        q: "Will whitening make my teeth sensitive?",
+        a: "Some people notice mild, short lived sensitivity during whitening. Tell your dentist and they can adjust the approach and suggest ways to keep you comfortable.",
+      },
+      {
+        q: "How long do the results last?",
+        a: "Whitening brightens your natural teeth, and everyday food and drink can dull them again over time. Your shade can be topped up with the trays your dentist provides.",
+      },
+      {
+        q: "Does whitening work on fillings or crowns?",
+        a: "Whitening brightens natural teeth but does not change the colour of fillings, crowns or veneers. Your dentist will talk through your options if you have these.",
+      },
+      {
+        q: "Home kit or in chair, which is right for me?",
+        a: "Both can work well. Your dentist will talk through the difference at your consultation and help you choose based on your teeth and what suits you.",
+      },
+    ],
+  },
+
+  footer: {
+    brand: "Vitality Dental",
+    tagline: "Teeth whitening",
+    builtBy: "Built by Azen",
+    compliance:
+      "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
+  },
+};
+
+// ---------------------------------------------------------------------------
+// VENEERS (from GBP 450, finance available)
+// ---------------------------------------------------------------------------
+export const VENEERS_LANDING_COPY: TreatmentLandingCopy = {
+  header: { brand: "VITALITY DENTAL" },
+
+  heroEyebrow: "Reshape and refine your smile",
+
+  heroPills: ["Custom made", "Shape and colour", "0% finance available", "Natural looking"],
+
+  trust: [
+    { value: "0%", label: "Finance available" },
+    { value: "£450", label: "Veneers from" },
+  ],
+
+  form: bespokeForm({
+    eyebrow: "Free consultation",
+    heading: "See if veneers are right for you",
+    subheading: "Book free. No commitment, and no pressure.",
+    messagePlaceholder: "Tell us what you would like to change, or ask a question",
+    submitFallback: "Book my free consultation",
+    fineprint: "Your details are only used to arrange your consultation.",
+    successBody: "The team will be in touch shortly to arrange your free consultation.",
+  }),
+
+  painPoints: {
+    head: {
+      eyebrow: "Sound familiar?",
+      title: "You would like to change how your teeth look",
+      intro:
+        "Most people who ask about veneers have wanted to change the shape or colour of their front teeth for a while.",
+    },
+    items: [
+      {
+        title: "Teeth that look worn",
+        body: "Front teeth that have worn down or lost their shape over the years.",
+      },
+      {
+        title: "Discolouration that will not lift",
+        body: "A shade or marks on your teeth that whitening alone does not fully change.",
+      },
+      {
+        title: "Uneven or chipped edges",
+        body: "Edges that look uneven, chipped or a little short when you smile.",
+      },
+      {
+        title: "Small gaps at the front",
+        body: "Spaces between your front teeth that show every time you smile.",
+      },
+      {
+        title: "Teeth that look small",
+        body: "Teeth that look small or out of proportion next to the ones around them.",
+      },
+      {
+        title: "Wanting a fuller change",
+        body: "You would like a bigger change to your smile than whitening or bonding alone can give.",
+      },
+    ],
+    banner: {
+      lead: "Veneers are thin covers bonded to the front of your teeth ",
+      accent: "to improve their shape and colour",
+      tail: ", for a natural looking result.",
+    },
+  },
+
+  treatment: {
+    head: {
+      eyebrow: "The treatment",
+      title: "Custom veneers, shaped to suit your smile",
+      intro:
+        "Veneers are thin, custom made covers bonded to the front of your teeth to improve their shape, colour and overall look, planned around the smile you would like.",
+    },
+    aboutTitle: "What are veneers?",
+    aboutBody:
+      "Veneers are thin covers, usually made of porcelain or a composite material, that are bonded to the front of your teeth to improve their shape, colour and overall look. They can even up worn or chipped edges, mask discolouration that whitening does not lift, close small gaps, and bring your front teeth into better proportion. Your dentist assesses your teeth and gums, talks through the look you would like, and plans your veneers around your natural features. Some preparation of the tooth may be needed so the veneer sits flush. Veneers are a longer term change, and your dentist will talk through how to care for them and what to expect over time.",
+    keyFactsTitle: "Key facts",
+    keyFacts: [
+      "Custom made",
+      "Shape and colour",
+      "Natural looking",
+      "0% finance available",
+      "Free initial consultation",
+    ],
+    stepsEyebrow: "How it works",
+    steps: [
+      {
+        title: "Free consultation",
+        body: "We assess your teeth and gums, talk through the look you would like, and check that veneers suit you.",
+      },
+      {
+        title: "Plan and design",
+        body: "Your dentist plans the shape, colour and number of veneers around your natural features.",
+      },
+      {
+        title: "Prepare and fit",
+        body: "Any preparation is done, your custom veneers are made, then bonded to the front of your teeth.",
+      },
+      {
+        title: "See your smile",
+        body: "We check the fit and finish together, and share simple tips to help your veneers last.",
+      },
+    ],
+  },
+
+  helps: {
+    head: { eyebrow: "What it helps with", title: "What veneers can help with" },
+    items: [
+      {
+        title: "Shape and proportion",
+        body: "Even up worn, short or uneven front teeth for a more balanced smile.",
+      },
+      {
+        title: "Discolouration",
+        body: "Mask staining or marks on a tooth that whitening on its own does not lift.",
+      },
+      {
+        title: "Chipped edges",
+        body: "Cover chipped or worn edges for a smoother, more even look.",
+      },
+      {
+        title: "Small gaps",
+        body: "Close or narrow small spaces between the front teeth.",
+      },
+      {
+        title: "A fuller change",
+        body: "A bigger change to the look of your smile than whitening or bonding alone.",
+      },
+      {
+        title: "A natural finish",
+        body: "Veneers are shaped and shade matched to look natural alongside your other teeth.",
+      },
+    ],
+  },
+
+  stories: {
+    head: {
+      eyebrow: "Patient stories",
+      title: "Real patients, real results",
+      intro:
+        "We are adding consented photos of real Vitality Dental veneer cases. In the meantime, your dentist can show you examples at your consultation.",
+    },
+    placeholderTitle: "Your consented veneer case here",
+    placeholderNote: "Real patient photos will appear here once added, with written consent.",
+  },
+
+  beforeAfter: {
+    head: {
+      eyebrow: "Results",
+      title: "Before and after",
+      intro:
+        "Every smile is different, and your dentist will talk through what veneers can realistically achieve for your teeth.",
+    },
+    placeholderTitle: "Your consented veneer case here",
+    placeholderNote: "Before and after photos will be added once the practice has consented cases to show.",
+    capTitle: "Before and after",
+    capNote: "Photo coming soon",
+    disclaimer:
+      "Individual results vary. Before and after images will be of genuine Vitality Dental patients, shown with their written consent.",
+  },
+
+  why: {
+    head: { eyebrow: "Why Vitality Dental", title: "Veneers, done properly" },
+    items: [
+      {
+        title: "Clinically assessed",
+        body: "Every case is assessed by a GDC registered dentist before any treatment begins.",
+      },
+      {
+        title: "Clinician-led care",
+        body: "You are treated by an experienced clinician who plans and fits your veneers personally.",
+      },
+      {
+        title: "Shade and shape matched",
+        body: "Your veneers are designed around your natural features for a natural looking result.",
+      },
+      {
+        title: "Easy to get to",
+        body: "Convenient and welcoming, with flexible appointment times around your schedule.",
+      },
+      {
+        title: "0% interest-free finance",
+        body: "Spread the cost with no added interest. Start today without paying everything upfront.",
+      },
+      {
+        title: "Honest, unrushed advice",
+        body: "We talk through what veneers can and cannot do, so you can decide what is right for you.",
+      },
+    ],
+  },
+
+  pricing: {
+    head: {
+      eyebrow: "Pricing",
+      title: "Clear pricing, no surprises.",
+      intro:
+        "The cost of veneers depends on the material and how many teeth are treated. Your exact price is confirmed at your free consultation.",
+    },
+    priceEyebrow: "Veneers start from",
+    priceLabel: "£450",
+    financeChip: "0% finance available",
+    financeNote:
+      "Spread the cost with no added interest. Your exact price is confirmed after a clinical assessment, and is always the real catalogue price, never an invented figure.",
+    fineprint: "Your details are only used to arrange your consultation.",
+    getTitle: "What you get",
+    getItems: [
+      { title: "Custom made veneers", body: "Designed around your natural features for a natural looking result." },
+      {
+        title: "Free initial consultation",
+        body: "No cost, no commitment. See if veneers are right for you.",
+      },
+      { title: "0% interest-free finance", body: "Start today without paying everything upfront." },
+      { title: "A planned smile design", body: "Shape, colour and number planned with your dentist before you start." },
+    ],
+  },
+
+  faq: {
+    head: {
+      eyebrow: "Good to know",
+      title: "Veneer questions",
+      intro: "A few common questions about veneers.",
+    },
+    items: [
+      {
+        q: "How long do veneers last?",
+        a: "Veneers are a longer term change and can last for years with good care. Your dentist will talk through how to look after them and what to expect over time.",
+      },
+      {
+        q: "Do veneers look natural?",
+        a: "Veneers are shaped and shade matched to blend with your other teeth. Your dentist plans them around your natural features so the result looks natural.",
+      },
+      {
+        q: "Will my teeth need preparing?",
+        a: "Some veneers need a little preparation of the tooth so they sit flush, while others need very little. Your dentist will explain what your case involves.",
+      },
+      {
+        q: "Veneers, whitening or bonding, which is right for me?",
+        a: "It depends on what you would like to change. Your dentist will talk through the options at your consultation and help you choose what suits your teeth.",
+      },
+      {
+        q: "Can I spread the cost?",
+        a: "Yes, 0% finance is available. We can go through the options with you at your consultation.",
+      },
+    ],
+  },
+
+  footer: {
+    brand: "Vitality Dental",
+    tagline: "Veneers",
+    builtBy: "Built by Azen",
+    compliance:
+      "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
+  },
+};
+
+// ---------------------------------------------------------------------------
+// IMPLANT (dental implant, from GBP 2,400, finance available)
+// ---------------------------------------------------------------------------
+export const IMPLANT_LANDING_COPY: TreatmentLandingCopy = {
+  header: { brand: "VITALITY DENTAL" },
+
+  heroEyebrow: "Replace a missing tooth",
+
+  heroPills: ["Long lasting", "Natural looking crown", "0% finance available", "Fixed in place"],
+
+  trust: [
+    { value: "0%", label: "Finance available" },
+    { value: "£2,400", label: "Implants from" },
+  ],
+
+  form: bespokeForm({
+    eyebrow: "Free consultation",
+    heading: "See if a dental implant is right for you",
+    subheading: "Book free. No commitment, and no pressure.",
+    messagePlaceholder: "Tell us about the tooth you would like to replace, or ask a question",
+    submitFallback: "Book my free consultation",
+    fineprint: "Your details are only used to arrange your consultation.",
+    successBody: "The team will be in touch shortly to arrange your free consultation.",
+  }),
+
+  painPoints: {
+    head: {
+      eyebrow: "Sound familiar?",
+      title: "Living with a missing tooth",
+      intro:
+        "Most people who ask about implants have managed around a missing tooth or a loose denture for a while.",
+    },
+    items: [
+      {
+        title: "A gap when you smile",
+        body: "A missing tooth that shows when you smile, or that you find yourself trying to hide.",
+      },
+      {
+        title: "Trouble chewing on one side",
+        body: "You favour one side when you eat because a gap or loose tooth makes chewing harder.",
+      },
+      {
+        title: "A denture that moves",
+        body: "A denture that slips or feels bulky, and you would like something more secure.",
+      },
+      {
+        title: "A tooth that came out",
+        body: "A tooth lost to injury or decay that you have never had replaced.",
+      },
+      {
+        title: "Worried about the gap",
+        body: "You have heard that a gap can affect the teeth around it, and you would like to sort it.",
+      },
+      {
+        title: "Wanting a fixed option",
+        body: "You would prefer a fixed replacement rather than something you take in and out.",
+      },
+    ],
+    banner: {
+      lead: "A dental implant is ",
+      accent: "a long lasting way to replace a missing tooth",
+      tail: ", with a natural looking crown fixed in place.",
+    },
+  },
+
+  treatment: {
+    head: {
+      eyebrow: "The treatment",
+      title: "A dental implant, fixed in place",
+      intro:
+        "A dental implant is a small fixture that replaces the root of a missing tooth and supports a natural looking crown, a long lasting way to fill the gap without relying on the teeth around it.",
+    },
+    aboutTitle: "What is a dental implant?",
+    aboutBody:
+      "A dental implant is a small fixture, usually titanium, that is placed into the jaw to replace the root of a missing tooth. Once it has healed and settled, it supports a natural looking crown that fills the gap and lets you bite and smile with confidence. Unlike a bridge, an implant does not rely on the teeth on either side, and unlike a denture it stays fixed in place. It is a long lasting way to replace a missing tooth. Your dentist assesses your teeth, gums and jaw first, plans the treatment over a few visits, and talks through what to expect at each stage and how to care for your implant.",
+    keyFactsTitle: "Key facts",
+    keyFacts: [
+      "Long lasting",
+      "Fixed in place",
+      "Natural looking crown",
+      "0% finance available",
+      "Free initial consultation",
+    ],
+    stepsEyebrow: "How it works",
+    steps: [
+      {
+        title: "Free consultation",
+        body: "We assess your teeth, gums and jaw, talk through your options, and check that an implant suits you.",
+      },
+      {
+        title: "Plan and place",
+        body: "Your treatment is planned, then the implant is placed into the jaw at the site of the missing tooth.",
+      },
+      {
+        title: "Heal and settle",
+        body: "The implant is given time to heal and settle firmly into place before the next stage.",
+      },
+      {
+        title: "Fit your crown",
+        body: "A natural looking crown is made and fixed onto the implant, completing your new tooth.",
+      },
+    ],
+  },
+
+  helps: {
+    head: { eyebrow: "What it helps with", title: "What a dental implant helps with" },
+    items: [
+      {
+        title: "A single missing tooth",
+        body: "Fills the gap left by one missing tooth without relying on the teeth beside it.",
+      },
+      {
+        title: "Chewing with confidence",
+        body: "A fixed replacement that lets you bite and chew more comfortably.",
+      },
+      {
+        title: "An alternative to a denture",
+        body: "A fixed option for people who would rather not have a denture that moves.",
+      },
+      {
+        title: "Keeping the gap supported",
+        body: "Replaces the missing tooth so the gap is filled and supported.",
+      },
+      {
+        title: "A natural looking result",
+        body: "The crown is shaped and shade matched to look natural alongside your other teeth.",
+      },
+      {
+        title: "A long lasting solution",
+        body: "A long lasting way to replace a missing tooth, cared for like your natural teeth.",
+      },
+    ],
+  },
+
+  stories: {
+    head: {
+      eyebrow: "Patient stories",
+      title: "Real patients, real results",
+      intro:
+        "We are adding consented photos of real Vitality Dental implant cases. In the meantime, your dentist can show you examples at your consultation.",
+    },
+    placeholderTitle: "Your consented implant case here",
+    placeholderNote: "Real patient photos will appear here once added, with written consent.",
+  },
+
+  beforeAfter: {
+    head: {
+      eyebrow: "Results",
+      title: "Before and after",
+      intro:
+        "Every case is different, and your dentist will talk through what a dental implant can realistically achieve for you.",
+    },
+    placeholderTitle: "Your consented implant case here",
+    placeholderNote: "Before and after photos will be added once the practice has consented cases to show.",
+    capTitle: "Before and after",
+    capNote: "Photo coming soon",
+    disclaimer:
+      "Individual results vary. Before and after images will be of genuine Vitality Dental patients, shown with their written consent.",
+  },
+
+  why: {
+    head: { eyebrow: "Why Vitality Dental", title: "Implants, done properly" },
+    items: [
+      {
+        title: "Clinically assessed",
+        body: "Every case is assessed by a GDC registered dentist before any treatment begins.",
+      },
+      {
+        title: "Clinician-led care",
+        body: "You are treated by an experienced clinician who plans and carries out your implant personally.",
+      },
+      {
+        title: "Planned over a few visits",
+        body: "Your treatment is planned carefully and carried out in stages, at a pace that suits you.",
+      },
+      {
+        title: "Easy to get to",
+        body: "Convenient and welcoming, with flexible appointment times around your schedule.",
+      },
+      {
+        title: "0% interest-free finance",
+        body: "Spread the cost with no added interest. Start today without paying everything upfront.",
+      },
+      {
+        title: "Honest, unrushed advice",
+        body: "We talk through what an implant involves, so you know what to expect at each stage.",
+      },
+    ],
+  },
+
+  pricing: {
+    head: {
+      eyebrow: "Pricing",
+      title: "Clear pricing, no surprises.",
+      intro:
+        "The cost of an implant depends on your case and whether any other treatment is needed first. Your exact price is confirmed at your free consultation.",
+    },
+    priceEyebrow: "Dental implants start from",
+    priceLabel: "£2,400",
+    financeChip: "0% finance available",
+    financeNote:
+      "Spread the cost with no added interest. Your exact price is confirmed after a clinical assessment, and is always the real catalogue price, never an invented figure.",
+    fineprint: "Your details are only used to arrange your consultation.",
+    getTitle: "What you get",
+    getItems: [
+      { title: "A planned implant treatment", body: "Assessed and planned by a GDC registered dentist." },
+      {
+        title: "Free initial consultation",
+        body: "No cost, no commitment. See if an implant is right for you.",
+      },
+      { title: "0% interest-free finance", body: "Start today without paying everything upfront." },
+      { title: "A natural looking crown", body: "Shaped and shade matched to look natural alongside your other teeth." },
+    ],
+  },
+
+  faq: {
+    head: {
+      eyebrow: "Good to know",
+      title: "Dental implant questions",
+      intro: "A few common questions about dental implants.",
+    },
+    items: [
+      {
+        q: "How long does an implant last?",
+        a: "An implant is a long lasting way to replace a missing tooth and can last for years with good care. Your dentist will talk through how to look after it.",
+      },
+      {
+        q: "How long does the treatment take?",
+        a: "Implant treatment is carried out over a few visits, with healing time in between. Your dentist will explain the timeline for your case at your consultation.",
+      },
+      {
+        q: "Will having an implant placed be uncomfortable?",
+        a: "The area is numbed for the procedure and most people find it very manageable. Tell your dentist about any concerns and they will talk you through it.",
+      },
+      {
+        q: "Is an implant right for me?",
+        a: "Suitability depends on a clinical assessment of your teeth, gums and jaw. Book a consultation and we will talk through your options.",
+      },
+      {
+        q: "Can I spread the cost?",
+        a: "Yes, 0% finance is available. We can go through the options with you at your consultation.",
+      },
+    ],
+  },
+
+  footer: {
+    brand: "Vitality Dental",
+    tagline: "Dental implants",
+    builtBy: "Built by Azen",
+    compliance:
+      "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
+  },
+};
+
+// ---------------------------------------------------------------------------
+// CHECKUP (routine dental checkup, from GBP 60, NO finance)
+// ---------------------------------------------------------------------------
+// Checkup has NO finance (catalog financeAvailable is false), so this corpus carries
+// no 0%/interest/"spread the cost" wording anywhere, like the hygiene page. The
+// before/after section is reframed honestly as practice photos (a checkup is not a
+// cosmetic transformation), still a LABELLED PLACEHOLDER with a consent line.
+export const CHECKUP_LANDING_COPY: TreatmentLandingCopy = {
+  header: { brand: "VITALITY DENTAL" },
+
+  heroEyebrow: "A routine dental checkup",
+
+  heroPills: ["With the dentist", "Teeth and gums checked", "Same week appointments", "Catch issues early"],
+
+  trust: [
+    { value: "£60", label: "Checkup from" },
+    { value: "30 min", label: "Usually per visit" },
+  ],
+
+  form: bespokeForm({
+    eyebrow: "Book a checkup",
+    heading: "Book your dental checkup",
+    subheading: "Book your visit. No pressure, and no obligation.",
+    messagePlaceholder: "Tell us about anything you have noticed, or when your last checkup was",
+    submitFallback: "Book my checkup",
+    fineprint: "Your details are only used to arrange your visit.",
+    successBody: "The team will be in touch shortly to arrange your checkup.",
+  }),
+
+  painPoints: {
+    head: {
+      eyebrow: "Sound familiar?",
+      title: "It has been a while since your last checkup",
+      intro:
+        "Life gets busy, and a routine checkup is easy to put off. A regular visit helps catch small things before they grow.",
+    },
+    items: [
+      {
+        title: "It has been a while",
+        body: "Longer than you would like since you last saw a dentist for a checkup.",
+      },
+      {
+        title: "A niggle you are unsure about",
+        body: "A twinge, a sensitive spot, or something that does not feel quite right.",
+      },
+      {
+        title: "New to the area",
+        body: "You have moved and have not found a regular dentist yet.",
+      },
+      {
+        title: "Kept meaning to book",
+        body: "A checkup has been on your list, but you have never quite got round to it.",
+      },
+      {
+        title: "Want peace of mind",
+        body: "You would simply like to know that your teeth and gums are healthy.",
+      },
+      {
+        title: "Keeping on top of things",
+        body: "You would like to stay on top of your dental health with regular visits.",
+      },
+    ],
+    banner: {
+      lead: "A routine checkup lets the dentist ",
+      accent: "catch small things early",
+      tail: ", and keep your teeth and gums healthy.",
+    },
+  },
+
+  treatment: {
+    head: {
+      eyebrow: "The visit",
+      title: "A routine checkup with the dentist",
+      intro:
+        "A checkup is a straightforward examination with the dentist, a look at your teeth, gums and mouth to check everything is healthy and to catch anything early.",
+    },
+    aboutTitle: "What is a dental checkup?",
+    aboutBody:
+      "A dental checkup is a routine examination with the dentist. They look over your teeth, gums and mouth to check that everything is healthy, and to spot any early signs of decay, gum problems or wear before they grow into something bigger. The dentist may take X-rays if needed, talk through anything they find, and suggest whether any treatment or a hygiene visit would help. It is also a good moment to ask about anything you have noticed. Seeing the dentist regularly helps keep your teeth and gums healthy and makes any problems easier to deal with while they are still small.",
+    keyFactsTitle: "Key facts",
+    keyFacts: [
+      "With the dentist",
+      "Teeth, gums and mouth checked",
+      "X-rays if needed",
+      "Same week appointments usually",
+      "Advice you can use",
+    ],
+    stepsEyebrow: "How it works",
+    steps: [
+      {
+        title: "Book your visit",
+        body: "Get in touch and we will find you a checkup appointment, often within the same week.",
+      },
+      {
+        title: "A friendly chat",
+        body: "The dentist asks how you have been getting on and about anything you have noticed.",
+      },
+      {
+        title: "The examination",
+        body: "The dentist checks your teeth, gums and mouth, and takes X-rays if they are needed.",
+      },
+      {
+        title: "Your plan",
+        body: "You talk through anything found, and any treatment or hygiene visit that would help.",
+      },
+    ],
+  },
+
+  helps: {
+    head: { eyebrow: "What it helps with", title: "What a routine checkup helps with" },
+    items: [
+      {
+        title: "Catching decay early",
+        body: "The dentist can spot early signs of decay before they turn into something bigger.",
+      },
+      {
+        title: "Gum health",
+        body: "A checkup keeps an eye on your gums and flags any early gum problems.",
+      },
+      {
+        title: "Wear and grinding",
+        body: "Signs of wear or grinding can be picked up and talked through.",
+      },
+      {
+        title: "Peace of mind",
+        body: "A clear picture of how your teeth and gums are doing.",
+      },
+      {
+        title: "A plan for anything found",
+        body: "If something needs attention, you leave with a clear idea of what helps.",
+      },
+      {
+        title: "Regular upkeep",
+        body: "Regular visits keep small things small and your mouth healthy.",
+      },
+    ],
+  },
+
+  stories: {
+    head: {
+      eyebrow: "Meet the team",
+      title: "Looking after local smiles",
+      intro:
+        "We are adding photos of the practice and the team. In the meantime, the team is happy to answer any questions when you book.",
+    },
+    placeholderTitle: "A friendly, familiar face here",
+    placeholderNote: "Photos of the team will appear here once added, with consent.",
+  },
+
+  beforeAfter: {
+    head: {
+      eyebrow: "The practice",
+      title: "A calm, welcoming visit",
+      intro:
+        "We are adding photos of the practice and the team. In the meantime, the team is happy to help with any questions when you book.",
+    },
+    placeholderTitle: "A calm, welcoming practice here",
+    placeholderNote: "Photos of the practice and team will be added once available.",
+    capTitle: "At the practice",
+    capNote: "Photo coming soon",
+    disclaimer: "Photos will be of the genuine Vitality Dental practice and team, added with consent.",
+  },
+
+  why: {
+    head: { eyebrow: "Why Vitality Dental", title: "Checkups, done properly" },
+    items: [
+      {
+        title: "GDC registered dentists",
+        body: "Your checkup is carried out by a GDC registered dentist.",
+      },
+      {
+        title: "Unhurried care",
+        body: "We take our time, listen, and explain what we find in plain language.",
+      },
+      {
+        title: "Same week appointments",
+        body: "Same week checkup appointments are usually available when you need one.",
+      },
+      {
+        title: "Easy to get to",
+        body: "Convenient and welcoming, with flexible appointment times around your schedule.",
+      },
+      {
+        title: "Clear pricing",
+        body: "A checkup from £60, confirmed with you before anything goes ahead.",
+      },
+      {
+        title: "Advice you can use",
+        body: "Practical, honest advice for keeping your teeth and gums healthy at home.",
+      },
+    ],
+  },
+
+  pricing: {
+    head: {
+      eyebrow: "Pricing",
+      title: "Clear pricing, no surprises.",
+      intro:
+        "A routine checkup is £60. Your exact price is always confirmed with you before your appointment goes ahead.",
+    },
+    priceEyebrow: "Checkup from",
+    priceLabel: "£60",
+    priceNote:
+      "Your price is confirmed before treatment, and is always the real catalogue price, never an invented figure.",
+    fineprint: "Your details are only used to arrange your visit.",
+    getTitle: "What is included",
+    getItems: [
+      { title: "An examination with the dentist", body: "A check of your teeth, gums and mouth." },
+      { title: "X-rays if needed", body: "Taken only where they help the dentist see more." },
+      { title: "Advice and a plan", body: "A clear idea of anything found and what would help." },
+      { title: "Same week appointments usually", body: "We aim to see you promptly when you need a checkup." },
+    ],
+  },
+
+  faq: {
+    head: {
+      eyebrow: "Good to know",
+      title: "Checkup questions",
+      intro: "A few common questions about a routine checkup.",
+    },
+    items: [
+      {
+        q: "How often should I have a checkup?",
+        a: "Many people come every six months, though the dentist may suggest more or less often depending on your teeth and gums. They will recommend what suits you.",
+      },
+      {
+        q: "What happens at a checkup?",
+        a: "The dentist looks over your teeth, gums and mouth, may take X-rays if needed, and talks through anything they find and what would help.",
+      },
+      {
+        q: "Do I need X-rays every time?",
+        a: "Not always. The dentist takes X-rays only when they help to see more, and will explain why if they are needed.",
+      },
+      {
+        q: "How long does a checkup take?",
+        a: "Most checkups take around thirty minutes. The dentist will let you know if you need any follow up.",
+      },
+      {
+        q: "Can I have a checkup and a clean together?",
+        a: "A checkup with the dentist and a hygiene visit work well together. The team can talk through booking both when you get in touch.",
+      },
+    ],
+  },
+
+  footer: {
+    brand: "Vitality Dental",
+    tagline: "Dental checkups",
+    builtBy: "Built by Azen",
+    compliance:
+      "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
+  },
+};

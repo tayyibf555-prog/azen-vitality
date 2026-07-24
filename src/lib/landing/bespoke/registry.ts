@@ -156,6 +156,107 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
         },
       },
     },
+    // Teeth whitening (seeded DRAFT). Same machinery + the shared bespoke renderer
+    // (vitality-treatment-landing.tsx). Whitening has finance, so variant b leads on
+    // the entry price + 0% finance. Modest claims only ("brighter", never permanent).
+    whitening: {
+      templateId: "vitality-whitening",
+      treatment: "whitening",
+      variants: {
+        // Variant A leads on the outcome (a brighter smile). No price in the headline.
+        a: {
+          heroHeadline: "A brighter smile, guided by a dentist",
+          heroAccent: "brighter smile",
+          heroSubhead:
+            "Professional teeth whitening at Vitality Dental, a dentist led way to lift everyday staining and brighten your natural teeth, at home, in the chair, or both.",
+          ctaLabel: "Book my free consultation",
+        },
+        // Variant B is the price objection-breaker: it leads on the entry price + 0%
+        // finance (the cost objection), against the outcome-led A.
+        b: {
+          heroHeadline: "Whiten your teeth from £350, with 0% finance",
+          heroAccent: "0% finance",
+          heroSubhead:
+            "Professional teeth whitening at Vitality Dental, planned around the shade you would like. Spread the cost with 0% finance, and book a free, unhurried consultation.",
+          ctaLabel: "Check if whitening suits me",
+        },
+      },
+    },
+    // Veneers (seeded DRAFT). Same machinery + the shared bespoke renderer. Veneers
+    // have finance, so variant b leads on the entry price + 0% finance.
+    veneers: {
+      templateId: "vitality-veneers",
+      treatment: "veneers",
+      variants: {
+        // Variant A leads on the outcome (reshaping the smile). No price in the headline.
+        a: {
+          heroHeadline: "Reshape your smile with custom veneers",
+          heroAccent: "custom veneers",
+          heroSubhead:
+            "Veneers at Vitality Dental, thin covers shaped and bonded to the front of your teeth to improve their shape and colour, for a natural looking smile.",
+          ctaLabel: "Book my free consultation",
+        },
+        // Variant B is the price objection-breaker: it leads on the entry price + 0% finance.
+        b: {
+          heroHeadline: "Custom veneers from £450, with 0% finance",
+          heroAccent: "0% finance",
+          heroSubhead:
+            "Custom made veneers at Vitality Dental, designed around your natural features to improve the shape and colour of your teeth. Spread the cost with 0% finance.",
+          ctaLabel: "Check if veneers suit me",
+        },
+      },
+    },
+    // Dental implant (seeded DRAFT). Same machinery + the shared bespoke renderer.
+    // Implants have finance; variant b leads on the entry price + 0% finance. Claims
+    // stay modest: "a long lasting way to replace a missing tooth" (catalogue phrasing).
+    implant: {
+      templateId: "vitality-implant",
+      treatment: "implant",
+      variants: {
+        // Variant A leads on the outcome (replacing a missing tooth). No price in the headline.
+        a: {
+          heroHeadline: "A long lasting way to replace a missing tooth",
+          heroAccent: "replace a missing tooth",
+          heroSubhead:
+            "Dental implants at Vitality Dental, a small fixture that supports a natural looking crown, fixed in place to fill the gap without relying on the teeth around it.",
+          ctaLabel: "Book my free consultation",
+        },
+        // Variant B is the price objection-breaker: it leads on the entry price + 0% finance.
+        b: {
+          heroHeadline: "Replace a missing tooth from £2,400, with 0% finance",
+          heroAccent: "0% finance",
+          heroSubhead:
+            "Dental implants at Vitality Dental, a long lasting way to replace a missing tooth with a natural looking crown. Spread the cost with 0% finance, and book a free consultation.",
+          ctaLabel: "Check if an implant suits me",
+        },
+      },
+    },
+    // Routine checkup (seeded DRAFT). Same machinery + the shared bespoke renderer.
+    // Checkup has NO finance, so neither variant carries finance wording; variant b is
+    // still price-led (the real catalogue price in the headline), just without finance.
+    checkup: {
+      templateId: "vitality-checkup",
+      treatment: "checkup",
+      variants: {
+        // Variant A leads on the outcome (a healthy smile). No price in the headline.
+        a: {
+          heroHeadline: "A healthy smile starts with a checkup",
+          heroAccent: "a checkup",
+          heroSubhead:
+            "A routine dental checkup with the dentist at Vitality Dental. We check your teeth and gums, catch anything early, and keep your smile healthy.",
+          ctaLabel: "Book my checkup",
+        },
+        // Variant B is the price objection-breaker: it leads on the flat checkup price
+        // (the cost objection), against the outcome-led A. NO finance (checkup has none).
+        b: {
+          heroHeadline: "A routine dental checkup, £60",
+          heroAccent: "£60",
+          heroSubhead:
+            "A routine dental checkup with the dentist at Vitality Dental, usually about thirty minutes. We check your teeth and gums and catch anything early.",
+          ctaLabel: "Book a checkup appointment",
+        },
+      },
+    },
   },
 };
 

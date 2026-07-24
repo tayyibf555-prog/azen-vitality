@@ -191,6 +191,33 @@ describe("landing lead endpoint — happy path", () => {
     ]);
   });
 
+  // The four remaining bespoke pages derive their treatment interest + source the same
+  // way (from the resolved live page, never hardcoded). One compact case per new slug.
+  it.each([
+    { slug: "whitening", treatment: "whitening", interest: "Teeth whitening" },
+    { slug: "veneers", treatment: "veneers", interest: "Veneers" },
+    { slug: "implant", treatment: "implant", interest: "Dental implant" },
+    { slug: "checkup", treatment: "checkup", interest: "Checkup" },
+  ])(
+    "derives treatment interest + source from the resolved live page ($slug)",
+    async ({ slug, treatment, interest }) => {
+      vi.mocked(getLivePageBySlug).mockResolvedValue({
+        page: { ...LIVE_PAGE.page, id: `page-${slug}`, slug, treatment },
+        variants: [],
+      });
+
+      const res = await post(validBody({ landingSlug: slug }));
+      expect(res.status).toBe(200);
+
+      expect(vi.mocked(insertLead)).toHaveBeenCalledWith(
+        expect.objectContaining({ treatmentInterest: interest, source: `landing:${slug}` }),
+      );
+      expect(vi.mocked(insertFunnelEvents)).toHaveBeenCalledWith([
+        expect.objectContaining({ step: "lead", meta: { variant: "b", landingSlug: slug } }),
+      ]);
+    },
+  );
+
   it("accepts an email-only enquiry on the email channel", async () => {
     const res = await post(
       validBody({ phone: undefined, email: "Jo@Example.com", channel: "email" }),
