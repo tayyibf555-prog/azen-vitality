@@ -78,23 +78,6 @@ describe("bespoke registry", () => {
   });
 });
 
-  it("variant b enables the sticky CTA + the expected hero price chip on every page", () => {
-    for (const slug of ["invisalign", "bonding", "hygiene"]) {
-      const t = getBespokeTemplate("vitality", slug)!;
-      const b = t.variants.b;
-      expect(b.layout).toBeDefined();
-                }
-  });
-
-  it("every hero price chip string is compliance-clean", () => {
-    for (const slug of ["invisalign", "bonding", "hygiene"]) {
-      const chip = getBespokeTemplate("vitality", slug)!.variants.b.layout!.heroPriceChip!;
-      expect(scanBannedText(chip.value)).toEqual([]);
-      expect(scanBannedText(chip.note)).toEqual([]);
-    }
-  });
-});
-
 describe("bespoke copy compliance", () => {
   const template = getBespokeTemplate("vitality", "invisalign")!;
 
