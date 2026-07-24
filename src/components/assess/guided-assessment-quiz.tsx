@@ -5,6 +5,7 @@ import { Loader2, CheckCircle2, ArrowLeft, ChevronRight, MessageSquare, Mail, ty
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { FIRST_QUESTION_ID, questionById, Q_TREATMENT } from "@/lib/smile-assessment/quiz";
+import { MAX_QUESTIONS } from "@/lib/smile-assessment/funnel";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { findTreatment } from "@/lib/treatments/catalog";
 import { iconFor } from "./option-icons";
@@ -112,6 +113,18 @@ function capitalize(s: string): string {
   return s.length > 0 ? s[0]!.toUpperCase() + s.slice(1) : s;
 }
 
+/** The quiet "4 of 6" counter above each question: this question's number against
+ *  the funnel's hard cap, read straight off MAX_QUESTIONS so the counter and the
+ *  progress bar (which divides by the same constant) can never disagree.
+ *
+ *  The funnel is adaptive and often stops early — the cap is a ceiling, not a
+ *  prediction, and finishing at 4 of 6 is the normal, good outcome. Clamped
+ *  because a patient should never be shown "7 of 6" if the cap is ever raised
+ *  server-side ahead of a deploy of this file. */
+export function stepCounterLabel(step: number): string {
+  return `${Math.min(step, MAX_QUESTIONS)} of ${MAX_QUESTIONS}`;
+}
+
 export function GuidedAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, practiceName, previewMode }: Props) {
   const [phase, setPhase] = useState<Phase>("intro");
   const [history, setHistory] = useState<Step[]>(() => [firstStep()]);
@@ -149,7 +162,7 @@ export function GuidedAssessmentQuiz({ clientSlug, campaignSlug, headline, intro
 
   const progress = useMemo(() => {
     if (phase === "intro") return 0;
-    if (phase === "question") return Math.min(0.92, step / 6) * 100;
+    if (phase === "question") return Math.min(0.92, step / MAX_QUESTIONS) * 100;
     return 100;
   }, [phase, step]);
 
@@ -340,15 +353,20 @@ export function GuidedAssessmentQuiz({ clientSlug, campaignSlug, headline, intro
       <div className="w-full max-w-md">
         <header className="mb-5 flex flex-col items-center gap-2 text-center">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/25 backdrop-blur-sm">
+            {/* The logo file is a blue mark on transparency, which sinks into this
+                navy gradient. brightness-0 crushes it to solid black and invert
+                flips that to solid white, leaving the transparent background
+                untouched — a white mark from the one asset, no second file. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/copilot-logo.png" alt={`${name} logo`} width={28} height={28} className="h-7 w-7 object-contain" />
+            <img
+              src="/copilot-logo.png"
+              alt={`${name} logo`}
+              width={28}
+              height={28}
+              className="h-7 w-7 object-contain brightness-0 invert"
+            />
           </span>
-          <div>
-            <p className="text-sm font-bold tracking-tight text-white">{name}</p>
-            <p className="text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-on-navy-muted">
-              Guided Smile Assessment
-            </p>
-          </div>
+          <p className="text-sm font-bold tracking-tight text-white">{name}</p>
         </header>
 
         {phase !== "intro" ? (
@@ -436,9 +454,6 @@ function IntroStep({
 }) {
   return (
     <div className="flex flex-col items-center gap-4 text-center motion-safe:[animation:guidedEnter_260ms_ease-out]">
-      <span className="rounded-full border border-tint-royal-line bg-tint-royal px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-status-royal">
-        Guided smile assessment
-      </span>
       <h1 className="text-2xl font-extrabold leading-tight text-navy [text-wrap:balance]">
         {headline?.trim() || "Find your ideal next step for your smile"}
       </h1>
@@ -528,9 +543,9 @@ function QuestionStep({
         ) : (
           <span />
         )}
-        <span className="rounded-full bg-card-muted px-2.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-muted">
-          Step {step}
-        </span>
+        {/* Deliberately plain text, not a badge: it is a quiet reassurance about
+            length, not a thing to look at. */}
+        <span className="text-[0.7rem] font-medium tabular-nums text-muted">{stepCounterLabel(step)}</span>
       </div>
 
       {transition ? (

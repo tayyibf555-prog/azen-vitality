@@ -1,7 +1,7 @@
+import type { ComponentType } from "react";
 import {
   Smile,
   Puzzle,
-  Gem,
   Sun,
   Brush,
   Paintbrush,
@@ -39,8 +39,8 @@ import {
   ChevronsUp,
   Shuffle,
   Equal,
-  type LucideIcon,
 } from "lucide-react";
+import { ToothIcon } from "./tooth-icon";
 
 // Maps each answer-option value (stable, from the quiz bank) to an icon. Shared by
 // the live funnel (assessment-quiz) and the owner-side preview (assessment-preview)
@@ -55,11 +55,23 @@ import {
 //   map pin (the standard "a place" affordance) rather than a forced pun each.
 // - Scalar answers (one/few/many, slight/noticeable/significant) use a same-shaped
 //   trio that visibly escalates.
-export const OPTION_ICONS: Record<string, LucideIcon> = {
+// - Where lucide has no glyph for a dental object at all, a local one is drawn to
+//   lucide's spec rather than settling for a near-miss from another domain (see
+//   tooth-icon.tsx) — hence the deliberately loose OptionIcon type below.
+
+/** The call signature every entry honours: lucide's icons and our local ones alike.
+ *  Callers only ever pass size/strokeWidth/className, so that is all this promises. */
+export type OptionIcon = ComponentType<{
+  size?: number | string;
+  strokeWidth?: number | string;
+  className?: string;
+}>;
+
+export const OPTION_ICONS: Record<string, OptionIcon> = {
   // treatment
   invisalign: Smile, // a straighter smile - not an abstract alignment glyph
   implants: Puzzle, // filling the missing piece
-  veneers: Gem, // a polished cosmetic finish - never the generic "AI sparkle"
+  veneers: ToothIcon, // the thing being treated; a gem read as jewellery, not dentistry
   bonding: Paintbrush, // reshaping/touching up a tooth, distinct from the Brush (hygiene) glyph
   whitening: Sun,
   hygiene: Brush,
@@ -119,6 +131,6 @@ export const OPTION_ICONS: Record<string, LucideIcon> = {
   elsewhere: Map,
 };
 
-export function iconFor(value: string): LucideIcon {
+export function iconFor(value: string): OptionIcon {
   return OPTION_ICONS[value] ?? Circle;
 }

@@ -31,7 +31,10 @@ describe("GuidedAssessmentQuiz still mounts with the picture tiles wired in", ()
         previewMode: true,
       }),
     );
-    expect(html).toContain("Guided Smile Assessment");
+    // The header is the practice's name alone now — the "Guided Smile Assessment"
+    // wordmark that used to sit under it was removed on owner feedback (see
+    // guided-assessment-shell.test.ts, which guards the removal).
+    expect(html).toContain("Vitality Dental");
     expect(html).toContain("Start my assessment");
   });
 });
