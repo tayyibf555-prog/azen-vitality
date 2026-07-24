@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { iconFor } from "./option-icons";
+import { GuidedAssessmentQuiz } from "./guided-assessment-quiz";
 
 // Shared Smile Assessment quiz UI — an ADAPTIVE, one-question-at-a-time funnel.
 // The first question is deterministic (instant, no network); after each answer
@@ -69,6 +70,22 @@ interface Props {
   intro?: string | null;
   /** Practice display name for the branded header (e.g. "Vitality Dental"). */
   practiceName?: string;
+  /**
+   * Visual/interaction style. Omitted (or "classic") renders exactly today's
+   * funnel, byte-identical. "guided" renders the premium one-question-per-screen
+   * GuidedAssessmentQuiz instead. No code path here ever DEFAULTS this to
+   * "guided" — callers must opt in explicitly (?style=guided on the public
+   * pages, or the Classic/Guided switch in the internal live preview).
+   */
+  style?: "classic" | "guided";
+  /**
+   * True only for the internal admin live-preview iframe (?preview=1 on the
+   * public pages). When true the funnel tracker no-ops (no telemetry from an
+   * owner clicking through a preview) and the final submit step is disabled
+   * with a small note, so opening a preview can never record a real enquiry
+   * or send a real SMS/email.
+   */
+  previewMode?: boolean;
 }
 
 /** Normalise the first deterministic question into a FunnelQuestion. */
@@ -105,7 +122,28 @@ function parseQuestion(raw: NextResponse["question"]): FunnelQuestion | null {
   return { id: r.id, prompt: r.prompt, options };
 }
 
-export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, practiceName }: Props) {
+export function AssessmentQuiz(props: Props) {
+  // Dispatch to the premium Guided style. This is a SEPARATE component (never a
+  // conditional early-return inside ClassicAssessmentQuiz) on purpose:
+  // ClassicAssessmentQuiz calls hooks unconditionally on every render, so a
+  // style branch has to happen at the mount boundary (which component gets
+  // rendered), not as an early return before those hooks run.
+  if (props.style === "guided") {
+    return (
+      <GuidedAssessmentQuiz
+        clientSlug={props.clientSlug}
+        campaignSlug={props.campaignSlug}
+        headline={props.headline}
+        intro={props.intro}
+        practiceName={props.practiceName}
+        previewMode={props.previewMode}
+      />
+    );
+  }
+  return <ClassicAssessmentQuiz {...props} />;
+}
+
+function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, practiceName, previewMode }: Props) {
   // The funnel history: history[history.length - 1] is the live question.
   const [history, setHistory] = useState<Step[]>(() => [firstStep()]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -130,18 +168,18 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
   const advancing = useRef(false);
 
   // PII-free funnel telemetry (started / question_answered / contact_viewed /
-  // submitted). Lazy one-time init so listeners are not re-registered per render.
-  const trackerRef = useRef<FunnelTracker | null>(null);
-  if (trackerRef.current === null) {
-    trackerRef.current = createFunnelTracker({
-      surface: "assessment",
-      clientSlug,
-      campaignSlug,
-    });
-  }
+  // submitted). Created once via useState's lazy initializer (never a ref
+  // read/written during render) so listeners are not re-registered per render.
+  // previewMode (the internal admin live-preview iframe) must never emit
+  // telemetry: a no-op tracker, never the real createFunnelTracker.
+  const [tracker] = useState<FunnelTracker>(() =>
+    previewMode
+      ? { track: () => {}, flush: () => {} }
+      : createFunnelTracker({ surface: "assessment", clientSlug, campaignSlug }),
+  );
   useEffect(() => {
-    trackerRef.current?.track("started");
-  }, []);
+    tracker.track("started");
+  }, [tracker]);
 
   const current = history[history.length - 1];
   const step = history.length; // 1-based count of questions shown so far.
@@ -164,7 +202,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     advancing.current = false;
     setPhase("contact");
     setAnimKey((k) => k + 1);
-    trackerRef.current?.track("contact_viewed");
+    tracker.track("contact_viewed");
   }
 
   /** Record the chosen answer, then ask the backend for the next question. */
@@ -172,7 +210,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     if (advancing.current || thinking || busy) return;
     advancing.current = true;
     // Which question (1-based) they just answered — the index only, never the answer.
-    trackerRef.current?.track("question_answered", { index: history.length });
+    tracker.track("question_answered", { index: history.length });
     const q = current.question;
     const nextAnswers = { ...answers, [q.id]: value };
 
@@ -269,7 +307,9 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit || busy) return;
+    // previewMode is also enforced by disabling the submit button below; this
+    // is defense in depth (e.g. an implicit Enter-key form submit).
+    if (!canSubmit || busy || previewMode) return;
     setBusy(true);
     setError(null);
     try {
@@ -316,7 +356,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         bookingUrl: typeof data.bookingUrl === "string" && data.bookingUrl ? data.bookingUrl : undefined,
       });
       setPhase("thanks");
-      trackerRef.current?.track("submitted", { band: data.band });
+      tracker.track("submitted", { band: data.band });
     } catch {
       setError("Sorry, something went wrong. Please try again in a moment.");
     }
@@ -377,6 +417,7 @@ export function AssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
               canSubmit={canSubmit}
               busy={busy}
               error={error}
+              previewMode={previewMode}
               onSubmit={submit}
               onBack={backFromContact}
             />
@@ -587,6 +628,7 @@ function ContactStep({
   canSubmit,
   busy,
   error,
+  previewMode,
   onSubmit,
   onBack,
 }: {
@@ -602,6 +644,7 @@ function ContactStep({
   canSubmit: boolean;
   busy: boolean;
   error: string | null;
+  previewMode?: boolean;
   onSubmit: (e: React.FormEvent) => void;
   onBack: () => void;
 }) {
@@ -733,13 +776,24 @@ function ContactStep({
         <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-[#b3261e]">{error}</p>
       ) : null}
 
-      <Button type="submit" variant="primary" className="min-h-12 w-full" disabled={!canSubmit || busy}>
+      <Button
+        type="submit"
+        variant="primary"
+        className="min-h-12 w-full"
+        disabled={!canSubmit || busy || previewMode}
+      >
         {busy ? <Loader2 size={16} className="motion-safe:animate-spin" /> : null}
         See my next step
       </Button>
-      <p className="text-center text-[0.7rem] leading-snug text-muted">
-        By sending this you agree we can contact you about your enquiry.
-      </p>
+      {previewMode ? (
+        <p className="text-center text-[0.7rem] font-semibold leading-snug text-blue-deep">
+          Preview mode. Submissions are disabled here.
+        </p>
+      ) : (
+        <p className="text-center text-[0.7rem] leading-snug text-muted">
+          By sending this you agree we can contact you about your enquiry.
+        </p>
+      )}
     </form>
   );
 }

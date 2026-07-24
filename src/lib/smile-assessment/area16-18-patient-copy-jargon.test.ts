@@ -7,6 +7,8 @@
 // patient's own choice and is fine — but the forbidden tokens are NHS and private.
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { QUIZ_QUESTIONS } from "./quiz";
 import { ONBOARDING_STEPS } from "@/lib/onboarding/steps";
 import { ONBOARDING_LIBRARY } from "@/lib/onboarding/library";
@@ -44,6 +46,25 @@ describe("no NHS/private jargon in onboarding patient copy", () => {
     for (const q of ONBOARDING_LIBRARY) {
       assertClean(q.key, q.label);
       for (const o of q.options ?? []) assertClean(`${q.key}.${o.value}`, o.label);
+    }
+  });
+});
+
+describe("no NHS/private jargon in the Guided assessment quiz's static copy", () => {
+  // The Guided quiz (src/components/assess/guided-assessment-quiz.tsx) is a new,
+  // original-design public surface (intro screen, big icon tiles, results
+  // reveal, contact step) whose copy is hand-written JSX text rather than data
+  // in QUIZ_QUESTIONS, so it cannot be walked like the bank above. Reading the
+  // component's own source as text still lets this guard catch a forbidden
+  // token landing in any of its patient-facing strings, the same way the seed
+  // tests read a migration file as text (see hygiene-seed-content.test.ts).
+  it("reads the component source and finds no forbidden jargon", () => {
+    const src = readFileSync(
+      resolve(process.cwd(), "src/components/assess/guided-assessment-quiz.tsx"),
+      "utf8",
+    );
+    for (const re of FORBIDDEN) {
+      expect(re.test(src), `guided-assessment-quiz.tsx contains forbidden jargon ${re}`).toBe(false);
     }
   });
 });

@@ -60,6 +60,7 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
       { value: "invisalign", label: "Straightening my teeth (Invisalign)", weight: 20 },
       { value: "implants", label: "Replacing missing teeth (implants)", weight: 20 },
       { value: "veneers", label: "Improving how my teeth look (veneers)", weight: 18 },
+      { value: "bonding", label: "Fixing chips, gaps or shape (bonding)", weight: 17 },
       { value: "whitening", label: "Whitening my teeth", weight: 12 },
       { value: "hygiene", label: "A check-up or hygiene visit", weight: 8 },
       { value: "other", label: "Something else", weight: 6 },
@@ -146,7 +147,7 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     id: "cosmetic_goal",
     prompt: "What would make the biggest difference for you?",
     dimension: "scope",
-    appliesTo: ["veneers", "whitening"],
+    appliesTo: ["veneers", "whitening", "bonding"],
     options: [
       { value: "brighter", label: "A brighter colour", weight: 12 },
       { value: "shape", label: "Fixing chips, gaps or shape", weight: 17 },

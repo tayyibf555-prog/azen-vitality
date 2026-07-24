@@ -17,6 +17,7 @@ export type AssessmentGoalKey =
   | "invisalign"
   | "implants"
   | "veneers"
+  | "bonding"
   | "whitening"
   | "hygiene"
   | "general";
@@ -32,6 +33,7 @@ export const GOAL_CATALOG: GoalDef[] = [
   { key: "invisalign", label: "Invisalign / teeth straightening", treatment: "invisalign" },
   { key: "implants", label: "Dental implants", treatment: "implants" },
   { key: "veneers", label: "Veneers / smile makeover", treatment: "veneers" },
+  { key: "bonding", label: "Composite bonding", treatment: "bonding" },
   { key: "whitening", label: "Teeth whitening", treatment: "whitening" },
   { key: "hygiene", label: "Hygiene / check-ups", treatment: "hygiene" },
   { key: "general", label: "General (any treatment)", treatment: null },

@@ -101,6 +101,27 @@ describe("scoreAssessment", () => {
     expect(full.band).toBe("high");
   });
 
+  it("scores the bonding treatment option (weight comparable to veneers)", () => {
+    const bonding = QUIZ_QUESTIONS.find((q) => q.id === Q_TREATMENT)?.options.find(
+      (o) => o.value === "bonding",
+    );
+    const veneers = QUIZ_QUESTIONS.find((q) => q.id === Q_TREATMENT)?.options.find(
+      (o) => o.value === "veneers",
+    );
+    expect(bonding).toBeDefined();
+    expect(bonding!.weight).toBeGreaterThan(10);
+    expect(Math.abs(bonding!.weight - veneers!.weight)).toBeLessThanOrEqual(3);
+
+    const { rawScore, band } = scoreAssessment({
+      [Q_TREATMENT]: "bonding",
+      [Q_TIMELINE]: "asap",
+      [Q_BUDGET]: "ready",
+      [Q_LOCATION]: "england",
+    });
+    expect(rawScore).toBeGreaterThan(0);
+    expect(band).toBe("high");
+  });
+
   it("treats a clear timeline + funding readiness without a strong treatment as high", () => {
     const { band } = scoreAssessment({
       [Q_TREATMENT]: "whitening", // 12

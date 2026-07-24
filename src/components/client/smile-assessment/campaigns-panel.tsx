@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Loader2, Copy, Check, ExternalLink, Megaphone, X, Pause, Play, ChevronRight } from "lucide-react";
+import { Plus, Loader2, Copy, Check, ExternalLink, Megaphone, X, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SectionCard, StatusPill, EmptyState } from "@/components/primitives";
-import { cn } from "@/lib/utils";
+import { SectionCard, StatusPill, EmptyState, Tabs, type TabItem } from "@/components/primitives";
 import { GOAL_CATALOG, BUDGET_CATALOG } from "@/lib/smile-assessment/campaign";
+import { groupCampaignsByGoal } from "@/lib/smile-assessment/grouping";
 import { getClient } from "@/lib/mock/clients";
 import { AssessmentPreview } from "@/components/assess/assessment-preview";
+import { AssessmentLivePreview } from "./assessment-live-preview";
 
 // One campaign as returned by the admin API (GET/POST). Mirrors the toAdminView
 // shape on the server: the raw campaign plus labels, the public url/path and a
@@ -94,10 +95,12 @@ function embedSnippet(url: string): string {
   return `<iframe src="${url}" style="width:100%;min-height:680px;border:0;border-radius:12px;" title="Smile Assessment" loading="lazy"></iframe>`;
 }
 
-/** "Embed on your website" row: shows the one-line iframe snippet with a copy button. */
-function EmbedRow({ url }: { url: string }) {
+/** "Embed on your website" row: shows the one-line iframe snippet with a copy
+ *  button. `noDivider` drops the top hairline when this is the only row in its
+ *  <dl> (e.g. no ideal customer note precedes it). */
+function EmbedRow({ url, noDivider }: { url: string; noDivider?: boolean }) {
   return (
-    <div className="border-t border-line pt-1.5">
+    <div className={noDivider ? "" : "border-t border-line pt-1.5"}>
       <dt className="text-muted">Embed on your website</dt>
       <dd className="mt-1 space-y-1.5">
         <code className="block max-h-20 overflow-y-auto whitespace-pre-wrap break-all rounded-lg border border-line bg-card-muted px-2 py-1.5 text-[11px] leading-relaxed text-ink">
@@ -128,9 +131,6 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
   // Per-row "status change in flight" guard, keyed by campaign id.
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  // The campaign whose preview is open at the side (click a row to toggle).
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -153,7 +153,6 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
     setForm(EMPTY_FORM);
     setFormError(null);
     setCreatedUrl(null);
-    setSelectedId(null);
     void load();
   }, [load]);
 
@@ -221,7 +220,6 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
   }
 
   const practiceName = getClient(clientSlug)?.name ?? "";
-  const selected = campaigns.find((c) => c.id === selectedId) ?? null;
 
   const slugPreview = (form.slug || form.name)
     .toLowerCase()
@@ -417,7 +415,9 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
           </div>
         ) : null}
 
-        {/* List */}
+        {/* List, grouped into one tab per goal (mirrors the Landing pages
+            section's treatment tabs). Each campaign card carries its own
+            embedded live preview with a Classic/Guided style switch. */}
         {loadError ? (
           <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{loadError}</p>
         ) : loading ? (
@@ -436,133 +436,145 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
             </Button>
           </EmptyState>
         ) : (
-          <div className={cn("grid gap-4", selected ? "lg:grid-cols-[minmax(0,1fr)_300px]" : "")}>
-            <ul className="space-y-3">
-              {campaigns.map((c) => {
-                const isSel = c.id === selectedId;
-                return (
-                  <li
-                    key={c.id}
-                    className={cn(
-                      "rounded-xl border bg-card px-4 py-3.5 transition-colors",
-                      isSel ? "border-blue-dark/50 ring-1 ring-blue-dark/20" : "border-line",
-                    )}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      {/* Click the name/meta to open its preview at the side. */}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(isSel ? null : c.id)}
-                        aria-pressed={isSel}
-                        aria-label={`Preview ${c.name}`}
-                        className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <ChevronRight
-                            size={14}
-                            className={cn("shrink-0 text-muted transition-transform", isSel && "rotate-90 text-blue-dark")}
-                          />
-                          <span className="font-semibold text-navy">{c.name}</span>
-                          <StatusPill tone={c.status === "active" ? "success" : "neutral"}>
-                            {c.status === "active" ? "Active" : "Paused"}
-                          </StatusPill>
-                        </div>
-                        <p className="mt-1 pl-5 text-xs text-muted">
-                          <span className="text-ink">{c.goalLabel}</span>
-                          <span className="px-1.5 text-line-strong">/</span>
-                          <span className="text-ink">{c.budgetLabel}</span>
-                          <span className="px-1.5 text-line-strong">/</span>
-                          <span className="font-semibold tabular-nums text-ink">{c.responseCount}</span>{" "}
-                          {c.responseCount === 1 ? "response" : "responses"}
-                        </p>
-                      </button>
-
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => toggleStatus(c)}
-                        disabled={togglingId !== null}
-                      >
-                        {togglingId === c.id ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : c.status === "active" ? (
-                          <Pause size={14} />
-                        ) : (
-                          <Play size={14} />
-                        )}
-                        {c.status === "active" ? "Pause" : "Activate"}
-                      </Button>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                      <span className={cn("truncate text-xs text-muted", "min-w-0 flex-1")}>{c.url}</span>
-                      <CopyLink url={c.url} />
-                      <a
-                        href={c.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-2.5 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
-                      >
-                        <ExternalLink size={13} /> Open
-                      </a>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-
-            {/* Side preview of the selected assessment: its landing screen + details. */}
-            {selected ? (
-              <div className="lg:sticky lg:top-4 lg:self-start">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="truncate text-xs font-semibold text-navy">{selected.name}</p>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(null)}
-                    aria-label="Close preview"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-card-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-                <AssessmentPreview
-                  practiceName={practiceName}
-                  headline={selected.headline ?? ""}
-                  intro={selected.intro ?? ""}
-                />
-                <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3 text-xs">
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted">Goal</dt>
-                    <dd className="text-right font-semibold text-ink">{selected.goalLabel}</dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted">Budget</dt>
-                    <dd className="text-right font-semibold text-ink">{selected.budgetLabel}</dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted">Responses</dt>
-                    <dd className="text-right font-semibold tabular-nums text-ink">{selected.responseCount}</dd>
-                  </div>
-                  {selected.idealCustomer ? (
-                    <div className="border-t border-line pt-1.5">
-                      <dt className="text-muted">Ideal customer</dt>
-                      <dd className="mt-0.5 text-ink">{selected.idealCustomer}</dd>
-                    </div>
-                  ) : null}
-                  <div className="border-t border-line pt-1.5">
-                    <dt className="text-muted">Link</dt>
-                    <dd className="mt-0.5 flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-ink">{selected.url}</span>
-                      <CopyLink url={selected.url} />
-                    </dd>
-                  </div>
-                  <EmbedRow url={selected.url} />
-                </dl>
-              </div>
-            ) : null}
-          </div>
+          <CampaignTabs campaigns={campaigns} togglingId={togglingId} onToggleStatus={toggleStatus} />
         )}
       </div>
     </SectionCard>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Treatment tabs: one per goal, plus an "All" tab once there's more than one
+ * goal represented (mirrors src/components/client/landing-pages/landing-pages
+ * -view.tsx's groupRowsByTreatment tabs exactly, using the Smile Assessment
+ * equivalent groupCampaignsByGoal). This lives here (inside CampaignsPanel, a
+ * client component) rather than in the server SmileAssessmentView, because the
+ * campaigns are fetched CLIENT-SIDE by this component — grouping them needs
+ * that already-fetched state, so there is no RSC boundary to cross.
+ * ------------------------------------------------------------------------- */
+
+function CampaignTabs({
+  campaigns,
+  togglingId,
+  onToggleStatus,
+}: {
+  campaigns: AdminCampaign[];
+  togglingId: string | null;
+  onToggleStatus: (c: AdminCampaign) => void;
+}) {
+  const groups = groupCampaignsByGoal(campaigns);
+  const goalTabs: TabItem[] = groups.map((group) => ({
+    key: group.key,
+    label: group.label,
+    badge: group.campaigns.length,
+    content: <CampaignList campaigns={group.campaigns} togglingId={togglingId} onToggleStatus={onToggleStatus} />,
+  }));
+  const tabs: TabItem[] =
+    groups.length > 1
+      ? [
+          {
+            key: "all",
+            label: "All",
+            badge: campaigns.length,
+            content: <CampaignList campaigns={campaigns} togglingId={togglingId} onToggleStatus={onToggleStatus} />,
+          },
+          ...goalTabs,
+        ]
+      : goalTabs;
+
+  return <Tabs tabs={tabs} />;
+}
+
+function CampaignList({
+  campaigns,
+  togglingId,
+  onToggleStatus,
+}: {
+  campaigns: AdminCampaign[];
+  togglingId: string | null;
+  onToggleStatus: (c: AdminCampaign) => void;
+}) {
+  return (
+    <ul className="space-y-3">
+      {campaigns.map((c) => (
+        <CampaignCard key={c.id} campaign={c} togglingId={togglingId} onToggleStatus={onToggleStatus} />
+      ))}
+    </ul>
+  );
+}
+
+/** One campaign: header + meta, its public URL, an embedded live preview
+ *  (Classic/Guided), and any extra detail (ideal customer, embed snippet). */
+function CampaignCard({
+  campaign,
+  togglingId,
+  onToggleStatus,
+}: {
+  campaign: AdminCampaign;
+  togglingId: string | null;
+  onToggleStatus: (c: AdminCampaign) => void;
+}) {
+  return (
+    <li className="rounded-xl border border-line bg-card px-4 py-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-navy">{campaign.name}</span>
+            <StatusPill tone={campaign.status === "active" ? "success" : "neutral"}>
+              {campaign.status === "active" ? "Active" : "Paused"}
+            </StatusPill>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            <span className="text-ink">{campaign.goalLabel}</span>
+            <span className="px-1.5 text-line-strong">/</span>
+            <span className="text-ink">{campaign.budgetLabel}</span>
+            <span className="px-1.5 text-line-strong">/</span>
+            <span className="font-semibold tabular-nums text-ink">{campaign.responseCount}</span>{" "}
+            {campaign.responseCount === 1 ? "response" : "responses"}
+          </p>
+        </div>
+
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onToggleStatus(campaign)}
+          disabled={togglingId !== null}
+        >
+          {togglingId === campaign.id ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : campaign.status === "active" ? (
+            <Pause size={14} />
+          ) : (
+            <Play size={14} />
+          )}
+          {campaign.status === "active" ? "Pause" : "Activate"}
+        </Button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+        <span className="min-w-0 flex-1 truncate text-xs text-muted">{campaign.url}</span>
+        <CopyLink url={campaign.url} />
+        <a
+          href={campaign.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-card px-2.5 py-1 text-xs font-semibold text-navy transition-colors hover:bg-card-muted"
+        >
+          <ExternalLink size={13} /> Open
+        </a>
+      </div>
+
+      <AssessmentLivePreview path={campaign.path} title={campaign.name} />
+
+      <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3 text-xs">
+        {campaign.idealCustomer ? (
+          <div>
+            <dt className="text-muted">Ideal customer</dt>
+            <dd className="mt-0.5 text-ink">{campaign.idealCustomer}</dd>
+          </div>
+        ) : null}
+        <EmbedRow url={campaign.url} noDivider={!campaign.idealCustomer} />
+      </dl>
+    </li>
   );
 }

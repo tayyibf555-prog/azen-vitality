@@ -3,8 +3,11 @@ import {
   slugify,
   isValidSlug,
   goalTreatment,
+  goalLabel,
   budgetMatches,
   toPublicCampaign,
+  GOAL_CATALOG,
+  GOAL_KEYS,
   type Campaign,
 } from "./campaign";
 import { scoreAssessment, GOAL_MATCH_BONUS, BUDGET_MATCH_BONUS } from "./scoring";
@@ -44,9 +47,23 @@ describe("goalTreatment", () => {
   it("maps a focused goal to its Q_TREATMENT value, general to null", () => {
     expect(goalTreatment("implants")).toBe("implants");
     expect(goalTreatment("invisalign")).toBe("invisalign");
+    expect(goalTreatment("bonding")).toBe("bonding");
     expect(goalTreatment("general")).toBeNull();
     expect(goalTreatment("nonsense")).toBeNull();
     expect(goalTreatment(null)).toBeNull();
+  });
+});
+
+describe("GOAL_CATALOG bonding entry", () => {
+  it("includes a bonding goal that targets the bonding treatment", () => {
+    const bonding = GOAL_CATALOG.find((g) => g.key === "bonding");
+    expect(bonding).toEqual({ key: "bonding", label: "Composite bonding", treatment: "bonding" });
+    expect(GOAL_KEYS).toContain("bonding");
+    expect(goalLabel("bonding")).toBe("Composite bonding");
+  });
+
+  it("keeps general as the last catalogue entry", () => {
+    expect(GOAL_CATALOG[GOAL_CATALOG.length - 1]?.key).toBe("general");
   });
 });
 

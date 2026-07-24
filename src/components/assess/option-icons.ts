@@ -4,6 +4,7 @@ import {
   Gem,
   Sun,
   Brush,
+  Paintbrush,
   MoreHorizontal,
   Zap,
   CalendarDays,
@@ -52,6 +53,7 @@ export const OPTION_ICONS: Record<string, LucideIcon> = {
   invisalign: Smile, // a straighter smile - not an abstract alignment glyph
   implants: Puzzle, // filling the missing piece
   veneers: Gem, // a polished cosmetic finish - never the generic "AI sparkle"
+  bonding: Paintbrush, // reshaping/touching up a tooth, distinct from the Brush (hygiene) glyph
   whitening: Sun,
   hygiene: Brush,
   other: MoreHorizontal,

@@ -1,0 +1,17 @@
+-- 0059_assessment_bonding_goal.sql
+-- Adds a "bonding" (composite bonding) option to the Smile Assessment quiz's
+-- treatment question (Q_TREATMENT, code: src/lib/smile-assessment/quiz.ts) and a
+-- matching "bonding" campaign goal (src/lib/smile-assessment/campaign.ts,
+-- AssessmentGoalKey + GOAL_CATALOG), so campaigns can target composite bonding
+-- exactly like invisalign/implants/veneers/whitening/hygiene.
+--
+-- NO SCHEMA CHANGE IS NEEDED. Verified against 0018_smile_assessment_campaign.sql:
+-- `goal text not null` carries no CHECK constraint (nor an enum type), so any
+-- string the application code considers valid (GOAL_KEYS, derived from
+-- GOAL_CATALOG) can already be written and read back unchanged. Likewise
+-- smile_assessment_response.responses is a free-form jsonb map of
+-- question id -> option value (0017_smile_assessment.sql), so the new
+-- "bonding" answer value needs no migration there either.
+--
+-- This file exists only as a record: it documents that the 0059 slot in the
+-- migration sequence was considered and intentionally contains no DDL.

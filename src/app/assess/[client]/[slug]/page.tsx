@@ -20,6 +20,11 @@ interface Params {
   client: string;
   slug: string;
 }
+type Search = Promise<{ [key: string]: string | string[] | undefined }>;
+
+function firstParam(v: string | string[] | undefined): string | undefined {
+  return typeof v === "string" ? v : Array.isArray(v) ? v[0] : undefined;
+}
 
 export async function generateMetadata({
   params,
@@ -52,8 +57,10 @@ export async function generateMetadata({
 
 export default async function CampaignAssessmentPage({
   params,
+  searchParams,
 }: {
   params: Promise<Params>;
+  searchParams: Search;
 }) {
   const { client, slug } = await params;
 
@@ -71,6 +78,14 @@ export default async function CampaignAssessmentPage({
 
   const pub = toPublicCampaign(campaign);
 
+  // ?style=guided opts into the premium Guided quiz; anything else (including
+  // absent) stays Classic. ?preview=1 is the internal admin live-preview flag:
+  // it never gates access (this campaign is already public/active either way),
+  // it only tells the quiz to no-op telemetry and disable the final submit.
+  const sp = await searchParams;
+  const style = firstParam(sp.style) === "guided" ? "guided" : "classic";
+  const previewMode = firstParam(sp.preview) === "1";
+
   return (
     <AssessmentQuiz
       clientSlug={client}
@@ -78,6 +93,8 @@ export default async function CampaignAssessmentPage({
       headline={pub.headline}
       intro={pub.intro}
       practiceName={clientRecord.name}
+      style={style}
+      previewMode={previewMode}
     />
   );
 }
