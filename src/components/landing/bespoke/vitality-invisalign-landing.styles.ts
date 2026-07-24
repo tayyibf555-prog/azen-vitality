@@ -237,7 +237,7 @@ export const VITALITY_INVISALIGN_CSS = `
   /* Display face = self-hosted Fraunces (next/font, applied via the wrapper's
      fraunces.variable); body face = the app's Plus Jakarta Sans (--font-jakarta,
      already on <html>). Robust fallbacks keep both graceful if a var is missing. */
-  --vd-display:var(--font-fraunces),"Fraunces",Georgia,"Times New Roman",serif;
+  --vd-display:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --vd-body:var(--font-jakarta),"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --vd-ease:cubic-bezier(.22,.61,.36,1);
   /* Layered soft shadow scale (replaces flat single shadows on light surfaces). */

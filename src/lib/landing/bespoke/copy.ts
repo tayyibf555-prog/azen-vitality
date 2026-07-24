@@ -28,7 +28,6 @@ export interface TitledPair {
 export interface HeaderCopy {
   brand: string;
   brandSub: string;
-  locations: string;
 }
 
 export interface SplitHeadCopy {
@@ -142,7 +141,6 @@ export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
   header: {
     brand: "VITALITY DENTAL",
     brandSub: "NORTH LONDON",
-    locations: "N15, Vitality Dental group",
   },
 
   heroEyebrow: "Straighten your smile with clear aligners",
@@ -160,7 +158,6 @@ export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
   trust: [
     { value: "0%", label: "Finance available" },
     { value: "3D", label: "Digital planning" },
-    { value: "N15", label: "North London" },
   ],
 
   form: {
@@ -543,7 +540,6 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
   header: {
     brand: "VITALITY DENTAL",
     brandSub: "NORTH LONDON",
-    locations: "N15, Vitality Dental group",
   },
 
   heroEyebrow: "Repair chips, gaps and worn edges",
@@ -560,7 +556,6 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
   trust: [
     { value: "0%", label: "Finance available" },
     { value: "£180", label: "Treatment from" },
-    { value: "N15", label: "North London" },
   ],
 
   form: {
@@ -915,7 +910,6 @@ export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
   header: {
     brand: "VITALITY DENTAL",
     brandSub: "NORTH LONDON",
-    locations: "N15, Vitality Dental group",
   },
 
   heroEyebrow: "Professional scale and polish",
@@ -931,7 +925,6 @@ export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
   // length). No rating, review or award claim, so they need no owner verification.
   trust: [
     { value: "£75", label: "Hygiene visit from" },
-    { value: "3 sites", label: "N15, N17 and Romford Road" },
     { value: "30 min", label: "Usually per visit" },
   ],
 

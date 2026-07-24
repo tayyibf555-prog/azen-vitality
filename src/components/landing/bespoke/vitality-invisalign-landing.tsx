@@ -9,7 +9,6 @@ import { INVISALIGN_LANDING_COPY as C } from "@/lib/landing/bespoke/copy";
 import type { VariantKey } from "@/lib/landing/winner";
 import { ConsultationForm } from "./consultation-form";
 import { RevealOnScroll } from "./reveal-on-scroll";
-import { fraunces } from "./fonts";
 import { VITALITY_INVISALIGN_CSS } from "./vitality-invisalign-landing.styles";
 
 // The bespoke, hand-designed Vitality Dental Invisalign landing page, ported from
@@ -48,7 +47,6 @@ const patientImg = (n: number) => `/landing/invisalign/patients/story-${n}.jpg`;
 const beforeAfterImg = (n: number) => `/landing/invisalign/before-after/case-${n}.jpg`;
 
 const CHECK = "✓"; // tick
-const DOT = "●"; // filled circle (header locations pin)
 
 /** Highlight the accent phrase (first, case-insensitive occurrence) in the headline. */
 function AccentedHeadline({ headline, accent }: { headline: string; accent: string }) {
@@ -159,7 +157,7 @@ export function VitalityInvisalignLanding({
       };
 
   return (
-    <div className={`vd-landing ${fraunces.variable}`}>
+    <div className="vd-landing">
       {/* Design CSS, scoped under .vd-landing. Static constant, no interpolation. */}
       <style dangerouslySetInnerHTML={{ __html: VITALITY_INVISALIGN_CSS }} />
       {/* Scroll-reveal + sticky-header controller (client island, no-JS safe). */}
@@ -174,9 +172,6 @@ export function VitalityInvisalignLanding({
               <b>{C.header.brand}</b>
               <span>{C.header.brandSub}</span>
             </div>
-          </div>
-          <div className="locs">
-            <span className="pin">{DOT}</span> {C.header.locations}
           </div>
           <a className="btn-blue" href="#consultation" data-lp-cta>
             {v.ctaLabel}
