@@ -351,4 +351,6 @@ export const VITALITY_INVISALIGN_CSS = `
 @media(min-width:821px){
 .vd-landing .cards6:has(> :nth-child(4):last-child){grid-template-columns:repeat(2,1fr);max-width:860px;margin-left:auto;margin-right:auto}
 }
+/* Owner feedback: no small uppercase label-titles above headings. */
+.vd-landing .eyebrow{display:none}
 `;
