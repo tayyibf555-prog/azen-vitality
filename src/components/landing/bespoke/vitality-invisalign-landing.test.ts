@@ -78,23 +78,4 @@ describe("VitalityInvisalignLanding", () => {
     // rating" checks above pin this; a bare number check would false-match SVG path
     // coordinates like the shield icon's "v4.9").
   });
-
-  it("renders the variant-B design extras (sticky CTA bar + hero price chip), absent on A", () => {
-    const b = render("b");
-    // Hero price chip with its value + note, under the hero subhead.
-    expect(b).toContain('class="vd-hero-chip"');
-    expect(b).toContain('class="vd-hero-chip-value"');
-    expect(b).toContain("From £2,500");
-    // Fixed mobile CTA bar carrying a tracked CTA to the form.
-    expect(b).toContain('class="vd-sticky-cta"');
-    expect(b).toContain('href="#consultation"');
-    expect(b).toContain("data-lp-cta");
-
-    // Variant A emits neither extra element (renders as it did before). We check for
-    // the rendered ELEMENTS, not the bare class token: the shared stylesheet (injected
-    // for both variants) names `.vd-hero-chip`/`.vd-sticky-cta` in its inert selectors.
-    const a = render("a");
-    expect(a).not.toContain('class="vd-hero-chip"');
-    expect(a).not.toContain('class="vd-sticky-cta"');
-  });
 });

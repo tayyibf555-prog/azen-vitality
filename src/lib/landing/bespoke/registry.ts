@@ -98,10 +98,6 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           ctaLabel: "Book my free consultation",
           // Design flags: variant b leads on price, so it earns a hero price chip and
           // a persistent mobile CTA bar. Variant a (above) carries no layout object.
-          layout: {
-            stickyCta: true,
-            heroPriceChip: { value: "From £2,500", note: "0% finance available" },
-          },
         },
       },
     },
@@ -129,10 +125,6 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           ctaLabel: "Book my free bonding consultation",
           // Design flags: the price-led variant b gets a hero price chip + mobile CTA
           // bar. Variant a (above) carries no layout object.
-          layout: {
-            stickyCta: true,
-            heroPriceChip: { value: "From £180", note: "Usually one visit" },
-          },
         },
       },
     },
@@ -161,10 +153,6 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           ctaLabel: "Book my scale and polish",
           // Design flags: the price-led variant b gets a hero price chip + mobile CTA
           // bar. NO finance wording (hygiene has no finance). Variant a carries no layout.
-          layout: {
-            stickyCta: true,
-            heroPriceChip: { value: "£75", note: "Usually about 30 minutes" },
-          },
         },
       },
     },
