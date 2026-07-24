@@ -8,6 +8,8 @@ import {
 import { BONDING_LANDING_COPY as C } from "@/lib/landing/bespoke/copy";
 import type { VariantKey } from "@/lib/landing/winner";
 import { ConsultationForm } from "./consultation-form";
+import { RevealOnScroll } from "./reveal-on-scroll";
+import { fraunces } from "./fonts";
 import { VITALITY_INVISALIGN_CSS } from "./vitality-invisalign-landing.styles";
 
 // The bespoke, hand-designed Vitality Dental composite bonding landing page, a
@@ -205,9 +207,11 @@ export function VitalityBondingLanding({
       };
 
   return (
-    <div className="vd-landing">
+    <div className={`vd-landing ${fraunces.variable}`}>
       {/* Design CSS, scoped under .vd-landing. Reused from the Invisalign page (not forked). */}
       <style dangerouslySetInnerHTML={{ __html: VITALITY_INVISALIGN_CSS }} />
+      {/* Scroll-reveal + sticky-header controller (client island, no-JS safe). */}
+      <RevealOnScroll />
 
       {/* ---- HEADER ------------------------------------------------------- */}
       <header>
@@ -268,7 +272,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- WHAT COMPOSITE BONDING FIXES (line-icon cards) --------------- */}
-      <section className="lt" data-lp-section="fixes">
+      <section className="lt" data-lp-section="fixes" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.fixes.head.eyebrow}</div>
@@ -294,7 +298,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- THE TREATMENT (about + how it works) ------------------------- */}
-      <section className="lt alt" data-lp-section="treatment">
+      <section className="lt alt" data-lp-section="treatment" data-reveal="">
         <div className="wrap">
           <div className="split-head">
             <div>
@@ -335,7 +339,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- BENEFITS ----------------------------------------------------- */}
-      <section className="lt" data-lp-section="benefits">
+      <section className="lt" data-lp-section="benefits" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.benefits.head.eyebrow}</div>
@@ -356,7 +360,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- SUITABILITY (is bonding right for you) ----------------------- */}
-      <section className="lt alt" data-lp-section="suitability">
+      <section className="lt alt" data-lp-section="suitability" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.suitability.head.eyebrow}</div>
@@ -380,7 +384,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- PATIENT STORIES (labelled placeholder slots) ---------------- */}
-      <section className="lt" data-lp-section="stories">
+      <section className="lt" data-lp-section="stories" data-reveal="">
         <div className="wrap">
           <div className="split-head">
             <div>
@@ -417,7 +421,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- BEFORE & AFTER (placeholder slots + kept consent disclaimer) - */}
-      <section className="dk" data-lp-section="before_after">
+      <section className="dk" data-lp-section="before_after" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.beforeAfter.head.eyebrow}</div>
@@ -460,7 +464,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- WHY VITALITY DENTAL ------------------------------------------ */}
-      <section className="lt" data-lp-section="why">
+      <section className="lt" data-lp-section="why" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.why.head.eyebrow}</div>
@@ -481,7 +485,7 @@ export function VitalityBondingLanding({
       </section>
 
       {/* ---- PRICING (real catalogue price) ------------------------------- */}
-      <section className="lt alt" data-lp-section="pricing">
+      <section className="lt alt" data-lp-section="pricing" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.pricing.head.eyebrow}</div>

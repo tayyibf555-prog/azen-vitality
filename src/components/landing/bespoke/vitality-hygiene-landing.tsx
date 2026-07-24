@@ -9,6 +9,8 @@ import { HYGIENE_LANDING_COPY as C } from "@/lib/landing/bespoke/copy";
 import type { VariantKey } from "@/lib/landing/winner";
 import { ConsultationForm } from "./consultation-form";
 import { BeforeAfterSlider } from "./before-after-slider";
+import { RevealOnScroll } from "./reveal-on-scroll";
+import { fraunces } from "./fonts";
 import { VITALITY_INVISALIGN_CSS } from "./vitality-invisalign-landing.styles";
 
 // The bespoke, hand-designed Vitality Dental hygiene (scale and polish) landing page,
@@ -188,9 +190,11 @@ export function VitalityHygieneLanding({
       };
 
   return (
-    <div className="vd-landing">
+    <div className={`vd-landing ${fraunces.variable}`}>
       {/* Design CSS, scoped under .vd-landing. Reused from the Invisalign page (not forked). */}
       <style dangerouslySetInnerHTML={{ __html: VITALITY_INVISALIGN_CSS }} />
+      {/* Scroll-reveal + sticky-header controller (client island, no-JS safe). */}
+      <RevealOnScroll />
 
       {/* ---- HEADER ------------------------------------------------------- */}
       <header>
@@ -251,7 +255,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- SOUND FAMILIAR? (concerns, line-icon cards) ----------------- */}
-      <section className="lt" data-lp-section="pain_points">
+      <section className="lt" data-lp-section="pain_points" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.concerns.head.eyebrow}</div>
@@ -278,7 +282,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- THE VISIT (about + how it works) ---------------------------- */}
-      <section className="lt alt" data-lp-section="treatment">
+      <section className="lt alt" data-lp-section="treatment" data-reveal="">
         <div className="wrap">
           <div className="split-head">
             <div>
@@ -319,7 +323,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- WHAT A PROFESSIONAL CLEAN HELPS WITH (line-icon cards) ------- */}
-      <section className="lt" data-lp-section="helps">
+      <section className="lt" data-lp-section="helps" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.helps.head.eyebrow}</div>
@@ -340,7 +344,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- PRODUCT BAND (a clean you can feel) ------------------------- */}
-      <section className="lt alt" data-lp-section="product">
+      <section className="lt alt" data-lp-section="product" data-reveal="">
         <div className="wrap">
           <div className="align-band">
             <div className="align-media">
@@ -367,7 +371,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- BEFORE & AFTER (interactive slider, illustration) ----------- */}
-      <section className="dk" data-lp-section="before_after">
+      <section className="dk" data-lp-section="before_after" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.beforeAfter.head.eyebrow}</div>
@@ -389,7 +393,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- WHY VITALITY DENTAL ------------------------------------------ */}
-      <section className="lt" data-lp-section="why">
+      <section className="lt" data-lp-section="why" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.why.head.eyebrow}</div>
@@ -410,7 +414,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- PRICING (real catalogue price, NO finance) ------------------- */}
-      <section className="lt alt" data-lp-section="pricing">
+      <section className="lt alt" data-lp-section="pricing" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.pricing.head.eyebrow}</div>
@@ -444,7 +448,7 @@ export function VitalityHygieneLanding({
       </section>
 
       {/* ---- FAQ ---------------------------------------------------------- */}
-      <section className="lt" data-lp-section="faq">
+      <section className="lt" data-lp-section="faq" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.faq.head.eyebrow}</div>

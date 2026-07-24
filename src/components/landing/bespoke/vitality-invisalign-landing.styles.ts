@@ -223,4 +223,128 @@ export const VITALITY_INVISALIGN_CSS = `
 .vd-landing .faq-item summary::after{content:"+";color:var(--blue);font-weight:800;font-size:22px;line-height:1;transition:transform .2s ease}
 .vd-landing .faq-item[open] summary::after{transform:rotate(45deg)}
 .vd-landing .faq-item .faq-a{color:var(--tx-soft);font-size:14.5px;line-height:1.65;padding:0 0 18px}
+
+/* ================================================================
+   PREMIUM PASS — presentational-only refinements (typography, depth,
+   motion, rhythm). Everything below stays scoped under .vd-landing and
+   only ADDS to the ported design above; no copy, markup or compliance
+   meaning changes. Later same-specificity rules intentionally supersede
+   a handful of base values (fonts, hero/section padding, hero h1 size).
+   ================================================================ */
+
+/* --- Design tokens ------------------------------------------------ */
+.vd-landing{
+  /* Display face = self-hosted Fraunces (next/font, applied via the wrapper's
+     fraunces.variable); body face = the app's Plus Jakarta Sans (--font-jakarta,
+     already on <html>). Robust fallbacks keep both graceful if a var is missing. */
+  --vd-display:var(--font-fraunces),"Fraunces",Georgia,"Times New Roman",serif;
+  --vd-body:var(--font-jakarta),"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --vd-ease:cubic-bezier(.22,.61,.36,1);
+  /* Layered soft shadow scale (replaces flat single shadows on light surfaces). */
+  --vd-sh-sm:0 1px 2px rgba(11,32,73,.05),0 3px 8px rgba(11,32,73,.05);
+  --vd-sh-md:0 4px 10px rgba(11,32,73,.06),0 14px 30px rgba(11,32,73,.09);
+  --vd-sh-lg:0 10px 24px rgba(11,32,73,.10),0 34px 64px rgba(11,32,73,.16);
+  /* Top-edge inner highlight + warmer hairline border for cards. */
+  --vd-edge:inset 0 1px 0 rgba(255,255,255,.75);
+  --vd-edge-d:inset 0 1px 0 rgba(255,255,255,.06);
+  --vd-border:#e7ecf5;
+  font-family:var(--vd-body);
+}
+
+/* --- Typography --------------------------------------------------- */
+.vd-landing h1,.vd-landing h2,.vd-landing h3{font-family:var(--vd-display);font-weight:600;font-optical-sizing:auto;letter-spacing:-.02em}
+.vd-landing .hero h1{font-size:clamp(40px,6vw,64px);line-height:1.03;letter-spacing:-.028em;font-weight:600}
+.vd-landing .sec-head h2,.vd-landing .split-head h2{font-size:clamp(30px,4vw,42px);line-height:1.08;letter-spacing:-.022em}
+.vd-landing .align-copy h2{font-size:clamp(28px,3.4vw,38px);line-height:1.1}
+.vd-landing .form h3{font-size:clamp(22px,2.1vw,26px);letter-spacing:-.018em}
+.vd-landing .tpanel h3{letter-spacing:-.018em}
+/* Body: relaxed, 16-17px on the primary reading copy. */
+.vd-landing .hero .lede{font-size:clamp(16px,1.35vw,18px);line-height:1.62}
+.vd-landing .sec-head p,.vd-landing .split-head p{font-size:16.5px;line-height:1.6}
+.vd-landing .align-intro{font-size:16.5px;line-height:1.6}
+.vd-landing .tpanel p{font-size:15.5px;line-height:1.75}
+.vd-landing .pcard p,.vd-landing .cond p{font-size:14.5px;line-height:1.6}
+
+/* --- Depth & light: cards, panels, hero, buttons, fields ---------- */
+.vd-landing .pcard,.vd-landing .step,.vd-landing .faq-item{box-shadow:var(--vd-sh-sm),var(--vd-edge);border-color:var(--vd-border)}
+.vd-landing .cond{box-shadow:var(--vd-sh-md),var(--vd-edge);border-color:var(--vd-border)}
+.vd-landing .tpanel,.vd-landing .getcard{box-shadow:var(--vd-sh-md),var(--vd-edge);border-color:var(--vd-border)}
+.vd-landing .form{box-shadow:0 24px 70px rgba(4,16,44,.46),0 4px 14px rgba(4,16,44,.30),var(--vd-edge)}
+.vd-landing .pcard-dark{box-shadow:var(--vd-sh-lg),var(--vd-edge-d)}
+.vd-landing .facts{box-shadow:0 10px 30px rgba(4,16,44,.22),var(--vd-edge-d)}
+.vd-landing .bacard{box-shadow:0 12px 30px rgba(4,16,44,.28),var(--vd-edge-d)}
+/* Consistent image treatment: layered shadow + hairline ring. */
+.vd-landing .story .ph{box-shadow:var(--vd-sh-md)}
+.vd-landing .align-media img{box-shadow:var(--vd-sh-lg);outline:1px solid rgba(11,32,73,.05);outline-offset:-1px}
+.vd-landing .bacard .baimg{box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+
+/* Hero: warmer glow + a very subtle desaturated grain, content lifted above both. */
+.vd-landing .hero{padding:92px 0 108px}
+.vd-landing .hero .glow{z-index:0;background:radial-gradient(circle at 68% 32%,rgba(91,196,247,.26),transparent 60%)}
+.vd-landing .hero>.wrap{position:relative;z-index:2}
+.vd-landing .hero::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.05;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='vdn'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23vdn)'/%3E%3C/svg%3E")}
+
+/* Buttons: gentle vertical gradient, soft inner top light, pressed state, hover glow. */
+.vd-landing .btn-blue{background-image:linear-gradient(180deg,#1b63ad,var(--blue));box-shadow:0 8px 22px rgba(22,85,154,.28),inset 0 1px 0 rgba(255,255,255,.18);transition:transform .18s var(--vd-ease),box-shadow .18s var(--vd-ease),filter .18s var(--vd-ease)}
+.vd-landing .btn-blue:hover{transform:translateY(-1px);filter:brightness(1.04) saturate(1.05);box-shadow:0 12px 30px rgba(22,85,154,.38),0 0 0 3px rgba(91,196,247,.16),inset 0 1px 0 rgba(255,255,255,.22)}
+.vd-landing .btn-blue:active{transform:translateY(1px);box-shadow:0 4px 12px rgba(22,85,154,.30),inset 0 2px 6px rgba(4,16,44,.22)}
+/* Keep the pricing card's inverted (white) CTA white — re-affirmed at higher specificity. */
+.vd-landing .pcard-dark .btn-blue{background-image:none;background-color:#fff;box-shadow:0 8px 22px rgba(4,16,44,.20),inset 0 1px 0 rgba(255,255,255,.6)}
+.vd-landing .pcard-dark .btn-blue:hover{filter:brightness(1.02);box-shadow:0 12px 28px rgba(4,16,44,.26)}
+/* Form fields: branded focus ring, smooth affordance. */
+.vd-landing .form .field{transition:border-color .16s ease,box-shadow .16s ease,background-color .16s ease}
+.vd-landing .form .field:hover{border-color:#cdd9ec}
+.vd-landing .form .field:focus{outline:none;border-color:var(--blue);background:#fff;box-shadow:0 0 0 3px rgba(22,85,154,.14)}
+
+/* --- Motion: hover lifts + image zoom + sticky-header state -------- */
+.vd-landing .pcard,.vd-landing .step,.vd-landing .cond,.vd-landing .getcard,.vd-landing .faq-item,.vd-landing .bacard{transition:transform .22s var(--vd-ease),box-shadow .22s var(--vd-ease),border-color .22s var(--vd-ease)}
+.vd-landing .pcard:hover,.vd-landing .step:hover,.vd-landing .faq-item:hover{transform:translateY(-3px);box-shadow:var(--vd-sh-md),var(--vd-edge)}
+.vd-landing .cond:hover,.vd-landing .getcard:hover{transform:translateY(-3px);box-shadow:var(--vd-sh-lg),var(--vd-edge)}
+.vd-landing .cond .img{overflow:hidden}
+.vd-landing .cond .img img,.vd-landing .story .ph img,.vd-landing .align-media img{transition:transform .55s var(--vd-ease)}
+.vd-landing .cond:hover .img img,.vd-landing .story:hover .ph img{transform:scale(1.04)}
+.vd-landing .align-band:hover .align-media img{transform:scale(1.02)}
+/* Sticky header gains a compacted, deeper-blurred "stuck" state on scroll. */
+.vd-landing header{transition:background-color .25s var(--vd-ease),box-shadow .25s var(--vd-ease),backdrop-filter .25s var(--vd-ease)}
+.vd-landing header .wrap{transition:height .25s var(--vd-ease)}
+.vd-landing header.is-stuck{background:rgba(255,255,255,.86);backdrop-filter:blur(16px) saturate(1.1);box-shadow:0 6px 24px rgba(11,32,73,.10)}
+.vd-landing header.is-stuck .wrap{height:62px}
+
+/* --- Rhythm: more air around the hero and dark bands -------------- */
+.vd-landing .lt{padding:92px 0}
+.vd-landing .dk{padding:104px 0}
+.vd-landing .banner{padding:38px 44px}
+/* Narrow screens: keep each hero trust value on one line (e.g. "30 min" no longer
+   splits) — flex was shrinking the columns and breaking the text. */
+@media(max-width:520px){
+  .vd-landing .trust{gap:18px}
+  .vd-landing .trust b{font-size:24px;white-space:nowrap}
+}
+
+/* --- Scroll-reveal engine ----------------------------------------- */
+/* The hidden state applies ONLY under .vd-landing.vd-js, which the RevealOnScroll
+   island adds on mount. No-JS / SSR users never get .vd-js, so every section stays
+   visible (the no-JS guard). The transition lives on the revealed state, so hiding is
+   instant (no off-screen fade-out) and only the reveal itself animates. */
+.vd-landing.vd-js section[data-reveal] :is(.sec-head,.split-head,.banner,.tpanel,.align-band,.ba-card),
+.vd-landing.vd-js section[data-reveal]>.wrap>.eyebrow,
+.vd-landing.vd-js section[data-reveal] :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*{opacity:0;transform:translateY(18px)}
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.sec-head,.split-head,.banner,.tpanel,.align-band,.ba-card),
+.vd-landing.vd-js section[data-reveal].is-revealed>.wrap>.eyebrow,
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*{opacity:1;transform:none;transition:opacity .6s var(--vd-ease),transform .6s var(--vd-ease)}
+/* Slight per-card stagger within each grid. */
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*:nth-child(2){transition-delay:.06s}
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*:nth-child(3){transition-delay:.12s}
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*:nth-child(4){transition-delay:.18s}
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*:nth-child(5){transition-delay:.24s}
+.vd-landing.vd-js section[data-reveal].is-revealed :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*:nth-child(n+6){transition-delay:.3s}
+
+/* --- Reduced motion: everything instant, nothing transformed ------ */
+@media (prefers-reduced-motion:reduce){
+  .vd-landing *,.vd-landing *::before,.vd-landing *::after{transition-duration:.001ms!important;animation-duration:.001ms!important;scroll-behavior:auto!important}
+  .vd-landing.vd-js section[data-reveal] :is(.sec-head,.split-head,.banner,.tpanel,.align-band,.ba-card),
+  .vd-landing.vd-js section[data-reveal]>.wrap>.eyebrow,
+  .vd-landing.vd-js section[data-reveal] :is(.cards6,.conds,.steps,.stories,.ba,.price,.faqs)>*{opacity:1!important;transform:none!important}
+  .vd-landing .pcard:hover,.vd-landing .step:hover,.vd-landing .cond:hover,.vd-landing .getcard:hover,.vd-landing .faq-item:hover,.vd-landing .bacard:hover,.vd-landing .btn-blue:hover,.vd-landing .cond:hover .img img,.vd-landing .story:hover .ph img,.vd-landing .align-band:hover .align-media img{transform:none!important}
+}
 `;

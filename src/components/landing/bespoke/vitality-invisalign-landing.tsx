@@ -8,6 +8,8 @@ import {
 import { INVISALIGN_LANDING_COPY as C } from "@/lib/landing/bespoke/copy";
 import type { VariantKey } from "@/lib/landing/winner";
 import { ConsultationForm } from "./consultation-form";
+import { RevealOnScroll } from "./reveal-on-scroll";
+import { fraunces } from "./fonts";
 import { VITALITY_INVISALIGN_CSS } from "./vitality-invisalign-landing.styles";
 
 // The bespoke, hand-designed Vitality Dental Invisalign landing page, ported from
@@ -157,9 +159,11 @@ export function VitalityInvisalignLanding({
       };
 
   return (
-    <div className="vd-landing">
+    <div className={`vd-landing ${fraunces.variable}`}>
       {/* Design CSS, scoped under .vd-landing. Static constant, no interpolation. */}
       <style dangerouslySetInnerHTML={{ __html: VITALITY_INVISALIGN_CSS }} />
+      {/* Scroll-reveal + sticky-header controller (client island, no-JS safe). */}
+      <RevealOnScroll />
 
       {/* ---- HEADER ------------------------------------------------------- */}
       <header>
@@ -220,7 +224,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- PATIENT STORIES (photos + tag only) -------------------------- */}
-      <section className="lt" data-lp-section="stories">
+      <section className="lt" data-lp-section="stories" data-reveal="">
         <div className="wrap">
           <div className="split-head">
             <div>
@@ -243,7 +247,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- SOUND FAMILIAR? (empathy) ------------------------------------ */}
-      <section className="lt alt" data-lp-section="pain_points">
+      <section className="lt alt" data-lp-section="pain_points" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.painPoints.head.eyebrow}</div>
@@ -270,7 +274,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- THE TREATMENT ------------------------------------------------ */}
-      <section className="lt" data-lp-section="treatment">
+      <section className="lt" data-lp-section="treatment" data-reveal="">
         <div className="wrap">
           <div className="split-head">
             <div>
@@ -311,7 +315,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- MEET YOUR ALIGNERS (product showcase) ----------------------- */}
-      <section className="lt" data-lp-section="aligners">
+      <section className="lt" data-lp-section="aligners" data-reveal="">
         <div className="wrap">
           <div className="align-band">
             <div className="align-media">
@@ -338,7 +342,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- CONDITIONS TREATED (3D models) ------------------------------- */}
-      <section className="lt alt" data-lp-section="conditions">
+      <section className="lt alt" data-lp-section="conditions" data-reveal="">
         <div className="wrap">
           <div className="sec-head">
             <div className="eyebrow">{C.conditions.head.eyebrow}</div>
@@ -361,7 +365,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- BEFORE & AFTER (with consent disclaimer) --------------------- */}
-      <section className="dk" data-lp-section="before_after">
+      <section className="dk" data-lp-section="before_after" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.beforeAfter.head.eyebrow}</div>
@@ -384,7 +388,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- WHY VITALITY DENTAL ------------------------------------------ */}
-      <section className="lt" data-lp-section="why">
+      <section className="lt" data-lp-section="why" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.why.head.eyebrow}</div>
@@ -405,7 +409,7 @@ export function VitalityInvisalignLanding({
       </section>
 
       {/* ---- PRICING (real catalogue price) ------------------------------- */}
-      <section className="lt alt" data-lp-section="pricing">
+      <section className="lt alt" data-lp-section="pricing" data-reveal="">
         <div className="wrap">
           <div className="sec-head center">
             <div className="eyebrow">{C.pricing.head.eyebrow}</div>
