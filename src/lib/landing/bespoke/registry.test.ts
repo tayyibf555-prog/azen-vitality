@@ -78,6 +78,50 @@ describe("bespoke registry", () => {
   });
 });
 
+describe("bespoke variant design flags (layout)", () => {
+  // The exact per-page chip the price/finance variant b advertises. Real catalogue
+  // prices only (invisalign £2,500, bonding £180, hygiene £75), and hygiene carries
+  // no finance wording.
+  const EXPECTED_B_CHIP: Record<string, { value: string; note: string }> = {
+    invisalign: { value: "From £2,500", note: "0% finance available" },
+    bonding: { value: "From £180", note: "Usually one visit" },
+    hygiene: { value: "£75", note: "Usually about 30 minutes" },
+  };
+
+  it("variant a carries NO layout object on any page (structurally identical to today)", () => {
+    for (const slug of ["invisalign", "bonding", "hygiene"]) {
+      const t = getBespokeTemplate("vitality", slug)!;
+      expect(t.variants.a.layout).toBeUndefined();
+    }
+  });
+
+  it("variant b enables the sticky CTA + the expected hero price chip on every page", () => {
+    for (const slug of ["invisalign", "bonding", "hygiene"]) {
+      const t = getBespokeTemplate("vitality", slug)!;
+      const b = t.variants.b;
+      expect(b.layout).toBeDefined();
+      expect(b.layout?.stickyCta).toBe(true);
+      expect(b.layout?.heroPriceChip).toEqual(EXPECTED_B_CHIP[slug]);
+    }
+  });
+
+  it("every hero price chip string is compliance-clean", () => {
+    for (const slug of ["invisalign", "bonding", "hygiene"]) {
+      const chip = getBespokeTemplate("vitality", slug)!.variants.b.layout!.heroPriceChip!;
+      expect(scanBannedText(chip.value)).toEqual([]);
+      expect(scanBannedText(chip.note)).toEqual([]);
+    }
+  });
+
+  it("the hygiene chip carries no finance wording (hygiene has no finance)", () => {
+    const chip = getBespokeTemplate("vitality", "hygiene")!.variants.b.layout!.heroPriceChip!;
+    const text = `${chip.value} ${chip.note}`.toLowerCase();
+    expect(text).not.toContain("finance");
+    expect(text).not.toContain("0%");
+    expect(text).not.toContain("interest");
+  });
+});
+
 describe("bespoke copy compliance", () => {
   const template = getBespokeTemplate("vitality", "invisalign")!;
 

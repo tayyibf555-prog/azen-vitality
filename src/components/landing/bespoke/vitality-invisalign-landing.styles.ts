@@ -353,4 +353,30 @@ export const VITALITY_INVISALIGN_CSS = `
 }
 /* Owner feedback: no small uppercase label-titles above headings. */
 .vd-landing .eyebrow{display:none}
+
+/* ================================================================
+   PER-VARIANT DESIGN FLAGS (variant B only) — structural extras the
+   registry toggles via BespokeVariantCopy.layout. Every rule stays
+   scoped under .vd-landing and only targets elements that render for
+   variant B (.vd-hero-chip, .vd-sticky-cta), so variant A — which
+   emits neither element — is visually unchanged by anything here.
+   ================================================================ */
+
+/* Hero price chip: a distinct blue-soft chip under the hero subhead, value bold +
+   note muted, sitting above the pills. Premium: soft tint, navy ink, rounded, a
+   layered shadow with a top inner highlight. */
+.vd-landing .vd-hero-chip{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin-top:24px;padding:12px 20px;border-radius:14px;background:var(--blue-soft);color:var(--navy);border:1px solid rgba(255,255,255,.55);box-shadow:0 10px 26px rgba(4,16,44,.24),inset 0 1px 0 rgba(255,255,255,.75)}
+.vd-landing .vd-hero-chip .vd-hero-chip-value{font-family:var(--vd-display);font-weight:800;font-size:19px;letter-spacing:-.01em;color:var(--navy)}
+.vd-landing .vd-hero-chip .vd-hero-chip-note{font-weight:600;font-size:13.5px;color:var(--tx-soft)}
+
+/* Sticky mobile CTA bar: hidden by default (desktop), a fixed full-width bar under
+   820px. Pure CSS + markup, so it appears without JavaScript. Safe-area padding keeps
+   the tap target clear of the home indicator, and the page body gains matching bottom
+   padding (only when the bar exists) so the footer is never hidden behind it. */
+.vd-landing .vd-sticky-cta{display:none}
+@media(max-width:820px){
+  .vd-landing .vd-sticky-cta{position:fixed;left:0;right:0;bottom:0;z-index:40;display:block;background:rgba(255,255,255,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));box-shadow:0 -8px 26px rgba(11,32,73,.16)}
+  .vd-landing .vd-sticky-cta .btn-blue{display:block;width:100%;text-align:center}
+  .vd-landing:has(.vd-sticky-cta){padding-bottom:78px}
+}
 `;

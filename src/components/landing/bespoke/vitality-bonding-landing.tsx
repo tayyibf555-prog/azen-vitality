@@ -9,6 +9,7 @@ import { BONDING_LANDING_COPY as C } from "@/lib/landing/bespoke/copy";
 import type { VariantKey } from "@/lib/landing/winner";
 import { ConsultationForm } from "./consultation-form";
 import { RevealOnScroll } from "./reveal-on-scroll";
+import { HeroPriceChip, StickyCtaBar } from "./variant-extras";
 import { VITALITY_INVISALIGN_CSS } from "./vitality-invisalign-landing.styles";
 
 // The bespoke, hand-designed Vitality Dental composite bonding landing page, a
@@ -237,6 +238,8 @@ export function VitalityBondingLanding({
                 <AccentedHeadline headline={v.heroHeadline} accent={v.heroAccent} />
               </h1>
               <p className="lede">{v.heroSubhead}</p>
+              {/* Hero price chip: variant b only (driven by the layout flag). */}
+              <HeroPriceChip chip={v.layout?.heroPriceChip} />
               <div className="pills">
                 {C.heroPills.map((pill) => (
                   <span className="pill" key={pill}>
@@ -525,6 +528,9 @@ export function VitalityBondingLanding({
           <span className="compliance">{C.footer.compliance}</span>
         </div>
       </footer>
+
+      {/* Fixed mobile CTA bar: variant b only (driven by the layout flag). */}
+      <StickyCtaBar enabled={v.layout?.stickyCta} ctaLabel={v.ctaLabel} />
     </div>
   );
 }

@@ -14,15 +14,23 @@
 // variant content: its per-variant copy (the A/B surface) lives here, so the copy
 // is code-reviewed and compliance-scanned alongside the design.
 //
-// THE A/B SURFACE. Only four things differ between variant a and b: the hero
-// headline, the hero accent (a verbatim substring of the headline, highlighted in
-// brand blue by the renderer), the hero subhead, and the primary CTA label.
-// Everything else in the design is identical across variants.
+// THE A/B SURFACE. Variant a and b differ in the hero headline, the hero accent (a
+// verbatim substring of the headline, highlighted in brand blue by the renderer),
+// the hero subhead, the primary CTA label, and now an optional set of DESIGN flags
+// (see `layout`) that let variant b differ in LAYOUT/STRUCTURE, not just wording.
+// Everything not named here is identical across variants.
 //
-// COMPLIANCE: every string below is scanned by scanBannedText in the registry
-// test (British English, no dashes, no testimonials/superlatives/funding words).
+// DESIGN FLAGS (layout). Optional, and present ONLY on the price/finance variant b:
+// variant a carries no `layout` object at all, so it renders byte-identical to the
+// original outcome-led design. The flags drive purely presentational, server-rendered
+// extras (a fixed mobile CTA bar, a hero price chip) via the shared scoped stylesheet;
+// they add no copy beyond the `heroPriceChip` strings, which are scanned like the rest.
+//
+// COMPLIANCE: every string below (including the heroPriceChip value + note) is scanned
+// by scanBannedText in the registry test (British English, no dashes, no
+// testimonials/superlatives/funding words).
 
-/** The per-variant hero + CTA copy: the only thing that differs a vs b. */
+/** The per-variant hero + CTA copy plus optional design flags: what differs a vs b. */
 export interface BespokeVariantCopy {
   /** Full hero headline. */
   heroHeadline: string;
@@ -32,6 +40,23 @@ export interface BespokeVariantCopy {
   heroSubhead: string;
   /** Primary CTA label (header button, pricing button, and the form submit). */
   ctaLabel: string;
+  /**
+   * Optional per-variant DESIGN flags. Present ONLY on variant b (the price/finance
+   * angle); variant a omits this entirely so it stays structurally identical to today.
+   * Each flag toggles a server-rendered, presentational-only extra defined in the
+   * shared `.vd-landing` stylesheet.
+   */
+  layout?: {
+    /** Render a fixed, full-width mobile CTA bar (shown under 820px only). */
+    stickyCta?: boolean;
+    /** Render a premium price chip under the hero subhead (value bold, note muted). */
+    heroPriceChip?: {
+      /** The headline figure, e.g. "From £2,500" or "£75". Real catalogue prices only. */
+      value: string;
+      /** A short muted note beside it, e.g. "0% finance available". */
+      note: string;
+    };
+  };
 }
 
 export interface BespokeTemplate {
@@ -71,6 +96,12 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           heroSubhead:
             "Invisalign clear aligners at Vitality Dental, mapped in 3D so you see your result before you start. Spread the cost with 0% finance, and book a free, unhurried consultation.",
           ctaLabel: "Book my free consultation",
+          // Design flags: variant b leads on price, so it earns a hero price chip and
+          // a persistent mobile CTA bar. Variant a (above) carries no layout object.
+          layout: {
+            stickyCta: true,
+            heroPriceChip: { value: "From £2,500", note: "0% finance available" },
+          },
         },
       },
     },
@@ -96,6 +127,12 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           heroSubhead:
             "Composite bonding at Vitality Dental shapes tooth coloured material onto the tooth to smooth chips, close small gaps and even up edges, usually in one visit. Book a free, no pressure consultation.",
           ctaLabel: "Book my free bonding consultation",
+          // Design flags: the price-led variant b gets a hero price chip + mobile CTA
+          // bar. Variant a (above) carries no layout object.
+          layout: {
+            stickyCta: true,
+            heroPriceChip: { value: "From £180", note: "Usually one visit" },
+          },
         },
       },
     },
@@ -122,6 +159,12 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           heroSubhead:
             "A thorough hygiene visit with the hygienist at Vitality Dental, usually about 30 minutes. We lift plaque, tartar and everyday staining, and leave your teeth feeling fresh and clean.",
           ctaLabel: "Book my scale and polish",
+          // Design flags: the price-led variant b gets a hero price chip + mobile CTA
+          // bar. NO finance wording (hygiene has no finance). Variant a carries no layout.
+          layout: {
+            stickyCta: true,
+            heroPriceChip: { value: "£75", note: "Usually about 30 minutes" },
+          },
         },
       },
     },

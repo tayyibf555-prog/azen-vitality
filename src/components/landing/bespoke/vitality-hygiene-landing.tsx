@@ -10,6 +10,7 @@ import type { VariantKey } from "@/lib/landing/winner";
 import { ConsultationForm } from "./consultation-form";
 import { BeforeAfterSlider } from "./before-after-slider";
 import { RevealOnScroll } from "./reveal-on-scroll";
+import { HeroPriceChip, StickyCtaBar } from "./variant-extras";
 import { VITALITY_INVISALIGN_CSS } from "./vitality-invisalign-landing.styles";
 
 // The bespoke, hand-designed Vitality Dental hygiene (scale and polish) landing page,
@@ -220,6 +221,8 @@ export function VitalityHygieneLanding({
                 <AccentedHeadline headline={v.heroHeadline} accent={v.heroAccent} />
               </h1>
               <p className="lede">{v.heroSubhead}</p>
+              {/* Hero price chip: variant b only (driven by the layout flag). */}
+              <HeroPriceChip chip={v.layout?.heroPriceChip} />
               <div className="pills">
                 {C.heroPills.map((pill) => (
                   <span className="pill" key={pill}>
@@ -470,6 +473,9 @@ export function VitalityHygieneLanding({
           <span className="compliance">{C.footer.compliance}</span>
         </div>
       </footer>
+
+      {/* Fixed mobile CTA bar: variant b only (driven by the layout flag). */}
+      <StickyCtaBar enabled={v.layout?.stickyCta} ctaLabel={v.ctaLabel} />
     </div>
   );
 }
