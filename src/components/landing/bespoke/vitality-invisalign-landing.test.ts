@@ -52,7 +52,7 @@ describe("VitalityInvisalignLanding", () => {
 
   it("renders the per-variant accented headline and CTA label", () => {
     const a = render("a");
-    expect(a).toContain('<span class="acc">from 3 months</span>');
+    expect(a).toContain('<span class="acc">clear aligners</span>');
     expect(a).toContain("Book my free consultation");
 
     const b = render("b");
