@@ -8,10 +8,18 @@ import { FIRST_QUESTION_ID, questionById, Q_TREATMENT } from "@/lib/smile-assess
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { findTreatment } from "@/lib/treatments/catalog";
 import { iconFor } from "./option-icons";
+import {
+  imageFor,
+  imageAltFor,
+  heroFor,
+  OPTION_IMAGE_WIDTH,
+  OPTION_IMAGE_HEIGHT,
+} from "./option-images";
 
 // The premium "Guided" Smile Assessment style: one question per screen inside a
 // white card floating on a navy -> royal Vitality gradient, a real progress bar,
-// big tappable icon tiles, and a RESULTS REVEAL screen (treatment + a couple of
+// big tappable tiles (a 3D-model render where option-images.ts has one for that
+// question + option, an icon chip otherwise), and a RESULTS REVEAL screen (treatment + a couple of
 // factual, catalogue-sourced chips) BEFORE the contact form, instead of asking
 // for contact details up front. Rendered by AssessmentQuiz when style="guided";
 // never mounted on its own.
@@ -449,8 +457,15 @@ function IntroStep({
 }
 
 /* ---------------------------------------------------------------------------
- * Question screen — big tappable icon tiles + a real progress bar (drawn by
- * the parent, above this card).
+ * Question screen — big tappable tiles + a real progress bar (drawn by the
+ * parent, above this card).
+ *
+ * A tile shows a 3D-model render when option-images.ts has one for this exact
+ * questionId + option value (today: the smile_concern picture question), and
+ * its lucide icon chip otherwise. Icon is the DEFAULT, not the fallback: most
+ * options have no artwork, so both paths are first-class. Everything else about
+ * the tile — selected/hover/focus treatment, aria-pressed, the thinking spinner
+ * slot — is identical either way.
  * ------------------------------------------------------------------------- */
 
 function QuestionStep({
@@ -487,6 +502,11 @@ function QuestionStep({
     if (step > 1) regionRef.current?.focus();
   }, [step]);
 
+  // Optional per-question hero artwork. Always null today (the map ships empty);
+  // this is the wired seam. Rendered just OUTSIDE the fieldset rather than inside
+  // it, because <legend> has to stay the fieldset's first child.
+  const hero = heroFor(question.id);
+
   return (
     <div
       key={animKey}
@@ -517,6 +537,21 @@ function QuestionStep({
         <p className="mb-3 text-[0.8rem] font-medium leading-snug text-blue-royal">{transition}</p>
       ) : null}
 
+      {hero ? (
+        <span className="mb-4 block overflow-hidden rounded-2xl bg-[#eef3fb]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={hero}
+            alt=""
+            width={OPTION_IMAGE_WIDTH}
+            height={OPTION_IMAGE_HEIGHT}
+            loading="lazy"
+            decoding="async"
+            className="h-auto w-full object-cover"
+          />
+        </span>
+      ) : null}
+
       <fieldset disabled={thinking}>
         <legend className="mb-4 text-xl font-extrabold leading-snug text-navy [text-wrap:balance] sm:text-2xl">
           {question.prompt}
@@ -525,6 +560,8 @@ function QuestionStep({
           {question.options.map((o) => {
             const checked = selected === o.value;
             const Icon = iconFor(o.value);
+            const artSrc = imageFor(question.id, o.value);
+            const artAlt = imageAltFor(question.id, o.value);
             return (
               <button
                 key={o.value}
@@ -541,15 +578,40 @@ function QuestionStep({
                   thinking ? "cursor-default" : "cursor-pointer",
                 )}
               >
-                <span
-                  className={cn(
-                    "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-colors",
-                    checked ? "bg-blue-royal text-white" : "bg-blue-royal/10 text-blue-royal group-hover:bg-blue-royal/15",
-                  )}
-                  aria-hidden
-                >
-                  <Icon size={22} strokeWidth={2} />
-                </span>
+                {artSrc ? (
+                  // The render takes the icon chip's slot. The tinted plate behind
+                  // it matches the conditions cards elsewhere on the site so the
+                  // cut-out models sit on the same ground. width/height are the
+                  // asset's intrinsic 4:3 size, so the box is reserved before the
+                  // lazy-loaded file arrives and nothing reflows.
+                  <span
+                    className={cn(
+                      "block w-full max-w-[9rem] shrink-0 overflow-hidden rounded-xl bg-[#eef3fb] ring-1 transition-colors",
+                      checked ? "ring-blue-royal/40" : "ring-transparent",
+                    )}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={artSrc}
+                      alt={artAlt ?? o.label}
+                      width={OPTION_IMAGE_WIDTH}
+                      height={OPTION_IMAGE_HEIGHT}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-auto w-full object-cover"
+                    />
+                  </span>
+                ) : (
+                  <span
+                    className={cn(
+                      "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-colors",
+                      checked ? "bg-blue-royal text-white" : "bg-blue-royal/10 text-blue-royal group-hover:bg-blue-royal/15",
+                    )}
+                    aria-hidden
+                  >
+                    <Icon size={22} strokeWidth={2} />
+                  </span>
+                )}
                 <span className={cn("text-[13px] font-semibold leading-snug", checked ? "text-navy" : "text-ink")}>
                   {o.label}
                 </span>

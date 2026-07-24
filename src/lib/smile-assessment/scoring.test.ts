@@ -134,6 +134,81 @@ describe("scoreAssessment", () => {
   });
 });
 
+describe("the smile_concern picture question's weights", () => {
+  const smileConcern = QUIZ_QUESTIONS.find((q) => q.id === "smile_concern");
+  const alignDetail = QUIZ_QUESTIONS.find((q) => q.id === "align_detail");
+
+  it("sits in the same band as the other aligners scope question", () => {
+    expect(smileConcern).toBeDefined();
+    expect(alignDetail).toBeDefined();
+    const max = Math.max(...smileConcern!.options.map((o) => o.weight));
+    // Same ceiling, so whichever scope question the funnel picks, the answer
+    // carries the same weight in the normalised score.
+    expect(max).toBe(Math.max(...alignDetail!.options.map((o) => o.weight)));
+  });
+
+  it("weighs a named condition in the 13-18 band and 'not sure' below it", () => {
+    for (const o of smileConcern!.options) {
+      if (o.value === "unsure") {
+        // Matches every other "I'm not sure" in the bank.
+        expect(o.weight).toBe(9);
+        continue;
+      }
+      expect(o.weight, `${o.value} weight`).toBeGreaterThanOrEqual(13);
+      expect(o.weight, `${o.value} weight`).toBeLessThanOrEqual(18);
+    }
+  });
+
+  it("ranks a specific concern above 'my bite looks fairly even' above 'not sure'", () => {
+    const w = (v: string) => smileConcern!.options.find((o) => o.value === v)!.weight;
+    expect(w("crossbite")).toBeGreaterThan(w("even"));
+    expect(w("even")).toBeGreaterThan(w("unsure"));
+  });
+
+  it("scores a keen aligners enquiry as high whichever option is picked", () => {
+    for (const o of smileConcern!.options) {
+      const { rawScore, band } = scoreAssessment({
+        [Q_TREATMENT]: "invisalign", // 20 / 20
+        [Q_TIMELINE]: "asap", // 30 / 30
+        [Q_BUDGET]: "ready", // 30 / 30
+        [Q_LOCATION]: "england", // 8 / 8
+        smile_concern: o.value, // w / 18
+      });
+      expect(rawScore, `${o.value} score`).toBeGreaterThan(0);
+      expect(band, `${o.value} band`).toBe("high");
+    }
+  });
+
+  it("normalises exactly like any other answered question", () => {
+    // A top answer everywhere => 106/106 => 100, unchanged in shape by the new question.
+    expect(
+      scoreAssessment({
+        [Q_TREATMENT]: "invisalign",
+        [Q_TIMELINE]: "asap",
+        [Q_BUDGET]: "ready",
+        [Q_LOCATION]: "england",
+        smile_concern: "crossbite", // 18 / 18
+      }).rawScore,
+    ).toBe(100);
+    // Swapping in the weakest option costs exactly its weight gap: 97 / 106 = 92.
+    expect(
+      scoreAssessment({
+        [Q_TREATMENT]: "invisalign",
+        [Q_TIMELINE]: "asap",
+        [Q_BUDGET]: "ready",
+        [Q_LOCATION]: "england",
+        smile_concern: "unsure", // 9 / 18
+      }).rawScore,
+    ).toBe(92);
+  });
+
+  it("cannot lift an under-covered submission to high on its own", () => {
+    const one = scoreAssessment({ smile_concern: "crossbite" });
+    expect(one.rawScore).toBe(100);
+    expect(one.band).toBe("medium"); // core trio still incomplete
+  });
+});
+
 describe("bandFor boundaries", () => {
   it("bands at and around the high threshold", () => {
     expect(bandFor(BAND_HIGH)).toBe("high"); // 70

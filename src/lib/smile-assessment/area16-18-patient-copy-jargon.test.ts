@@ -52,19 +52,27 @@ describe("no NHS/private jargon in onboarding patient copy", () => {
 
 describe("no NHS/private jargon in the Guided assessment quiz's static copy", () => {
   // The Guided quiz (src/components/assess/guided-assessment-quiz.tsx) is a new,
-  // original-design public surface (intro screen, big icon tiles, results
+  // original-design public surface (intro screen, big tappable tiles, results
   // reveal, contact step) whose copy is hand-written JSX text rather than data
   // in QUIZ_QUESTIONS, so it cannot be walked like the bank above. Reading the
   // component's own source as text still lets this guard catch a forbidden
   // token landing in any of its patient-facing strings, the same way the seed
   // tests read a migration file as text (see hygiene-seed-content.test.ts).
-  it("reads the component source and finds no forbidden jargon", () => {
-    const src = readFileSync(
-      resolve(process.cwd(), "src/components/assess/guided-assessment-quiz.tsx"),
-      "utf8",
-    );
-    for (const re of FORBIDDEN) {
-      expect(re.test(src), `guided-assessment-quiz.tsx contains forbidden jargon ${re}`).toBe(false);
-    }
-  });
+  //
+  // option-images.ts is on the list for the same reason and then some: it holds
+  // the tiles' ALT TEXT and their asset paths, both of which reach the patient's
+  // DOM, and neither of which lives in QUIZ_QUESTIONS either.
+  const GUIDED_SOURCES = [
+    "src/components/assess/guided-assessment-quiz.tsx",
+    "src/components/assess/option-images.ts",
+  ];
+
+  for (const path of GUIDED_SOURCES) {
+    it(`reads ${path} and finds no forbidden jargon`, () => {
+      const src = readFileSync(resolve(process.cwd(), path), "utf8");
+      for (const re of FORBIDDEN) {
+        expect(re.test(src), `${path} contains forbidden jargon ${re}`).toBe(false);
+      }
+    });
+  }
 });

@@ -132,6 +132,36 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     ],
   },
   {
+    // The PICTURE question: the Guided style renders each of these options as a
+    // 3D-model tile (see src/components/assess/option-images.ts), which is why the
+    // values are concrete conditions rather than a severity scale. Deliberately a
+    // SEPARATE question from align_detail below, not a replacement: align_detail
+    // measures HOW MUCH ("slight" -> "significant"), this one measures WHAT, and
+    // its values/weights are new so nothing already scored or validated moves.
+    //
+    // Both are dimension "scope" + appliesTo invisalign, so both sit in the
+    // invisalign candidate pool. That is intentional and safe: DIMENSION_PRIORITY
+    // ranks the pool, the AI picks one question at a time from it, and
+    // shouldFinish/MAX_QUESTIONS cap the run — so a patient gets at most a couple
+    // of scope questions, never both-plus-everything. This entry is listed BEFORE
+    // align_detail so that on the priority tie (both "scope") the stable sort puts
+    // the picture question first, making it the preferred scope ask for aligners.
+    id: "smile_concern",
+    prompt: "Which of these best describes your teeth?",
+    dimension: "scope",
+    appliesTo: ["invisalign"],
+    options: [
+      { value: "crowded", label: "Crowded or overlapping", weight: 17 },
+      { value: "gaps", label: "Gaps between my teeth", weight: 17 },
+      { value: "open_bite", label: "My front teeth don't meet", weight: 18 },
+      { value: "overbite", label: "My top teeth sit too far over", weight: 18 },
+      { value: "underbite", label: "My bottom teeth sit further forward", weight: 18 },
+      { value: "crossbite", label: "Some top teeth sit inside the bottom ones", weight: 18 },
+      { value: "even", label: "My bite looks fairly even", weight: 13 },
+      { value: "unsure", label: "I'm not sure", weight: 9 },
+    ],
+  },
+  {
     id: "align_detail",
     prompt: "How would you describe your teeth at the moment?",
     dimension: "scope",

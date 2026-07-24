@@ -32,6 +32,13 @@ import {
   Wand2,
   MapPin,
   Map,
+  Layers,
+  Columns2,
+  Unlink,
+  ChevronsDown,
+  ChevronsUp,
+  Shuffle,
+  Equal,
   type LucideIcon,
 } from "lucide-react";
 
@@ -88,6 +95,19 @@ export const OPTION_ICONS: Record<string, LucideIcon> = {
   slight: Circle,
   noticeable: Grip,
   significant: Grid3x3,
+  // smile_concern — the picture question. The GUIDED style draws a 3D-model render
+  // for these instead (see option-images.ts), but Classic is icon-only and serves
+  // the same question, so each value still needs its own glyph: seven identical
+  // fallback dots would be worse than no question at all. Geometry rather than
+  // objects here, matching the other scope trios above, and each one states the
+  // RELATIONSHIP the option describes rather than illustrating teeth.
+  crowded: Layers, // overlapping, no room
+  gaps: Columns2, // a visible space between two
+  open_bite: Unlink, // the two halves never meet
+  overbite: ChevronsDown, // the top reaches down too far over the bottom
+  underbite: ChevronsUp, // the bottom pushes up past the top
+  crossbite: Shuffle, // they cross over each other
+  even: Equal, // balanced
   // cosmetic goal
   brighter: Sun,
   shape: PencilRuler,
