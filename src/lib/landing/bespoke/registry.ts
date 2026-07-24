@@ -95,7 +95,7 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
           heroAccent: "0% finance",
           heroSubhead:
             "Invisalign clear aligners at Vitality Dental, mapped in 3D so you see your result before you start. Spread the cost with 0% finance, and book a free, unhurried consultation.",
-          ctaLabel: "Book my free consultation",
+          ctaLabel: "Check if I am suitable",
           // Design flags: variant b leads on price, so it earns a hero price chip and
           // a persistent mobile CTA bar. Variant a (above) carries no layout object.
         },
