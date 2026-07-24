@@ -201,7 +201,6 @@ export function VitalityHygieneLanding({
             <img src={LOGO} alt={`${practiceName} logo`} />
             <div>
               <b>{C.header.brand}</b>
-              <span>{C.header.brandSub}</span>
             </div>
           </div>
           <a className="btn-blue" href="#consultation" data-lp-cta>

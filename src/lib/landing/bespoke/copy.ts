@@ -27,7 +27,6 @@ export interface TitledPair {
 
 export interface HeaderCopy {
   brand: string;
-  brandSub: string;
 }
 
 export interface SplitHeadCopy {
@@ -140,7 +139,6 @@ export interface InvisalignLandingCopy {
 export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
   header: {
     brand: "VITALITY DENTAL",
-    brandSub: "NORTH LONDON",
   },
 
   heroEyebrow: "Straighten your smile with clear aligners",
@@ -389,8 +387,8 @@ export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
         body: "You are treated by an experienced clinician who plans and monitors your result personally, start to finish.",
       },
       {
-        title: "North London, easy to reach",
-        body: "Based at N15, convenient and welcoming, with flexible appointment times around your schedule.",
+        title: "Easy to get to",
+        body: "Convenient and welcoming, with flexible appointment times around your schedule.",
       },
       {
         title: "3D planned from day one",
@@ -437,7 +435,7 @@ export const INVISALIGN_LANDING_COPY: InvisalignLandingCopy = {
 
   footer: {
     brand: "Vitality Dental",
-    tagline: "Invisalign, N15 North London",
+    tagline: "Invisalign",
     builtBy: "Built by Azen",
     compliance:
       "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
@@ -539,7 +537,6 @@ export interface BondingLandingCopy {
 export const BONDING_LANDING_COPY: BondingLandingCopy = {
   header: {
     brand: "VITALITY DENTAL",
-    brandSub: "NORTH LONDON",
   },
 
   heroEyebrow: "Repair chips, gaps and worn edges",
@@ -635,8 +632,7 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
       "Composite bonding is a tooth coloured resin that is applied to the tooth, shaped by hand, then set firm and polished so it blends with your natural teeth. It is used to repair small chips, close minor gaps, and reshape uneven or worn edges. It usually needs little preparation of the tooth underneath, and in many cases it can be done in a single visit. Over time bonding can chip or stain and may need a small repair or refresh, which your dentist will talk through with you.",
     keyFactsTitle: "Key facts",
     keyFacts: [
-      "Usually one visit",
-      "Tooth coloured resin",
+        "Tooth coloured resin",
       "Minimal preparation",
       "0% finance available",
       "Free initial consultation",
@@ -753,8 +749,8 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
         body: "The resin is matched and shaped to your natural teeth, so the result blends in.",
       },
       {
-        title: "North London, easy to reach",
-        body: "Based at N15, convenient and welcoming, with flexible appointment times around your schedule.",
+        title: "Easy to get to",
+        body: "Convenient and welcoming, with flexible appointment times around your schedule.",
       },
       {
         title: "0% interest-free finance",
@@ -791,13 +787,12 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
         title: "0% interest-free finance",
         body: "Start today without paying everything upfront.",
       },
-      { title: "Usually one visit", body: "Many cases are completed in a single appointment." },
     ],
   },
 
   footer: {
     brand: "Vitality Dental",
-    tagline: "Composite bonding, N15 North London",
+    tagline: "Composite bonding",
     builtBy: "Built by Azen",
     compliance:
       "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
@@ -908,7 +903,6 @@ export interface HygieneLandingCopy {
 export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
   header: {
     brand: "VITALITY DENTAL",
-    brandSub: "NORTH LONDON",
   },
 
   heroEyebrow: "Professional scale and polish",
@@ -1123,7 +1117,7 @@ export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
       },
       {
         title: "Three London sites",
-        body: "Book at N15, N17 or Romford Road, whichever is easiest for you to reach.",
+        body: "Book a time that suits you, with flexible appointments around your schedule.",
       },
       {
         title: "Clear pricing",
@@ -1201,7 +1195,7 @@ export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
 
   footer: {
     brand: "Vitality Dental",
-    tagline: "Dental hygiene, N15 North London",
+    tagline: "Dental hygiene",
     builtBy: "Built by Azen",
     compliance:
       "Our dentists and hygienists are GDC registered. Treatment suitability always depends on a clinical assessment.",
