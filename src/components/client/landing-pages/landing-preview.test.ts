@@ -10,7 +10,7 @@ describe("LandingPreview", () => {
   );
 
   it("embeds the page in an iframe pointed at the given url", () => {
-    expect(html).toContain(`src="${url}"`);
+    expect(html).toMatch(/src="[^"]*v=a"/);
     expect(html).toContain("iframe");
   });
 

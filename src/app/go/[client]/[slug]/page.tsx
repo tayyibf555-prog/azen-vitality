@@ -145,6 +145,11 @@ export default async function LandingPageRoute({
   if (isPreview) {
     // Preview honours ?v=a|b (default a) and never sets a bucket cookie.
     variant = firstParam(sp.v) === "b" ? "b" : "a";
+  } else if (firstParam(sp.v) === "a" || firstParam(sp.v) === "b") {
+    // Explicit ?v=a|b on a live page: force that variant for THIS render only (no
+    // bucket cookie). Powers the console preview's variant switcher; a visitor
+    // arriving on such a link simply sees, and is counted for, that variant.
+    variant = firstParam(sp.v) as VariantKey;
   } else {
     const cookieStore = await cookies();
     const cookieName = variantCookieName(found.page.id);

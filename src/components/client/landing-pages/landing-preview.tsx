@@ -25,6 +25,8 @@ export function LandingPreview({
   isDraft: boolean;
 }) {
   const [open, setOpen] = useState(true);
+  const [v, setV] = useState<"a" | "b">("a");
+  const src = `${url}${url.includes("?") ? "&" : "?"}v=${v}`;
 
   return (
     <div className="mt-3 overflow-hidden rounded-[10px] border border-line">
@@ -43,6 +45,14 @@ export function LandingPreview({
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <div className="inline-flex overflow-hidden rounded-md border border-line-strong" role="tablist" aria-label="Preview variant">
+            {(["a", "b"] as const).map((k) => (
+              <button key={k} type="button" role="tab" aria-selected={v === k} onClick={() => setV(k)}
+                className={"px-2 py-1 text-xs font-semibold " + (v === k ? "bg-navy text-white" : "bg-card text-muted hover:text-navy")}>
+                {k.toUpperCase()}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
@@ -65,7 +75,7 @@ export function LandingPreview({
       </div>
       {open ? (
         <iframe
-          src={url}
+          src={src}
           title={`Live preview of ${title}`}
           loading="lazy"
           // No allow-scripts: renders the page but blocks its analytics tracker, so a
