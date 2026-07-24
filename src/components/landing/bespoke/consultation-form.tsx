@@ -10,9 +10,11 @@ import type { FormCopy } from "@/lib/landing/bespoke/copy";
 // /api/landing-lead endpoint, which records a Speed-to-lead lead (feeding the
 // worklist) and emits the funnel `lead` event (feeding the A/B Leads column).
 //
-// It carries NO secrets: the endpoint resolves the site + does all the sensitive
-// work server-side. The only ids it sends are the public clientSlug/landingSlug,
-// the A/B variant it was served, and a client-generated, PII-free sessionId.
+// It carries NO secrets: the endpoint independently re-validates any site it is
+// given and does all the sensitive work server-side. The only ids it sends are
+// the public clientSlug/landingSlug, the A/B variant it was served, the effective
+// site (re-validated server-side before being honoured), and a client-generated,
+// PII-free sessionId.
 //
 // It renders with the design's own `.form` / `.field` / `.btn-blue` classes (styled
 // by the page's scoped `.vd-landing` CSS) so it looks native to the ported design,
@@ -25,7 +27,11 @@ interface Props {
   variant: VariantKey;
   clientSlug: string;
   landingSlug: string;
-  /** Ignored by the endpoint (it resolves the site from the live page), sent as a hint. */
+  /**
+   * The effective site for this render (the page's own site, or a valid ?site=
+   * override resolved by the /go route). Sent to the endpoint, which re-validates
+   * it against the resolved client's real sites before honouring it.
+   */
   siteId?: string | null;
   /** Primary CTA label (the A/B-tested label), used on the submit button. */
   submitLabel: string;

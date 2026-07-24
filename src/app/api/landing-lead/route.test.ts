@@ -234,6 +234,37 @@ describe("landing lead endpoint — happy path", () => {
   });
 });
 
+// The multi-site override: ONE published page (e.g. LIVE_PAGE, configured for
+// site-cc) can be linked from several practice sites' campaigns via a siteId in
+// the POST body (sent by the /go page's ?site= override, or the ConsultationForm
+// hint). Valid, foreign, and absent values must each resolve exactly as
+// resolveEffectiveSite (src/lib/landing/site.ts) specifies.
+describe("landing lead endpoint — site override", () => {
+  it("honours a siteId override that belongs to the resolved client", async () => {
+    const res = await post(validBody({ siteId: "site-rv" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(insertLead)).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: "site-rv" }),
+    );
+  });
+
+  it("falls back to the page's own site when siteId is foreign/unknown", async () => {
+    const res = await post(validBody({ siteId: "not-a-real-site" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(insertLead)).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: "site-cc" }), // LIVE_PAGE's own configured site
+    );
+  });
+
+  it("falls back to the page's own site when siteId is absent (unchanged default)", async () => {
+    const res = await post(validBody());
+    expect(res.status).toBe(200);
+    expect(vi.mocked(insertLead)).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: "site-cc" }),
+    );
+  });
+});
+
 describe("landing lead endpoint — rejections (no lead recorded)", () => {
   async function expectRejected(body: unknown, status: number) {
     const res = await post(body);

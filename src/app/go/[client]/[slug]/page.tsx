@@ -7,6 +7,7 @@ import { TREATMENTS } from "@/lib/treatments/catalog";
 import { getLivePageBySlug, getPageBySlug } from "@/lib/landing/repository";
 import { verifyPreviewToken } from "@/lib/landing/preview-token";
 import { assignVariant, coinToss, variantCookieName, variantCookiePath } from "@/lib/landing/assignment";
+import { resolveEffectiveSite } from "@/lib/landing/site";
 import type { LandingPageVariant } from "@/lib/landing/types";
 import type { VariantKey } from "@/lib/landing/winner";
 import { LandingContent } from "@/components/landing/landing-content";
@@ -166,6 +167,16 @@ export default async function LandingPageRoute({
   // Serve the variant we will actually render (pickVariant may fall back).
   variant = chosen.variantKey;
 
+  // An explicit ?site=<internalSiteId> lets ONE published page route its leads to
+  // a different practice site than the page's own configured site (e.g. the same
+  // Invisalign page linked from three sites' ad campaigns), without duplicating
+  // the page. Honoured ONLY when it names a site that belongs to THIS client; a
+  // foreign or unknown value is ignored silently and the page's own configured
+  // site stands. `sp` is already resolved above, so this works for both the live
+  // and the preview path.
+  const requestedSiteId = firstParam(sp.site);
+  const effectiveSiteId = resolveEffectiveSite(record.id, requestedSiteId, found.page.siteId);
+
   // A registered bespoke (hand-designed) template renders its own server component
   // INSTEAD of the generic renderer, picked by templateId. Everything around it is
   // unchanged: the same sticky A/B variant, the same preview banner path, and the
@@ -179,7 +190,7 @@ export default async function LandingPageRoute({
       variant={variant}
       clientSlug={client}
       landingSlug={slug}
-      siteId={found.page.siteId}
+      siteId={effectiveSiteId}
       practiceName={record.name}
     />
   ) : (
@@ -189,7 +200,7 @@ export default async function LandingPageRoute({
       clientSlug={client}
       landingSlug={slug}
       variant={variant}
-      siteId={found.page.siteId}
+      siteId={effectiveSiteId}
       // OWNER-VERIFIED facts from practice configuration: the ONLY source the
       // proof stats row / awards line / press mentions can render from.
       practiceFacts={record.facts ?? null}

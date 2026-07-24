@@ -1,4 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
+import { resolveEffectiveSite } from "@/lib/landing/site";
 import { TREATMENTS } from "@/lib/treatments/catalog";
 import { getLivePageBySlug } from "@/lib/landing/repository";
 import { consumeBudget } from "@/lib/rate-budget";
@@ -115,7 +116,15 @@ export async function POST(request: Request): Promise<Response> {
     // must not accept enquiries. This also yields the site the lead belongs to.
     const found = await getLivePageBySlug(client.id, landingSlug);
     if (!found) return bad("This page is not accepting enquiries.", 404);
-    const siteId = found.page.siteId ?? "site-cc";
+
+    // An explicit siteId in the POST body lets one published page route its lead
+    // to a different practice site than the page's own configured site (mirrors
+    // the /go page's ?site= override, and reuses the same validation policy).
+    // Honoured ONLY when it names a site that belongs to THIS client — a forged
+    // id from another client is rejected — otherwise the page's own configured
+    // site stands.
+    const requestedSiteId = str(body.siteId);
+    const siteId = resolveEffectiveSite(client.id, requestedSiteId, found.page.siteId ?? "site-cc");
 
     // Durable per-contact rate-limit (a lead can trigger a real first contact).
     const contactKey = phone ?? email!;
