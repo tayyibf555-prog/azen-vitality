@@ -14,6 +14,7 @@ import { LandingTracker } from "@/components/landing/landing-tracker";
 import { getBespokeTemplate } from "@/lib/landing/bespoke/registry";
 import { VitalityInvisalignLanding } from "@/components/landing/bespoke/vitality-invisalign-landing";
 import { VitalityBondingLanding } from "@/components/landing/bespoke/vitality-bonding-landing";
+import { VitalityHygieneLanding } from "@/components/landing/bespoke/vitality-hygiene-landing";
 
 // The props every bespoke landing component takes. The /go seam passes these
 // identically regardless of which template renders.
@@ -31,6 +32,7 @@ type BespokeLandingProps = {
 const BESPOKE_COMPONENTS: Record<string, ComponentType<BespokeLandingProps>> = {
   "vitality-invisalign": VitalityInvisalignLanding,
   "vitality-bonding": VitalityBondingLanding,
+  "vitality-hygiene": VitalityHygieneLanding,
 };
 
 // Public campaign landing page (/go/<client>/<slug>). The ad destination for a

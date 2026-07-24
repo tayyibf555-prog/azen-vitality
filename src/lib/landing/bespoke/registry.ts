@@ -97,6 +97,31 @@ const BESPOKE_TEMPLATES: Record<string, Record<string, BespokeTemplate>> = {
         },
       },
     },
+    // Hygiene visit / scale and polish (seeded DRAFT). Same machinery as invisalign
+    // and bonding, its own bespoke component, and it adds an interactive before/after
+    // slider. Hygiene has NO finance, so the copy carries no 0%/interest wording.
+    hygiene: {
+      templateId: "vitality-hygiene",
+      treatment: "hygiene",
+      variants: {
+        // Variant A leads on the outcome (a fresher, cleaner smile).
+        a: {
+          heroHeadline: "A fresher, cleaner smile starts here",
+          heroAccent: "fresher, cleaner",
+          heroSubhead:
+            "A professional scale and polish with the hygienist at Vitality Dental. We lift plaque, tartar and everyday staining, and leave your teeth feeling fresh and clean.",
+          ctaLabel: "Book my hygiene visit",
+        },
+        // Variant B leads on gum health (the reason to keep on top of a clean).
+        b: {
+          heroHeadline: "Healthier gums start with a professional clean",
+          heroAccent: "professional clean",
+          heroSubhead:
+            "A gentle, thorough hygiene visit at Vitality Dental. Removing built up plaque and tartar helps keep your gums healthy, and your smile feeling fresh.",
+          ctaLabel: "Book a hygiene appointment",
+        },
+      },
+    },
   },
 };
 

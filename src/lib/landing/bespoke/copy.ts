@@ -809,3 +809,409 @@ export const BONDING_LANDING_COPY: BondingLandingCopy = {
       "Our dentists are GDC registered. Treatment suitability always depends on a clinical assessment.",
   },
 };
+
+// ---------------------------------------------------------------------------
+// HYGIENE (scale and polish)
+// ---------------------------------------------------------------------------
+// Static, user-visible COPY for the bespoke Vitality Dental hygiene landing page.
+// Adapts the Invisalign/bonding layout to a routine hygiene visit, kept in the same
+// module so the SAME compliance test enumerates every visible string (including the
+// before/after slider caption + labels) and asserts scanBannedText finds zero hits.
+//
+// COMPLIANCE (UK GDC/ASA + house style), same rules as the other bespoke copy:
+//   - NO testimonials, patient quotes, star ratings or review counts.
+//   - No em/en-dashes, no "$" (GBP only), no NHS/private/"payment plan"/"band"
+//     funding words, no superlatives (best / leading / cheapest), no guarantees,
+//     no pain-free claims. Clinical claims kept modest and honest (a clean "helps
+//     keep your gums healthy"; the hygienist "works gently"), never "painless".
+//   - Hygiene has NO finance (catalog financeAvailable is false), so there is NO
+//     "0% finance" / "spread the cost" / interest wording ANYWHERE in this corpus,
+//     unlike the Invisalign and bonding pages.
+//   - The before/after SLIDER shows a stylised ILLUSTRATION, never a real patient
+//     photo, so its caption says so verbatim ("Illustrative model, not a patient
+//     photo.").
+//   - Pricing uses the real catalogue figure (Hygiene visit from GBP 75). No
+//     invented numbers.
+// British English throughout. Per-variant hero + CTA copy is the A/B surface and
+// lives in registry.ts, NOT here.
+
+export interface HygieneLandingCopy {
+  header: HeaderCopy;
+  /** Shared hero eyebrow (the accented headline + subhead are the A/B surface, in registry.ts). */
+  heroEyebrow: string;
+  heroPills: string[];
+  /** Small factual trust chips (value + label). No ratings, reviews or awards. */
+  trust: { value: string; label: string }[];
+  form: FormCopy;
+  /** Section 3: "sound familiar" concerns, six line-icon cards (paired with icons by index) + banner. */
+  concerns: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+    banner: { lead: string; accent: string; tail: string };
+  };
+  treatment: {
+    head: SplitHeadCopy;
+    aboutTitle: string;
+    aboutBody: string;
+    keyFactsTitle: string;
+    keyFacts: string[];
+    stepsEyebrow: string;
+    /** Four steps: quick check, gentle scaling, polish, tips for home. */
+    steps: TitledPair[];
+  };
+  /** Section 5: "what a professional clean helps with", six line-icon cards (paired with icons by index). */
+  helps: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  /** Section 6: product band (align-band), image + three numbered callouts. */
+  product: {
+    eyebrow: string;
+    title: string;
+    intro: string;
+    /** Alt text for the product-band image. */
+    alt: string;
+    features: TitledPair[];
+  };
+  /** Section 7: before/after slider (dark results band). The image is an ILLUSTRATION. */
+  beforeAfter: {
+    head: CenterHeadCopy;
+    beforeLabel: string;
+    afterLabel: string;
+    beforeAlt: string;
+    afterAlt: string;
+    /** Verbatim caption; the slider is an illustration, never a real patient photo. */
+    caption: string;
+  };
+  why: {
+    head: CenterHeadCopy;
+    items: TitledPair[];
+  };
+  /** Pricing: NO finance (hygiene financeAvailable is false), so no 0%/interest wording. */
+  pricing: {
+    head: CenterHeadCopy;
+    priceEyebrow: string;
+    priceLabel: string;
+    /** Honest caveat (real catalogue price), the finance-free equivalent of the other pages' note. */
+    priceNote: string;
+    fineprint: string;
+    getTitle: string;
+    getItems: TitledPair[];
+  };
+  /** Section 9: a short hygiene FAQ (native disclosure list). */
+  faq: {
+    head: CenterHeadCopy;
+    items: { q: string; a: string }[];
+  };
+  footer: {
+    brand: string;
+    tagline: string;
+    builtBy: string;
+    compliance: string;
+  };
+}
+
+export const HYGIENE_LANDING_COPY: HygieneLandingCopy = {
+  header: {
+    brand: "VITALITY DENTAL",
+    brandSub: "NORTH LONDON",
+    locations: "N15, Vitality Dental group",
+  },
+
+  heroEyebrow: "Professional scale and polish",
+
+  heroPills: [
+    "Scale and polish",
+    "Seen by a hygienist",
+    "Removes plaque and staining",
+    "Fresher, cleaner feel",
+  ],
+
+  // Factual, non-proof chips (the real from-price, the three sites, a typical
+  // length). No rating, review or award claim, so they need no owner verification.
+  trust: [
+    { value: "£75", label: "Hygiene visit from" },
+    { value: "3 sites", label: "N15, N17 and Romford Road" },
+    { value: "30 min", label: "Usually per visit" },
+  ],
+
+  form: {
+    eyebrow: "Book a hygiene visit",
+    heading: "Book your hygiene visit",
+    subheading: "Book your visit. No pressure, and no obligation.",
+    nameLabel: "Full name",
+    namePlaceholder: "Your full name",
+    phoneLabel: "Mobile number",
+    phonePlaceholder: "07700 900123",
+    emailLabel: "Email address",
+    emailPlaceholder: "you@example.com",
+    contactHint: "Add a mobile number or an email so the team can reach you.",
+    channelLabel: "How should we reach you?",
+    channelWhatsApp: "WhatsApp",
+    channelSms: "SMS",
+    channelEmail: "Email",
+    messageLabel: "Your message (optional)",
+    messagePlaceholder: "Tell us about any staining, or when your last clean was",
+    consentLabel: "I agree to be contacted about my enquiry.",
+    submitFallback: "Book my hygiene visit",
+    fineprint: "Your details are only used to arrange your visit.",
+    successTitle: "Thanks, your enquiry is in.",
+    successBody: "The team will be in touch shortly to arrange your hygiene visit.",
+    errorGeneric: "Something went wrong. Please try again, or call the practice.",
+    errorName: "Please enter your name.",
+    errorContact: "Please add a mobile number or an email address.",
+    errorConsent: "Please tick the box so we can contact you about your enquiry.",
+  },
+
+  concerns: {
+    head: {
+      eyebrow: "Sound familiar?",
+      title: "The little things you have noticed",
+      intro:
+        "Most people who book a hygiene visit have put up with the same small niggles for a while. A professional clean sorts them out.",
+    },
+    items: [
+      {
+        title: "A rough, furry feeling",
+        body: "That fuzzy film on your teeth by the end of the day, however well you brush.",
+      },
+      {
+        title: "Tea and coffee staining",
+        body: "Everyday cups leave a dullness and staining that brushing at home does not shift.",
+      },
+      {
+        title: "Tender or bleeding gums",
+        body: "Gums that feel sore or bleed a little when you brush can be a sign of build up.",
+      },
+      {
+        title: "Conscious of freshness",
+        body: "You would like your mouth to feel cleaner and fresher, for longer.",
+      },
+      {
+        title: "It has been a while",
+        body: "Life got busy and your last clean was longer ago than you would like to admit.",
+      },
+      {
+        title: "Wanting a fresh start",
+        body: "You want to reset, get on top of it, and keep your teeth feeling clean and fresh.",
+      },
+    ],
+    banner: {
+      lead: "A professional clean removes the build up that brushing leaves behind, ",
+      accent: "for a fresher, cleaner feel",
+      tail: ", and helps keep your gums healthy.",
+    },
+  },
+
+  treatment: {
+    head: {
+      eyebrow: "The visit",
+      title: "A professional scale and polish, with a hygienist",
+      intro:
+        "A hygiene visit is a thorough clean that removes the plaque and tartar brushing cannot, lifts everyday staining, and leaves your teeth feeling smooth and fresh.",
+    },
+    aboutTitle: "What is a hygiene visit?",
+    aboutBody:
+      "A hygiene visit, sometimes called a scale and polish, is a professional clean carried out by a dental hygienist. They gently remove the hardened plaque and tartar that build up over time, including along the gumline where a toothbrush struggles to reach. Your teeth are then polished to lift surface staining and leave them feeling smooth. To finish, the hygienist shows you simple ways to look after your teeth and gums at home, so the fresh feeling lasts. Regular visits help keep your gums healthy and make each clean easier than the last.",
+    keyFactsTitle: "Key facts",
+    keyFacts: [
+      "Around 30 minutes",
+      "With a dental hygienist",
+      "Scale and polish",
+      "Lifts surface staining",
+      "Home care advice",
+    ],
+    stepsEyebrow: "How it works",
+    steps: [
+      {
+        title: "Quick check",
+        body: "The hygienist looks over your teeth and gums and asks about anything you have noticed.",
+      },
+      {
+        title: "Gentle scaling",
+        body: "Hardened plaque and tartar are carefully removed from your teeth and along the gumline.",
+      },
+      {
+        title: "Polish",
+        body: "Your teeth are polished to lift surface staining and left feeling smooth and clean.",
+      },
+      {
+        title: "Tips for home",
+        body: "You get simple, practical advice on brushing and cleaning between your teeth.",
+      },
+    ],
+  },
+
+  helps: {
+    head: {
+      eyebrow: "What it helps with",
+      title: "What a professional clean helps with",
+    },
+    items: [
+      {
+        title: "Plaque and tartar",
+        body: "A scale removes the hardened build up that brushing alone leaves behind.",
+      },
+      {
+        title: "Surface staining",
+        body: "A polish lifts everyday staining from tea, coffee and food, for a brighter look.",
+      },
+      {
+        title: "Gum health",
+        body: "Removing build up along the gumline helps keep your gums healthy and comfortable.",
+      },
+      {
+        title: "A fresher feel",
+        body: "Teeth feel smooth and clean, and your mouth feels fresher afterwards.",
+      },
+      {
+        title: "Regular upkeep",
+        body: "Coming in regularly makes each clean easier and keeps small problems small.",
+      },
+      {
+        title: "Home care advice",
+        body: "Simple, practical tips so you can keep things fresh between visits.",
+      },
+    ],
+  },
+
+  product: {
+    eyebrow: "The result",
+    title: "A clean you can feel",
+    intro:
+      "The moment you run your tongue over your teeth afterwards, you can feel the difference. Smooth, fresh and properly clean.",
+    alt: "A fresh, clean and healthy looking smile after a professional hygiene visit at Vitality Dental",
+    features: [
+      {
+        title: "Deep clean",
+        body: "Plaque and tartar lifted from places a toothbrush cannot reach, including along the gumline.",
+      },
+      {
+        title: "Stain removal",
+        body: "A polish that lifts surface staining from tea, coffee and everyday food and drink.",
+      },
+      {
+        title: "Healthier gums",
+        body: "Clearing away build up helps keep your gums healthy and feeling comfortable.",
+      },
+    ],
+  },
+
+  beforeAfter: {
+    head: {
+      eyebrow: "See the difference",
+      title: "What a professional clean can do",
+      intro:
+        "An illustrative look at how a scale and polish lifts everyday staining and leaves teeth looking brighter and cleaner.",
+    },
+    beforeLabel: "Before",
+    afterLabel: "After",
+    beforeAlt: "Illustration of a dull, stained smile before a professional clean",
+    afterAlt: "Illustration of a brighter, cleaner smile after a professional clean",
+    caption: "Drag to compare. Illustrative model, not a patient photo.",
+  },
+
+  why: {
+    head: {
+      eyebrow: "Why Vitality Dental",
+      title: "Hygiene care, done properly",
+    },
+    items: [
+      {
+        title: "Clinically led",
+        body: "Your hygiene care is overseen by a GDC registered dentist.",
+      },
+      {
+        title: "Seen by a hygienist",
+        body: "A trained hygienist carries out your scale and polish and shows you how to care for your teeth at home.",
+      },
+      {
+        title: "Gentle and unrushed",
+        body: "We take our time, especially if your gums are tender or it has been a while since your last visit.",
+      },
+      {
+        title: "Three London sites",
+        body: "Book at N15, N17 or Romford Road, whichever is easiest for you to reach.",
+      },
+      {
+        title: "Clear pricing",
+        body: "A hygiene visit from £75, confirmed with you before anything goes ahead.",
+      },
+      {
+        title: "Advice you can use",
+        body: "Practical, honest tips for keeping your teeth and gums healthy between visits.",
+      },
+    ],
+  },
+
+  pricing: {
+    head: {
+      eyebrow: "Pricing",
+      title: "Clear pricing, no surprises.",
+      intro:
+        "A professional hygiene visit is £75. Your exact price is always confirmed with you before your appointment goes ahead.",
+    },
+    priceEyebrow: "Hygiene visit from",
+    priceLabel: "£75",
+    priceNote:
+      "Your price is confirmed before treatment, and is always the real catalogue price, never an invented figure.",
+    fineprint: "Your details are only used to arrange your visit.",
+    getTitle: "What is included",
+    getItems: [
+      {
+        title: "Scale and polish",
+        body: "A thorough clean to remove plaque, tartar and surface staining.",
+      },
+      {
+        title: "Seen by a hygienist",
+        body: "Your clean is carried out by a trained dental hygienist.",
+      },
+      {
+        title: "Home care advice",
+        body: "Simple tips to keep your teeth and gums feeling fresh.",
+      },
+      {
+        title: "Around 30 minutes",
+        body: "Most hygiene visits take about half an hour.",
+      },
+    ],
+  },
+
+  faq: {
+    head: {
+      eyebrow: "Good to know",
+      title: "Hygiene visit questions",
+      intro: "A few common questions about a professional clean.",
+    },
+    items: [
+      {
+        q: "How often should I have a hygiene visit?",
+        a: "Many people come every six months, and some benefit from more regular visits. Your dentist or hygienist can suggest what suits your teeth and gums.",
+      },
+      {
+        q: "Does a scale and polish hurt?",
+        a: "Most people find it comfortable. If your gums are tender, tell the hygienist and they will work gently and take their time.",
+      },
+      {
+        q: "How long does a hygiene appointment take?",
+        a: "Usually around 30 minutes, depending on how much build up there is to remove.",
+      },
+      {
+        q: "Will it get rid of tea and coffee staining?",
+        a: "A scale and polish lifts a lot of the surface staining from tea, coffee and everyday food and drink. Deeper staining within the tooth may need a different approach, which the hygienist can talk you through.",
+      },
+      {
+        q: "What can I do to keep my teeth clean at home?",
+        a: "The hygienist will show you simple ways to brush and clean between your teeth, so your mouth stays fresher for longer between visits.",
+      },
+    ],
+  },
+
+  footer: {
+    brand: "Vitality Dental",
+    tagline: "Dental hygiene, N15 North London",
+    builtBy: "Built by Azen",
+    compliance:
+      "Our dentists and hygienists are GDC registered. Treatment suitability always depends on a clinical assessment.",
+  },
+};

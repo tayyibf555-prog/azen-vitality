@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getBespokeTemplate, bespokeVariantCopy } from "./registry";
-import { INVISALIGN_LANDING_COPY, BONDING_LANDING_COPY } from "./copy";
+import { INVISALIGN_LANDING_COPY, BONDING_LANDING_COPY, HYGIENE_LANDING_COPY } from "./copy";
 import { scanBannedText } from "@/lib/landing/compliance";
 
 // Two guarantees for the bespoke Invisalign landing:
@@ -44,17 +44,31 @@ describe("bespoke registry", () => {
     expect(t?.variants.a.ctaLabel).not.toBe(t?.variants.b.ctaLabel);
   });
 
+  it("returns the vitality/hygiene template", () => {
+    const t = getBespokeTemplate("vitality", "hygiene");
+    expect(t).not.toBeNull();
+    expect(t?.templateId).toBe("vitality-hygiene");
+    expect(t?.treatment).toBe("hygiene");
+    expect(t?.variants.a).toBeDefined();
+    expect(t?.variants.b).toBeDefined();
+    // The A/B surface really differs between the variants.
+    expect(t?.variants.a.heroHeadline).not.toBe(t?.variants.b.heroHeadline);
+    expect(t?.variants.a.ctaLabel).not.toBe(t?.variants.b.ctaLabel);
+  });
+
   it("returns null for any other (client, slug)", () => {
     expect(getBespokeTemplate("vitality", "veneers")).toBeNull();
     expect(getBespokeTemplate("vitality", "invisalign-demo")).toBeNull();
     expect(getBespokeTemplate("vitality", "bonding-demo")).toBeNull();
+    expect(getBespokeTemplate("vitality", "hygiene-demo")).toBeNull();
     expect(getBespokeTemplate("other", "invisalign")).toBeNull();
     expect(getBespokeTemplate("other", "bonding")).toBeNull();
+    expect(getBespokeTemplate("other", "hygiene")).toBeNull();
     expect(getBespokeTemplate("", "")).toBeNull();
   });
 
   it("the hero accent is a verbatim substring of the headline for both variants", () => {
-    for (const slug of ["invisalign", "bonding"]) {
+    for (const slug of ["invisalign", "bonding", "hygiene"]) {
       const t = getBespokeTemplate("vitality", slug)!;
       for (const key of ["a", "b"] as const) {
         const v = bespokeVariantCopy(t, key);
@@ -113,5 +127,51 @@ describe("bespoke bonding copy compliance", () => {
     }
     // Surface every offending string so a failure is actionable.
     expect(hits, JSON.stringify(hits, null, 2)).toEqual([]);
+  });
+});
+
+describe("bespoke hygiene copy compliance", () => {
+  const template = getBespokeTemplate("vitality", "hygiene")!;
+
+  // The full corpus of user-visible strings on the bespoke hygiene page, including
+  // the before/after slider caption + Before/After labels (they live in the copy
+  // module and are scanned here too).
+  const strings = [
+    ...collectStrings(HYGIENE_LANDING_COPY),
+    ...collectStrings(template.variants.a),
+    ...collectStrings(template.variants.b),
+  ];
+
+  it("has a non-trivial corpus to scan", () => {
+    expect(strings.length).toBeGreaterThan(60);
+  });
+
+  it("finds zero banned-pattern hits across every visible string", () => {
+    const hits: { text: string; category: string; matched: string }[] = [];
+    for (const text of strings) {
+      for (const hit of scanBannedText(text)) {
+        hits.push({ text, category: hit.category, matched: hit.matched });
+      }
+    }
+    // Surface every offending string so a failure is actionable.
+    expect(hits, JSON.stringify(hits, null, 2)).toEqual([]);
+  });
+
+  it("includes the exact before/after slider caption, and it is compliant", () => {
+    // The caption must say the image is an illustration, verbatim, and must itself
+    // be clean (it is part of the scanned corpus above, asserted here explicitly).
+    expect(HYGIENE_LANDING_COPY.beforeAfter.caption).toBe(
+      "Drag to compare. Illustrative model, not a patient photo.",
+    );
+    expect(scanBannedText(HYGIENE_LANDING_COPY.beforeAfter.caption)).toEqual([]);
+  });
+
+  it("carries no finance wording anywhere (hygiene has no finance)", () => {
+    const corpus = strings.join(" \n ").toLowerCase();
+    expect(corpus).not.toContain("finance");
+    expect(corpus).not.toContain("0%");
+    expect(corpus).not.toContain("0 percent");
+    expect(corpus).not.toContain("interest-free");
+    expect(corpus).not.toContain("spread the cost");
   });
 });

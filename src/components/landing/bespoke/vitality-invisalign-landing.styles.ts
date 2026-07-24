@@ -197,4 +197,30 @@ export const VITALITY_INVISALIGN_CSS = `
 .vd-landing .align-feats h4{font-size:16px;color:var(--navy);margin:3px 0 3px}
 .vd-landing .align-feats p{color:var(--tx-soft);font-size:14.5px;line-height:1.5}
 @media(max-width:820px){.vd-landing .align-band{grid-template-columns:1fr;gap:26px}}
+
+/* Before/after comparison slider (hygiene results band). White card holds the
+   fixed-ratio frame so there is no layout shift; the slider is a client island. */
+.vd-landing .ba-card{max-width:660px;margin:44px auto 0;background:#fff;border-radius:18px;padding:16px;box-shadow:0 30px 70px rgba(4,16,44,.42)}
+.vd-landing .ba-slider{margin:0}
+.vd-landing .ba-frame{position:relative;width:100%;aspect-ratio:623/400;border-radius:12px;overflow:hidden;background:#eef3fb;touch-action:none;cursor:ew-resize;-webkit-user-select:none;user-select:none}
+.vd-landing .ba-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;-webkit-user-select:none;user-select:none}
+.vd-landing .ba-badge{position:absolute;top:12px;z-index:3;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:5px 11px;border-radius:999px;color:#fff;pointer-events:none;box-shadow:0 4px 12px rgba(4,16,44,.28)}
+.vd-landing .ba-badge-before{left:12px;background:var(--navy)}
+.vd-landing .ba-badge-after{right:12px;background:var(--blue)}
+.vd-landing .ba-divider{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:#fff;z-index:2;pointer-events:none;box-shadow:0 0 0 1px rgba(11,32,73,.14)}
+.vd-landing .ba-handle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:40px;height:40px;border-radius:50%;background:#fff;border:2px solid var(--blue);color:var(--blue);display:grid;place-items:center;box-shadow:0 4px 14px rgba(11,32,73,.3)}
+.vd-landing .ba-handle svg{width:20px;height:20px;display:block}
+.vd-landing .ba-range{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;border:0;background:transparent;pointer-events:none}
+.vd-landing .ba-frame:focus-within .ba-handle{box-shadow:0 0 0 4px rgba(91,196,247,.55),0 4px 14px rgba(11,32,73,.3)}
+.vd-landing .ba-cap{margin-top:14px;text-align:center;color:var(--tx-on-soft);font-size:12.5px;line-height:1.45}
+@media(max-width:820px){.vd-landing .ba-card{margin-top:36px;padding:12px}}
+
+/* FAQ: native disclosure list, one card per question. */
+.vd-landing .faqs{max-width:820px;margin:44px auto 0;display:grid;gap:14px}
+.vd-landing .faq-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:2px 22px}
+.vd-landing .faq-item summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 0;font-size:16.5px;font-weight:700;color:var(--navy)}
+.vd-landing .faq-item summary::-webkit-details-marker{display:none}
+.vd-landing .faq-item summary::after{content:"+";color:var(--blue);font-weight:800;font-size:22px;line-height:1;transition:transform .2s ease}
+.vd-landing .faq-item[open] summary::after{transform:rotate(45deg)}
+.vd-landing .faq-item .faq-a{color:var(--tx-soft);font-size:14.5px;line-height:1.65;padding:0 0 18px}
 `;

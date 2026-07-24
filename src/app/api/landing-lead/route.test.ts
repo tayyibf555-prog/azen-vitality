@@ -60,6 +60,18 @@ const BONDING_PAGE = {
   variants: [],
 };
 
+// A third live bespoke page (hygiene), proving the same derivation for the hygiene
+// treatment key ("Hygiene visit") and the "landing:hygiene" source.
+const HYGIENE_PAGE = {
+  page: {
+    ...LIVE_PAGE.page,
+    id: "page-3",
+    slug: "hygiene",
+    treatment: "hygiene",
+  },
+  variants: [],
+};
+
 function post(body: unknown): Promise<Response> {
   return POST(
     new Request("http://test/api/landing-lead", {
@@ -155,6 +167,27 @@ describe("landing lead endpoint — happy path", () => {
     // The funnel `lead` event carries the bonding slug too.
     expect(vi.mocked(insertFunnelEvents)).toHaveBeenCalledWith([
       expect.objectContaining({ step: "lead", meta: { variant: "b", landingSlug: "bonding" } }),
+    ]);
+  });
+
+  it("derives treatment interest + source from the resolved live page (hygiene)", async () => {
+    vi.mocked(getLivePageBySlug).mockResolvedValue(HYGIENE_PAGE);
+
+    const res = await post(validBody({ landingSlug: "hygiene" }));
+    expect(res.status).toBe(200);
+
+    // The catalogue treatment NAME for key "hygiene" is "Hygiene visit"; the source
+    // is "landing:" + the page slug. Neither is hardcoded to Invisalign.
+    expect(vi.mocked(insertLead)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        treatmentInterest: "Hygiene visit",
+        source: "landing:hygiene",
+      }),
+    );
+
+    // The funnel `lead` event carries the hygiene slug too.
+    expect(vi.mocked(insertFunnelEvents)).toHaveBeenCalledWith([
+      expect.objectContaining({ step: "lead", meta: { variant: "b", landingSlug: "hygiene" } }),
     ]);
   });
 

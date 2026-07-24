@@ -9,8 +9,12 @@ import { lintContent, catalogPriceResolver } from "@/lib/landing/compliance";
 // the ACTUAL migration file, extracts the two jsonb literals, and runs the real
 // validateContent + lintContent (with the same catalogue price resolver the lint
 // uses in production) over them, so the seed can never drift out of spec.
-// Mirrors the 0056 (Invisalign) and 0057 (bonding) seed tests. This page uses the
-// GENERIC renderer: hygiene is deliberately NOT in the bespoke registry.
+// Mirrors the 0056 (Invisalign) and 0057 (bonding) seed tests. This migration seeds
+// the DB substrate (a real landing_page + two variants) so the page appears in
+// Growth > Landing pages with Preview + A/B stats and its lead endpoint works. The
+// public /go render is the bespoke hygiene component (see bespoke/registry.ts and
+// vitality-hygiene-landing.tsx), exactly as for invisalign and bonding; the seeded
+// content is still valid, compliant v2 content, which is what this test guards.
 
 const MIGRATION_PATH = resolve(
   process.cwd(),
