@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSite } from "@/lib/mock";
-import { getSites, getClient } from "@/lib/mock/clients";
+import { getSites, getClient, dentallySiteId } from "@/lib/mock/clients";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { londonDayKey } from "@/lib/time/london";
 import { TREATMENTS, findTreatment } from "@/lib/treatments/catalog";
@@ -32,6 +32,9 @@ import {
   dentallyReadKey,
   type PatientRecord,
 } from "@/lib/dentally/read";
+import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { DentallyError } from "@/lib/dentally/client";
+import { normaliseGender, ageFromDob } from "@/lib/patient/demographics";
 import { listTargets } from "@/lib/reactivation/repository";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { getAgentAnalytics } from "@/lib/agent/repository";
@@ -243,6 +246,24 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
       required: ["campaignId"],
     },
   },
+  {
+    name: "create_patient",
+    description:
+      "Create a NEW patient record in Dentally, the practice's real management system. TWO STEPS, exactly like send_sms: call first WITHOUT confirm to CHECK FOR AN EXISTING MATCH and read back every detail that would be saved; then, ONLY after the owner clearly says yes in a later reply, call again with confirm true to actually create them. REQUIRES first name, last name, a date of birth (ISO YYYY-MM-DD) AND at least one of a mobile number or an email. NEVER invent or guess any detail: if a name spelling, the date of birth, a contact number/email or the gender is missing, return without creating and ask the owner for it. On the first call it first searches Dentally for a likely existing patient (same mobile, same email, or same name and date of birth); if one is found it reports that record and creates nothing. Real creation only happens against the live practice system once the Dentally write key is enabled; otherwise it records in test mode and says so. Any Dentally error (including a key that is not permitted to create patients) is reported honestly and never retried.",
+    input_schema: {
+      type: "object",
+      properties: {
+        firstName: { type: "string", description: "The patient's first name, exactly as the owner gave it. Never invented." },
+        lastName: { type: "string", description: "The patient's last name, exactly as the owner gave it. Never invented." },
+        dateOfBirth: { type: "string", description: "Date of birth as an ISO date, YYYY-MM-DD. Must be a real past date. Never guess it; ask the owner if unknown." },
+        phone: { type: "string", description: "Mobile number in any common format. Required unless an email is given. Never invented." },
+        email: { type: "string", description: "Email address. Required unless a mobile number is given. Never invented." },
+        gender: { type: "string", enum: ["female", "male"], description: "Optional. Only set it if the owner stated it; never guess." },
+        confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to check for an existing match and read back without creating." },
+      },
+      required: ["firstName", "lastName", "dateOfBirth"],
+    },
+  },
 ];
 
 function patientSummary(p: PatientRecord) {
@@ -255,6 +276,71 @@ function patientSummary(p: PatientRecord) {
     lastVisit: p.lastVisitAt,
     recallDue: p.recallDueAt,
   };
+}
+
+/**
+ * Validate + canonicalise an ISO date of birth to YYYY-MM-DD, or null when it is not a
+ * REAL calendar date. A bare regex would pass impossible dates (2001-13-40, 31 Feb), so
+ * we round-trip the parsed parts through a UTC date and reject any that do not survive.
+ * The caller separately rejects future / absurdly old dates via ageFromDob.
+ */
+function canonicalDob(raw: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+interface LikelyMatch {
+  id: string;
+  name: string;
+  dateOfBirth: string | null;
+  siteId: string;
+  matchedOn: string;
+}
+
+/**
+ * DEDUPE for create_patient. Uses the SAME server-side Dentally search the co-pilot's
+ * search_patients uses (searchPatients -> Dentally `query=`), fanned out over the phone,
+ * the email and the name, then applies a STRICT match test so a broad text hit never
+ * wrongly blocks a genuinely new patient:
+ *   - exact mobile (normalised both sides; Dentally stores national format), OR
+ *   - exact email (normalised both sides), OR
+ *   - identical full name AND identical date of birth.
+ * Returns the first strong match, or null when the person looks genuinely new.
+ */
+async function findLikelyExistingPatient(
+  siteIds: string[],
+  cand: { name: string; dob: string; phone: string | null; email: string | null },
+): Promise<LikelyMatch | null> {
+  const seen = new Map<string, PatientRecord>();
+  const queries: string[] = [];
+  if (cand.phone) queries.push(cand.phone);
+  if (cand.email) queries.push(cand.email);
+  queries.push(cand.name);
+  for (const q of queries) {
+    // searchPatients returns [] for a query under 2 chars, so short/blank ones are inert.
+    const rows = await searchPatients(siteIds, q);
+    for (const r of rows) seen.set(r.id, r);
+  }
+  const nameLc = cand.name.toLowerCase();
+  for (const p of seen.values()) {
+    if (cand.phone && p.phone && toE164(p.phone) === cand.phone) {
+      return { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same mobile number" };
+    }
+    if (cand.email && p.email && normaliseEmail(p.email) === cand.email) {
+      return { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same email address" };
+    }
+    if (p.name.toLowerCase() === nameLc && p.dateOfBirth && p.dateOfBirth.slice(0, 10) === cand.dob) {
+      return { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same name and date of birth" };
+    }
+  }
+  return null;
 }
 
 export function makeCopilotDispatch(siteIds: string[], clientId: string, actor = "owner") {
@@ -1343,6 +1429,221 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             message:
               "Created on Meta in PAUSED status. Tell the owner to review and activate it in Meta Ads Manager, and that nothing is spending until they do." +
               (result.notes.length > 0 ? ` Also read these honestly to the owner: ${result.notes.join(" ")}` : ""),
+          });
+        }
+
+        case "create_patient": {
+          // A HIGH-STAKES write: this creates a real person in the practice's real
+          // Dentally book (51k+ real patients). Mirrors send_sms's discipline — strict
+          // validation, a dedupe short-circuit, a two-step confirm, audit logging and an
+          // honest dry-run/error read-back — and the booking-create write posture (the
+          // gated dentallyAgentClient + internal->Dentally site mapping).
+
+          // (1) REQUIRED identity fields. NEVER invent a missing detail: an absent or bad
+          // field returns an error that tells the model to ASK the owner, not guess.
+          const firstName = String(input.firstName ?? "").trim();
+          const lastName = String(input.lastName ?? "").trim();
+          const dobRaw = String(input.dateOfBirth ?? "").trim();
+          if (!firstName || !lastName) {
+            return JSON.stringify({
+              created: false,
+              error: "I need the patient's first and last name. Ask the owner for the missing name; never guess it.",
+            });
+          }
+          if (!dobRaw) {
+            return JSON.stringify({
+              created: false,
+              error: "I need the patient's date of birth (YYYY-MM-DD). Ask the owner for it; never guess it.",
+            });
+          }
+
+          // (2) DOB must be a REAL, PAST calendar date. canonicalDob rejects impossible
+          // dates (2001-13-40, 31 Feb); ageFromDob returns null for a future/unparseable
+          // date, and a whole-year age otherwise — so both a future DOB and an absurdly old
+          // one (age > 120) are refused.
+          const dob = canonicalDob(dobRaw);
+          const age = dob ? ageFromDob(dob, new Date()) : null;
+          if (!dob || age === null || age > 120) {
+            return JSON.stringify({
+              created: false,
+              error: `"${dobRaw}" is not a valid date of birth. It must be a real, past date in YYYY-MM-DD form. Ask the owner to confirm it; never guess.`,
+            });
+          }
+
+          // (3) At least one contact method, each validated with the SAME canonicalisers
+          // the send path uses. A supplied-but-invalid value is an error (never silently
+          // dropped or guessed); a missing pair is an error (never invented).
+          const phoneRaw = String(input.phone ?? "").trim();
+          const emailRaw = String(input.email ?? "").trim();
+          const phone = phoneRaw ? toE164(phoneRaw) : null;
+          const email = emailRaw ? normaliseEmail(emailRaw) : null;
+          if (phoneRaw && !phone) {
+            return JSON.stringify({
+              created: false,
+              error: `"${phoneRaw}" does not look like a valid mobile number. Ask the owner to check it; never guess.`,
+            });
+          }
+          if (emailRaw && !email) {
+            return JSON.stringify({
+              created: false,
+              error: `"${emailRaw}" does not look like a valid email address. Ask the owner to check it; never guess.`,
+            });
+          }
+          if (!phone && !email) {
+            return JSON.stringify({
+              created: false,
+              error: "A new patient needs at least a mobile number or an email address. Ask the owner for one; never invent contact details.",
+            });
+          }
+
+          // (4) Optional gender: only honoured if the owner stated a recognised value.
+          // Never guessed. An unrecognised value is an error rather than a silent drop.
+          const genderInput = String(input.gender ?? "").trim();
+          const gender = genderInput ? normaliseGender(genderInput) : null;
+          if (genderInput && !gender) {
+            return JSON.stringify({
+              created: false,
+              error: `I did not recognise the gender "${genderInput}". Use female or male, or leave it out; never guess.`,
+            });
+          }
+
+          // (5) Target site WITHIN the co-pilot's view scope, exactly like the other write
+          // tools: the site currently in view (the first scoped site). An all-sites scope
+          // resolves to that same primary site (siteIds[0]).
+          const siteId = siteIds[0];
+          if (!siteId) return JSON.stringify({ created: false, error: "No site is in scope to create the patient in." });
+
+          const name = `${firstName} ${lastName}`.trim();
+          const readback = {
+            firstName,
+            lastName,
+            dateOfBirth: dob,
+            phone: phone ?? null,
+            email: email ?? null,
+            gender: gender ?? null,
+            site: siteName(siteId),
+          };
+
+          // (6) DEDUPE FIRST (both steps). A plausible existing record short-circuits
+          // creation entirely: we never create a second record for someone already there.
+          const likely = await findLikelyExistingPatient(siteIds, { name, dob, phone, email });
+          if (likely) {
+            if (input.confirm === true) {
+              // The re-check at confirm caught an existing record: log the block so the
+              // audit trail shows a duplicate was prevented at the commit step.
+              await logCopilotAction({
+                clientId,
+                siteId,
+                actor,
+                action: "create_patient",
+                targetRef: `patient:${likely.id}`,
+                targetName: name,
+                channel: null,
+                body: `DOB ${dob}${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}`,
+                status: "blocked:duplicate",
+              });
+            }
+            return JSON.stringify({
+              created: false,
+              duplicate: true,
+              match: {
+                id: likely.id,
+                name: likely.name,
+                dateOfBirth: likely.dateOfBirth,
+                site: siteName(likely.siteId),
+                matchedOn: likely.matchedOn,
+              },
+              note:
+                `A patient who looks like this already exists: ${likely.name}${likely.dateOfBirth ? ` (born ${likely.dateOfBirth})` : ""} at ${siteName(likely.siteId)}, matched on ${likely.matchedOn}. ` +
+                "I have NOT created anyone. Tell the owner about the existing record. Only create a new patient if the owner explicitly confirms this is a DIFFERENT person.",
+            });
+          }
+
+          // (7) STEP 1 gate: without an explicit confirm this is a PREVIEW only. Nothing
+          // is written. Enforced here (not just in the prompt) so a model that skips the
+          // confirmation cannot create a patient; the run.ts commit gate (create_patient
+          // is in CONFIRM_COMMIT_TOOLS) ALSO makes a same-turn confirm inert.
+          if (input.confirm !== true) {
+            return JSON.stringify({
+              created: false,
+              preview: true,
+              ...readback,
+              note:
+                `Ready to create this patient in Dentally (nothing saved yet). Read every detail back to the owner: ${firstName} ${lastName}, born ${dob}` +
+                `${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}${gender ? `, ${gender}` : ""}, at ${siteName(siteId)}. ` +
+                "Only once they clearly say yes, call create_patient again with confirm true.",
+            });
+          }
+
+          // (8) STEP 2: confirmed. Create via the gated write client, mirroring the
+          // booking-create write path: dentallyAgentClient() targets the dedicated write
+          // instance ONLY when writes are enabled, otherwise the default (mock/pilot)
+          // client, so a real create can never happen until the write key is set. The
+          // internal site id is mapped to Dentally's own UUID exactly as booking-create
+          // and register_patient do. Field names follow the existing createPatient payload.
+          const writeEnabled = isDentallyWriteEnabled();
+          const audit = {
+            clientId,
+            siteId,
+            actor,
+            action: "create_patient",
+            targetName: name,
+            channel: null,
+            body: `DOB ${dob}${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}${gender ? `, ${gender}` : ""}`,
+          };
+
+          let newId: string;
+          try {
+            const client = dentallyAgentClient();
+            const { patient } = await client.createPatient({
+              first_name: firstName,
+              last_name: lastName,
+              date_of_birth: dob,
+              email_address: email ?? undefined,
+              mobile_phone: phone ?? undefined,
+              // Dentally has historically carried gender as a "Male"/"Female" string
+              // (see normaliseGender); omitted entirely when the owner did not state it.
+              ...(gender ? { gender: gender === "female" ? "Female" : "Male" } : {}),
+              // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
+              site_id: dentallySiteId(siteId),
+              use_sms: Boolean(phone),
+              use_email: Boolean(email),
+            });
+            newId = String(patient.id);
+          } catch (err) {
+            // ANY Dentally failure is surfaced HONESTLY and NEVER auto-retried. A 403 most
+            // likely means the write key is not permitted to create patients; a 422 means
+            // Dentally rejected the details. The raw error body is never relayed verbatim.
+            await logCopilotAction({ ...audit, targetRef: null, status: "error:create_failed" });
+            const status = err instanceof DentallyError ? err.status : 0;
+            const reason =
+              status === 403
+                ? "the Dentally key does not allow creating patients (403), so nothing was created."
+                : status === 422
+                  ? "Dentally rejected the details (422), so nothing was created. Check the date of birth and contact details with the owner."
+                  : "I hit an error creating them in Dentally, so nothing was created.";
+            return JSON.stringify({
+              created: false,
+              reason: "dentally_error",
+              status,
+              ...readback,
+              message: `I could not create ${name}: ${reason}`,
+            });
+          }
+
+          await logCopilotAction({
+            ...audit,
+            targetRef: `patient:${newId}`,
+            status: writeEnabled ? "created" : "created:dry_run",
+          });
+          return JSON.stringify({
+            created: true,
+            patientId: newId,
+            ...readback,
+            dryRun: !writeEnabled,
+            note: writeEnabled
+              ? `Created ${name} in Dentally (id ${newId}). Confirm to the owner that they have been added.`
+              : `Recorded ${name} in test mode (id ${newId}). Real patient creation goes live once the practice enables the Dentally write key; nothing has been written to the real practice system yet. Tell the owner it was recorded in test mode.`,
           });
         }
 

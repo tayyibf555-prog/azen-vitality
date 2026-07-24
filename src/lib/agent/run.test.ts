@@ -288,4 +288,42 @@ describe("co-pilot commit gate (finding #3)", () => {
     // Meta-connection guard is what then keeps it from going live.
     expect(dispatch).toHaveBeenCalledWith("publish_meta_campaign", expect.objectContaining({ confirm: true }));
   });
+
+  // create_patient is in the SAME CONFIRM_COMMIT_TOOLS set (a real write to the practice's
+  // Dentally book), so a confirm:true set in the same turn as the request is refused, and a
+  // confirm answering a prior read-back proceeds.
+  it("REFUSES a create_patient confirm:true set in the same turn as the request", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(
+        toolUseMessage("tu1", "create_patient", { firstName: "Jane", lastName: "Doe", dateOfBirth: "1990-05-01", phone: "07700900123", confirm: true }),
+      )
+      .mockResolvedValueOnce(textMessage("Ready to add Jane Doe, born 1 May 1990. Shall I go ahead and add them?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ created: true, patientId: "new-1" }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn([{ role: "user", content: "add a new patient Jane Doe born 1990-05-01, mobile 07700900123, yes create her" }], deps);
+    expect(dispatch).not.toHaveBeenCalled(); // no patient reached Dentally
+    expect(r.replyText).toMatch(/add/i);
+  });
+
+  it("ALLOWS a create_patient confirm:true that answers a prior read-back", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(
+        toolUseMessage("tu1", "create_patient", { firstName: "Jane", lastName: "Doe", dateOfBirth: "1990-05-01", phone: "07700900123", confirm: true }),
+      )
+      .mockResolvedValueOnce(textMessage("Done, I have added Jane Doe."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ created: true, patientId: "new-1" }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "add a new patient Jane Doe born 1990-05-01, mobile 07700900123" },
+        { role: "assistant", content: "Ready to add Jane Doe, born 1 May 1990, mobile +447700900123, at N15 Vitality Dental. Shall I go ahead and add them?" },
+        { role: "user", content: "yes please" },
+      ],
+      deps,
+    );
+    expect(dispatch).toHaveBeenCalledWith("create_patient", expect.objectContaining({ confirm: true }));
+    expect(r.replyText).toMatch(/added/i);
+  });
 });

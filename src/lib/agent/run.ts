@@ -35,19 +35,21 @@ const APPOINTMENT_MUTATIONS = new Set(["book", "reschedule", "cancel"]);
 
 // Co-pilot COMMIT steps that go live the moment they fire with confirm:true: a send_sms
 // / send_email (a message to a real patient), a launch_outreach_campaign (starts texting
-// a segment), a launch_landing_page (publishes a public page), or a publish_meta_campaign
-// (the confirmed take-it-live step). These run through this same loop (the owner co-pilot
+// a segment), a launch_landing_page (publishes a public page), a publish_meta_campaign
+// (the confirmed take-it-live step), or a create_patient (writes a real person into the
+// practice's Dentally book). These run through this same loop (the owner co-pilot
 // dispatches via runAgentTurn), so they get the SAME deterministic latest-turn floor as
 // an appointment write: the prompt + each tool's own two-step already ask for a read-back,
 // and this makes a same-turn confirm inert regardless of what the model tries. The
-// per-tool guards (consent, suppression, toggle, IDOR, angle, Meta-connection) stay as
-// belt-and-braces.
+// per-tool guards (consent, suppression, toggle, IDOR, angle, Meta-connection, dedupe)
+// stay as belt-and-braces.
 const CONFIRM_COMMIT_TOOLS = new Set([
   "send_sms",
   "send_email",
   "launch_outreach_campaign",
   "launch_landing_page",
   "publish_meta_campaign",
+  "create_patient",
 ]);
 
 // A patient must give a clear affirmative before the agent is allowed to WRITE an
