@@ -398,6 +398,78 @@ export async function listAppointments(
   return [...rows].sort((a, b) => (a.start < b.start ? -1 : 1));
 }
 
+export interface AppointmentsRead {
+  appointments: AppointmentRecord[];
+  /**
+   * True only when the read could not be trusted: every requested site failed
+   * outright, or a site failed and the combined result came back empty. A
+   * calendar rendering zero rows is otherwise indistinguishable from "the day
+   * is genuinely free", so a caller that must tell those apart (the calendar
+   * page, go-live defect B3) reads this instead of guessing from an empty
+   * array. Deliberately NEVER cached: caching a failed read would serve the
+   * empty-diary lie back to every reader for the rest of the TTL.
+   */
+  failed: boolean;
+}
+
+/**
+ * Like listAppointments, but for a caller that must tell a genuine Dentally
+ * read failure apart from a day that is genuinely free (B3), and must never
+ * let a failed read be cached and served back as "no appointments". A
+ * successful read IS still cached (same TTL as listAppointments), so repeat
+ * navigation within an already-loaded window stays fast.
+ */
+export async function listAppointmentsSafe(
+  siteIds: string[],
+  range?: { from?: string; to?: string },
+): Promise<AppointmentsRead> {
+  const from = range?.from ?? "";
+  const to = range?.to ?? "";
+  const cacheKey = `apptssafe:${[...siteIds].sort().join("|")}:${from}:${to}`;
+
+  if (!process.env.VITEST) {
+    const hit = readCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as AppointmentsRead;
+  }
+
+  const client = dentallyFromEnv();
+  let anyFailed = false;
+  const perSite = await Promise.all(
+    siteIds.map(async (siteId) => {
+      try {
+        const rows = await pageAll((page) =>
+          client
+            .listAppointments({
+              siteId: dentallySiteId(siteId),
+              fromDate: from || undefined,
+              toDate: to || undefined,
+              page,
+              perPage: PER_PAGE,
+            })
+            .then((res) => res.appointments ?? []),
+        );
+        return rows.map((a) => toAppointment(a as Record<string, unknown>, siteId));
+      } catch (err) {
+        console.error(`[dentally] listAppointments (safe) failed for site ${siteId}; skipping this site`, err);
+        anyFailed = true;
+        return [] as AppointmentRecord[];
+      }
+    }),
+  );
+  const appointments = perSite.flat().sort((a, b) => (a.start < b.start ? -1 : 1));
+  // A failure only needs surfacing when it could plausibly explain the empty
+  // result: if another site's real data still came back, the diary is showing
+  // what it genuinely has, not lying about a day being free. Every-site-failed
+  // always lands here too (0 rows can ever be collected in that case).
+  const failed = siteIds.length > 0 && anyFailed && appointments.length === 0;
+
+  const result: AppointmentsRead = { appointments, failed };
+  if (!process.env.VITEST && !failed) {
+    readCache.set(cacheKey, { at: Date.now(), value: result });
+  }
+  return result;
+}
+
 export interface PlanRecord {
   name: string;
   planned: number;
