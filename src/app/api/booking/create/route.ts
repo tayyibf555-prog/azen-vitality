@@ -288,11 +288,29 @@ export async function POST(request: Request): Promise<Response> {
       if ("error" in built) {
         // e.g. a live slot with no practitioner id: refuse rather than send an
         // invalid write. Internal detail, so the patient sees the friendly line.
+        console.error(`[booking/create] refused an invalid write: ${built.error}`);
         return bad(BOOKING_FAILED, 502);
       }
       await dentally.createAppointment(built.payload);
-    } catch {
+    } catch (err) {
       // Any Dentally failure (422 included): friendly, never the error body.
+      //
+      // LOG IT. This branch previously swallowed the cause entirely, so a booking
+      // that failed in production was invisible: the patient saw "please call the
+      // practice" and nobody could tell whether Dentally was down, the payload was
+      // rejected, or the patient could not be registered. Server-side only, and it
+      // deliberately records which half failed, since registering a new patient and
+      // writing the appointment fail for very different reasons.
+      const stage = patientCreated || patientId ? "createAppointment" : "createPatient";
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      const status = (err as { status?: number })?.status;
+      const bodyText = (err as { body?: unknown })?.body;
+      console.error(
+        `[booking/create] ${stage} failed for site ${siteId}` +
+          (status ? ` (HTTP ${status})` : "") +
+          `: ${detail}` +
+          (bodyText ? ` | ${typeof bodyText === "string" ? bodyText.slice(0, 500) : JSON.stringify(bodyText).slice(0, 500)}` : ""),
+      );
       return bad(BOOKING_FAILED, 502);
     }
 
