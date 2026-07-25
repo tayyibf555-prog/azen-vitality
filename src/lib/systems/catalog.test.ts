@@ -13,7 +13,9 @@ import { CLIENT_NAV } from "@/lib/nav";
 // panel renders from SYSTEMS directly, so they still get an owner switch.
 // "outreach" is headless too: the segment outreach engine ships before its UI
 // workstream, so it has no CLIENT_NAV page yet but still needs an owner kill switch.
-const HEADLESS_SYSTEM_SLUGS = new Set(["online-booking", "outreach"]);
+// "whatsapp-agent" is headless: the inbound WhatsApp agent is switched separately
+// from outbound WhatsApp sending ('whatsapp'), but they share one nav module.
+const HEADLESS_SYSTEM_SLUGS = new Set(["online-booking", "outreach", "whatsapp-agent"]);
 
 describe("systems catalog", () => {
   it("every non-headless system slug is a real CLIENT_NAV module", () => {
