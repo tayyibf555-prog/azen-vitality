@@ -15,6 +15,7 @@ import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/booking/slots";
 import { markHoldConfirmed } from "@/lib/booking/holds";
 import { londonDayKey } from "@/lib/time/london";
+import { ageFromDob } from "@/lib/patient/demographics";
 
 export const dynamic = "force-dynamic";
 
@@ -108,6 +109,79 @@ function safeNote(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
+/* ---------------------------------------------------------------------------
+ * The fields live Dentally REQUIRES to register a patient.
+ *
+ * Registering a brand new patient against real Dentally fails with a 422 unless
+ * date_of_birth, title and payment_plan are all present, and gender is sent as a
+ * BOOLEAN. Nothing below is trusted from the client: every value is re-derived or
+ * re-checked here, because this endpoint is public and unauthenticated.
+ * ------------------------------------------------------------------------- */
+
+/** The only titles this practice uses, and the only ones the booking page offers. */
+const TITLES = ["Mr", "Mrs", "Miss", "Ms", "Master"] as const;
+type Title = (typeof TITLES)[number];
+
+/**
+ * Whitelist, exactly like knownTreatment(): the booking page's own five options
+ * are the ONLY accepted values, so no arbitrary string a stranger posts can land
+ * on a real patient record. Returns the canonical spelling, never the caller's.
+ */
+function knownTitle(value: string | undefined): Title | undefined {
+  if (!value) return undefined;
+  const cleaned = value.replace(/\s+/g, " ").trim().toLowerCase();
+  return TITLES.find((t) => t.toLowerCase() === cleaned);
+}
+
+/**
+ * Dentally carries sex as a BOOLEAN on the patient record, true = male and
+ * false = female (proven against 200 real records for this practice: Mr and
+ * Master are true, Miss, Ms and Mrs are false), and it is required to register.
+ *
+ * DELIBERATE DECISION, not an oversight: we derive it from the chosen title
+ * rather than asking. This form is the end of a public marketing funnel, and
+ * putting a binary male or female question in front of someone booking a
+ * check-up is off-putting and adds a step for no patient benefit. The derivation
+ * happens HERE, on the server, never in the browser, so the client cannot set it.
+ * It is a starting value on the record like any other detail, and the practice
+ * can correct it in Dentally whenever it is wrong.
+ */
+function genderFromTitle(title: Title): boolean {
+  return title === "Mr" || title === "Master";
+}
+
+/**
+ * How the patient asked to be seen, mapped to THIS practice's own Dentally
+ * payment plan ids. Whitelisted like the title: an unrecognised value is refused
+ * rather than passed through.
+ */
+const FUNDING_PLAN_IDS: Record<string, number> = { nhs: 1, private: 2 };
+
+function knownPaymentPlanId(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  return FUNDING_PLAN_IDS[value.replace(/\s+/g, " ").trim().toLowerCase()];
+}
+
+/**
+ * A real calendar date as YYYY-MM-DD, the same check the onboarding register
+ * route and the co-pilot's create_patient already make: an impossible date
+ * (2001-13-40, 31 February) fails the UTC round trip rather than being written
+ * through because it was merely regex-shaped. Anchored at both ends here, unlike
+ * those two: the booking page posts a plain date input value, and this endpoint
+ * is public, so a timestamp or trailing junk is refused rather than truncated.
+ */
+function canonicalDob(raw: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
 export async function POST(request: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
@@ -158,6 +232,23 @@ export async function POST(request: Request): Promise<Response> {
     const rawEmail = str(body.email);
     const email = normaliseEmail(rawEmail);
     if (rawEmail && !email) return bad("Please check your email address and try again.", 400);
+
+    // Live Dentally will not register a patient without these, so the booking page
+    // asks for all three and every one is re-checked here. Sex is NOT among them:
+    // it is derived from the title below, server side (see genderFromTitle).
+    const title = knownTitle(str(body.title));
+    if (!title) return bad("Please choose a title and try again.", 400);
+    const dob = canonicalDob(str(body.dateOfBirth) ?? "");
+    // ageFromDob returns null for a date in the future, so a future date of birth
+    // is refused here along with an impossible or implausibly old one.
+    const age = dob ? ageFromDob(dob, new Date()) : null;
+    if (!dob || age === null || age > 120) {
+      return bad("Please check your date of birth and try again.", 400);
+    }
+    const paymentPlanId = knownPaymentPlanId(str(body.funding));
+    if (paymentPlanId === undefined) {
+      return bad("Please choose how you would like to be seen and try again.", 400);
+    }
 
     const slotStart = str(body.slotStart);
     const finish = str(body.finish);
@@ -253,6 +344,14 @@ export async function POST(request: Request): Promise<Response> {
         const { patient } = await dentally.createPatient({
           first_name: firstName,
           last_name: lastName,
+          // Live Dentally rejects a registration missing any of these three.
+          title,
+          date_of_birth: dob,
+          payment_plan_id: paymentPlanId,
+          // A BOOLEAN, never a string: Dentally stores sex as true = male. Derived
+          // from the title HERE rather than taken from the client, so the browser
+          // can never set it (see genderFromTitle for why we do not ask for it).
+          gender: genderFromTitle(title),
           email_address: email ?? undefined,
           mobile_phone: phone,
           // Dentally knows its own site UUIDs, not our internal ids ("site-cc").

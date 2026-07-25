@@ -11,17 +11,21 @@ import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 // screens, kept as plain as Dentally's own flow (big obvious steps, little
 // scrolling):
 //
-//   times   — "next available" quick-pick chips (soonest first), then a
+//   times:   "next available" quick-pick chips (soonest first), then a
 //             horizontal strip of the next 14 days (extendable once to 28) with
 //             per-day slot counts and the selected day's times grouped
 //             morning/afternoon.
-//   details — STEP 1: the chosen time summarised, plus name/mobile/email. Submit
-//             HOLDS the time (POST /api/booking/hold) with NO Dentally write, and
-//             a short line that the practice may text about the booking.
-//   confirm — STEP 2: the exact slot read back, one big "Confirm" that runs the
+//   details: STEP 1: the chosen time summarised, plus title, name, date of
+//             birth, how the patient would like to be seen, mobile and email.
+//             Submit HOLDS the time (POST /api/booking/hold) with NO Dentally
+//             write, and a short line that the practice may text about the
+//             booking. Title, date of birth and funding are collected because
+//             live Dentally refuses to register a new patient without them, so
+//             without them a first-time patient could not book online at all.
+//   confirm: STEP 2: the exact slot read back, one big "Confirm" that runs the
 //             existing POST /api/booking/create (which flips the hold to
 //             confirmed).
-//   success — the booked confirmation.
+//   success: the booked confirmation.
 //
 // Availability comes from GET /api/booking/slots (max 14 days per request, so
 // the "next two weeks" toggle issues exactly one extra request). Each slot it
@@ -75,6 +79,30 @@ const TREATMENT_OPTIONS = [
   "Something else",
 ] as const;
 
+/**
+ * The titles the practice uses. Required: Dentally will not register a new
+ * patient without a title, a date of birth and a payment plan, so the booking
+ * page has to collect all three or a first-time patient cannot book at all.
+ *
+ * SEX: Dentally also requires it, and stores it as a boolean on the patient
+ * record (true = male, false = female). We do NOT ask the patient for it. The
+ * server DERIVES it from the title chosen here (Mr and Master as male, Mrs, Miss
+ * and Ms as female), because this form is the end of a public marketing funnel
+ * and a binary male or female question in front of someone booking a check-up is
+ * off-putting and adds a step for no patient benefit. It is a starting value on
+ * the record, and the practice can correct it in Dentally like any other detail.
+ * The derivation deliberately lives on the server only, never here.
+ */
+const TITLE_OPTIONS = ["Mr", "Mrs", "Miss", "Ms", "Master"] as const;
+
+/**
+ * How the patient would like to be seen. The practice asked for this question so
+ * the booking is registered on the right plan; the server maps the answer to the
+ * practice's own Dentally payment plan. Plain wording only, and nothing about
+ * charges, bands or what any appointment will involve.
+ */
+const FUNDING_OPTIONS = ["NHS", "Private"] as const;
+
 /* ---------------------------------------------------------------------------
  * Europe/London date helpers
  * ------------------------------------------------------------------------- */
@@ -100,6 +128,13 @@ const timeFmt = new Intl.DateTimeFormat("en-GB", {
   hour: "numeric",
   minute: "2-digit",
   hour12: true,
+  timeZone: TZ,
+});
+// Date of birth read back on the confirm step, e.g. "14 March 1990".
+const birthDateFmt = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
   timeZone: TZ,
 });
 const hourFmt = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: TZ });
@@ -131,6 +166,26 @@ function timeLabel(iso: string): string {
 /** Hour of day (0-23) in London, for morning/afternoon grouping. */
 function londonHour(iso: string): number {
   return parseInt(hourFmt.format(new Date(iso)), 10);
+}
+
+/**
+ * A real calendar date of birth: YYYY-MM-DD (the shape a date input gives us), a
+ * day that genuinely exists, not in the future and not implausibly long ago. This
+ * mirrors the server's own check so the patient is told before they submit, but
+ * the server remains the authority on every field.
+ */
+function isRealPastDob(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return false;
+  // Both sides are YYYY-MM-DD, so a plain string compare is a date compare.
+  const todayKey = londonToday();
+  return value <= todayKey && y >= Number(todayKey.slice(0, 4)) - 120;
 }
 
 /* ---------------------------------------------------------------------------
@@ -204,9 +259,14 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Slot | null>(null);
 
-  // Details step (step 1).
+  // Details step (step 1). Title, date of birth and funding start blank on
+  // purpose: each is required, and Dentally records what the patient chose, so
+  // none of them may be pre-filled with a guess.
+  const [title, setTitle] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [dob, setDob] = useState("");
+  const [funding, setFunding] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [treatment, setTreatment] = useState<string>(TREATMENT_OPTIONS[0]);
@@ -353,7 +413,13 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   // Mirrors the server's requirements so the button only lights up when the
   // form could plausibly succeed; exact patterns are checked on submit.
   const canSubmit =
-    firstName.trim() !== "" && lastName.trim() !== "" && phone.trim() !== "" && !busy;
+    title !== "" &&
+    firstName.trim() !== "" &&
+    lastName.trim() !== "" &&
+    dob !== "" &&
+    funding !== "" &&
+    phone.trim() !== "" &&
+    !busy;
 
   /** Fetch the short-lived public-funnel page token (best effort). */
   async function fetchPageToken(): Promise<string | undefined> {
@@ -374,8 +440,22 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
 
     const fn = firstName.trim();
     const ln = lastName.trim();
+    // The practice's Dentally record needs all of these on a new patient, so they
+    // are checked in the same order the patient filled them in.
+    if (!TITLE_OPTIONS.some((t) => t === title)) {
+      setError("Please choose a title.");
+      return;
+    }
     if (!fn || !ln) {
       setError("Please enter your first and last name.");
+      return;
+    }
+    if (!isRealPastDob(dob)) {
+      setError("Please enter your date of birth.");
+      return;
+    }
+    if (!FUNDING_OPTIONS.some((f) => f === funding)) {
+      setError("Please choose how you would like to be seen.");
       return;
     }
     // Same normalisation the server applies (07... / +44... / spaces all fine),
@@ -460,8 +540,13 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
           slotStart: chosen.start,
           finish: chosen.finish,
           practitionerId: chosen.practitionerId,
+          title,
           firstName: firstName.trim(),
           lastName: lastName.trim(),
+          // Required by Dentally to register a first-time patient. Sex is not sent:
+          // the server derives it from the title (see TITLE_OPTIONS above).
+          dateOfBirth: dob,
+          funding,
           phone: phone.trim(),
           email: email.trim() ? normaliseEmail(email.trim()) ?? undefined : undefined,
           treatment,
@@ -533,8 +618,11 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
             animKey={animKey}
             chosen={chosen}
             siteName={siteName}
+            title={title}
             firstName={firstName}
             lastName={lastName}
+            dob={dob}
+            funding={funding}
             phone={phone}
             treatment={treatment}
             busy={busy}
@@ -547,10 +635,16 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
             animKey={animKey}
             chosen={chosen}
             siteName={siteName}
+            title={title}
+            setTitle={setTitle}
             firstName={firstName}
             setFirstName={setFirstName}
             lastName={lastName}
             setLastName={setLastName}
+            dob={dob}
+            setDob={setDob}
+            funding={funding}
+            setFunding={setFunding}
             phone={phone}
             setPhone={setPhone}
             email={email}
@@ -914,10 +1008,16 @@ function DetailsStep({
   animKey,
   chosen,
   siteName,
+  title,
+  setTitle,
   firstName,
   setFirstName,
   lastName,
   setLastName,
+  dob,
+  setDob,
+  funding,
+  setFunding,
   phone,
   setPhone,
   email,
@@ -933,10 +1033,16 @@ function DetailsStep({
   animKey: number;
   chosen: Slot;
   siteName: string;
+  title: string;
+  setTitle: (v: string) => void;
   firstName: string;
   setFirstName: (v: string) => void;
   lastName: string;
   setLastName: (v: string) => void;
+  dob: string;
+  setDob: (v: string) => void;
+  funding: string;
+  setFunding: (v: string) => void;
   phone: string;
   setPhone: (v: string) => void;
   email: string;
@@ -949,6 +1055,9 @@ function DetailsStep({
   onSubmit: (e: React.FormEvent) => void;
   onBack: () => void;
 }) {
+  // The date picker can never offer a day after today for a date of birth.
+  const latestBirthDate = londonToday();
+
   return (
     <form
       key={animKey}
@@ -1004,6 +1113,68 @@ function DetailsStep({
           />
         </label>
       </div>
+
+      {/* Title and date of birth. Both are required before the practice can put a
+          first-time patient on its books. The title also settles how the record is
+          addressed, and the server derives the sex field Dentally requires from it,
+          so the patient is never asked a male or female question here. */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
+            Title
+          </span>
+          <select
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            autoComplete="honorific-prefix"
+            className={inputClass}
+          >
+            <option value="" disabled>
+              Please choose
+            </option>
+            {TITLE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
+            Date of birth
+          </span>
+          <input
+            type="date"
+            autoComplete="bday"
+            max={latestBirthDate}
+            value={dob}
+            onChange={(e) => setDob(e.target.value)}
+            className={inputClass}
+          />
+        </label>
+      </div>
+
+      {/* How they would like to be seen. The practice asked for this so the
+          booking goes on the right plan; plain wording, nothing about charges. */}
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
+          How would you like to be seen?
+        </span>
+        <select
+          value={funding}
+          onChange={(e) => setFunding(e.target.value)}
+          className={inputClass}
+        >
+          <option value="" disabled>
+            Please choose
+          </option>
+          {FUNDING_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
 
       {/* Why they are coming in. Carried through to the appointment so the
           practice can plan the visit rather than seeing every online booking as
@@ -1082,8 +1253,11 @@ function ConfirmStep({
   animKey,
   chosen,
   siteName,
+  title,
   firstName,
   lastName,
+  dob,
+  funding,
   phone,
   treatment,
   busy,
@@ -1094,8 +1268,11 @@ function ConfirmStep({
   animKey: number;
   chosen: Slot;
   siteName: string;
+  title: string;
   firstName: string;
   lastName: string;
+  dob: string;
+  funding: string;
   phone: string;
   treatment: string;
   busy: boolean;
@@ -1140,8 +1317,12 @@ function ConfirmStep({
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
         <dt className="text-muted">Name</dt>
         <dd className="font-semibold text-navy">
-          {firstName} {lastName}
+          {title} {firstName} {lastName}
         </dd>
+        <dt className="text-muted">Date of birth</dt>
+        <dd className="font-semibold text-navy">{birthDateFmt.format(noonUtc(dob))}</dd>
+        <dt className="text-muted">Seen as</dt>
+        <dd className="font-semibold text-navy">{funding}</dd>
         <dt className="text-muted">Mobile</dt>
         <dd className="font-semibold text-navy">{phone}</dd>
         <dt className="text-muted">Visit</dt>

@@ -87,13 +87,21 @@ function goodBody(overrides: Record<string, unknown> = {}) {
     siteId: "site-cc",
     slotStart: START_ISO,
     finish: FINISH_ISO,
+    title: "Mr",
     firstName: "Alex",
     lastName: "Patient",
+    dateOfBirth: "1990-03-14",
+    funding: "NHS",
     phone: `07700 9002${String(phoneCounter).padStart(2, "0")}`,
     email: "alex@example.com",
     pageToken: mintSubmitToken("vitality", new Date(), KEY),
     ...overrides,
   };
+}
+
+/** The E.164 form of a goodBody() phone, the way the route normalises it. */
+function e164Of(body: { phone: unknown }): string {
+  return "+44" + String(body.phone).replace(/\s/g, "").slice(1);
 }
 
 beforeEach(() => {
@@ -216,6 +224,132 @@ describe("create — happy paths", () => {
     expect(created.site_id).toBe(OWN_SITE_UUID);
     const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
     expect(payload.patient_id).toBe("pat-new");
+  });
+});
+
+// The bug this block defends. Registering a first-time patient against LIVE Dentally
+// failed with 422: date_of_birth, title and payment_plan "seems to be missing", and
+// gender "must be male or female". So no new patient could book online at all, and it
+// went unnoticed because registration had only ever been exercised against the local
+// mock. On real Dentally gender is a BOOLEAN (true = male, false = female), and we
+// DERIVE it from the title on the server rather than putting a binary sex question in
+// front of a patient on a marketing funnel.
+describe("create, the fields live Dentally requires to register a patient", () => {
+  it("registers with date_of_birth, title, payment_plan_id and a BOOLEAN gender, the four fields Dentally rejected as missing", async () => {
+    const body = goodBody();
+    const res = await POST(req(body));
+    expect(res.status).toBe(200);
+    expect(h.createPatient).toHaveBeenCalledTimes(1);
+    const created = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
+    expect(created).toEqual({
+      first_name: "Alex",
+      last_name: "Patient",
+      title: "Mr",
+      date_of_birth: "1990-03-14",
+      payment_plan_id: 1,
+      gender: true,
+      email_address: "alex@example.com",
+      mobile_phone: e164Of(body),
+      site_id: OWN_SITE_UUID,
+      use_sms: true,
+      use_email: true,
+    });
+    // A STRING is what the old code sent, and what live Dentally rejected.
+    expect(typeof created.gender).toBe("boolean");
+  });
+
+  it("derives the boolean sex from the chosen title (Mr and Master true, Mrs, Miss and Ms false)", async () => {
+    for (const [title, expected] of [
+      ["Mr", true],
+      ["Master", true],
+      ["Mrs", false],
+      ["Miss", false],
+      ["Ms", false],
+    ] as const) {
+      h.createPatient.mockClear();
+      const res = await POST(req(goodBody({ title })));
+      expect(res.status).toBe(200);
+      const created = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
+      expect(created.title).toBe(title);
+      expect(created.gender).toBe(expected);
+    }
+  });
+
+  it("never takes the sex from the client, even when one is posted", async () => {
+    const res = await POST(req(goodBody({ title: "Mrs", gender: "Male" })));
+    expect(res.status).toBe(200);
+    const created = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
+    expect(created.gender).toBe(false); // derived from Mrs, not the posted "Male"
+  });
+
+  it("maps NHS to payment plan 1 and Private to payment plan 2", async () => {
+    const nhs = await POST(req(goodBody({ funding: "NHS" })));
+    expect(nhs.status).toBe(200);
+    expect((h.createPatient.mock.calls[0]![0] as Record<string, unknown>).payment_plan_id).toBe(1);
+
+    h.createPatient.mockClear();
+    const priv = await POST(req(goodBody({ funding: "Private" })));
+    expect(priv.status).toBe(200);
+    expect((h.createPatient.mock.calls[0]![0] as Record<string, unknown>).payment_plan_id).toBe(2);
+  });
+
+  it("REFUSES a title the practice does not use, so nothing arbitrary reaches a patient record", async () => {
+    for (const title of ["Dr", "Lord Admiral <script>", "", undefined]) {
+      const res = await POST(req(goodBody({ title })));
+      expect(res.status).toBe(400);
+      const j = (await res.json()) as { ok: boolean; error: string };
+      expect(j.ok).toBe(false);
+      expect(j.error).toBe("Please choose a title and try again.");
+    }
+    expect(h.createPatient).not.toHaveBeenCalled();
+    expect(h.createAppointment).not.toHaveBeenCalled();
+    expect(h.getAvailability).not.toHaveBeenCalled();
+  });
+
+  it("accepts the page's own titles whatever the casing, and stores the practice's spelling", async () => {
+    const res = await POST(req(goodBody({ title: "  mISS " })));
+    expect(res.status).toBe(200);
+    const created = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
+    expect(created.title).toBe("Miss");
+    expect(created.gender).toBe(false);
+  });
+
+  it("REFUSES a funding value that is not one the booking page offers", async () => {
+    for (const funding of ["Insurance", "47752", "", undefined]) {
+      const res = await POST(req(goodBody({ funding })));
+      expect(res.status).toBe(400);
+      const j = (await res.json()) as { error: string };
+      expect(j.error).toBe("Please choose how you would like to be seen and try again.");
+    }
+    expect(h.createPatient).not.toHaveBeenCalled();
+    expect(h.createAppointment).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a date of birth in the future", async () => {
+    const nextYear = new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10);
+    const res = await POST(req(goodBody({ dateOfBirth: nextYear })));
+    expect(res.status).toBe(400);
+    const j = (await res.json()) as { error: string };
+    expect(j.error).toBe("Please check your date of birth and try again.");
+    expect(h.createPatient).not.toHaveBeenCalled();
+    expect(h.createAppointment).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a missing, malformed, impossible or implausibly old date of birth", async () => {
+    for (const dateOfBirth of [
+      undefined,
+      "",
+      "14/03/1990",
+      "1990-02-31", // a day that does not exist
+      "1990-13-01", // a month that does not exist
+      "1200-01-01", // older than any living patient
+      "1990-03-14T00:00:00Z",
+    ]) {
+      const res = await POST(req(goodBody({ dateOfBirth })));
+      expect(res.status).toBe(400);
+    }
+    expect(h.createPatient).not.toHaveBeenCalled();
+    expect(h.createAppointment).not.toHaveBeenCalled();
   });
 });
 
