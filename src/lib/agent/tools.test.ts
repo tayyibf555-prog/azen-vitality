@@ -17,6 +17,46 @@ describe("AGENT_TOOLS", () => {
   });
 });
 
+// Booking now REVALIDATES the slot against live availability immediately before
+// the write, so every book fixture has to offer an open diary. Only future slots
+// inside the booking horizon come back from that read, so the fixtures are pinned
+// a few days ahead of the real clock rather than to a fixed date that ages out.
+const SITE_UUID = "3286d822-68c5-48ff-b1a2-065780dfcd15";
+const SLOT_START = new Date(Date.now() + 3 * 86_400_000).toISOString();
+const SLOT_FINISH = new Date(Date.parse(SLOT_START) + 30 * 60_000).toISOString();
+
+/** An availability reader offering one clinician's open window around a slot. */
+function openDiary(
+  practitionerId = "42",
+  start = SLOT_START,
+  windowMinutes = 240,
+): { listPractitioners: ReturnType<typeof vi.fn>; getAvailability: ReturnType<typeof vi.fn> } {
+  return {
+    listPractitioners: vi.fn().mockResolvedValue({
+      practitioners: [{ id: practitionerId, active: true, site_id: SITE_UUID }],
+    }),
+    getAvailability: vi.fn().mockResolvedValue({
+      availability: [
+        {
+          start_time: start,
+          finish_time: new Date(Date.parse(start) + windowMinutes * 60_000).toISOString(),
+          practitioner_id: practitionerId,
+        },
+      ],
+    }),
+  };
+}
+
+/** An availability reader with nothing free at all (the slot has just gone). */
+function emptyDiary(): { listPractitioners: ReturnType<typeof vi.fn>; getAvailability: ReturnType<typeof vi.fn> } {
+  return {
+    listPractitioners: vi.fn().mockResolvedValue({
+      practitioners: [{ id: "42", active: true, site_id: SITE_UUID }],
+    }),
+    getAvailability: vi.fn().mockResolvedValue({ availability: [] }),
+  };
+}
+
 describe("makeDispatch", () => {
   const context = { patientId: "pat-010", siteId: "site-cc", patientName: "Harold", treatment: "Invisalign", fundingType: "private" as const };
 
@@ -44,21 +84,21 @@ describe("makeDispatch", () => {
 
   it("book sends the calibrated real-Dentally fields: reason/practitioner/finish, not treatment/site_id", async () => {
     const dentally = {
-      getAvailability: vi.fn(),
+      ...openDiary(),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-1" } }),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
     const out = await dispatch("book", {
-      slotStart: "2026-06-22T09:00:00Z",
-      finishTime: "2026-06-22T09:30:00Z",
+      slotStart: SLOT_START,
+      finishTime: SLOT_FINISH,
       practitionerId: "42",
       treatment: "Invisalign",
     });
     const payload = dentally.createAppointment.mock.calls[0][0];
     expect(payload).toMatchObject({
       patient_id: "pat-010",
-      start_time: "2026-06-22T09:00:00Z",
-      finish_time: "2026-06-22T09:30:00Z",
+      start_time: SLOT_START,
+      finish_time: SLOT_FINISH,
       practitioner_id: "42",
       reason: "Other", // Invisalign -> Other; the treatment name goes in notes
       booked_via_api: true,
@@ -70,27 +110,27 @@ describe("makeDispatch", () => {
   });
 
   it("book maps the treatment onto a valid Dentally reason enum", async () => {
-    const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "a" } }) };
+    const dentally = { ...openDiary(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "a" } }) };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
-    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", finishTime: "2026-06-22T09:30:00Z", practitionerId: "42", treatment: "checkup" });
+    await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "checkup" });
     expect(dentally.createAppointment.mock.calls[0][0]).toMatchObject({ reason: "Exam" }); // checkup -> Exam
   });
 
   it("book REFUSES to write a slot with no practitioner (never sends an invalid payload)", async () => {
     const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn() };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
-    const out = await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", finishTime: "2026-06-22T09:30:00Z", treatment: "Invisalign" });
+    const out = await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, treatment: "Invisalign" });
     expect(dentally.createAppointment).not.toHaveBeenCalled();
     expect(JSON.parse(out).error).toBeTruthy();
   });
 
   it("book derives finish_time from the treatment length when the slot omits it", async () => {
-    const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-3" } }) };
+    const dentally = { ...openDiary(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-3" } }) };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
-    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", practitionerId: "42", treatment: "Invisalign" });
+    await dispatch("book", { slotStart: SLOT_START, practitionerId: "42", treatment: "Invisalign" });
     const payload = dentally.createAppointment.mock.calls[0][0];
     expect(typeof payload.finish_time).toBe("string");
-    expect(Date.parse(payload.finish_time as string)).toBeGreaterThan(Date.parse("2026-06-22T09:00:00Z"));
+    expect(Date.parse(payload.finish_time as string)).toBeGreaterThan(Date.parse(SLOT_START));
   });
 
   it("find_appointments returns only upcoming, active appointments", async () => {
@@ -148,7 +188,9 @@ describe("makeDispatch", () => {
 
   it("register_patient onboards a new patient and later book uses the new id", async () => {
     const dentally = {
-      getAvailability: vi.fn(), getPatientAppointments: vi.fn(), updateAppointment: vi.fn(), cancelAppointment: vi.fn(),
+      ...openDiary(),
+      getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
+      updateAppointment: vi.fn(), cancelAppointment: vi.fn(),
       createPatient: vi.fn().mockResolvedValue({ patient: { id: "pat-new" } }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-2" } }),
     };
@@ -161,7 +203,7 @@ describe("makeDispatch", () => {
     );
     expect(reg).toContain("pat-new");
 
-    await dispatch("book", { slotStart: "2026-07-01T09:00:00Z", finishTime: "2026-07-01T09:30:00Z", practitionerId: "42", treatment: "Checkup" });
+    await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "Checkup" });
     expect(dentally.createAppointment).toHaveBeenCalledWith(expect.objectContaining({ patient_id: "pat-new" }));
   });
 

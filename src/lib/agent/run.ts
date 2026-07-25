@@ -10,6 +10,24 @@ import type {
 import type { AgentTurnResult } from "./types";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 
+/**
+ * What the turn actually DID, on top of what the model said.
+ *
+ * `toolCalls` records what the model ATTEMPTED, which is not the same thing: a
+ * call can be blocked by the confirmation gate, refused by the tool, or fail at
+ * Dentally. Anything downstream that must only fire on a real write (marking a
+ * conversation booked, marking a lead booked) keys off these outcome fields,
+ * which are read from the tool RESULTS, never off an attempt.
+ */
+export interface AgentTurnOutcome extends AgentTurnResult {
+  /** True only when a `book` result confirmed a real appointment. */
+  booked: boolean;
+  /** Dentally id of a patient `register_patient` created this turn, if any. */
+  registeredPatientId: string | null;
+  /** The name they were registered under, for the directory and the thread. */
+  registeredPatientName: string | null;
+}
+
 export interface AgentRunDeps {
   anthropic: Anthropic;
   dispatch: (name: string, input: Record<string, unknown>) => Promise<string>;
@@ -121,13 +139,27 @@ function assistantTextBeforeLatestPatient(history: MessageParam[]): string {
   return "";
 }
 
+/** A tool result as an object, or an empty object when it is not JSON. */
+function parseToolResult(result: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(result);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function runAgentTurn(
   history: MessageParam[],
   deps: AgentRunDeps,
-): Promise<AgentTurnResult> {
+): Promise<AgentTurnOutcome> {
   const messages: MessageParam[] = [...history];
   const toolCalls: { name: string; input: Record<string, unknown> }[] = [];
   let escalated = false;
+  // Real outcomes, read from tool RESULTS (see AgentTurnOutcome).
+  let booked = false;
+  let registeredPatientId: string | null = null;
+  let registeredPatientName: string | null = null;
   // Fixed for the whole turn. Compute the shared pieces once: the latest inbound text,
   // the assistant read-back before it, and whether that inbound is a clear affirmative.
   const latestInbound = latestPatientText(history);
@@ -142,6 +174,17 @@ export async function runAgentTurn(
   // answer, so priorReadback is empty and this is false — exactly the case we refuse.
   const commitConfirmed =
     latestIsAffirmative && (SEND_PROPOSAL.test(priorReadback) || PROPOSAL.test(priorReadback));
+
+  // Every exit from the loop reports the same outcome fields, read at the moment
+  // of return so a write in the last round is never dropped from the result.
+  const outcome = (replyText: string, wasEscalated = escalated): AgentTurnOutcome => ({
+    replyText,
+    toolCalls,
+    escalated: wasEscalated,
+    booked,
+    registeredPatientId,
+    registeredPatientName,
+  });
 
   const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
   for (let round = 0; round < maxRounds; round++) {
@@ -180,9 +223,9 @@ export async function runAgentTurn(
           });
           continue;
         }
-        return { replyText: "", toolCalls, escalated };
+        return outcome("");
       }
-      return { replyText, toolCalls, escalated };
+      return outcome(replyText);
     }
 
     // ContentBlock[] is structurally compatible with ContentBlockParam[] for the
@@ -262,10 +305,21 @@ export async function runAgentTurn(
         result = JSON.stringify({ error: "That action could not be completed just now. Try again, or let me pass you to a colleague." });
         escalated = true;
       }
+      // Record what really happened, from the RESULT. A booking that was blocked,
+      // refused because the slot had gone, or thrown by Dentally reports nothing
+      // here, so no caller can mistake the attempt for an appointment.
+      const parsed = parseToolResult(result);
+      if (tu.name === "book" && parsed.booked === true) booked = true;
+      if (tu.name === "register_patient" && parsed.registered === true && typeof parsed.patientId === "string") {
+        registeredPatientId = parsed.patientId;
+        const firstName = typeof input.firstName === "string" ? input.firstName.trim() : "";
+        const lastName = typeof input.lastName === "string" ? input.lastName.trim() : "";
+        registeredPatientName = [firstName, lastName].filter(Boolean).join(" ") || null;
+      }
       results.push({ type: "tool_result", tool_use_id: tu.id, content: result });
     }
     messages.push({ role: "user", content: results });
   }
 
-  return { replyText: "", toolCalls, escalated: true };
+  return outcome("", true);
 }

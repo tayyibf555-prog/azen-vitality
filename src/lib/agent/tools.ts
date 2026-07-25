@@ -2,6 +2,14 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { DentallyClient } from "@/lib/dentally/client";
 import { findTreatment } from "@/lib/treatments/catalog";
 import { getSite, getClient, dentallySiteId } from "@/lib/mock/clients";
+import {
+  fetchAvailabilityDays,
+  findExactSlot,
+  BOOKING_SLOT_DURATION_MIN,
+  type BookingDay,
+  type BookingSlot,
+} from "@/lib/booking/slots";
+import { londonDayKey } from "@/lib/time/london";
 import type { AgentContext } from "./types";
 
 // Real Dentally requires the appointment `reason` to be one of a fixed set (calibrated
@@ -67,6 +75,11 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
         appointmentId: { type: "string", description: "id of the appointment to move, from find_appointments" },
         newSlotStart: { type: "string", description: "ISO datetime of the new slot, exactly as returned by find_slots" },
         newFinishTime: { type: "string", description: "ISO end datetime of the new slot from find_slots (optional)" },
+        practitionerId: {
+          type: "string",
+          description:
+            "practitioner_id of the new slot from find_slots. Always pass this when the new slot is in a different clinician's diary, otherwise the appointment stays with the clinician who has it now.",
+        },
       },
       required: ["appointmentId", "newSlotStart"],
     },
@@ -146,6 +159,56 @@ export function filterSlotsByPractitioner(slots: unknown[], practitionerId: stri
   });
 }
 
+/**
+ * Whether live availability still covers a whole booking span.
+ *
+ * The agent quotes slots at the TREATMENT's own length, while availability is
+ * read back in fixed 30 minute slots, so an exact slot match is not always on
+ * offer. What has to be true before a write is simpler: every minute of
+ * [start, finish) is still free in the diary. Back-to-back open slots are
+ * merged first, so an hour-long appointment sitting across two adjacent slots
+ * still counts as covered, while a slot taken in the meantime opens a gap and
+ * fails the check. Pure + exported so it is unit-testable.
+ */
+export function spanStillOpen(
+  days: BookingDay[],
+  startIso: string,
+  finishIso: string,
+  practitionerId: string | null,
+): boolean {
+  const startMs = Date.parse(startIso);
+  const finishMs = Date.parse(finishIso);
+  if (Number.isNaN(startMs) || Number.isNaN(finishMs) || finishMs <= startMs) return false;
+  const spans: Array<[number, number]> = [];
+  for (const day of days) {
+    for (const slot of day.slots) {
+      if (practitionerId && slot.practitionerId !== practitionerId) continue;
+      const s = Date.parse(slot.start);
+      const f = Date.parse(slot.finish);
+      if (Number.isNaN(s) || Number.isNaN(f) || f <= s) continue;
+      spans.push([s, f]);
+    }
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  let openFrom = Number.NaN;
+  let openTo = Number.NaN;
+  for (const [s, f] of spans) {
+    if (Number.isFinite(openTo) && s <= openTo) {
+      if (f > openTo) openTo = f; // contiguous or overlapping: extend the run
+    } else {
+      openFrom = s; // a gap in the diary: start a fresh run
+      openTo = f;
+    }
+    if (openFrom <= startMs && openTo >= finishMs) return true;
+  }
+  return false;
+}
+
+/** YYYY-MM-DD shifted by whole days (UTC-safe), for an availability window. */
+function shiftYmd(ymd: string, days: number): string {
+  return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 export interface ToolDeps {
   dentally: Pick<
     DentallyClient,
@@ -163,6 +226,37 @@ export interface ToolDeps {
 export function makeDispatch(deps: ToolDeps) {
   // When a new patient is onboarded mid-conversation, book under their new id.
   let registeredPatientId: string | null = null;
+
+  // Bookings this dispatch has already written, keyed by patient + slot. Dentally
+  // can be slow, and a write that times out on the client side may well have
+  // landed; the model then retries the same booking in the same turn. Replaying
+  // the first result keeps that retry from putting the patient in the diary twice.
+  const bookedSlots = new Map<string, string>();
+
+  // An appointment already on the patient's own record at exactly this start, if
+  // any. Catches the cross-turn half of the same race: the timed-out write DID
+  // land, and the retry arrives on a later inbound with a fresh dispatch. Returns
+  // the existing appointment id so we confirm that booking rather than duplicate
+  // it. Best-effort: a failed read must never block a genuine first booking (the
+  // per-dispatch memo above still covers the same-turn retry).
+  async function appointmentAtStart(patientId: string, startMs: number): Promise<string | null> {
+    try {
+      const res = await deps.dentally.getPatientAppointments(patientId);
+      const raw = Array.isArray(res.appointments) ? res.appointments : [];
+      for (const a of raw) {
+        const row = a && typeof a === "object" ? (a as Record<string, unknown>) : {};
+        const state = typeof row.state === "string" ? row.state : "";
+        if (state === "cancelled") continue;
+        const s = Date.parse(String(row.start_time ?? ""));
+        if (!Number.isNaN(s) && s === startMs && row.id !== undefined && row.id !== null) {
+          return String(row.id);
+        }
+      }
+    } catch (err) {
+      console.warn("[agent] could not read existing appointments before booking; continuing", err);
+    }
+    return null;
+  }
 
   // Server-side ownership check for a mutation on an existing appointment. A
   // patient can only ever reschedule/cancel an appointment that is on THEIR own
@@ -274,7 +368,7 @@ export function makeDispatch(deps: ToolDeps) {
         const treatmentName = typeof input.treatment === "string" ? input.treatment : "";
         const start = typeof input.slotStart === "string" ? input.slotStart : "";
         const startMs = Date.parse(start);
-        const durationMin = findTreatment(treatmentName)?.durationMinutes ?? 30;
+        const durationMin = findTreatment(treatmentName)?.durationMinutes ?? BOOKING_SLOT_DURATION_MIN;
         const finishTime =
           typeof input.finishTime === "string" && input.finishTime
             ? input.finishTime
@@ -282,21 +376,74 @@ export function makeDispatch(deps: ToolDeps) {
               ? ""
               : new Date(startMs + durationMin * 60_000).toISOString();
         const practitionerId = typeof input.practitionerId === "string" ? input.practitionerId : "";
-        // Dentally rejects an appointment with no practitioner or no end time. Never send
-        // an invalid write: ask the model to re-pick a slot from find_slots instead.
-        if (!practitionerId || !finishTime) {
-          return JSON.stringify({ error: "That slot is missing its practitioner or end time. Call find_slots again and book one of the slots it returns." });
+        // Dentally rejects an appointment with no practitioner, no start or no end time.
+        // Never send an invalid write: ask the model to re-pick a slot from find_slots.
+        if (!practitionerId || !finishTime || Number.isNaN(startMs)) {
+          return JSON.stringify({ error: "That slot is missing its practitioner, or its start or end time. Call find_slots again and book one of the slots it returns." });
+        }
+        // Idempotency, first half: this dispatch has already written this exact
+        // booking, so replay its result instead of writing a second appointment.
+        const bookKey = `${patientId}|${start}|${practitionerId}`;
+        const alreadyBooked = bookedSlots.get(bookKey);
+        if (alreadyBooked) return alreadyBooked;
+        // Idempotency, second half: the patient already holds an appointment at
+        // this exact time (an earlier write that timed out but landed). Confirm
+        // that one rather than booking them in twice.
+        const existingId = await appointmentAtStart(patientId, startMs);
+        if (existingId) {
+          const already = JSON.stringify({ booked: true, appointmentId: existingId, alreadyBooked: true });
+          bookedSlots.set(bookKey, already);
+          return already;
+        }
+        // LIVE SLOT REVALIDATION. Minutes pass between the agent offering a time
+        // and the patient confirming it, and in that gap reception or another
+        // patient can take it. Re-read availability immediately before the write
+        // and refuse if the time has gone, exactly as the public booking route
+        // does, so the agent can never write over a slot Dentally is no longer
+        // offering. The MATCHED live slot is what gets booked where there is an
+        // exact match; otherwise the agent's own span is used, having been proved
+        // still open. A failed availability read leaves the slot unproven, so it
+        // throws rather than writing blind (the turn then hands over to a human).
+        const dayKey = londonDayKey(new Date(startMs));
+        // The availability reader drops days beyond the PUBLIC booking horizon, and
+        // the agent legitimately books further ahead than that, so the read is
+        // anchored to the day before the requested slot rather than to today. Never
+        // earlier than now, so a slot in the past is still dropped and refused. The
+        // question asked is unchanged (is this slot open in the live diary?); the
+        // anchor only stops a genuinely distant booking being refused as "taken".
+        const anchor = new Date(Math.max(Date.now(), startMs - 86_400_000));
+        const days = await fetchAvailabilityDays(
+          deps.dentally,
+          deps.context.siteId,
+          dayKey,
+          shiftYmd(dayKey, 1),
+          anchor,
+        );
+        const exact = findExactSlot(days, start, finishTime, practitionerId);
+        const live: BookingSlot | null =
+          exact ??
+          (spanStillOpen(days, start, finishTime, practitionerId)
+            ? { start, finish: finishTime, practitionerId }
+            : null);
+        if (!live) {
+          return JSON.stringify({
+            booked: false,
+            error:
+              "That time has just been taken. Apologise, call find_slots again and offer the patient the times it returns.",
+          });
         }
         const { appointment } = await deps.dentally.createAppointment({
           patient_id: patientId,
-          start_time: start,
-          finish_time: finishTime,
-          practitioner_id: practitionerId,
+          start_time: live.start,
+          finish_time: live.finish,
+          practitioner_id: live.practitionerId ?? practitionerId,
           reason: reasonForTreatment(treatmentName),
           notes: treatmentName ? `Booked via assistant: ${treatmentName}` : "Booked via assistant",
           booked_via_api: true,
         });
-        return JSON.stringify({ booked: true, appointmentId: appointment.id });
+        const result = JSON.stringify({ booked: true, appointmentId: appointment.id });
+        bookedSlots.set(bookKey, result);
+        return result;
       }
       case "find_appointments": {
         const res = await deps.dentally.getPatientAppointments(deps.context.patientId);
@@ -334,7 +481,17 @@ export function makeDispatch(deps: ToolDeps) {
         if (!finish) {
           return JSON.stringify({ error: "Provide newFinishTime for the new slot before rescheduling." });
         }
+        // The new slot belongs to a clinician, and a slot from find_slots is very
+        // often in a DIFFERENT clinician's diary to the one holding the appointment
+        // now. Patching the times alone left the appointment with its old clinician,
+        // so the move landed in the wrong diary (and on top of whatever that
+        // clinician already had). Carry the new slot's practitioner through; with
+        // none supplied, restate the appointment's own so the diary is explicit.
+        const newPractitionerId =
+          (typeof input.practitionerId === "string" ? input.practitionerId.trim() : "") ||
+          String(owned.practitioner_id ?? "");
         const reschedulePatch: Record<string, unknown> = { start_time: input.newSlotStart, finish_time: finish };
+        if (newPractitionerId) reschedulePatch.practitioner_id = newPractitionerId;
         const { appointment } = await deps.dentally.updateAppointment(appointmentId, reschedulePatch);
         return JSON.stringify({
           rescheduled: true,
