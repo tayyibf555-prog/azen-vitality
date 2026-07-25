@@ -86,7 +86,7 @@ describe("longDate / weekLabel / dow / dnum", () => {
   });
 
   it("formats a week label spanning Monday to Sunday", () => {
-    expect(weekLabel("2026-07-02")).toBe("29 Jun – 5 Jul 2026");
+    expect(weekLabel("2026-07-02")).toBe("29 Jun, 5 Jul 2026");
   });
 
   it("formats the short day-of-week and the day number", () => {

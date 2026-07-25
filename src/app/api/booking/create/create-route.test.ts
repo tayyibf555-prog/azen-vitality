@@ -339,17 +339,30 @@ describe("create, the appointment says what the patient booked for", () => {
     expect(payload.reason).toBe("Emergency");
   });
 
-  it("books an interest we cannot map as Other, never as an Exam, and sanitises the note", async () => {
+  // This endpoint is PUBLIC and unauthenticated, and its output lands in the notes of
+  // a real clinical record. The booking page offers a fixed select of six options, so
+  // any other value was not chosen by a patient using the page. Sanitising such a value
+  // and writing it through would still let a stranger put arbitrary text into the
+  // practice's records, so an unrecognised value is dropped entirely instead.
+  it("REFUSES an interest that is not one of the booking page's own options, so no stranger's free text reaches a clinical note", async () => {
     const res = await POST(
       req(goodBody({ treatment: `Straightening\n\nmy teeth ${"x".repeat(200)}` })),
     );
     expect(res.status).toBe(200);
     const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
-    expect(payload.reason).toBe("Other");
+    expect(payload.reason).toBe("Exam"); // no information about the interest, so the default
     const notes = payload.notes as string;
-    expect(notes.startsWith("Booked online via Smile Assessment. Patient interest: Straightening my teeth ")).toBe(true);
+    expect(notes).not.toContain("Straightening");
+    expect(notes).not.toContain("xxx");
     expect(notes).not.toContain("\n");
-    expect(notes.length).toBeLessThanOrEqual("Booked online via Smile Assessment. Patient interest: ".length + 80);
+  });
+
+  it("still books the page's own catch-all option as Other rather than an Exam", async () => {
+    const res = await POST(req(goodBody({ treatment: "Something else" })));
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.reason).toBe("Other");
+    expect(payload.notes as string).toContain("Something else");
   });
 
   it("still books an exam when no interest was stated", async () => {

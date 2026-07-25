@@ -84,7 +84,23 @@ const TREATMENT_REASONS: Record<string, string> = {
   "hygiene clean": "Scale & Polish",
   "in pain or a dental problem": "Emergency",
   "continuing treatment already started": "Continuing Treatment",
+  "something else": "Other",
 };
+
+/**
+ * The booking page's own six options are the ONLY accepted values.
+ *
+ * This endpoint is public and unauthenticated, and the value ends up in the notes
+ * of a real clinical record, so an unrecognised string is DROPPED rather than
+ * written through. Without this a stranger could post arbitrary text straight into
+ * the practice's Dentally notes. Returns the cleaned original (for the note) so the
+ * staff member reads the patient's own wording, not a normalised key.
+ */
+function knownTreatment(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned.toLowerCase() in TREATMENT_REASONS ? cleaned : undefined;
+}
 
 /** Free text bound for a Dentally note: single line and length capped, because
  *  this endpoint is public and the value reaches a real clinical record. */
@@ -156,7 +172,7 @@ export async function POST(request: Request): Promise<Response> {
     const requestedPractitionerId = str(body.practitionerId);
     // What the patient said they are coming in for (the same field the hold
     // route records). Optional: a booking without one still books as an exam.
-    const treatment = str(body.treatment);
+    const treatment = knownTreatment(str(body.treatment));
     // Optional: the step-1 hold this confirmation completes. Flipped to
     // 'confirmed' after a successful write so the sweep never mistakes a finished
     // booking for an abandonment. Absent for a direct (non-two-step) booking.

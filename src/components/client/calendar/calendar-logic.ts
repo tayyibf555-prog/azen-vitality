@@ -6,11 +6,11 @@ import { londonDayKey } from "@/lib/time/london";
 // src/**/*.test.ts (no .tsx, no jsdom), so anything worth testing has to live here.
 //
 // Covers the calendar's five display defects:
-//   B1 — appointment times must be Europe/London, never UTC (hhmm).
-//   B2 — "today" and day-bucketing must be the LONDON calendar day (dayKey).
-//   B4 — navigation must never land on a day outside the loaded window
+//   B1, appointment times must be Europe/London, never UTC (hhmm).
+//   B2, "today" and day-bucketing must be the LONDON calendar day (dayKey).
+//   B4, navigation must never land on a day outside the loaded window
 //        (clampDayToWindow / isWithinWindow).
-//   B5 — every appointment state gets its own dot colour and, for the states
+//   B5, every appointment state gets its own dot colour and, for the states
 //        that need calling out, a StatusPill badge (STATE_DOT / STATE_LABEL /
 //        STATE_BADGE_TONE / STATE_BADGE_LABEL).
 
@@ -27,7 +27,7 @@ export function dayKey(iso: string): string {
 
 /**
  * Add/subtract whole days from a YYYY-MM-DD day key. Anchored at UTC midnight
- * so the arithmetic is a pure calendar-day step, never a wall-clock instant —
+ * so the arithmetic is a pure calendar-day step, never a wall-clock instant , 
  * the key itself is already the correct London day (from dayKey/londonDayKey),
  * so stepping it in UTC cannot introduce a DST-shift artefact.
  */
@@ -64,7 +64,7 @@ export function isWithinWindow(day: string, min: string, max: string): boolean {
 
 /**
  * A London wall-clock "HH:MM" for an appointment's ISO start. MUST use the
- * Europe/London zone, never UTC (B1) — during BST (UTC+1) a UTC-formatted
+ * Europe/London zone, never UTC (B1), during BST (UTC+1) a UTC-formatted
  * time reads an hour early for every single appointment.
  */
 export function hhmm(iso: string): string {
@@ -87,13 +87,13 @@ export function longDate(dayIso: string): string {
   });
 }
 
-/** "2 Jul – 8 Jul 2026" for the week containing a day key. */
+/** "2 Jul, 8 Jul 2026" for the week containing a day key. */
 export function weekLabel(dayIso: string): string {
   const mon = mondayOf(dayIso);
   const sun = shiftDay(mon, 6);
   const fmt = (d: string, opts: Intl.DateTimeFormatOptions) =>
     new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { ...opts, timeZone: "UTC" });
-  return `${fmt(mon, { day: "numeric", month: "short" })} – ${fmt(sun, { day: "numeric", month: "short", year: "numeric" })}`;
+  return `${fmt(mon, { day: "numeric", month: "short" })}, ${fmt(sun, { day: "numeric", month: "short", year: "numeric" })}`;
 }
 
 /** "Thu" for a day key. */
@@ -112,7 +112,7 @@ export function dnum(dayIso: string): number {
 // confirmed, arrived, in_surgery, completed, cancelled, did_not_attend; the mock
 // also uses the legacy "booked". Previously only booked/completed/did_not_attend/
 // cancelled/pending had a dot colour, so confirmed/arrived/in_surgery all fell
-// through to the SAME grey default as cancelled — staff could not tell a
+// through to the SAME grey default as cancelled, staff could not tell a
 // cancelled slot from a patient sitting in the chair. Every state below now has
 // its own colour, chosen from tokens that stay distinct in the live theme
 // (status-blue and status-royal are the SAME hex there, so both blues used here
@@ -146,7 +146,7 @@ export const STATE_LABEL: Record<string, string> = {
 
 /** The dot fill class for a state, falling back to the neutral grey for an
  *  unrecognised value (never silently matching "cancelled"'s colour by luck of
- *  object-key miss — this fallback is explicit and applies to every unknown
+ *  object-key miss, this fallback is explicit and applies to every unknown
  *  state alike). */
 export function stateDotClass(state: string): string {
   return STATE_DOT[state] ?? "bg-line-strong";

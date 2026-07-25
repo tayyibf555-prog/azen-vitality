@@ -5,6 +5,7 @@ import { getSite, getClient, dentallySiteId } from "@/lib/mock/clients";
 import {
   fetchAvailabilityDays,
   findExactSlot,
+  chunkWindowIntoSlots,
   BOOKING_SLOT_DURATION_MIN,
   type BookingDay,
   type BookingSlot,
@@ -157,6 +158,33 @@ export function filterSlotsByPractitioner(slots: unknown[], practitionerId: stri
     const row = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
     return String(row.practitioner_id ?? "") === practitionerId;
   });
+}
+
+/**
+ * Dentally's availability rows are WINDOWS, not bookable slots: one row can span a
+ * whole afternoon. Handing a raw window to the model means it offers, and then
+ * books, the entire span, which writes a multi hour appointment into a real
+ * clinician's diary and blocks their day. Measured against live production data
+ * most windows are longer than one booking, and the longest ran to 390 minutes.
+ *
+ * So every window is cut into consecutive units of exactly the length this booking
+ * needs, before the model ever sees it. The raw Dentally field names are preserved
+ * (and every other field carried through untouched) so the prompt, the practitioner
+ * filter and the model's own slot echo all keep working unchanged.
+ */
+function chunkAvailabilityRows(rows: unknown[], durationMin: number): unknown[] {
+  const out: unknown[] = [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Record<string, unknown>;
+    const start = typeof row.start_time === "string" ? row.start_time : "";
+    const finish = typeof row.finish_time === "string" ? row.finish_time : "";
+    if (!start || !finish) continue;
+    for (const unit of chunkWindowIntoSlots({ start, finish, practitionerId: null }, durationMin)) {
+      out.push({ ...row, start_time: unit.start, finish_time: unit.finish });
+    }
+  }
+  return out;
 }
 
 /**
@@ -337,7 +365,10 @@ export function makeDispatch(deps: ToolDeps) {
         } else {
           slots = allSlots; // no targeting at all
         }
-        return JSON.stringify({ slots });
+        // Never offer a raw availability window: cut it to what this booking needs.
+        return JSON.stringify({
+          slots: chunkAvailabilityRows(slots, treatment?.durationMinutes ?? BOOKING_SLOT_DURATION_MIN),
+        });
       }
       case "treatment_info": {
         const treatment = typeof input.treatment === "string" ? input.treatment : "";
@@ -369,12 +400,22 @@ export function makeDispatch(deps: ToolDeps) {
         const start = typeof input.slotStart === "string" ? input.slotStart : "";
         const startMs = Date.parse(start);
         const durationMin = findTreatment(treatmentName)?.durationMinutes ?? BOOKING_SLOT_DURATION_MIN;
-        const finishTime =
-          typeof input.finishTime === "string" && input.finishTime
-            ? input.finishTime
-            : Number.isNaN(startMs)
-              ? ""
-              : new Date(startMs + durationMin * 60_000).toISOString();
+        // The treatment length is the AUTHORITY on how long to book, and the model's
+        // echoed finish is only ever allowed to shorten it. Without this clamp a model
+        // that echoed a raw Dentally availability window (a whole free afternoon) would
+        // book that entire span, blocking a real clinician's diary. find_slots now
+        // chunks its output so the model should never see such a span, but this is the
+        // choke point immediately before the write, so it refuses one regardless.
+        const derivedFinishMs = Number.isNaN(startMs) ? Number.NaN : startMs + durationMin * 60_000;
+        const requestedFinishMs =
+          typeof input.finishTime === "string" && input.finishTime ? Date.parse(input.finishTime) : Number.NaN;
+        const finishMs =
+          Number.isFinite(requestedFinishMs) &&
+          requestedFinishMs > startMs &&
+          requestedFinishMs < derivedFinishMs
+            ? requestedFinishMs
+            : derivedFinishMs;
+        const finishTime = Number.isNaN(finishMs) ? "" : new Date(finishMs).toISOString();
         const practitionerId = typeof input.practitionerId === "string" ? input.practitionerId : "";
         // Dentally rejects an appointment with no practitioner, no start or no end time.
         // Never send an invalid write: ask the model to re-pick a slot from find_slots.

@@ -604,7 +604,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           }
 
           // Cross-module one-per-patient-per-day ledger. The co-pilot dispatches directly
-          // (not via the shared drain), so — like the drain — it must key on the CANONICAL
+          // (not via the shared drain), so, like the drain, it must key on the CANONICAL
           // address (E.164 / lowercased email) so the co-pilot and the automated modules
           // stamp/read the SAME row for one handset. Falls back to the raw destination if
           // normalisation fails (implausible number), so a send is still recorded.
@@ -637,7 +637,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
           // Confirmed. The one-per-day cap is a fatigue guard, not a safety gate, so a
           // human-confirmed owner send MAY override it (mirroring how the Inbox human
-          // takeover bypasses the module kill switches) — but only as a DELIBERATE,
+          // takeover bypasses the module kill switches), but only as a DELIBERATE,
           // surfaced choice. Without an explicit override, a patient already contacted
           // today is NOT silently stacked on top of an automated same-day send.
           if (alreadyContactedToday && input.override !== true) {
@@ -661,7 +661,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           const dryRun = result.provider === "dry-run";
           await logCopilotAction({ ...audit, status: dryRun ? "dry_run" : result.status });
           // Stamp the cross-module daily ledger so the automated systems (recall,
-          // reactivation, no-show, outreach, nurture — all draining through the shared
+          // reactivation, no-show, outreach, nurture, all draining through the shared
           // drain) treat this patient as contacted today and do not add a second message.
           // Best-effort, exactly like the drain: a ledger-write failure never unsends the
           // message that already went out. Recorded even in dry-run so the cap is honoured
@@ -1494,9 +1494,9 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
         case "create_patient": {
           // A HIGH-STAKES write: this creates a real person in the practice's real
-          // Dentally book (51k+ real patients). Mirrors send_sms's discipline — strict
+          // Dentally book (51k+ real patients). Mirrors send_sms's discipline, strict
           // validation, a dedupe short-circuit, a two-step confirm, audit logging and an
-          // honest error read-back — and the booking-create write posture (the gated
+          // honest error read-back, and the booking-create write posture (the gated
           // dentallyAgentClient + internal->Dentally site mapping).
 
           // (0) THE WRITE GATE, FIRST, BEFORE ANY VALIDATION OR NETWORK CALL. Every
@@ -1535,7 +1535,7 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
           // (2) DOB must be a REAL, PAST calendar date. canonicalDob rejects impossible
           // dates (2001-13-40, 31 Feb); ageFromDob returns null for a future/unparseable
-          // date, and a whole-year age otherwise — so both a future DOB and an absurdly old
+          // date, and a whole-year age otherwise, so both a future DOB and an absurdly old
           // one (age > 120) are refused.
           const dob = canonicalDob(dobRaw);
           const age = dob ? ageFromDob(dob, new Date()) : null;

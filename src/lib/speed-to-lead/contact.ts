@@ -9,11 +9,23 @@ import { getClient, getSite } from "@/lib/mock/clients";
 import { latestResponseByLead } from "@/lib/smile-assessment/repository";
 import { answerLines } from "@/lib/smile-assessment/summary";
 import { draftFirstContact, type CampaignContext } from "./draft";
+import { isWhatsappConfigured } from "@/lib/messaging/providers/twilio";
 import {
   insertAttempt,
+  listAttempts,
   recordFirstResponse,
   setLeadStage,
 } from "./repository";
+
+/**
+ * Stop re-drafting after this many failed delivery attempts on one lead.
+ *
+ * A failed send leaves the lead retryable at stage 'new', and listUncontacted
+ * re-picks it on every sweep tick for a 48 hour window. Each pick calls the model
+ * to draft the message BEFORE attempting delivery, so a lead that can never be
+ * delivered costs a model call per tick, thousands of them, in silence.
+ */
+const MAX_FAILED_CONTACT_ATTEMPTS = 3;
 import type { LeadChannel, SpeedToLeadLead } from "./types";
 
 /** The address a given first-contact channel sends to, or null if missing. */
@@ -50,6 +62,20 @@ export function channelConsented(lead: SpeedToLeadLead): boolean {
  * (the failsafe for anything the intake missed).
  */
 export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignContext): Promise<void> {
+  // Dead-channel guard, applied FIRST so every downstream use of lead.channel
+  // (address, consent, suppression, draft, send, attempt) sees the real channel.
+  // A lead queued for WhatsApp when no WhatsApp sender is configured can never be
+  // delivered, and the failure path below leaves it retryable, so the sweep would
+  // re-draft it every tick for 48 hours. sms and whatsapp reach the same handset and
+  // a STOP suppresses both, so downgrading is opt-out-safe. It is also STRICTER on
+  // consent (it now needs sms consent rather than either), which fails the safe way.
+  if (lead.channel === "whatsapp" && !isWhatsappConfigured()) {
+    console.warn(
+      `[speed-to-lead] lead ${lead.id} is queued for WhatsApp but no WhatsApp sender is configured; contacting by SMS`,
+    );
+    lead = { ...lead, channel: "sms" };
+  }
+
   const to = toAddress(lead);
   // No deliverable address yet: nothing to send to and nothing to retire on;
   // leave at 'new' so a later enquiry that supplies an address can be contacted.
@@ -138,6 +164,22 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     if (lines.length > 0) assessment = lines;
   } catch {
     /* context only; never block the first contact */
+  }
+
+  // Retry cap, checked immediately BEFORE the model call so a doomed lead costs at
+  // most MAX_FAILED_CONTACT_ATTEMPTS drafts rather than one per sweep tick for 48
+  // hours. The lead is deliberately left at 'new' and visible in the worklist: a
+  // delivery problem is something a human should look at, not something to hide.
+  try {
+    const priorFailures = (await listAttempts(lead.id)).filter((a) => a.status === "failed").length;
+    if (priorFailures >= MAX_FAILED_CONTACT_ATTEMPTS) {
+      console.warn(
+        `[speed-to-lead] lead ${lead.id} has ${priorFailures} failed delivery attempts; not drafting again, needs a human`,
+      );
+      return;
+    }
+  } catch {
+    /* best effort only: a failed attempts read must never block a first contact */
   }
 
   const { body } = await draftFirstContact(lead, lead.channel, client, campaign, assessment);

@@ -311,7 +311,7 @@ export function CalendarBoard({
                   </button>
                   <div className="flex flex-1 flex-col p-1.5">
                     {list.length === 0 ? (
-                      <span className="py-3 text-center text-[11px] text-faint">{inWindow ? "—" : "Not loaded"}</span>
+                      <span className="py-3 text-center text-[11px] text-faint">{inWindow ? ", " : "Not loaded"}</span>
                     ) : (
                       list.map((a) => (
                         <button

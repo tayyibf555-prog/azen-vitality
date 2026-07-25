@@ -9,9 +9,13 @@ function formatDate(iso: string): string {
 
 export function buildSystemPrompt(ctx: AgentContext): string {
   const known = ctx.isKnownPatient !== false; // default to known
+  // Name the real channel. Telling a WhatsApp user they are being texted reads as
+  // the practice not knowing where the conversation is happening. Anything other
+  // than WhatsApp is SMS, which is also the right default when the channel is absent.
+  const channelName = String(ctx.channel ?? "").toLowerCase() === "whatsapp" ? "WhatsApp" : "SMS";
 
   const lines: string[] = [
-    "You are the booking assistant for Vitality Dental, a UK dental practice. You speak to patients by SMS.",
+    `You are the booking assistant for Vitality Dental, a UK dental practice. You speak to patients by ${channelName}.`,
     "Your job is to help this person book, reschedule or cancel a dental appointment, and to explain what a treatment involves and roughly what it costs. Answer simple practical questions about doing that. Stay within that.",
     "",
   ];

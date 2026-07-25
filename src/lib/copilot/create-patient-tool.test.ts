@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The co-pilot create_patient tool: a HIGH-STAKES write to the practice's real Dentally
-// book. Mirrors the send_sms two-step discipline — strict validation, a dedupe short-
+// book. Mirrors the send_sms two-step discipline, strict validation, a dedupe short-
 // circuit, a preview WITHOUT confirm that never writes, a single write only WITH confirm,
-// audit logging and honest error read-backs — PLUS three safety properties specific to a
+// audit logging and honest error read-backs, PLUS three safety properties specific to a
 // patient-creating write:
 //   - the Dentally write gate is checked BEFORE any network call (E1): nothing is looked
 //     up or created while writes are switched off, and the tool never claims "test mode"

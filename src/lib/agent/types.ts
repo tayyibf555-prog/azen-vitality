@@ -30,6 +30,12 @@ export interface AgentContext {
   siteId: string;
   /** The inbound mobile number, used to onboard a new patient. */
   phone?: string | null;
+  /**
+   * The channel this conversation is actually happening on ("sms" or "whatsapp").
+   * The prompt names it to the patient, so getting it wrong makes the agent tell a
+   * WhatsApp user it is texting them. Defaults to SMS when absent.
+   */
+  channel?: string | null;
   patientName: string;
   treatment: string | null;
   fundingType: "nhs" | "private" | null;

@@ -599,6 +599,7 @@ export async function POST(request: Request): Promise<Response> {
     patientId,
     siteId,
     phone: from,
+    channel,
     patientName: identity ? identity.patientName : "there",
     treatment: conversation.treatment,
     fundingType: conversation.fundingType,

@@ -91,7 +91,7 @@ beforeEach(() => {
   vi.mocked(findEarlierOpenLead).mockResolvedValue(null);
 });
 
-describe("landing lead — per-IP durable spend gate", () => {
+describe("landing lead, per-IP durable spend gate", () => {
   it("consumes a durable budget keyed on the caller IP, before the per-slug one", async () => {
     await post(validBody(), { "x-forwarded-for": "203.0.113.7, 70.41.3.18" });
 
@@ -123,7 +123,7 @@ describe("landing lead — per-IP durable spend gate", () => {
   });
 });
 
-describe("landing lead — no send in the request path", () => {
+describe("landing lead, no send in the request path", () => {
   it("records the lead but never first-contacts it inside the request", async () => {
     const res = await post(validBody());
     expect(res.status).toBe(200);
@@ -134,7 +134,7 @@ describe("landing lead — no send in the request path", () => {
   });
 });
 
-describe("landing lead — WhatsApp consent", () => {
+describe("landing lead, WhatsApp consent", () => {
   it("records sms consent alongside whatsapp so the nurture cadence can still reach them", async () => {
     const res = await post(validBody({ channel: "whatsapp" }));
     expect(res.status).toBe(200);
@@ -154,7 +154,7 @@ describe("landing lead — WhatsApp consent", () => {
   });
 });
 
-describe("landing lead — double-submit race", () => {
+describe("landing lead, double-submit race", () => {
   it("retires the losing lead and does not count it as a second conversion", async () => {
     vi.mocked(findEarlierOpenLead).mockResolvedValue({
       id: "lead-winner",

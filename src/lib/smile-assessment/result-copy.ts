@@ -10,12 +10,12 @@
 //
 // `leadCreated` mirrors the submit route's own signal for "a real Speed-to-lead
 // lead now exists for this contact" (see src/app/api/smile-assessment/submit/
-// route.ts) — it is the one place this component-owned copy trusts the server,
+// route.ts), it is the one place this component-owned copy trusts the server,
 // because it is a plain fact (a lead row exists / does not), not prose.
 //
 // British English throughout. No em dash or en dash. Never NHS, private or
 // privately. No invented statistics or clinical claims, and nothing that reads
-// as a diagnosis — this is a marketing questionnaire, not a clinical assessment.
+// as a diagnosis, this is a marketing questionnaire, not a clinical assessment.
 
 import type { AssessmentBand } from "./scoring";
 

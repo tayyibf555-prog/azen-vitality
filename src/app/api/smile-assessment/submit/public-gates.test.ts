@@ -100,7 +100,7 @@ beforeEach(() => {
   vi.stubEnv("NODE_ENV", "test"); // trusted, so the bridge is reachable
 });
 
-describe("smile assessment submit — durable spend ceiling", () => {
+describe("smile assessment submit, durable spend ceiling", () => {
   it("consumes the shared budget per IP and per client + campaign", async () => {
     await POST(
       req({ ...GOOD, campaignSlug: "spring-implants" }, { "x-forwarded-for": "203.0.113.9" }),
@@ -128,7 +128,7 @@ describe("smile assessment submit — durable spend ceiling", () => {
   });
 });
 
-describe("smile assessment submit — Speed-to-lead kill switch", () => {
+describe("smile assessment submit, Speed-to-lead kill switch", () => {
   it("records the response but never bridges when speed-to-lead is off", async () => {
     h.isSystemEnabledForSend.mockImplementation(async (..._a: unknown[]) => _a[1] !== "speed-to-lead");
 
@@ -152,7 +152,7 @@ describe("smile assessment submit — Speed-to-lead kill switch", () => {
   });
 });
 
-describe("smile assessment submit — double-submit race", () => {
+describe("smile assessment submit, double-submit race", () => {
   it("retires the losing lead, links the response to the winner and sends nothing", async () => {
     h.findEarlierOpenLead.mockResolvedValue({ id: "lead-winner" });
 

@@ -23,5 +23,14 @@ export function sourceLabel(source: string | null | undefined): string {
     const slug = source.slice("smile:".length);
     return slug ? `Smile Assessment · ${slug}` : "Smile Assessment";
   }
+  // landing:<page-slug>, a lead from one of the bespoke treatment landing pages.
+  // The worklist showed the raw value ("landing:invisalign"), which reads as debug
+  // output to the staff member trying to work out where the enquiry came from.
+  if (source.startsWith("landing:")) {
+    const slug = source.slice("landing:".length);
+    if (!slug) return "Landing page";
+    const name = slug.replace(/[-_]+/g, " ").trim();
+    return name ? `${name.charAt(0).toUpperCase()}${name.slice(1)} landing page` : "Landing page";
+  }
   return FIXED[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
 }

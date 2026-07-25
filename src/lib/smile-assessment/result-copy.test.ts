@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { resultCopy } from "./result-copy";
 
 // H1: a MEDIUM-band (and any not-actually-contacted) patient must never be told
-// someone will reach out, because nobody does — only a HIGH band, fast-tracked
+// someone will reach out, because nobody does, only a HIGH band, fast-tracked
 // submission is ever contacted. These tests pin that contract at the copy layer
 // so a future change cannot silently reintroduce the broken promise.
 
@@ -62,7 +62,7 @@ describe("resultCopy", () => {
           expect(text).not.toMatch(/\bNHS\b/i);
           expect(text).not.toMatch(/\bprivate\b/i);
           expect(text).not.toMatch(/\bprivately\b/i);
-          expect(text).not.toMatch(/[–—]/); // en dash / em dash
+          expect(text).not.toMatch(/[\u2014\u2013]/); // en dash / em dash
         }
       }
     }

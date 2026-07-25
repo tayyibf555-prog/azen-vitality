@@ -68,7 +68,12 @@ describe("makeDispatch", () => {
           { id: 999, active: false, site_id: "3286d822-68c5-48ff-b1a2-065780dfcd15" }, // inactive: excluded
         ],
       }),
-      getAvailability: vi.fn().mockResolvedValue({ availability: [{ start_time: "2026-06-22T09:00:00Z" }] }),
+      // finish_time is part of the live Dentally availability contract and is now
+      // required: rows are chunked into bookable units, so a row without an end
+      // cannot be sized and is dropped rather than offered whole.
+      getAvailability: vi.fn().mockResolvedValue({
+        availability: [{ start_time: "2026-06-22T09:00:00Z", finish_time: "2026-06-22T09:30:00Z" }],
+      }),
       createAppointment: vi.fn(),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context });
@@ -79,7 +84,11 @@ describe("makeDispatch", () => {
     expect(dentally.getAvailability).toHaveBeenCalledWith(
       expect.objectContaining({ practitionerIds: ["10383"] }),
     );
-    expect(out).toContain("2026-06-22T09:00:00Z");
+    // Slots are re-serialised when the availability window is chunked into bookable
+    // units, so the string gains milliseconds. Compare the instant, not the spelling.
+    const { slots } = JSON.parse(out) as { slots: Array<{ start_time: string; finish_time: string }> };
+    expect(slots).toHaveLength(1);
+    expect(Date.parse(slots[0]!.start_time)).toBe(Date.parse("2026-06-22T09:00:00Z"));
   });
 
   it("book sends the calibrated real-Dentally fields: reason/practitioner/finish, not treatment/site_id", async () => {
