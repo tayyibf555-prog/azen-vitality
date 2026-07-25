@@ -4,7 +4,15 @@ import { QUIZ_QUESTION_IDS, Q_TREATMENT, questionById } from "@/lib/smile-assess
 import { countRecent, insertResponse, setResponseLead } from "@/lib/smile-assessment/repository";
 import type { AssessmentChannel } from "@/lib/smile-assessment/types";
 import { contactLead } from "@/lib/speed-to-lead/contact";
-import { insertLead, findOpenLeadByAddress, claimLeadForContact, releaseLeadClaim } from "@/lib/speed-to-lead/repository";
+import {
+  insertLead,
+  findOpenLeadByAddress,
+  findEarlierOpenLead,
+  setLeadStage,
+  claimLeadForContact,
+  releaseLeadClaim,
+} from "@/lib/speed-to-lead/repository";
+import { consumeBudget } from "@/lib/rate-budget";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
@@ -20,12 +28,18 @@ export const dynamic = "force-dynamic";
 // the patient is contacted instantly.
 //
 // ABUSE SURFACE: like the speed-to-lead intake, a high score can trigger a real
-// outbound SMS to a caller-supplied number. This is unauthenticated, so it
-// validates hard, rate-limits per contact (durable, in the DB) AND per IP
-// (best-effort, in-process), and never throws to the client.
+// outbound SMS to a caller-supplied number, and that first contact is drafted by
+// Claude, so every submission can cost real money. This is unauthenticated, so it
+// validates hard, is bounded by the SHARED durable budget guard (per client +
+// campaign and per IP, the real spend ceiling), rate-limits per contact (durable,
+// in the DB) AND per IP (best-effort, in-process), and never throws to the client.
 
 const CONTACT_RATE_LIMIT = 5; // max submissions from one phone/email per hour
 const IP_RATE_LIMIT = 20; // max submissions from one IP per hour (best-effort, per-instance)
+const BUDGET_LIMIT = 60; // submissions per window, per client + campaign
+const BUDGET_WINDOW_SECONDS = 60;
+const IP_BUDGET_LIMIT = 20; // submissions per window, per caller IP
+const IP_BUDGET_WINDOW_SECONDS = 60 * 60;
 const HOUR_MS = 60 * 60 * 1000;
 const VALID_CHANNELS: AssessmentChannel[] = ["sms", "email", "whatsapp"];
 
@@ -116,6 +130,34 @@ export async function POST(request: Request): Promise<Response> {
     : process.env.NODE_ENV !== "production";
 
   try {
+    // Identify the funnel this submission came through before anything else: both
+    // durable budget keys are derived from it.
+    const clientSlug = str(body.clientSlug);
+    const campaignSlug = str(body.campaignSlug);
+    const ip = clientIp(request);
+
+    // Durable, distributed spend ceiling FIRST, before any scoring, DB write or model
+    // call. This endpoint is public and its Speed-to-lead bridge drafts the first
+    // contact with Claude, so an unbounded flood costs real model and Twilio spend on
+    // a live account. The in-process per-IP cap further down only bounds ONE
+    // serverless instance and resets on every cold start; this is the shared guard
+    // (api_budget, the same one the landing-lead route uses), so it holds across every
+    // instance. Per caller first, then per client + campaign, so neither rotating IPs
+    // nor rotating campaign slugs gets round it. Fails OPEN on a DB blip, so a
+    // transient outage degrades the ceiling rather than breaking the quiz.
+    if (!(await consumeBudget(`smile-submit-ip:${ip}`, IP_BUDGET_LIMIT, IP_BUDGET_WINDOW_SECONDS))) {
+      return bad("too many submissions, please try again later", 429);
+    }
+    if (
+      !(await consumeBudget(
+        `smile-submit:${clientSlug ?? ""}:${campaignSlug ?? ""}`,
+        BUDGET_LIMIT,
+        BUDGET_WINDOW_SECONDS,
+      ))
+    ) {
+      return bad("too many submissions, please try again later", 429);
+    }
+
     const firstName = str(body.firstName);
     // Canonicalise so the rate-limit is per-handset, only valid addresses reach
     // Twilio/Resend, and the lead:<phone> key matches the inbound webhook.
@@ -145,8 +187,6 @@ export async function POST(request: Request): Promise<Response> {
     // landing). It overrides the site, tunes the scoring to the campaign's goal +
     // budget, and is recorded against every response for attribution. A paused or
     // unknown slug resolves to null (we fall back to the generic quiz behaviour).
-    const clientSlug = str(body.clientSlug);
-    const campaignSlug = str(body.campaignSlug);
     const client = clientSlug ? getClient(clientSlug) : undefined;
     const campaign =
       client && campaignSlug ? await getActiveCampaignBySlug(client.id, campaignSlug) : null;
@@ -175,8 +215,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     if (!siteId) return bad("could not resolve a site from clientSlug or siteId");
 
-    // Per-IP cap first (cheap, in-process) so a flood is blunted before any DB hit.
-    const ip = clientIp(request);
+    // Second per-IP cap (cheap, in-process) so a flood is blunted before any DB hit.
     if (tooManyForIp(ip, Date.now())) {
       return bad("too many submissions, please try again later", 429);
     }
@@ -226,6 +265,16 @@ export async function POST(request: Request): Promise<Response> {
     // benign shape a skipped-bridge submission produces (never reveal it is off).
     const smileEnabled = await isSystemEnabledForSend(client?.id ?? "", "smile-assessment");
 
+    // Owner kill-switch, second half: the bridge below creates a Speed-to-lead lead
+    // and first-contacts the patient, so it is a SPEED-TO-LEAD send and the
+    // Speed-to-lead switch must hold here as well. Without this check an assessment
+    // submission still reached the patient after the owner had explicitly switched
+    // Speed-to-lead off, which is exactly what that switch is for. Send-path variant,
+    // so it fails CLOSED once messaging is live. With it off we record the response
+    // and create no lead at all (the intake route takes the same line), so nothing is
+    // left at stage 'new' for the sweep to text later.
+    const speedToLeadEnabled = await isSystemEnabledForSend(client?.id ?? "", "speed-to-lead");
+
     // Online-booking link-up: EVERY band may book (finishing the assessment is
     // the invitation), so the success response carries the public booking page
     // URL whenever the client+site resolved and the online-booking system is on.
@@ -239,7 +288,7 @@ export async function POST(request: Request): Promise<Response> {
     // is present we simply record the response and skip the bridge.
     let leadCreated = false;
     const hasContact = Boolean(phone || email);
-    if (band === "high" && hasContact && trusted && smileEnabled) {
+    if (band === "high" && hasContact && trusted && smileEnabled && speedToLeadEnabled) {
       // DEMO DECISION (owner): first contact goes by SMS whenever a phone exists.
       // A "whatsapp" preference never reaches here (it is not in VALID_CHANNELS,
       // so it parses to undefined and falls through to SMS) — the WhatsApp sender
@@ -281,6 +330,27 @@ export async function POST(request: Request): Promise<Response> {
           score: rawScore,
           consent,
         });
+
+        // Double-submit race guard (the same post-insert re-check the intake route
+        // uses). There is no DB unique constraint on (site, contact), so two
+        // near-simultaneous submits can BOTH pass the pre-insert dedup above and
+        // create two leads, which means two first-contact texts to the same person.
+        // Re-check for a STRICTLY-earlier open lead; if one exists ours lost the
+        // race, so retire it, point the response at the winner and send nothing.
+        const earlier = await findEarlierOpenLead(
+          siteId,
+          phone,
+          email,
+          sinceIso,
+          lead.id,
+          lead.createdAt,
+        );
+        if (earlier) {
+          await setLeadStage(lead.id, "lost");
+          await setResponseLead(response.id, earlier.id);
+          return ok(band, BAND_MESSAGE[band], true, bookingUrl);
+        }
+
         await setResponseLead(response.id, lead.id);
         leadCreated = true;
         // Fire first contact in-request so the patient hears back instantly — but

@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   countRecent: vi.fn(async (..._a: unknown[]) => 0 as number),
   insertLead: vi.fn(async (..._a: unknown[]) => ({ id: "lead-1", channel: "sms" })),
   findOpenLeadByAddress: vi.fn(async (..._a: unknown[]) => null as unknown),
+  findEarlierOpenLead: vi.fn(async (..._a: unknown[]) => null as unknown),
   contactLead: vi.fn(async (..._a: unknown[]) => {}),
   getActiveCampaignBySlug: vi.fn(async (..._a: unknown[]) => null as unknown),
   // Force a HIGH band so the bridge path is exercised whenever trust allows.
@@ -36,9 +37,13 @@ vi.mock("@/lib/smile-assessment/repository", () => ({
 vi.mock("@/lib/speed-to-lead/repository", () => ({
   insertLead: h.insertLead,
   findOpenLeadByAddress: h.findOpenLeadByAddress,
+  findEarlierOpenLead: h.findEarlierOpenLead,
+  setLeadStage: vi.fn(async () => {}),
   claimLeadForContact: vi.fn(async () => true),
   releaseLeadClaim: vi.fn(async () => {}),
 }));
+// The durable spend guard: open by default here, exercised in public-gates.test.ts.
+vi.mock("@/lib/rate-budget", () => ({ consumeBudget: vi.fn(async () => true) }));
 vi.mock("@/lib/speed-to-lead/contact", () => ({ contactLead: h.contactLead }));
 vi.mock("@/lib/smile-assessment/campaign-repository", () => ({
   getActiveCampaignBySlug: h.getActiveCampaignBySlug,
@@ -81,6 +86,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.countRecent.mockResolvedValue(0);
   h.findOpenLeadByAddress.mockResolvedValue(null);
+  h.findEarlierOpenLead.mockResolvedValue(null);
   h.scoreAssessment.mockReturnValue({ rawScore: 95, band: "high" });
   h.isSystemEnabled.mockImplementation(async () => true);
   vi.unstubAllEnvs();
