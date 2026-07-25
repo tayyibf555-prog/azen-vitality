@@ -93,14 +93,25 @@ describe("guardrails: system prompt constraints", () => {
 // ---------------------------------------------------------------------------
 describe("tool safety: mutation scoping and the IDOR surface", () => {
   it("book is pinned to the CONTEXT patient/site, not any model-supplied id", async () => {
+    // The write now revalidates the slot against live availability first, so the
+    // fixture offers an open diary a few days ahead of the real clock (only future
+    // slots inside the booking horizon come back from that read).
+    const slotStart = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    const slotFinish = new Date(Date.parse(slotStart) + 30 * 60_000).toISOString();
     const dentally = {
-      getAvailability: vi.fn(),
+      listPractitioners: vi.fn().mockResolvedValue({
+        practitioners: [{ id: "42", active: true, site_id: "3286d822-68c5-48ff-b1a2-065780dfcd15" }],
+      }),
+      getAvailability: vi.fn().mockResolvedValue({
+        availability: [{ start_time: slotStart, finish_time: slotFinish, practitioner_id: "42" }],
+      }),
+      getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "a1" } }),
     };
     const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX });
     // Even if a crafted message coaxed the model to pass a patient_id, the tool
     // schema has no such field and dispatch injects context.patientId itself.
-    await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", finishTime: "2026-06-22T09:30:00Z", practitionerId: "42", treatment: "Invisalign", patient_id: "pat-999" });
+    await dispatch("book", { slotStart, finishTime: slotFinish, practitionerId: "42", treatment: "Invisalign", patient_id: "pat-999" });
     const payload = dentally.createAppointment.mock.calls[0][0];
     expect(payload.patient_id).toBe("pat-010"); // context-pinned, ignores the crafted pat-999
     // site_id is no longer sent (the site is implied by the practitioner in real Dentally).

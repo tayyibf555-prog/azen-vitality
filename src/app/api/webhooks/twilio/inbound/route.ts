@@ -36,7 +36,7 @@ import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
 import { getSite, getSites, getClient } from "@/lib/mock/clients";
-import { findLeadByConversation } from "@/lib/speed-to-lead/repository";
+import { findLeadByConversation, setLeadStage } from "@/lib/speed-to-lead/repository";
 import { latestResponseByLead } from "@/lib/smile-assessment/repository";
 import { answerLines } from "@/lib/smile-assessment/summary";
 import { listActiveUspTexts } from "@/lib/usp/repository";
@@ -57,9 +57,11 @@ import {
   setConversationName,
   stampInbound,
   isAgentEnabled,
+  upsertPhoneIdentity,
 } from "@/lib/agent/repository";
 import type { AgentContext, PhoneIdentity } from "@/lib/agent/types";
 import { isSystemEnabled, isSystemEnabledForSend } from "@/lib/systems/repository";
+import { serviceClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -96,6 +98,47 @@ function outreachMatchRecent(target: OutreachTarget, nowMs: number): boolean {
 
 function publicUrl(path: string): string {
   return `${process.env.PUBLIC_BASE_URL ?? "http://localhost:3000"}${path}`;
+}
+
+/**
+ * Tell the agent which channel this conversation is actually on. The same agent
+ * answers SMS and WhatsApp, so a fixed "you speak by SMS" line has it offering to
+ * text a patient who is messaging on WhatsApp, which reads as though we have lost
+ * track of who we are talking to. Appended last so it settles the question.
+ */
+function channelPromptNote(channel: MessageChannel): string {
+  if (channel === "whatsapp") {
+    return [
+      "CHANNEL: this conversation is happening on WhatsApp, not by text message.",
+      "Where anything above says SMS or text, it means this WhatsApp thread. Never tell them you will text or SMS them; say you will message them here.",
+    ].join(" ");
+  }
+  return "CHANNEL: this conversation is happening by text message (SMS). Reply as a text message.";
+}
+
+/**
+ * Re-key a conversation onto a new Dentally patient id.
+ *
+ * When the agent registers a brand new patient mid-thread, that person's id
+ * changes from the "lead:<number>" placeholder to a real Dentally id. Threads are
+ * found by (site, patient id, channel), so without this their next message opens
+ * a SECOND, empty thread: the agent, with no history, starts the conversation
+ * again and refuses the booking it had just confirmed. Adopting the thread keeps
+ * the history, the staff inbox entry and the booking together.
+ */
+async function adoptConversationPatientId(
+  conversationId: string,
+  dentallyPatientId: string,
+  patientName: string | null,
+): Promise<void> {
+  const db = serviceClient();
+  const patch: Record<string, unknown> = {
+    dentally_patient_id: dentallyPatientId,
+    updated_at: new Date().toISOString(),
+  };
+  if (patientName) patch.patient_name = patientName;
+  const { error } = await db.from("agent_conversation").update(patch).eq("id", conversationId);
+  if (error) throw error;
 }
 
 function twiml(): Response {
@@ -591,10 +634,39 @@ export async function POST(request: Request): Promise<Response> {
       // client: default-OFF (same target as `dentally` above, i.e. the mock in the
       // pilot), targeting a real/sandbox book only when DENTALLY_WRITE_ENABLED is set.
       dispatch: makeDispatch({ dentally: dentallyAgentClient(), context }),
-      systemPrompt: buildSystemPrompt(context),
+      systemPrompt: `${buildSystemPrompt(context)}\n\n${channelPromptNote(channel)}`,
       tools: AGENT_TOOLS,
     });
     replyText = result.replyText;
+
+    // A brand new patient was registered mid-thread, so their id has just changed
+    // from the "lead:<number>" placeholder to a real Dentally id. Move THIS thread
+    // onto the new id and remember the number, so their next message lands back in
+    // this conversation, with its history, instead of opening a fresh one the agent
+    // would answer as a stranger. Both steps are best-effort: the patient's reply
+    // must go out either way.
+    if (result.registeredPatientId) {
+      const registeredName = result.registeredPatientName ?? conversation.patientName;
+      try {
+        await adoptConversationPatientId(conversation.id, result.registeredPatientId, registeredName);
+      } catch (err) {
+        console.error(`[inbound] could not adopt conversation ${conversation.id} onto the new patient id`, err);
+      }
+      try {
+        await upsertPhoneIdentity(from, {
+          patientId: result.registeredPatientId,
+          siteId,
+          patientName: registeredName,
+          treatment: conversation.treatment,
+          fundingType: conversation.fundingType,
+          lastVisitAt: null,
+          recallDueAt: null,
+          source: "dentally",
+        });
+      } catch (err) {
+        console.error(`[inbound] could not cache the identity for ${from} after registration`, err);
+      }
+    }
 
     // OUTPUT GUARDRAIL: the no-clinical-advice / no-unverified-price /
     // no-NHS-or-private-or-funding rules are enforced in the prompt, but a prompt
@@ -608,11 +680,16 @@ export async function POST(request: Request): Promise<Response> {
       await setConversationStatus(conversation.id, "needs_human");
       handoverReason = "guardrail";
     } else {
-      const booked = result.toolCalls.some((t) => t.name === "book");
+      // A REAL appointment only: result.booked comes from the book tool's own
+      // result, so a booking the model merely attempted (blocked for want of a
+      // confirmation, refused because the slot had gone, or failed at Dentally)
+      // never marks the thread booked. It used to key off the attempt, which
+      // over-reported the Booked figure and let staff skip a patient who in fact
+      // had no appointment.
       if (result.escalated || !replyText) {
         await setConversationStatus(conversation.id, "needs_human");
         handoverReason = result.escalated ? "escalated" : "no_reply";
-      } else if (booked) {
+      } else if (result.booked) {
         await setConversationStatus(conversation.id, "booked");
         // Outreach A/B attribution: stamp booked_at when this number belongs to a
         // recent outreach target (self-guarded: stamp-once + 30-day recency; no-op
@@ -620,6 +697,16 @@ export async function POST(request: Request): Promise<Response> {
         try {
           await markOutreachBookedByAddress(from);
         } catch {}
+        // Speed-to-lead: an enquiry the agent has just booked is done. Without
+        // this the lead sits in the worklist as still-to-chase and staff ring a
+        // patient who already has an appointment in the diary. Best-effort, and
+        // only ever forward: a lead already marked booked is left alone.
+        try {
+          const lead = await findLeadByConversation(conversation.id);
+          if (lead && lead.stage !== "booked") await setLeadStage(lead.id, "booked");
+        } catch (err) {
+          console.error(`[inbound] could not mark the lead booked for conversation ${conversation.id}`, err);
+        }
       }
     }
   } catch {
