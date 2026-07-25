@@ -114,10 +114,24 @@ export const SYSTEMS: SystemDef[] = [
     halts: "The SMS agent stops auto-replying. Opt-out (STOP) is still honoured.",
   },
   {
+    // OUTBOUND WhatsApp only: the messaging drain reads this slug to decide
+    // whether a patient's WhatsApp preference may route an outgoing message to
+    // WhatsApp. Migration 0047 seeds it OFF. It deliberately does NOT gate the
+    // inbound agent, which has its own 'whatsapp-agent' slug below: switching
+    // sending off must never silently swallow inbound patient messages.
     slug: "whatsapp",
-    label: "WhatsApp agent",
+    label: "WhatsApp sending",
     group: "Conversational agents",
-    halts: "The WhatsApp agent stops auto-replying. Opt-out is still honoured.",
+    halts: "Outgoing messages stop going out over WhatsApp and use SMS instead.",
+  },
+  {
+    // Headless system: the inbound WhatsApp agent has no page of its own (the
+    // 'whatsapp' nav module is the shared WhatsApp workspace), so its switch
+    // lives in the systems control panel, which renders from SYSTEMS directly.
+    slug: "whatsapp-agent",
+    label: "WhatsApp agent (inbound)",
+    group: "Conversational agents",
+    halts: "The WhatsApp agent stops auto-replying and inbound messages are flagged for a human. Opt-out is still honoured.",
   },
   // --- Operations ---
   {

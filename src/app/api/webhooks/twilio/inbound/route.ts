@@ -494,14 +494,24 @@ export async function POST(request: Request): Promise<Response> {
     await setConversationStatus(conversation.id, "needs_human");
     return twiml();
   }
-  // Owner kill switch: the SMS agent ("booking-agent") and the WhatsApp agent are
-  // switched independently. When the relevant one is off, hand to a human with no
-  // auto-reply. The inbound is already recorded above, and STOP/opt-out was
-  // handled earlier, so turning the agent off never blocks opt-out.
+  // Owner kill switch: the SMS agent ("booking-agent") and the WhatsApp agent
+  // ("whatsapp-agent") are switched independently. When the relevant one is off,
+  // hand to a human with no auto-reply. The inbound is already recorded above, and
+  // STOP/opt-out was handled earlier, so turning the agent off never blocks opt-out.
+  //
+  // The inbound agent deliberately uses its OWN slug, distinct from the 'whatsapp'
+  // slug the messaging drain reads as its OUTBOUND channel gate (and which
+  // migration 0047 seeds off). Sharing one slug meant switching WhatsApp SENDING
+  // off also silenced every inbound WhatsApp enquiry, so a patient could message
+  // the practice and get nothing back with nobody any the wiser.
   const agentClientId = getSite(siteId)?.clientId ?? "vitality";
-  const agentSystem = channel === "whatsapp" ? "whatsapp" : "booking-agent";
+  const agentSystem = channel === "whatsapp" ? "whatsapp-agent" : "booking-agent";
   if (!(await isSystemEnabledForSend(agentClientId, agentSystem))) {
     await setConversationStatus(conversation.id, "needs_human");
+    // Silence must never be invisible: the patient has messaged us and will get no
+    // automatic reply, so ping the practice the same way every other handover does.
+    // Best-effort and hourly-capped inside alertStaffHandover.
+    await alertStaffHandover({ patientName: displayName, reason: "no_reply" });
     return twiml();
   }
   if (conversation.status === "needs_human") {

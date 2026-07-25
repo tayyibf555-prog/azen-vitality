@@ -1,4 +1,9 @@
-import { DentallyClient, DentallyError } from "@/lib/dentally/client";
+import { DentallyError } from "@/lib/dentally/client";
+import {
+  isDentallyWriteEnabled,
+  dentallyAgentClient,
+  buildManualBookingPayload,
+} from "@/lib/dentally/write";
 import {
   getTarget,
   getCadenceByTarget,
@@ -21,10 +26,16 @@ function asRecord(v: unknown): Record<string, unknown> {
 function badRequest(message: string): Response {
   return Response.json({ error: message }, { status: 400 });
 }
-function dentallyClient(): DentallyClient | null {
-  const apiKey = process.env.DENTALLY_API_KEY;
-  if (!apiKey) return null;
-  return new DentallyClient({ apiKey, baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co" });
+/**
+ * The honest 503 for a write action while the Dentally write gate is shut. Same
+ * shape and wording as the recall / reactivation / coordinator book actions, so
+ * every manual write path tells the practice the same thing.
+ */
+function writesOff(): Response {
+  return Response.json(
+    { error: "Booking into Dentally is not switched on yet. Ask your administrator to enable it." },
+    { status: 503 },
+  );
 }
 /** Site guard against the entity's real site; no-op when enforcement is off (auth null). */
 function siteDenied(auth: AuthedUser | null, siteId: string): Response | null {
@@ -65,66 +76,103 @@ async function handleCancel(body: Record<string, unknown>, auth: AuthedUser | nu
   const off = await systemOff(target.siteId);
   if (off) return off;
 
-  // Free the slot in Dentally where we can, then mark our side and offer the waitlist.
-  const client = dentallyClient();
-  if (client) {
+  // Cancelling an appointment is a REAL WRITE to the practice diary, so it goes
+  // through the same gate as every other write: the dedicated write client, only
+  // when the write path is deliberately enabled. It must never be attempted with
+  // the read key or outside the gate.
+  let dentallyCancelled = false;
+  if (isDentallyWriteEnabled()) {
     try {
-      await client.cancelAppointment(target.appointmentId);
-    } catch {
-      /* best effort: still record our cancellation so the slot can be reused */
+      await dentallyAgentClient().cancelAppointment(target.appointmentId);
+      dentallyCancelled = true;
+    } catch (err) {
+      console.error(
+        `[noshow] cancel: Dentally cancelAppointment(${target.appointmentId}) failed; ` +
+          "our side is marked cancelled but the slot is NOT offered to the waitlist",
+        err,
+      );
     }
   }
+
+  // Stop the reminders either way: staff have told us this patient is not coming.
   await setTargetStatus(targetId, "cancelled");
   const cadence = await getCadenceByTarget(targetId);
   if (cadence) await updateCadence(cadence.id, { status: "cancelled", endedAt: new Date().toISOString() });
 
-  const slot: FreedSlot = {
-    appointmentId: target.appointmentId,
-    siteId: target.siteId,
-    startAt: target.appointmentStartAt,
-    durationMin: target.durationMin || 30,
-    practitioner: target.practitioner,
-  };
-  const offered = await offerSlotToNextCandidate(slot);
-  return Response.json({ ok: true, offeredTo: offered?.waitlistId ?? null });
+  // Only offer the slot when Dentally ACTUALLY released it. Offering a slot the
+  // diary still holds (writes disabled, wrong key, transient error) promises a
+  // waitlist patient a chair that is still taken, and they turn up to a clash.
+  // The inbound reply path already works this way; this mirrors it.
+  let offeredTo: string | null = null;
+  if (dentallyCancelled) {
+    const slot: FreedSlot = {
+      appointmentId: target.appointmentId,
+      siteId: target.siteId,
+      startAt: target.appointmentStartAt,
+      durationMin: target.durationMin || 30,
+      practitioner: target.practitioner,
+    };
+    const offered = await offerSlotToNextCandidate(slot);
+    offeredTo = offered?.waitlistId ?? null;
+  }
+  return Response.json({ ok: true, dentallyCancelled, offeredTo });
+}
+
+/** start + duration as an ISO finish time, for a caller that only sends a start. */
+function finishTimeFrom(startIso: string, durationMin: number): string | null {
+  const startMs = Date.parse(startIso);
+  if (Number.isNaN(startMs)) return null;
+  return new Date(startMs + durationMin * 60_000).toISOString();
 }
 
 async function handleBook(body: Record<string, unknown>, auth: AuthedUser | null): Promise<Response> {
-  // The booking site must be explicit and authorized; never trust a pass-through.
-  const siteId =
-    typeof body.site_id === "string" && body.site_id !== ""
-      ? body.site_id
-      : typeof body.targetId === "string"
-        ? body.targetId.split(":")[0]
-        : "";
-  if (!siteId) return badRequest("site_id is required");
-  const denied = siteDenied(auth, siteId);
+  // Rebooking is keyed on OUR target, never on a caller-supplied site or patient:
+  // the target is what carries the authorized site and the real Dentally patient id.
+  const targetId = body.targetId;
+  if (typeof targetId !== "string" || targetId === "") return badRequest("targetId is required");
+  const target = await getTarget(targetId);
+  if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
+  const denied = siteDenied(auth, target.siteId);
   if (denied) return denied;
-  const off = await systemOff(siteId);
+  const off = await systemOff(target.siteId);
   if (off) return off;
 
-  const patientId = body.patient_id;
-  const start = (typeof body.start_time === "string" && body.start_time) || (typeof body.start === "string" && body.start) || "";
-  if (typeof patientId !== "string" || patientId === "") return badRequest("patient_id is required");
+  const start =
+    (typeof body.start_time === "string" && body.start_time) || (typeof body.start === "string" && body.start) || "";
   if (start === "") return badRequest("start is required");
 
-  const client = dentallyClient();
-  if (!client) return Response.json({ error: "DENTALLY_API_KEY not set" }, { status: 503 });
+  // Manual bookings go through the SAME gate as the agent's writes: no real
+  // appointment can be created until the write path is deliberately enabled.
+  if (!isDentallyWriteEnabled()) return writesOff();
 
-  // Allowlist the fields sent to Dentally; the site is the authorized one.
-  const payload: Record<string, unknown> = {
-    site_id: siteId,
-    patient_id: patientId,
-    start_time: start,
-    duration: typeof body.duration === "number" ? body.duration : 30,
-    ...(typeof body.practitioner === "string" ? { practitioner: body.practitioner } : {}),
-    booked_via_api: true,
-  };
+  // Whitelisted payload, exactly like the recall / reactivation / coordinator book
+  // actions: patient_id comes from OUR target record and nothing is forwarded from
+  // the raw request body. A caller that sends only a start gets the finish derived
+  // from the appointment's own duration, since Dentally rejects a booking with no
+  // end time.
+  const duration = typeof body.duration === "number" && body.duration > 0 ? body.duration : target.durationMin || 30;
+  const finish =
+    typeof body.finish_time === "string" && body.finish_time ? body.finish_time : finishTimeFrom(start, duration);
+  if (!finish) return badRequest("start must be a valid ISO time");
+  const built = buildManualBookingPayload(
+    {
+      start_time: start,
+      finish_time: finish,
+      practitioner_id: body.practitioner_id,
+      reason: body.reason,
+      notes: typeof body.notes === "string" && body.notes ? body.notes : "Rebooked after a missed or cancelled visit",
+    },
+    target.dentallyPatientId,
+  );
+  if ("error" in built) return badRequest(built.error);
+
   try {
-    const { appointment } = await client.createAppointment(payload);
-    if (typeof body.targetId === "string" && body.targetId !== "") {
-      await setTargetStatus(body.targetId, "confirmed");
-    }
+    const { appointment } = await dentallyAgentClient().createAppointment(built.payload);
+    // The old appointment is settled: stop its confirmations so the patient is not
+    // reminded about a time they have just moved away from.
+    await setTargetStatus(targetId, "confirmed");
+    const cadence = await getCadenceByTarget(targetId);
+    if (cadence) await updateCadence(cadence.id, { status: "confirmed", endedAt: new Date().toISOString() });
     return Response.json({ ok: true, appointment });
   } catch (err) {
     const message =

@@ -311,6 +311,12 @@ describe("STOP suppression propagates to EVERY module's drain send path", () => 
   it("does NOT suppress a different channel: a STOP on sms does not block whatsapp", async () => {
     // Suppression is per-channel. A patient who opted out of SMS may still be
     // reachable on WhatsApp; the drain must not over-block.
+    // A WhatsApp sender must be configured for the row to stay on WhatsApp: with
+    // no sender the drain's dead-channel guard downgrades the row to SMS (it would
+    // otherwise be sent into a channel that cannot deliver), and the patient's SMS
+    // opt-out then correctly blocks it. Configure the sender so this test exercises
+    // what it is actually about, per-channel suppression.
+    vi.stubEnv("TWILIO_WHATSAPP_FROM", "whatsapp:+441134960000");
     await addSuppression(SITE, "sms", SUPPRESSED_REF, "stop");
     seed("recall", { channel: "whatsapp" });
 

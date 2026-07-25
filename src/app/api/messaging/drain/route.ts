@@ -127,6 +127,59 @@ const SOURCES: OutboxSource[] = [
   { name: "outreach", list: listOutreachQueued, claim: claimOutreach, recordSent: recordOutreachSent, markFailed: markOutreachFailed, markBlocked: markOutreachBlocked },
 ];
 
+/**
+ * Send one row, with a ONE-SHOT SMS fallback for WhatsApp. Returns the provider
+ * result, or null when the message could not be delivered at all.
+ *
+ * WhatsApp refuses a freeform message sent outside its 24 hour customer service
+ * window (the patient has not messaged us recently), so a cadence message we
+ * queued on WhatsApp can fail for a reason SMS never would. The number is the
+ * same handset either way, so rather than retiring a real reminder or recall
+ * unsent we send it by SMS instead.
+ *
+ * Opt-out safety: suppression rows are per channel, so the SMS opt-out is
+ * re-checked before the fallback. A patient who stopped SMS is never reached by
+ * the fallback, even though their WhatsApp send failed.
+ */
+async function dispatch(
+  sourceName: string,
+  row: QueuedRow,
+  channel: MessageChannel,
+  to: string,
+  statusCallbackUrl: string | undefined,
+): Promise<Awaited<ReturnType<typeof sendMessage>> | null> {
+  try {
+    return await sendMessage({
+      channel,
+      to,
+      body: row.body,
+      statusCallbackUrl: channel === "email" ? undefined : statusCallbackUrl,
+    });
+  } catch (err) {
+    if (channel !== "whatsapp") return null;
+    const smsOptedOut =
+      (await isSuppressed(row.siteId, "sms", row.toRef)) || (await isSuppressed(row.siteId, "sms", to));
+    if (smsOptedOut) {
+      console.warn(
+        `[drain] ${sourceName}: outbox ${row.id} failed on WhatsApp and the SMS fallback is opted out; not sent`,
+        err,
+      );
+      return null;
+    }
+    try {
+      const fallback = await sendMessage({ channel: "sms", to, body: row.body, statusCallbackUrl });
+      console.warn(
+        `[drain] ${sourceName}: outbox ${row.id} could not be sent on WhatsApp; delivered by SMS instead`,
+        err,
+      );
+      return fallback;
+    } catch (smsErr) {
+      console.warn(`[drain] ${sourceName}: outbox ${row.id} SMS fallback also failed`, smsErr);
+      return null;
+    }
+  }
+}
+
 async function drainSource(
   source: OutboxSource,
   client: DentallyClient,
@@ -154,6 +207,16 @@ async function drainSource(
     if (whatsappEnabled && rowChannel !== "email") {
       const preferred = await getChannelPref(row.siteId, row.toRef);
       channel = resolvePreferredChannel(rowChannel, preferred, whatsappEnabled);
+    } else if (rowChannel === "whatsapp") {
+      // Dead-channel guard for a row QUEUED as WhatsApp (rather than re-routed to
+      // it by preference above). With WhatsApp switched off or no sender
+      // configured, sending it as WhatsApp can only fail, so the message would be
+      // retired unsent. sms and whatsapp are the same handset and a STOP
+      // suppresses both, so downgrade to SMS and let the patient actually get it.
+      channel = "sms";
+      console.warn(
+        `[drain] ${source.name}: outbox ${row.id} was queued for WhatsApp but WhatsApp is not available; sending by SMS`,
+      );
     }
 
     // Resolve the recipient first. A THROW here is transient (e.g. Dentally briefly
@@ -291,17 +354,10 @@ async function drainSource(
     // the row 'failed'; a recordSent failure must NOT (recordSent is two writes —
     // outbox + touch — and flipping a genuinely DELIVERED message to 'failed' would
     // strand the cadence and, once a status webhook lands, misreport delivery).
-    let result: Awaited<ReturnType<typeof sendMessage>>;
-    try {
-      result = await sendMessage({
-        channel,
-        to,
-        body: row.body,
-        statusCallbackUrl: channel === "email" ? undefined : statusCallbackUrl,
-      });
-    } catch {
-      // Delivery threw. Mark failed; the Twilio status webhook tracks terminal
-      // delivery state separately for any retryable handling.
+    const result = await dispatch(source.name, row, channel, to, statusCallbackUrl);
+    if (!result) {
+      // Delivery threw with no way through. Mark failed; the Twilio status webhook
+      // tracks terminal delivery state separately for any retryable handling.
       await source.markFailed(row.id);
       failed += 1;
       continue;
