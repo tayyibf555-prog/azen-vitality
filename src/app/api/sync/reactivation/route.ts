@@ -14,14 +14,22 @@ import {
   setBackfillCursor,
   listTargets,
   getCadenceByTarget,
+  createCadence,
   updateCadence,
+  listCadences,
+  listDueCadences,
   setTargetStatus,
 } from "@/lib/reactivation/repository";
+import { getDailyContactLimit, countContactedToday } from "@/lib/reactivation/settings";
+import { withinLapseWindow } from "@/lib/reactivation/normalise";
 import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { mapWithConcurrency } from "@/lib/async/pool";
+import { isSystemEnabled } from "@/lib/systems/repository";
+import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import { enrolmentBudget } from "@/lib/enrolment/budget";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
 
@@ -42,6 +50,10 @@ const MAX_PLAN_PAGES = 30;
 // so a site finishes fast — serial ~2 calls/patient made a big site burn the whole
 // 300s function and starve the sites after it — without spiking Dentally load.
 const PATIENT_CONCURRENCY = 8;
+// Hard per-run cap on AUTO-ENROLMENTS across all sites. The sync classifies
+// thousands of targets; this is the ceiling on how many cadences one run may
+// start, on top of the daily-cap arithmetic in enrolmentBudget.
+const MAX_ENROLMENTS_PER_RUN = 25;
 // One-time historical backfill uses a page-NUMBER cursor. Dentally's /v1/patients has
 // NO sort control (only updated_after/created_after/site_id filters), so the
 // updated_after high-water-mark + per-run cap strands older-updated patients on a
@@ -221,12 +233,20 @@ function vitalitySiteIds(): string[] {
   return SITES.filter((s) => s.clientId === "vitality").map((s) => s.id);
 }
 
+/** Run-wide auto-enrolment allowance, shared by every site (see the enrol pass). */
+interface EnrolAllowance {
+  remaining: number;
+  /** `${siteId}:${patientId}` keys the platform admin has excluded from outreach. */
+  excludedKeys: Set<string>;
+}
+
 async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: ReactivationConfig,
+  allowance: EnrolAllowance,
   maxPatients: number = MAX_PATIENTS_PER_RUN,
-): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; processed: number; remaining: number; mode: string; backfillPage: number | null }> {
+): Promise<{ siteId: string; pulled: number; upserted: number; converted: number; enrolled: number; processed: number; remaining: number; mode: string; backfillPage: number | null }> {
   const now = new Date();
   // Backfill vs incremental. The cursor (backfill_page + backfill_done) lives on this
   // site's sync_state row; done=false (the default) means the one-time full pass has
@@ -346,6 +366,10 @@ async function syncSite(
   //    high-water mark only for FULLY-processed (enriched) patients, in page order.
   const targets = [];
   let highWaterMark = updatedAfter ?? null;
+  // Patients this run has just seen with a future booking. The enrol pass below
+  // reads STORED rows, which can be stale, so this is the freshest evidence we
+  // have that a patient no longer needs chasing.
+  const rebookedIds = new Set<string>();
   for (const { p, patient } of pending) {
     const data = enriched.get(patient.id);
     if (!data) continue; // failed secondary read: skip, do not advance the mark past them
@@ -372,6 +396,7 @@ async function syncSite(
     // with patients who never booked anything.
     const stoppedQualifying = input.futureBookingExists || !target;
     const targetId = `${siteId}:${patient.id}`;
+    if (input.futureBookingExists) rebookedIds.add(targetId);
     if (stoppedQualifying && inCadenceIds.has(targetId)) {
       const settledAs = input.futureBookingExists ? "converted" : "exhausted";
       const cad = await getCadenceByTarget(targetId);
@@ -436,12 +461,58 @@ async function syncSite(
     // so the next run re-fetches rather than skipping when nothing did.
     await setSyncState(siteId, RESOURCE, highWaterMark);
   }
+
+  // -------------------------------------------------------------------------
+  // AUTO-ENROL. Exactly the recall defect: the enrol action exists but no screen
+  // calls it, so thousands of classified targets sat dormant with no cadence and
+  // switching reactivation on sent nothing at all. Bounded, consent-gated, and it
+  // never enrols a patient the sweep would then refuse to message.
+  //
+  // The allowance is computed ONCE per run in POST (kill switch, the owner's
+  // daily contact limit, cadences already waiting to send, hard per-run ceiling)
+  // and SHARED across sites, so three sites cannot each spend the day's budget.
+  //
+  // Deliberately LAST: an enrolment write that fails must not cost this run its
+  // cursor progress, which is the expensive part of the pass.
+  // -------------------------------------------------------------------------
+  let enrolled = 0;
+  if (allowance.remaining > 0) {
+    const dormant = await listTargets({ siteIds: [siteId], statuses: ["dormant"] });
+    // One query for the site's cadences rather than a read per target: a target
+    // that has ever been enrolled is never enrolled a second time.
+    const alreadyEnrolled = new Set((await listCadences([siteId])).map((c) => c.targetId));
+    // listTargets orders by score, so a squeezed budget goes to the most
+    // recoverable patients first.
+    for (const t of dormant) {
+      if (allowance.remaining <= 0) break;
+      if (alreadyEnrolled.has(t.id)) continue;
+      // Hard lapse ceiling (1 year), the same gate the enrol action applies: a
+      // stored row ages while the sync only re-pulls patients Dentally marks
+      // updated, so a stale target can sit past the window.
+      if (!withinLapseWindow(t.lastVisitAt, now)) continue;
+      // Step 1 is an SMS: no consent means a manual call, never a message.
+      if (!t.consent.sms) continue;
+      // Platform admin status (inactive / do not contact) excludes this patient.
+      if (allowance.excludedKeys.has(excludedTargetKey(t.siteId, t.dentallyPatientId))) continue;
+      // Recall owns the patient until it hands off, so never chase them twice.
+      if (openRecall.has(t.id)) continue;
+      // Booked in since: nothing to re-engage.
+      if (rebookedIds.has(t.id)) continue;
+
+      await createCadence({ targetId: t.id, siteId, nextDueAt: now.toISOString() });
+      await setTargetStatus(t.id, "in_cadence");
+      allowance.remaining -= 1;
+      enrolled += 1;
+    }
+  }
+
   const mode = backfilling ? (backfillComplete ? "backfill-done" : "backfill") : "incremental";
   return {
     siteId,
     pulled,
     upserted: ranked.length,
     converted,
+    enrolled,
     processed,
     remaining,
     mode,
@@ -494,17 +565,47 @@ export async function POST(request: Request) {
       ordered = [...sites.slice(offset), ...sites.slice(0, offset)];
       capFor = MAX_PATIENTS_PER_RUN;
     }
+    // How many cadences this whole run may start. Read once, shared by every site:
+    // the daily contact limit counts messages across all three, so a per-site
+    // budget would let the run enrol three times the day's allowance. Everything
+    // is skipped while the owner has reactivation switched off.
+    const now = new Date();
+    const systemEnabled = await isSystemEnabled("vitality", "reactivation");
+    const [dailyLimit, usedToday, dueCadences] = systemEnabled
+      ? await Promise.all([
+          getDailyContactLimit("vitality"),
+          countContactedToday(now),
+          listDueCadences(now.toISOString()),
+        ])
+      : [0, 0, []];
+    const allowance: EnrolAllowance = {
+      remaining: enrolmentBudget({
+        systemEnabled,
+        dailyLimit,
+        usedToday,
+        // Cadences already due will spend today's budget; enrolling on top of them
+        // just piles up messages the sweep cannot serve today.
+        pendingDue: dueCadences.length,
+        perRunCap: MAX_ENROLMENTS_PER_RUN,
+      }),
+      excludedKeys: new Set<string>(),
+    };
+    if (allowance.remaining > 0) {
+      allowance.excludedKeys = await loadExcludedTargetKeys();
+    }
+    const enrolBudget = allowance.remaining;
+
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
     for (const siteId of ordered) {
       try {
-        perSite.push(await syncSite(client, siteId, cfg, capFor));
+        perSite.push(await syncSite(client, siteId, cfg, allowance, capFor));
       } catch (e) {
         perSite.push({ siteId, error: String(e) });
       }
     }
-    return Response.json({ ok: true, perSite });
+    return Response.json({ ok: true, enrolBudget, enrolUnspent: allowance.remaining, perSite });
   } finally {
     await releaseCronLock("sync-reactivation");
   }

@@ -56,6 +56,16 @@ vi.mock("@/lib/recall/repository", () => ({
   // Incremental mode (backfill already done): the exclusion behaviour is mode-independent.
   getBackfillCursor: vi.fn(async () => ({ page: 5, done: true })),
   setBackfillCursor: vi.fn(async () => {}),
+  // Auto-enrolment reads. No 'due' rows come back above, so nothing is enrolled here.
+  createCadence: vi.fn(async () => ({ id: "cad-new" })),
+  listCadences: vi.fn(async () => []),
+  listDueCadences: vi.fn(async () => []),
+  countContactedToday: vi.fn(async () => 0),
+}));
+vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => true }));
+vi.mock("@/lib/patient-status/repository", () => ({
+  loadExcludedTargetKeys: async () => new Set<string>(),
+  excludedTargetKey: (siteId: string, patientId: string) => `${siteId}:${patientId}`,
 }));
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-1", clientId: "vitality", name: "Test", timezone: "Europe/London" }],

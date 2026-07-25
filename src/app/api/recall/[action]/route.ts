@@ -1,5 +1,7 @@
 import { DentallyError } from "@/lib/dentally/client";
 import { isDentallyWriteEnabled, dentallyAgentClient, buildManualBookingPayload } from "@/lib/dentally/write";
+import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/booking/slots";
+import { londonDayKey } from "@/lib/time/london";
 import { draftRecall } from "@/lib/recall/draft";
 import { stepDef, advanceAfter, RECALL_CADENCE } from "@/lib/recall/cadence";
 import { shouldGraduate } from "@/lib/recall/normalise";
@@ -50,6 +52,20 @@ function badRequest(message: string): Response {
   return Response.json({ error: message }, { status: 400 });
 }
 
+/** YYYY-MM-DD shifted by whole days (UTC-safe). */
+function shiftYmd(ymd: string, days: number): string {
+  return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
+}
+
+/**
+ * Step 1's due time for a freshly enrolled target: the recall due date itself, or
+ * now if that has already passed. Shared by the enrol action and the manual draft
+ * path so a cadence is anchored the same way however it started.
+ */
+function enrolAnchor(target: RecallTarget, now: Date): string {
+  return new Date(Math.max(now.getTime(), new Date(target.dueAt).getTime())).toISOString();
+}
+
 /**
  * True when the target already has an outbound touch in flight (drafted, approved
  * or queued but not yet sent/failed). Mirrors the SWEEP path's `hasPending`
@@ -86,8 +102,7 @@ async function handleEnrol(body: Record<string, unknown>): Promise<Response> {
     // due date, an already-overdue one immediately. (The old `- leadWindowDays*DAY`
     // pushed the anchor into the past for every in-window target, so it ALWAYS fired
     // immediately — dead code that contradicted the documented on/near-due intent.)
-    const anchor = new Date(target.dueAt).getTime();
-    const nextDueAt = new Date(Math.max(Date.now(), anchor)).toISOString();
+    const nextDueAt = enrolAnchor(target, new Date());
     cadence = await createCadence({ targetId, siteId: target.siteId, nextDueAt });
   }
   await setTargetStatus(targetId, "in_cadence");
@@ -110,11 +125,29 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
     return Response.json({ skipped: true, reason: "pending_touch", autoQueued: false });
   }
 
-  const cadence = await getCadenceByTarget(targetId);
+  let cadence = await getCadenceByTarget(targetId);
   const stepNumber = (cadence?.currentStep ?? 0) + 1;
   const step = stepDef(stepNumber, RECALL_CADENCE) ?? stepDef(1, RECALL_CADENCE)!;
 
   const { body: draftBody, rationale } = await draftRecall(target, channel, step);
+
+  // Recall is routine and high-volume: auto-send whenever the channel is consented.
+  const consented = channelConsented(target, channel);
+
+  // A manual draft that will actually be sent has to run ON a cadence. Without one
+  // the touch sits at step 1 for ever (steps 2 and 3 never fire), and now that the
+  // sync auto-enrols, a later run would enrol this same target and send step 1 a
+  // SECOND time. Created only when we are going to queue: a consent-blocked draft
+  // starts nothing. Anchored exactly as the enrol action does.
+  if (consented && !cadence) {
+    cadence = await createCadence({
+      targetId,
+      siteId: target.siteId,
+      nextDueAt: enrolAnchor(target, new Date()),
+    });
+    await setTargetStatus(targetId, "in_cadence");
+  }
+
   let touch = await insertTouch({
     targetId: target.id,
     cadenceId: cadence?.id ?? "",
@@ -126,11 +159,27 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
     status: "draft",
   });
 
-  // Recall is routine and high-volume: auto-send whenever the channel is consented.
-  const consented = channelConsented(target, channel);
   let autoQueued = false;
   if (consented) {
     touch = await approveTouch(touch.id, "auto");
+    // Advance the cadence BEFORE enqueuing, mirroring the sweep: the message is
+    // going out now, so the position must move on or the next sweep re-drafts and
+    // re-sends this very step. The send action's stale-step guard then makes the
+    // coordinator's follow-up "send" click a no-op rather than a second advance.
+    if (cadence) {
+      const now = new Date();
+      await incrementPriorAttempts(target.id);
+      const adv = advanceAfter(step.step, now, RECALL_CADENCE);
+      await updateCadence(cadence.id, {
+        currentStep: adv.currentStep,
+        status: adv.status,
+        nextDueAt: adv.nextDueAt,
+        endedAt: adv.endedAt,
+      });
+      // Last step: settle the target here, because the send action's stale-step
+      // guard will skip and never reach its own settlement.
+      if (adv.status === "exhausted") await settleExhausted(target, now);
+    }
     await enqueueOutbox({
       touchId: touch.id,
       siteId: target.siteId,
@@ -266,11 +315,44 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
   // Whitelisted payload: patient_id comes from OUR target record, never the body.
+  // Validated first so a body missing the end time or the clinician is refused
+  // before we spend a Dentally availability read on it.
   const built = buildManualBookingPayload(body, target.dentallyPatientId);
   if ("error" in built) return badRequest(built.error);
 
+  // Slot revalidation, live and uncached, exactly as the public create route does:
+  // the coordinator's chosen slot must STILL be free in Dentally, and the write
+  // then uses the live slot's own end time and clinician rather than the browser's
+  // copy. The day is queried with a +1 day end so an exclusive end-date reading of
+  // the availability filter can never hide that day's own evening slots.
+  const dentally = dentallyAgentClient();
+  const day = londonDayKey(new Date(start));
+  let liveSlot: BookingSlot | null = null;
   try {
-    const { appointment } = await dentallyAgentClient().createAppointment(built.payload);
+    const days = await fetchAvailabilityDays(dentally, target.siteId, day, shiftYmd(day, 1), new Date());
+    liveSlot = findExactSlot(
+      days,
+      start,
+      typeof body.finish_time === "string" ? body.finish_time : "",
+      typeof body.practitioner_id === "string" ? body.practitioner_id : null,
+    );
+  } catch {
+    return Response.json(
+      { error: "We could not check the diary just now. Please try again shortly." },
+      { status: 502 },
+    );
+  }
+  if (!liveSlot) {
+    return Response.json({ error: "That time has just been taken. Please pick another slot." }, { status: 409 });
+  }
+  const confirmed = buildManualBookingPayload(
+    { ...body, start_time: liveSlot.start, finish_time: liveSlot.finish, practitioner_id: liveSlot.practitionerId ?? "" },
+    target.dentallyPatientId,
+  );
+  if ("error" in confirmed) return badRequest(confirmed.error);
+
+  try {
+    const { appointment } = await dentally.createAppointment(confirmed.payload);
     const cadence = await getCadenceByTarget(targetId);
     if (cadence) {
       await updateCadence(cadence.id, { status: "converted", endedAt: new Date().toISOString() });

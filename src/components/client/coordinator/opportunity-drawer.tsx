@@ -14,6 +14,9 @@ import { Button } from "@/components/ui/button";
 import { StatusPill, type Tone } from "@/components/primitives";
 import { gbp, relativeTime } from "@/lib/utils";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
+import { SlotPicker, slotFullLabel } from "@/components/client/booking/slot-picker";
+import { manualBookingFieldsFromSlot } from "@/lib/booking/manual-slot-payload";
+import type { BookingSlot } from "@/lib/booking/slots";
 import type {
   OpportunityStatus,
   TouchChannel,
@@ -74,9 +77,11 @@ export function OpportunityDrawer({
   const now = new Date(nowIso);
   const [touches, setTouches] = useState<SessionTouch[]>([]);
 
-  // Booking state.
+  // Booking state. The picked live availability slot: Dentally refuses a booking
+  // without an end time and a clinician, and only a real slot carries those, so
+  // the booking is driven by a selection out of the diary, not a typed-in time.
   const [showBook, setShowBook] = useState(false);
-  const [start, setStart] = useState("");
+  const [slot, setSlot] = useState<BookingSlot | null>(null);
   const [booking, setBooking] = useState(false);
   const [bookError, setBookError] = useState<string | null>(null);
   const [bookOk, setBookOk] = useState(false);
@@ -95,14 +100,18 @@ export function OpportunityDrawer({
   }
 
   async function book() {
-    if (!start) return;
+    const built = manualBookingFieldsFromSlot(slot);
+    if ("error" in built) {
+      setBookError(built.error);
+      return;
+    }
     setBookError(null);
     setBooking(true);
     try {
       const res = await fetch("/api/coordinator/book", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ opportunityId: opportunity.id, start: new Date(start).toISOString() }),
+        body: JSON.stringify({ opportunityId: opportunity.id, ...built.fields }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (res.status === 503) {
@@ -119,7 +128,7 @@ export function OpportunityDrawer({
         {
           id: `b-${prev.length}`,
           kind: "booking",
-          body: `Next step booked for ${new Date(start).toLocaleString("en-GB")}`,
+          body: `Next step booked for ${slotFullLabel(built.fields.start)}`,
           at: new Date().toISOString(),
         },
       ]);
@@ -206,26 +215,31 @@ export function OpportunityDrawer({
                 Book next step
               </Button>
             ) : (
-              <div className="space-y-2 rounded-lg border border-line bg-card-muted/40 p-3">
-                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                  Appointment start
-                </label>
-                <input
-                  type="datetime-local"
-                  value={start}
-                  onChange={(e) => setStart(e.target.value)}
-                  className="w-full rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+              <div className="space-y-3 rounded-lg border border-line bg-card-muted/40 p-3">
+                <SlotPicker
+                  siteId={opportunity.siteId}
+                  selected={slot}
+                  onSelect={setSlot}
+                  disabled={booking}
                 />
+                {slot ? (
+                  <p className="text-sm text-ink">
+                    Booking <span className="font-semibold text-navy">{slotFullLabel(slot.start)}</span>
+                  </p>
+                ) : null}
                 <div className="flex gap-2">
                   <Button
-                    onClick={() => setShowBook(false)}
+                    onClick={() => {
+                      setShowBook(false);
+                      setSlot(null);
+                    }}
                     variant="ghost"
                     className="flex-1"
                     disabled={booking}
                   >
                     Cancel
                   </Button>
-                  <Button onClick={book} variant="primary" className="flex-1" disabled={booking || !start}>
+                  <Button onClick={book} variant="primary" className="flex-1" disabled={booking || !slot}>
                     {booking ? <Loader2 size={15} className="animate-spin" /> : <CalendarPlus size={15} />}
                     Confirm
                   </Button>

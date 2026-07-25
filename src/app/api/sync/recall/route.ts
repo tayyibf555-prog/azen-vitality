@@ -12,7 +12,11 @@ import {
   markGraduated,
   setTargetStatus,
   getCadenceByTarget,
+  createCadence,
   updateCadence,
+  listCadences,
+  listDueCadences,
+  countContactedToday,
   getSyncState,
   setSyncState,
   getBackfillCursor,
@@ -22,6 +26,9 @@ import { londonOverdueDays } from "@/lib/time/london";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
+import { isSystemEnabled } from "@/lib/systems/repository";
+import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import { enrolmentBudget } from "@/lib/enrolment/budget";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
 
@@ -35,6 +42,12 @@ const DAY = 86_400_000;
 // function limit. The high-water mark only advances past fully-processed records,
 // so the next cron tick resumes where this one stopped.
 const MAX_PATIENTS_PER_RUN = 300;
+// Hard per-run cap on AUTO-ENROLMENTS across all sites. The sync classifies
+// thousands of targets; this is the ceiling on how many cadences one run may
+// start, on top of the daily-cap arithmetic in enrolmentBudget.
+const MAX_ENROLMENTS_PER_RUN = 25;
+// Conservative default for a 51k-patient base, IDENTICAL to the recall sweep's.
+const RECALL_DEFAULT_DAILY_CONTACT_LIMIT = 25;
 
 // ===========================================================================
 // CALIBRATION: confirm these field paths against the live Dentally sandbox.
@@ -121,6 +134,28 @@ function vitalitySiteIds(): string[] {
   return SITES.filter((s) => s.clientId === "vitality").map((s) => s.id);
 }
 
+/**
+ * The daily automated-contact cap (env RECALL_DAILY_CONTACT_LIMIT). Deliberately
+ * a copy of the recall SWEEP's reader, right down to the fail-loud fallback, so
+ * enrolment and sending are governed by exactly one number: an empty, non-numeric
+ * or negative value reverts to the default LOUDLY, never to "unlimited". 0 is a
+ * valid "paused" value.
+ */
+function dailyContactLimit(): number {
+  const raw = process.env.RECALL_DAILY_CONTACT_LIMIT;
+  if (raw === undefined) return RECALL_DEFAULT_DAILY_CONTACT_LIMIT;
+  const trimmed = raw.trim();
+  const n = Number(trimmed);
+  // Number("") is 0, so the empty check must precede the numeric check.
+  if (trimmed === "" || !Number.isFinite(n) || n < 0) {
+    console.error(
+      `[recall] RECALL_DAILY_CONTACT_LIMIT="${raw}" is invalid; using default ${RECALL_DEFAULT_DAILY_CONTACT_LIMIT}`,
+    );
+    return RECALL_DEFAULT_DAILY_CONTACT_LIMIT;
+  }
+  return Math.floor(n);
+}
+
 /** Run `fn` over items with a small worker pool (bounds Dentally load + run time). */
 async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let i = 0;
@@ -134,11 +169,19 @@ async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
   await Promise.all(workers);
 }
 
+/** Run-wide auto-enrolment allowance, shared by every site (see the enrol pass). */
+interface EnrolAllowance {
+  remaining: number;
+  /** `${siteId}:${patientId}` keys the platform admin has excluded from outreach. */
+  excludedKeys: Set<string>;
+}
+
 async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: RecallConfig,
-): Promise<{ siteId: string; pulled: number; upserted: number; processed: number; remaining: number; converted: number; mode: string; backfillPage: number | null }> {
+  allowance: EnrolAllowance,
+): Promise<{ siteId: string; pulled: number; upserted: number; processed: number; remaining: number; converted: number; enrolled: number; mode: string; backfillPage: number | null }> {
   const now = new Date();
 
   // Backfill vs incremental (mirrors the reactivation sync, which hit the exact
@@ -306,10 +349,12 @@ async function syncSite(
   // the grace boundary: graduate them so they leave the recall worklist and
   // reactivation can adopt them (closes the seam double-coverage gap).
   const openDue = await listTargets({ siteIds: [siteId], statuses: ["due"] });
+  const graduatedIds = new Set<string>();
   for (const t of openDue) {
     // Whole London days, matching classification + the sweep's settle logic.
     if (londonOverdueDays(t.dueAt, now) > cfg.graceDays) {
       await markGraduated(t.id);
+      graduatedIds.add(t.id);
     }
   }
 
@@ -338,6 +383,50 @@ async function syncSite(
     await setSyncState(siteId, RESOURCE, highWaterMark);
   }
 
+  // -------------------------------------------------------------------------
+  // 5. AUTO-ENROL. Nothing else in the product ever created a recall cadence: the
+  // enrol action exists but no screen calls it, so thousands of classified
+  // targets sat on the worklist with no cadence and switching recall on sent
+  // absolutely nothing. This is the no-show sync's proven enrolment block,
+  // mirrored: bounded, consent-gated, and it never enrols a patient the sweep
+  // would then refuse to message.
+  //
+  // The allowance is computed ONCE per run in POST (kill switch, daily contact
+  // cap, cadences already waiting to send, hard per-run ceiling) and SHARED
+  // across sites, so three sites cannot each spend the whole day's budget.
+  //
+  // Deliberately LAST: an enrolment write that fails must not cost this run its
+  // cursor progress, which is the expensive part of the pass.
+  // -------------------------------------------------------------------------
+  let enrolled = 0;
+  if (allowance.remaining > 0) {
+    // One query for the site's cadences rather than a read per target: a target
+    // that has ever been enrolled (running, paused, converted or exhausted) is
+    // never enrolled a second time by the sweep's own account.
+    const alreadyEnrolled = new Set((await listCadences([siteId])).map((c) => c.targetId));
+    // listTargets orders by due date, so the most overdue patients are enrolled
+    // first and a squeezed budget is spent where it matters most.
+    for (const t of openDue) {
+      if (allowance.remaining <= 0) break;
+      if (graduatedIds.has(t.id)) continue; // handed to reactivation moments ago
+      if (alreadyEnrolled.has(t.id)) continue;
+      // Step 1 is an SMS. No consent means the patient stays on the worklist for
+      // a manual call; we never enrol an unconsented patient into messaging.
+      if (!t.consent.sms) continue;
+      // Platform admin status (inactive / do not contact) excludes this patient
+      // from all outreach: never start a cadence the sweep would only suppress.
+      if (allowance.excludedKeys.has(excludedTargetKey(t.siteId, t.dentallyPatientId))) continue;
+
+      // Anchor step 1 to the due date itself, identical to the enrol action: a
+      // still-due-soon patient is reached ON the due date, an overdue one now.
+      const nextDueAt = new Date(Math.max(now.getTime(), new Date(t.dueAt).getTime())).toISOString();
+      await createCadence({ targetId: t.id, siteId, nextDueAt });
+      await setTargetStatus(t.id, "in_cadence");
+      allowance.remaining -= 1;
+      enrolled += 1;
+    }
+  }
+
   const mode = backfilling ? (backfillComplete ? "backfill-done" : "backfill") : "incremental";
   return {
     siteId,
@@ -346,6 +435,7 @@ async function syncSite(
     processed,
     remaining,
     converted,
+    enrolled,
     mode,
     backfillPage: backfilling ? safeCursor : null,
   };
@@ -372,17 +462,53 @@ export async function POST(request: Request) {
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
     });
     const cfg = config();
+
+    // How many cadences this whole run may start. Read once, shared by every site:
+    // the daily contact cap counts messages across all three, so a per-site budget
+    // would let the run enrol three times the day's allowance. Everything is
+    // skipped while the owner has recall switched off.
+    const now = new Date();
+    const systemEnabled = await isSystemEnabled("vitality", "recall");
+    const [usedToday, dueCadences] = systemEnabled
+      ? await Promise.all([countContactedToday(now), listDueCadences(now.toISOString())])
+      : [0, []];
+    const allowance: EnrolAllowance = {
+      remaining: enrolmentBudget({
+        systemEnabled,
+        dailyLimit: dailyContactLimit(),
+        usedToday,
+        // Cadences already due will spend today's budget; enrolling on top of them
+        // just piles up messages the sweep cannot serve today.
+        pendingDue: dueCadences.length,
+        perRunCap: MAX_ENROLMENTS_PER_RUN,
+      }),
+      excludedKeys: new Set<string>(),
+    };
+    if (allowance.remaining > 0) {
+      allowance.excludedKeys = await loadExcludedTargetKeys();
+    }
+
+    const enrolBudget = allowance.remaining;
+
+    // Rotate which site goes first each run (by hour), exactly as the no-show and
+    // reactivation syncs do. The enrolment allowance above is shared across sites,
+    // so a fixed order would let whichever site is listed first spend the whole
+    // day's budget every single run and PERMANENTLY starve the other two.
+    const sites = vitalitySiteIds();
+    const offset = sites.length > 0 ? new Date().getUTCHours() % sites.length : 0;
+    const ordered = [...sites.slice(offset), ...sites.slice(0, offset)];
+
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
-    for (const siteId of vitalitySiteIds()) {
+    for (const siteId of ordered) {
       try {
-        perSite.push(await syncSite(client, siteId, cfg));
+        perSite.push(await syncSite(client, siteId, cfg, allowance));
       } catch (e) {
         perSite.push({ siteId, error: String(e) });
       }
     }
-    return Response.json({ ok: true, perSite });
+    return Response.json({ ok: true, enrolBudget, enrolUnspent: allowance.remaining, perSite });
   } finally {
     await releaseCronLock("sync-recall");
   }
