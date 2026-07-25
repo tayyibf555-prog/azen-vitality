@@ -1,4 +1,4 @@
-import { getClient, getSites, dentallySiteId } from "@/lib/mock/clients";
+import { getClient, getSites, dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import {
   isDentallyWriteEnabled,
@@ -68,6 +68,30 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
 }
 
+/** Names for comparison: case and spacing insensitive. */
+function nameKey(first: string, last: string): string {
+  return `${first} ${last}`.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// What the patient said they are coming in for, mapped to the appointment
+// reasons Dentally accepts (BOOKING_REASONS in lib/dentally/write.ts). Anything
+// we cannot map confidently books as "Other" and the patient's own words ride
+// along in the notes, so the practice always sees WHY the patient booked and
+// never sees an appointment mislabelled as a check-up.
+const TREATMENT_REASONS: Record<string, string> = {
+  "check-up": "Exam",
+  "check-up and hygiene clean": "Exam + Scale & Polish",
+  "hygiene clean": "Scale & Polish",
+  "in pain or a dental problem": "Emergency",
+  "continuing treatment already started": "Continuing Treatment",
+};
+
+/** Free text bound for a Dentally note: single line and length capped, because
+ *  this endpoint is public and the value reaches a real clinical record. */
+function safeNote(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
 export async function POST(request: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
@@ -130,6 +154,9 @@ export async function POST(request: Request): Promise<Response> {
       return bad("Please pick a time slot and try again.", 400);
     }
     const requestedPractitionerId = str(body.practitionerId);
+    // What the patient said they are coming in for (the same field the hold
+    // route records). Optional: a booking without one still books as an exam.
+    const treatment = str(body.treatment);
     // Optional: the step-1 hold this confirmation completes. Flipped to
     // 'confirmed' after a successful write so the sweep never mistakes a finished
     // booking for an abandonment. Absent for a direct (non-two-step) booking.
@@ -164,14 +191,23 @@ export async function POST(request: Request): Promise<Response> {
       return bad("That time has just been taken. Please pick another slot.", 409);
     }
 
-    // (h) Patient resolution: an exact mobile match reuses the existing Dentally
-    // record (never create a duplicate); otherwise register a new patient,
-    // mirroring the agent's validated register_patient payload.
+    // (h) Patient resolution: an exact mobile match on one of THIS client's own
+    // sites reuses the existing Dentally record (never create a duplicate);
+    // otherwise register a new patient, mirroring the agent's validated
+    // register_patient payload.
+    //
+    // The site scope is not optional. The write key can see other practices on
+    // the same Dentally account (see SITES in lib/mock/clients.ts: two nearby
+    // practices are deliberately unmapped), so an unscoped phone lookup could
+    // match a stranger's record and file this appointment against it. Rows that
+    // do not resolve to one of the client's own sites are ignored entirely.
+    const ownSiteIds = new Set(getSites(client.id).map((s) => s.id));
     let patientId = "";
     let patientCreated = false;
     try {
       const found = await dentally.findPatientsByPhone(phone);
       const rows = Array.isArray(found.patients) ? found.patients : [];
+      const candidates: Array<{ id: string; name: string }> = [];
       for (const r of rows) {
         if (!r || typeof r !== "object") continue;
         const p = r as Record<string, unknown>;
@@ -180,11 +216,23 @@ export async function POST(request: Request): Promise<Response> {
         // ("07834...") while ours is already E.164 ("+447834..."), so a raw
         // string compare never matches and would duplicate every patient.
         const rowMobile = typeof p.mobile_phone === "string" ? toE164(p.mobile_phone) : null;
-        if (id && rowMobile && rowMobile === phone) {
-          patientId = id;
-          break;
-        }
+        if (!id || !rowMobile || rowMobile !== phone) continue;
+        // A row with no site, or a site that is not ours, is never a match.
+        const rowSite = typeof p.site_id === "string" ? siteIdFromDentally(p.site_id) : undefined;
+        if (!rowSite || !ownSiteIds.has(rowSite)) continue;
+        candidates.push({
+          id,
+          name: nameKey(
+            typeof p.first_name === "string" ? p.first_name : "",
+            typeof p.last_name === "string" ? p.last_name : "",
+          ),
+        });
       }
+      // A household often shares one mobile, so prefer the record whose name the
+      // patient just gave us; fall back to the first match on our own sites.
+      const wanted = nameKey(firstName, lastName);
+      patientId = (candidates.find((c) => c.name === wanted) ?? candidates[0])?.id ?? "";
+
       if (!patientId) {
         const { patient } = await dentally.createPatient({
           first_name: firstName,
@@ -202,14 +250,22 @@ export async function POST(request: Request): Promise<Response> {
 
       // (i) The write itself goes through the whitelisted payload builder that
       // was validated end-to-end against live Dentally. The time/practitioner
-      // fields come from the REVALIDATED live slot, never the client's copy.
+      // fields come from the REVALIDATED live slot, never the client's copy;
+      // liveSlot.finish is one booking duration after its start, because the
+      // availability reader chunks Dentally's windows (see lib/booking/slots.ts).
+      //
+      // The reason follows what the patient said they wanted, and their own
+      // words are appended to the notes either way, so the practice can see why
+      // the patient booked instead of a diary full of identical exams.
       const built = buildManualBookingPayload(
         {
           start_time: liveSlot.start,
           finish_time: liveSlot.finish,
           practitioner_id: liveSlot.practitionerId ?? "",
-          reason: "Exam",
-          notes: "Booked online via Smile Assessment",
+          reason: treatment ? TREATMENT_REASONS[treatment.toLowerCase()] ?? "Other" : "Exam",
+          notes: treatment
+            ? `Booked online via Smile Assessment. Patient interest: ${safeNote(treatment)}`
+            : "Booked online via Smile Assessment",
         },
         patientId,
       );

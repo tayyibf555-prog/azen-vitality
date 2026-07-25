@@ -31,6 +31,11 @@ function ymd(offsetDays: number): string {
   return new Date(Date.now() + offsetDays * DAY_MS).toISOString().slice(0, 10);
 }
 
+/** The Europe/London calendar day of an ISO instant (en-CA renders YYYY-MM-DD). */
+function londonDay(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(iso));
+}
+
 function get(params: Record<string, string>): Promise<Response> {
   const qs = new URLSearchParams(params).toString();
   return GET(new Request(`http://localhost/api/booking/slots?${qs}`));
@@ -72,14 +77,17 @@ describe("GET /api/booking/slots", () => {
     expect(arg.duration).toBe(30);
   });
 
-  it("clamps the requested range to 14 days", async () => {
+  it("clamps the requested range to 14 days, spanning whole Europe/London days", async () => {
     const from = ymd(3);
     const res = await get({ client: "vitality", site: "site-rv", from, to: ymd(40) });
     expect(res.status).toBe(200);
     const arg = h.getAvailability.mock.calls[0]![0] as { startTime: string; finishTime: string };
-    expect(arg.startTime.slice(0, 10)).toBe(from);
-    // finish = from + 13 days, end of day.
-    expect(arg.finishTime.slice(0, 10)).toBe(ymd(3 + 13));
+    // The range ends are LONDON day boundaries, so on BST the UTC date of the
+    // start instant is the previous day. Assert the London day, which is what
+    // the practice and the patient actually mean by "that day".
+    expect(londonDay(arg.startTime)).toBe(from);
+    // finish = from + 13 days, end of the London day.
+    expect(londonDay(arg.finishTime)).toBe(ymd(3 + 13));
   });
 
   it("rejects malformed dates cleanly", async () => {

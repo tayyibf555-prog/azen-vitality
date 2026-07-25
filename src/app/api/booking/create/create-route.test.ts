@@ -6,6 +6,7 @@
 //   - a slot not in LIVE availability -> 409 (revalidation before every write),
 //   - happy path reuses an exact-mobile-match patient (no duplicate creation),
 //   - happy path registers a new patient with the site's Dentally UUID,
+//   - a mobile match on ANOTHER practice's site is never reused (shared key),
 //   - a Dentally 422 surfaces as a friendly 502, never the Dentally error body.
 //
 // Every I/O seam is mocked; the REAL route handler and the REAL whitelisted
@@ -55,6 +56,12 @@ const FINISH_ISO = new Date(START.getTime() + 30 * 60_000).toISOString();
 const LIVE_ROW = { start_time: START_ISO, finish_time: FINISH_ISO, practitioner_id: 101 };
 
 const KEY = "s3cret";
+
+// The REAL Dentally site UUIDs: site-cc is one of the client's own sites, the
+// other is a nearby practice the shared write key can also see but that is
+// deliberately NOT mapped to any of our sites (see SITES in lib/mock/clients.ts).
+const OWN_SITE_UUID = "3286d822-68c5-48ff-b1a2-065780dfcd15";
+const FOREIGN_SITE_UUID = "00000000-1111-2222-3333-444444444444";
 
 let ipCounter = 0;
 function req(body: unknown): Request {
@@ -167,8 +174,8 @@ describe("create — happy paths", () => {
     const e164 = "+44" + String(body.phone).replace(/\s/g, "").slice(1);
     h.findPatientsByPhone.mockResolvedValue({
       patients: [
-        { id: 1, mobile_phone: "+447700000000" }, // different handset: not a match
-        { id: 42, mobile_phone: e164 },
+        { id: 1, mobile_phone: "+447700000000", site_id: OWN_SITE_UUID }, // different handset: not a match
+        { id: 42, mobile_phone: e164, site_id: OWN_SITE_UUID, first_name: "Alex", last_name: "Patient" },
       ],
     });
     const res = await POST(req(body));
@@ -206,9 +213,151 @@ describe("create — happy paths", () => {
     expect(created.last_name).toBe("Patient");
     expect(created.email_address).toBe("alex@example.com");
     // site-cc maps to the REAL Dentally site UUID, never the internal id.
-    expect(created.site_id).toBe("3286d822-68c5-48ff-b1a2-065780dfcd15");
+    expect(created.site_id).toBe(OWN_SITE_UUID);
     const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
     expect(payload.patient_id).toBe("pat-new");
+  });
+});
+
+describe("create, a long availability window is booked as ONE 30 minute slot", () => {
+  it("writes start + 30 minutes, never the window's own end", async () => {
+    // Dentally answers with WINDOWS: this one runs six hours from the requested
+    // start. Writing its finish_time verbatim would block a clinician's whole
+    // afternoon, so the write must use the chunked slot.
+    h.getAvailability.mockResolvedValue({
+      availability: [
+        {
+          start_time: START_ISO,
+          finish_time: new Date(START.getTime() + 6 * 60 * 60_000).toISOString(),
+          practitioner_id: 101,
+        },
+      ],
+    });
+    const res = await POST(req(goodBody()));
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.start_time).toBe(START_ISO);
+    expect(payload.finish_time).toBe(FINISH_ISO);
+    expect(Date.parse(payload.finish_time as string) - Date.parse(payload.start_time as string)).toBe(
+      30 * 60_000,
+    );
+  });
+
+  it("offers the later chunks of that window too (a 13:00 pick out of a 10:00 window books 13:00 to 13:30)", async () => {
+    const later = new Date(START.getTime() + 3 * 60 * 60_000);
+    h.getAvailability.mockResolvedValue({
+      availability: [
+        {
+          start_time: START_ISO,
+          finish_time: new Date(START.getTime() + 6 * 60 * 60_000).toISOString(),
+          practitioner_id: 101,
+        },
+      ],
+    });
+    const res = await POST(
+      req(
+        goodBody({
+          slotStart: later.toISOString(),
+          finish: new Date(later.getTime() + 30 * 60_000).toISOString(),
+        }),
+      ),
+    );
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.start_time).toBe(later.toISOString());
+    expect(payload.finish_time).toBe(new Date(later.getTime() + 30 * 60_000).toISOString());
+  });
+});
+
+describe("create, patient matching is scoped to the client's own sites", () => {
+  it("never books against a mobile match belonging to ANOTHER practice on the shared key", async () => {
+    const body = goodBody();
+    const e164 = "+44" + String(body.phone).replace(/\s/g, "").slice(1);
+    h.findPatientsByPhone.mockResolvedValue({
+      patients: [
+        { id: 99, mobile_phone: e164, site_id: FOREIGN_SITE_UUID, first_name: "Alex", last_name: "Patient" },
+        { id: 98, mobile_phone: e164 }, // no site at all: ownership unprovable
+      ],
+    });
+    const res = await POST(req(body));
+    expect(res.status).toBe(200);
+    // A new record on OUR site is registered instead of filing the appointment
+    // against a stranger's chart.
+    const j = (await res.json()) as { patientCreated: boolean };
+    expect(j.patientCreated).toBe(true);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.patient_id).toBe("pat-new");
+  });
+
+  it("prefers the name match when a household shares one mobile", async () => {
+    const body = goodBody({ firstName: "Sam", lastName: "Patient" });
+    const e164 = "+44" + String(body.phone).replace(/\s/g, "").slice(1);
+    h.findPatientsByPhone.mockResolvedValue({
+      patients: [
+        { id: 10, mobile_phone: e164, site_id: OWN_SITE_UUID, first_name: "Alex", last_name: "Patient" },
+        { id: 11, mobile_phone: e164, site_id: OWN_SITE_UUID, first_name: " sam ", last_name: "PATIENT" },
+      ],
+    });
+    const res = await POST(req(body));
+    expect(res.status).toBe(200);
+    expect(h.createPatient).not.toHaveBeenCalled();
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.patient_id).toBe("11");
+  });
+
+  it("falls back to the first own-site match when no name matches", async () => {
+    const body = goodBody({ firstName: "Jo", lastName: "Newname" });
+    const e164 = "+44" + String(body.phone).replace(/\s/g, "").slice(1);
+    h.findPatientsByPhone.mockResolvedValue({
+      patients: [
+        { id: 20, mobile_phone: e164, site_id: FOREIGN_SITE_UUID, first_name: "Jo", last_name: "Newname" },
+        { id: 21, mobile_phone: e164, site_id: OWN_SITE_UUID, first_name: "Alex", last_name: "Patient" },
+      ],
+    });
+    const res = await POST(req(body));
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.patient_id).toBe("21");
+  });
+});
+
+describe("create, the appointment says what the patient booked for", () => {
+  it("maps a stated treatment interest to an allowed Dentally reason and keeps it in the notes", async () => {
+    const res = await POST(req(goodBody({ treatment: "Check-up and hygiene clean" })));
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.reason).toBe("Exam + Scale & Polish");
+    expect(payload.notes).toBe(
+      "Booked online via Smile Assessment. Patient interest: Check-up and hygiene clean",
+    );
+  });
+
+  it("books a pain enquiry as an Emergency", async () => {
+    const res = await POST(req(goodBody({ treatment: "In pain or a dental problem" })));
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.reason).toBe("Emergency");
+  });
+
+  it("books an interest we cannot map as Other, never as an Exam, and sanitises the note", async () => {
+    const res = await POST(
+      req(goodBody({ treatment: `Straightening\n\nmy teeth ${"x".repeat(200)}` })),
+    );
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.reason).toBe("Other");
+    const notes = payload.notes as string;
+    expect(notes.startsWith("Booked online via Smile Assessment. Patient interest: Straightening my teeth ")).toBe(true);
+    expect(notes).not.toContain("\n");
+    expect(notes.length).toBeLessThanOrEqual("Booked online via Smile Assessment. Patient interest: ".length + 80);
+  });
+
+  it("still books an exam when no interest was stated", async () => {
+    const res = await POST(req(goodBody()));
+    expect(res.status).toBe(200);
+    const payload = h.createAppointment.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.reason).toBe("Exam");
+    expect(payload.notes).toBe("Booked online via Smile Assessment");
   });
 });
 

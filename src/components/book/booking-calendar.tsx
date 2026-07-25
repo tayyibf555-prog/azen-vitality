@@ -24,7 +24,11 @@ import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 //   success — the booked confirmation.
 //
 // Availability comes from GET /api/booking/slots (max 14 days per request, so
-// the "next two weeks" toggle issues exactly one extra request). The server is
+// the "next two weeks" toggle issues exactly one extra request). Each slot it
+// returns is exactly one appointment length: the server chunks Dentally's
+// availability windows, so a time here is a time the patient can actually book.
+// The details step also asks what the patient would like to come in for, and
+// that reason travels with both the hold and the booking. The server is
 // the authority on validation and slot freshness; its error strings are
 // patient-friendly and rendered VERBATIM. On a 409 at confirm (slot just taken)
 // we re-pull availability so the taken time disappears and return the patient to
@@ -52,6 +56,24 @@ interface Props {
 type Phase = "times" | "details" | "confirm" | "success";
 
 const GENERIC_ERROR = "Sorry, something went wrong. Please try again in a moment.";
+
+/**
+ * What the patient is coming in for. Sent with the hold and the booking so the
+ * practice sees the reason on the appointment instead of a diary of identical
+ * exams; the server maps each of these to an appointment reason Dentally accepts
+ * and keeps the patient's own wording in the appointment notes.
+ *
+ * Plain, everyday wording only: nothing clinical, nothing a patient would have
+ * to decode, and no promise about what the appointment will involve.
+ */
+const TREATMENT_OPTIONS = [
+  "Check-up",
+  "Check-up and hygiene clean",
+  "Hygiene clean",
+  "In pain or a dental problem",
+  "Continuing treatment already started",
+  "Something else",
+] as const;
 
 /* ---------------------------------------------------------------------------
  * Europe/London date helpers
@@ -187,6 +209,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [treatment, setTreatment] = useState<string>(TREATMENT_OPTIONS[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -387,6 +410,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
           lastName: ln,
           phone: phone.trim(),
           email: normEmail ?? undefined,
+          treatment,
           pageToken,
         }),
       });
@@ -440,6 +464,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
           lastName: lastName.trim(),
           phone: phone.trim(),
           email: email.trim() ? normaliseEmail(email.trim()) ?? undefined : undefined,
+          treatment,
           holdId: holdId ?? undefined,
           pageToken,
         }),
@@ -511,6 +536,7 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
             firstName={firstName}
             lastName={lastName}
             phone={phone}
+            treatment={treatment}
             busy={busy}
             error={error}
             onConfirm={confirmBooking}
@@ -529,6 +555,8 @@ export function BookingCalendar({ clientSlug, siteId, siteName }: Props) {
             setPhone={setPhone}
             email={email}
             setEmail={setEmail}
+            treatment={treatment}
+            setTreatment={setTreatment}
             canSubmit={canSubmit}
             busy={busy}
             error={error}
@@ -894,6 +922,8 @@ function DetailsStep({
   setPhone,
   email,
   setEmail,
+  treatment,
+  setTreatment,
   canSubmit,
   busy,
   error,
@@ -911,6 +941,8 @@ function DetailsStep({
   setPhone: (v: string) => void;
   email: string;
   setEmail: (v: string) => void;
+  treatment: string;
+  setTreatment: (v: string) => void;
   canSubmit: boolean;
   busy: boolean;
   error: string | null;
@@ -973,6 +1005,26 @@ function DetailsStep({
         </label>
       </div>
 
+      {/* Why they are coming in. Carried through to the appointment so the
+          practice can plan the visit rather than seeing every online booking as
+          the same generic check-up. */}
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
+          What would you like to come in for?
+        </span>
+        <select
+          value={treatment}
+          onChange={(e) => setTreatment(e.target.value)}
+          className={inputClass}
+        >
+          {TREATMENT_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+
       <label className="block">
         <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">
           UK mobile number
@@ -1033,6 +1085,7 @@ function ConfirmStep({
   firstName,
   lastName,
   phone,
+  treatment,
   busy,
   error,
   onConfirm,
@@ -1044,6 +1097,7 @@ function ConfirmStep({
   firstName: string;
   lastName: string;
   phone: string;
+  treatment: string;
   busy: boolean;
   error: string | null;
   onConfirm: () => void;
@@ -1090,6 +1144,8 @@ function ConfirmStep({
         </dd>
         <dt className="text-muted">Mobile</dt>
         <dd className="font-semibold text-navy">{phone}</dd>
+        <dt className="text-muted">Visit</dt>
+        <dd className="font-semibold text-navy">{treatment}</dd>
       </dl>
 
       {error ? (
