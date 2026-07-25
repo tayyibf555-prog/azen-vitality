@@ -1,5 +1,7 @@
 import { DentallyError } from "@/lib/dentally/client";
 import { isDentallyWriteEnabled, dentallyAgentClient, buildManualBookingPayload } from "@/lib/dentally/write";
+import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/booking/slots";
+import { londonDayKey } from "@/lib/time/london";
 import { draftReactivation } from "@/lib/reactivation/draft";
 import { stepDef, advanceAfter } from "@/lib/reactivation/cadence";
 import {
@@ -41,6 +43,11 @@ function patientToRef(t: ReactivationTarget): string {
 }
 function badRequest(message: string): Response {
   return Response.json({ error: message }, { status: 400 });
+}
+
+/** YYYY-MM-DD shifted by whole days (UTC-safe). */
+function shiftYmd(ymd: string, days: number): string {
+  return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
 async function handleEnrol(body: Record<string, unknown>): Promise<Response> {
@@ -89,11 +96,29 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
     );
   }
 
-  const cadence = await getCadenceByTarget(targetId);
+  let cadence = await getCadenceByTarget(targetId);
   const stepNumber = (cadence?.currentStep ?? 0) + 1;
   const step = stepDef(stepNumber) ?? stepDef(1)!;
 
   const { body: draftBody, rationale } = await draftReactivation(target, channel, step);
+
+  const consented = channelConsented(target, channel);
+
+  // A manual draft that can actually be sent has to run ON a cadence. Without one
+  // the touch sticks at step 1 for ever: nothing advances the position, so steps 2
+  // and 3 never fire and the target is silently abandoned after a single message.
+  // (This is also what keeps the sync's auto-enrolment from later starting the same
+  // target at step 1 again.) Created only when the channel is consented, since an
+  // unsendable draft starts nothing. Anchored now, exactly as the enrol action does.
+  if (consented && !cadence) {
+    cadence = await createCadence({
+      targetId,
+      siteId: target.siteId,
+      nextDueAt: new Date().toISOString(),
+    });
+    await setTargetStatus(targetId, "in_cadence");
+  }
+
   let touch = await insertTouch({
     targetId: target.id,
     cadenceId: cadence?.id ?? "",
@@ -105,7 +130,6 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
     status: "draft",
   });
 
-  const consented = channelConsented(target, channel);
   const underThreshold = target.recoverableValue < autoSendThreshold();
   let autoQueued = false;
   if (underThreshold && consented) {
@@ -117,14 +141,18 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
       // re-drafts and re-sends it (#17); advancing first also means a kill before
       // enqueue skips a step rather than double-sending.
       if (cadence) {
+        const now = new Date();
         await incrementPriorAttempts(target.id);
-        const adv = advanceAfter(step.step, new Date());
+        const adv = advanceAfter(step.step, now);
         await updateCadence(cadence.id, {
           currentStep: adv.currentStep,
           status: adv.status,
           nextDueAt: adv.nextDueAt,
           endedAt: adv.endedAt,
         });
+        // Last step: settle the target here so an auto-queued final message does
+        // not leave it sitting in_cadence against a finished cadence.
+        if (adv.status === "exhausted") await setTargetStatus(target.id, "exhausted");
       }
       await enqueueOutbox({
         touchId: approved.id,
@@ -254,11 +282,44 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
   // Whitelisted payload: patient_id comes from OUR target record, never the body.
+  // Validated first so a body missing the end time or the clinician is refused
+  // before we spend a Dentally availability read on it.
   const built = buildManualBookingPayload(body, target.dentallyPatientId);
   if ("error" in built) return badRequest(built.error);
 
+  // Slot revalidation, live and uncached, exactly as the public create route does:
+  // the coordinator's chosen slot must STILL be free in Dentally, and the write
+  // then uses the live slot's own end time and clinician rather than the browser's
+  // copy. The day is queried with a +1 day end so an exclusive end-date reading of
+  // the availability filter can never hide that day's own evening slots.
+  const dentally = dentallyAgentClient();
+  const day = londonDayKey(new Date(start));
+  let liveSlot: BookingSlot | null = null;
   try {
-    const { appointment } = await dentallyAgentClient().createAppointment(built.payload);
+    const days = await fetchAvailabilityDays(dentally, target.siteId, day, shiftYmd(day, 1), new Date());
+    liveSlot = findExactSlot(
+      days,
+      start,
+      typeof body.finish_time === "string" ? body.finish_time : "",
+      typeof body.practitioner_id === "string" ? body.practitioner_id : null,
+    );
+  } catch {
+    return Response.json(
+      { error: "We could not check the diary just now. Please try again shortly." },
+      { status: 502 },
+    );
+  }
+  if (!liveSlot) {
+    return Response.json({ error: "That time has just been taken. Please pick another slot." }, { status: 409 });
+  }
+  const confirmed = buildManualBookingPayload(
+    { ...body, start_time: liveSlot.start, finish_time: liveSlot.finish, practitioner_id: liveSlot.practitionerId ?? "" },
+    target.dentallyPatientId,
+  );
+  if ("error" in confirmed) return badRequest(confirmed.error);
+
+  try {
+    const { appointment } = await dentally.createAppointment(confirmed.payload);
     const cadence = await getCadenceByTarget(targetId);
     if (cadence) {
       await updateCadence(cadence.id, { status: "converted", endedAt: new Date().toISOString() });

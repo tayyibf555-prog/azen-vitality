@@ -74,6 +74,19 @@ vi.mock("@/lib/reactivation/repository", () => ({
   setSyncState: (s: string, r: string, v: string) => repo.setSyncState(s, r, v),
   getBackfillCursor: (s: string, r: string) => repo.getBackfillCursor(),
   setBackfillCursor: (s: string, r: string, o: { page: number | null; done: boolean; highWaterMark?: string }) => repo.setBackfillCursor(s, r, o),
+  // Auto-enrolment reads. listTargets returns nothing here, so nothing is enrolled.
+  createCadence: async () => ({ id: "cad-new" }),
+  listCadences: async () => [],
+  listDueCadences: async () => [],
+}));
+vi.mock("@/lib/reactivation/settings", () => ({
+  getDailyContactLimit: async () => 25,
+  countContactedToday: async () => 0,
+}));
+vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => true }));
+vi.mock("@/lib/patient-status/repository", () => ({
+  loadExcludedTargetKeys: async () => new Set<string>(),
+  excludedTargetKey: (siteId: string, patientId: string) => `${siteId}:${patientId}`,
 }));
 vi.mock("@/lib/recall/repository", () => ({ listOpenRecallPatientKeys: async () => new Set<string>() }));
 vi.mock("@/lib/mock/clients", () => ({
