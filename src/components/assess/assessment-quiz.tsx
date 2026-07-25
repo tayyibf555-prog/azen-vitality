@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
+import { resultCopy } from "@/lib/smile-assessment/result-copy";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { iconFor } from "./option-icons";
 import { GuidedAssessmentQuiz } from "./guided-assessment-quiz";
@@ -58,7 +59,14 @@ interface NextResponse {
 
 interface SubmitResult {
   band: "high" | "medium" | "low";
-  message: string;
+  /**
+   * True only when the submit route actually bridged this response into
+   * Speed-to-lead (a real contact happens or is retried). The thank-you copy
+   * is derived from band + this flag (see result-copy.ts), never from the
+   * server's raw "message" string, so it can never promise a callback that
+   * is not going to happen.
+   */
+  leadCreated: boolean;
   /** When set, the thank-you screen offers a direct link to the booking page. */
   bookingUrl?: string;
 }
@@ -338,13 +346,13 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; band?: string; message?: string; error?: string; bookingUrl?: unknown }
+        | { ok?: boolean; band?: string; message?: string; error?: string; bookingUrl?: unknown; leadCreated?: unknown }
         | null;
       if (!res.ok || !data?.ok || !data.band || !data.message) {
         setError(
           data?.error === "too many submissions from this contact, please try again later" ||
             data?.error === "too many submissions, please try again later"
-            ? "We've already received your details. Our team will be in touch shortly."
+            ? "Thanks, we've already got your details from a moment ago. If you'd like to speak to us sooner, please get in touch with the practice directly."
             : "Sorry, something went wrong. Please try again in a moment.",
         );
         setBusy(false);
@@ -352,7 +360,7 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
       }
       setResult({
         band: data.band as SubmitResult["band"],
-        message: data.message,
+        leadCreated: data.leadCreated === true,
         bookingUrl: typeof data.bookingUrl === "string" && data.bookingUrl ? data.bookingUrl : undefined,
       });
       setPhase("thanks");
@@ -809,7 +817,9 @@ function ThankYou({ result }: { result: SubmitResult }) {
         <CheckCircle2 size={24} />
       </span>
       <h1 className="text-xl text-navy">Thank you</h1>
-      <p className="max-w-sm text-sm text-muted">{result.message}</p>
+      <p className="max-w-sm text-sm text-muted">
+        {resultCopy(result.band, result.leadCreated, Boolean(result.bookingUrl))}
+      </p>
       {result.bookingUrl ? (
         <Button asChild variant="primary" className="w-full sm:w-auto">
           <a href={result.bookingUrl}>Book your appointment now</a>
