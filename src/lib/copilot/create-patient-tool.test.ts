@@ -3,16 +3,31 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // The co-pilot create_patient tool: a HIGH-STAKES write to the practice's real Dentally
 // book. Mirrors the send_sms two-step discipline — strict validation, a dedupe short-
 // circuit, a preview WITHOUT confirm that never writes, a single write only WITH confirm,
-// audit logging and honest dry-run/error read-backs. The Dentally read (dedupe) and write
-// clients plus the audit log are mocked so we test the branching deterministically.
+// audit logging and honest error read-backs — PLUS three safety properties specific to a
+// patient-creating write:
+//   - the Dentally write gate is checked BEFORE any network call (E1): nothing is looked
+//     up or created while writes are switched off, and the tool never claims "test mode"
+//     for a call that never should have reached Dentally at all;
+//   - the dedupe check fails CLOSED (E2): if the Dentally search itself errors, creation
+//     is refused rather than risking a duplicate;
+//   - the dedupe check searches EVERY site of the client (E3), not just the site
+//     currently in view, so a patient already registered at a sister site is found.
+//
+// The dedupe search now goes through the raw Dentally client (dentallyFromEnv().listPatients)
+// rather than the swallowing searchPatients() helper, precisely so a per-site failure can
+// propagate instead of silently reading as "no match" (see findLikelyExistingPatient /
+// rawPatientSearch in ./tools.ts). The write client and the audit log are mocked so we
+// test the branching deterministically.
 
-const searchPatients = vi.fn();
+const searchPatients = vi.fn(); // still statically imported by tools.ts for other tool cases (unused by create_patient itself now)
+const listPatientsRaw = vi.fn(); // the raw DentallyClient.listPatients, used ONLY by create_patient's dedupe
 const createPatient = vi.fn();
 const isDentallyWriteEnabled = vi.fn();
 const logCopilotAction = vi.fn();
 
 vi.mock("@/lib/dentally/read", () => ({
   searchPatients: (...a: unknown[]) => searchPatients(...a),
+  dentallyFromEnv: () => ({ listPatients: (...a: unknown[]) => listPatientsRaw(...a) }),
   listPatients: vi.fn(),
   listAppointments: vi.fn(),
   listOutstanding: vi.fn(),
@@ -29,10 +44,13 @@ vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: (...a: unknown[]) =>
 import { makeCopilotDispatch } from "./tools";
 import { DentallyError } from "@/lib/dentally/client";
 
-// The real internal->Dentally site UUID for site-cc (from src/lib/mock/clients.ts). The
-// write payload must carry THIS, not our internal id, proving the site mapping is applied.
+// The real internal->Dentally site UUIDs for vitality's three sites (from
+// src/lib/mock/clients.ts). The write payload must carry site-cc's UUID, not our
+// internal id, proving the site mapping is applied.
 const SITE_CC_UUID = "3286d822-68c5-48ff-b1a2-065780dfcd15";
 
+// The co-pilot's view is scoped to ONE site (site-cc); vitality also has site-rv and
+// site-ng. E3 requires the dedupe to search all three regardless of this view scope.
 const dispatch = makeCopilotDispatch(["site-cc"], "vitality", "tester");
 
 // A complete, valid new-patient input (nobody matching in the mocked search).
@@ -44,12 +62,39 @@ const GOOD = {
   email: "jane.doe@example.co.uk",
 };
 
+/** A raw Dentally-shaped patient row, as the live API returns it. */
+function rawPatient(fields: Record<string, unknown>) {
+  return { id: "pat-1", first_name: "", last_name: "", ...fields };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  searchPatients.mockResolvedValue([]); // default: genuinely new patient
+  listPatientsRaw.mockResolvedValue({ patients: [] }); // default: genuinely new patient
   createPatient.mockResolvedValue({ patient: { id: "new-pat-1" } });
   isDentallyWriteEnabled.mockReturnValue(true);
   logCopilotAction.mockResolvedValue(undefined);
+});
+
+describe("create_patient write gate (E1: refuses BEFORE any network call)", () => {
+  it("refuses outright when the Dentally write gate is off, before any dedupe search or create attempt", async () => {
+    isDentallyWriteEnabled.mockReturnValue(false);
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.reason).toBe("writes_disabled");
+    expect(out.message).toMatch(/switched off/i);
+    // Honesty: never call this "test mode" for a call that never reached Dentally.
+    expect(out.message).not.toMatch(/test mode/i);
+    expect(listPatientsRaw).not.toHaveBeenCalled();
+    expect(createPatient).not.toHaveBeenCalled();
+  });
+
+  it("refuses even on the unconfirmed preview call, so no dedupe lookup runs while writes are off", async () => {
+    isDentallyWriteEnabled.mockReturnValue(false);
+    const out = JSON.parse(await dispatch("create_patient", GOOD));
+    expect(out.created).toBe(false);
+    expect(out.reason).toBe("writes_disabled");
+    expect(listPatientsRaw).not.toHaveBeenCalled();
+  });
 });
 
 describe("create_patient validation (never invents a missing detail)", () => {
@@ -121,9 +166,9 @@ describe("create_patient validation (never invents a missing detail)", () => {
 
 describe("create_patient dedupe (short-circuits creation)", () => {
   it("finds an existing record by the same mobile and does NOT create", async () => {
-    searchPatients.mockResolvedValue([
-      { id: "pat-existing", name: "Jane Doe", phone: "+447700900123", email: null, siteId: "site-cc", dateOfBirth: "1990-05-01", active: true },
-    ]);
+    listPatientsRaw.mockResolvedValue({
+      patients: [rawPatient({ id: "pat-existing", first_name: "Jane", last_name: "Doe", mobile_phone: "+447700900123", date_of_birth: "1990-05-01" })],
+    });
     const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
     expect(out.created).toBe(false);
     expect(out.duplicate).toBe(true);
@@ -134,9 +179,9 @@ describe("create_patient dedupe (short-circuits creation)", () => {
   });
 
   it("finds an existing record by the same name and date of birth (different phone)", async () => {
-    searchPatients.mockResolvedValue([
-      { id: "pat-namedob", name: "Jane Doe", phone: "+447700999999", email: null, siteId: "site-cc", dateOfBirth: "1990-05-01", active: true },
-    ]);
+    listPatientsRaw.mockResolvedValue({
+      patients: [rawPatient({ id: "pat-namedob", first_name: "Jane", last_name: "Doe", mobile_phone: "+447700999999", date_of_birth: "1990-05-01" })],
+    });
     const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
     expect(out.created).toBe(false);
     expect(out.duplicate).toBe(true);
@@ -147,12 +192,58 @@ describe("create_patient dedupe (short-circuits creation)", () => {
 
   it("does NOT treat a mere name substring hit (different DOB and contact) as a duplicate", async () => {
     // A broad text hit that is clearly a different person must not block a real new patient.
-    searchPatients.mockResolvedValue([
-      { id: "pat-other", name: "Jane Doe-Smith", phone: "+447700111111", email: "other@example.co.uk", siteId: "site-cc", dateOfBirth: "1975-02-02", active: true },
-    ]);
+    listPatientsRaw.mockResolvedValue({
+      patients: [
+        rawPatient({
+          id: "pat-other",
+          first_name: "Jane",
+          last_name: "Doe-Smith",
+          mobile_phone: "+447700111111",
+          email_address: "other@example.co.uk",
+          date_of_birth: "1975-02-02",
+        }),
+      ],
+    });
     const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
     expect(out.created).toBe(true);
     expect(createPatient).toHaveBeenCalledTimes(1);
+  });
+
+  it("(E2) fails CLOSED and refuses to create when the Dentally dedupe search errors, rather than creating anyway", async () => {
+    listPatientsRaw.mockRejectedValue(new Error("Dentally 503: upstream unavailable"));
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.reason).toBe("dedupe_check_failed");
+    expect(out.message).toMatch(/could not fully check/i);
+    expect(createPatient).not.toHaveBeenCalled();
+    expect(logCopilotAction).toHaveBeenCalledWith(expect.objectContaining({ status: "blocked:dedupe_check_failed" }));
+  });
+
+  it("(E3) searches EVERY site of the client, not just the site currently in view", async () => {
+    // The co-pilot's view is scoped to site-cc only; vitality also has site-rv and
+    // site-ng, and the dedupe must cover all three so a sister-site patient is found.
+    await dispatch("create_patient", GOOD); // preview call is enough to trigger the dedupe search
+    const searchedSiteIds = new Set(listPatientsRaw.mock.calls.map((call) => (call[0] as { siteId: string }).siteId));
+    // dentallySiteId maps site-cc/site-rv/site-ng to their real Dentally UUIDs; every
+    // one of the three must appear, proving the search was not limited to site-cc.
+    expect(searchedSiteIds.size).toBeGreaterThanOrEqual(3);
+  });
+
+  it("(E3) finds a duplicate at a sister site outside the current view scope", async () => {
+    // site-rv's real Dentally UUID (from src/lib/mock/clients.ts).
+    const SITE_RV_UUID = "c9b87b78-96e6-4f3d-aa8b-e1b953ae79cf";
+    listPatientsRaw.mockImplementation(async (args: { siteId: string }) => {
+      if (args.siteId === SITE_RV_UUID) {
+        return { patients: [rawPatient({ id: "pat-sister-site", first_name: "Jane", last_name: "Doe", mobile_phone: "+447700900123" })] };
+      }
+      return { patients: [] };
+    });
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.duplicate).toBe(true);
+    expect(out.match.id).toBe("pat-sister-site");
+    expect(out.match.site).toBe("N17 Dental");
+    expect(createPatient).not.toHaveBeenCalled();
   });
 });
 
@@ -201,16 +292,7 @@ describe("create_patient two-step confirm", () => {
   });
 });
 
-describe("create_patient honesty (dry-run and errors)", () => {
-  it("reports a dry run when the Dentally write key is not enabled", async () => {
-    isDentallyWriteEnabled.mockReturnValue(false);
-    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
-    expect(out.created).toBe(true);
-    expect(out.dryRun).toBe(true);
-    expect(out.note).toMatch(/test mode/i);
-    expect(logCopilotAction).toHaveBeenCalledWith(expect.objectContaining({ status: "created:dry_run" }));
-  });
-
+describe("create_patient honesty (errors, never a misleading dry run)", () => {
   it("surfaces a 403 (key not permitted to create patients) honestly and never retries", async () => {
     createPatient.mockRejectedValue(new DentallyError(403, "forbidden"));
     const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
@@ -229,5 +311,12 @@ describe("create_patient honesty (dry-run and errors)", () => {
     expect(out.reason).toBe("dentally_error");
     expect(out.status).toBe(422);
     expect(createPatient).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a real (non-dry-run) creation now that the write gate guarantees writes are enabled", async () => {
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(true);
+    expect(out.dryRun).toBe(false);
+    expect(out.note).not.toMatch(/test mode/i);
   });
 });

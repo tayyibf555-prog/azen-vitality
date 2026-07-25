@@ -30,6 +30,7 @@ import {
   getPatientDetail,
   listSitePractitioners,
   dentallyReadKey,
+  dentallyFromEnv,
   type PatientRecord,
 } from "@/lib/dentally/read";
 import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
@@ -304,43 +305,102 @@ interface LikelyMatch {
   matchedOn: string;
 }
 
+// (E2) A dedupe search that could not complete must never read as "nobody found": the
+// caller has to be able to tell "genuinely no match" apart from "the search itself
+// failed" so it can fail CLOSED. searchPatients() (src/lib/dentally/read.ts) swallows a
+// per-site Dentally error and silently returns [] for that site, which is right for a
+// display list but wrong here, so create_patient's dedupe goes straight to the raw
+// per-site Dentally read (dentallyFromEnv) and lets any error propagate.
+const DEDUPE_SEARCH_MAX_PAGES = 3;
+const DEDUPE_SEARCH_PER_PAGE = 100;
+
 /**
- * DEDUPE for create_patient. Uses the SAME server-side Dentally search the co-pilot's
- * search_patients uses (searchPatients -> Dentally `query=`), fanned out over the phone,
- * the email and the name, then applies a STRICT match test so a broad text hit never
- * wrongly blocks a genuinely new patient:
+ * One site's raw Dentally patient search for a query, paged like searchPatients, but
+ * NEVER swallowing a failure: a thrown error here is left to propagate to the caller.
+ */
+async function rawPatientSearch(siteId: string, query: string): Promise<PatientRecord[]> {
+  const client = dentallyFromEnv();
+  const dentallyId = dentallySiteId(siteId);
+  const out: PatientRecord[] = [];
+  for (let page = 1; page <= DEDUPE_SEARCH_MAX_PAGES; page += 1) {
+    const res = await client.listPatients({ siteId: dentallyId, query, page, perPage: DEDUPE_SEARCH_PER_PAGE });
+    const rows = Array.isArray(res.patients) ? res.patients : [];
+    for (const raw of rows) {
+      const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+      const first = typeof r.first_name === "string" ? r.first_name : "";
+      const last = typeof r.last_name === "string" ? r.last_name : "";
+      out.push({
+        id: String(r.id ?? ""),
+        name: `${first} ${last}`.trim() || "Unknown",
+        email: typeof r.email_address === "string" && r.email_address ? r.email_address : null,
+        phone: typeof r.mobile_phone === "string" && r.mobile_phone ? r.mobile_phone : null,
+        // The site we queried, not a value parsed from the response: we already know
+        // which of THIS client's sites this row came from.
+        siteId,
+        active: r.active !== false,
+        archivedReason: null,
+        recallDueAt: null,
+        lastVisitAt: null,
+        dateOfBirth: typeof r.date_of_birth === "string" && r.date_of_birth ? r.date_of_birth : null,
+        gender: null,
+        smsConsent: false,
+        emailConsent: false,
+      });
+    }
+    if (rows.length < DEDUPE_SEARCH_PER_PAGE) break; // short page => last page for this site
+  }
+  return out;
+}
+
+/**
+ * DEDUPE for create_patient. Searches EVERY site passed in (E3: the caller supplies
+ * every site belonging to the client, not just the one currently in view, so a patient
+ * already registered at a sister site is found), fanned out over the phone, the email
+ * and the name, then applies a STRICT match test so a broad text hit never wrongly
+ * blocks a genuinely new patient:
  *   - exact mobile (normalised both sides; Dentally stores national format), OR
  *   - exact email (normalised both sides), OR
  *   - identical full name AND identical date of birth.
- * Returns the first strong match, or null when the person looks genuinely new.
+ * Returns { ok: false } (E2: fail CLOSED) the moment any site's search fails, without
+ * reporting a match either way, so the caller refuses to create rather than risk a
+ * duplicate. Returns { ok: true, match } (possibly null) only once every site has been
+ * searched successfully.
  */
 async function findLikelyExistingPatient(
   siteIds: string[],
   cand: { name: string; dob: string; phone: string | null; email: string | null },
-): Promise<LikelyMatch | null> {
+): Promise<{ ok: true; match: LikelyMatch | null } | { ok: false }> {
   const seen = new Map<string, PatientRecord>();
   const queries: string[] = [];
   if (cand.phone) queries.push(cand.phone);
   if (cand.email) queries.push(cand.email);
   queries.push(cand.name);
-  for (const q of queries) {
-    // searchPatients returns [] for a query under 2 chars, so short/blank ones are inert.
-    const rows = await searchPatients(siteIds, q);
-    for (const r of rows) seen.set(r.id, r);
+  for (const siteId of siteIds) {
+    for (const q of queries) {
+      // Dentally's query search is inert under 2 chars; mirrors searchPatients.
+      if (q.trim().length < 2) continue;
+      try {
+        const rows = await rawPatientSearch(siteId, q);
+        for (const r of rows) seen.set(r.id, r);
+      } catch (err) {
+        console.error(`[copilot] create_patient dedupe search failed for site ${siteId}`, err);
+        return { ok: false };
+      }
+    }
   }
   const nameLc = cand.name.toLowerCase();
   for (const p of seen.values()) {
     if (cand.phone && p.phone && toE164(p.phone) === cand.phone) {
-      return { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same mobile number" };
+      return { ok: true, match: { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same mobile number" } };
     }
     if (cand.email && p.email && normaliseEmail(p.email) === cand.email) {
-      return { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same email address" };
+      return { ok: true, match: { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same email address" } };
     }
     if (p.name.toLowerCase() === nameLc && p.dateOfBirth && p.dateOfBirth.slice(0, 10) === cand.dob) {
-      return { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same name and date of birth" };
+      return { ok: true, match: { id: p.id, name: p.name, dateOfBirth: p.dateOfBirth, siteId: p.siteId, matchedOn: "the same name and date of birth" } };
     }
   }
-  return null;
+  return { ok: true, match: null };
 }
 
 export function makeCopilotDispatch(siteIds: string[], clientId: string, actor = "owner") {
@@ -1436,8 +1496,24 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // A HIGH-STAKES write: this creates a real person in the practice's real
           // Dentally book (51k+ real patients). Mirrors send_sms's discipline — strict
           // validation, a dedupe short-circuit, a two-step confirm, audit logging and an
-          // honest dry-run/error read-back — and the booking-create write posture (the
-          // gated dentallyAgentClient + internal->Dentally site mapping).
+          // honest error read-back — and the booking-create write posture (the gated
+          // dentallyAgentClient + internal->Dentally site mapping).
+
+          // (0) THE WRITE GATE, FIRST, BEFORE ANY VALIDATION OR NETWORK CALL. Every
+          // appointment route in this codebase (booking/create, coordinator, reactivation,
+          // recall) refuses outright on !isDentallyWriteEnabled() before touching Dentally
+          // at all; create_patient previously fell through to dentallyAgentClient(), which
+          // defaults to the READ key/URL when writes are disabled and still issues a real
+          // POST, then reported the result as "test mode" regardless of what actually
+          // happened. Refuse honestly here instead: no dedupe search, no create attempt.
+          if (!isDentallyWriteEnabled()) {
+            return JSON.stringify({
+              created: false,
+              reason: "writes_disabled",
+              message:
+                "Patient creation is currently switched off for this practice, so I have not looked anyone up or created anyone. Tell the owner that creating patients needs the Dentally write key enabled first.",
+            });
+          }
 
           // (1) REQUIRED identity fields. NEVER invent a missing detail: an absent or bad
           // field returns an error that tells the model to ASK the owner, not guess.
@@ -1509,9 +1585,15 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
           // (5) Target site WITHIN the co-pilot's view scope, exactly like the other write
           // tools: the site currently in view (the first scoped site). An all-sites scope
-          // resolves to that same primary site (siteIds[0]).
+          // resolves to that same primary site (siteIds[0]). CREATION happens here, but the
+          // dedupe search below (E3) covers every site of the client, not just this one, so
+          // someone already registered at a sister site is still found.
           const siteId = siteIds[0];
           if (!siteId) return JSON.stringify({ created: false, error: "No site is in scope to create the patient in." });
+
+          const client = getClient(clientId);
+          if (!client) return JSON.stringify({ created: false, error: "I could not resolve your practice." });
+          const allSiteIds = getSites(client.id).map((s) => s.id);
 
           const name = `${firstName} ${lastName}`.trim();
           const readback = {
@@ -1524,9 +1606,35 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             site: siteName(siteId),
           };
 
-          // (6) DEDUPE FIRST (both steps). A plausible existing record short-circuits
-          // creation entirely: we never create a second record for someone already there.
-          const likely = await findLikelyExistingPatient(siteIds, { name, dob, phone, email });
+          // (6) DEDUPE FIRST (both steps), across EVERY site belonging to this client (E3),
+          // so a patient already registered at a sister site is found rather than
+          // duplicated. A plausible existing record short-circuits creation entirely: we
+          // never create a second record for someone already there.
+          const dedupe = await findLikelyExistingPatient(allSiteIds, { name, dob, phone, email });
+          if (!dedupe.ok) {
+            // (E2) FAIL CLOSED: the search itself did not complete, so we cannot say
+            // whether this person already exists. Refuse rather than risk a duplicate in
+            // a live 51k-patient book; a refused create is always recoverable, a duplicate
+            // record is not.
+            await logCopilotAction({
+              clientId,
+              siteId,
+              actor,
+              action: "create_patient",
+              targetRef: null,
+              targetName: name,
+              channel: null,
+              body: `DOB ${dob}${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}`,
+              status: "blocked:dedupe_check_failed",
+            });
+            return JSON.stringify({
+              created: false,
+              reason: "dedupe_check_failed",
+              message:
+                "I could not fully check Dentally for an existing match just now, so I have not created anyone (to avoid risking a duplicate record). Please try again in a moment.",
+            });
+          }
+          const likely = dedupe.match;
           if (likely) {
             if (input.confirm === true) {
               // The re-check at confirm caught an existing record: log the block so the
@@ -1577,11 +1685,11 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
           // (8) STEP 2: confirmed. Create via the gated write client, mirroring the
           // booking-create write path: dentallyAgentClient() targets the dedicated write
-          // instance ONLY when writes are enabled, otherwise the default (mock/pilot)
-          // client, so a real create can never happen until the write key is set. The
-          // internal site id is mapped to Dentally's own UUID exactly as booking-create
-          // and register_patient do. Field names follow the existing createPatient payload.
-          const writeEnabled = isDentallyWriteEnabled();
+          // instance (the write gate at the top of this case already guarantees writes
+          // are enabled, so this always reaches the real/sandbox write instance, never the
+          // default read-only client). The internal site id is mapped to Dentally's own
+          // UUID exactly as booking-create and register_patient do. Field names follow the
+          // existing createPatient payload.
           const audit = {
             clientId,
             siteId,
@@ -1631,19 +1739,13 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             });
           }
 
-          await logCopilotAction({
-            ...audit,
-            targetRef: `patient:${newId}`,
-            status: writeEnabled ? "created" : "created:dry_run",
-          });
+          await logCopilotAction({ ...audit, targetRef: `patient:${newId}`, status: "created" });
           return JSON.stringify({
             created: true,
             patientId: newId,
             ...readback,
-            dryRun: !writeEnabled,
-            note: writeEnabled
-              ? `Created ${name} in Dentally (id ${newId}). Confirm to the owner that they have been added.`
-              : `Recorded ${name} in test mode (id ${newId}). Real patient creation goes live once the practice enables the Dentally write key; nothing has been written to the real practice system yet. Tell the owner it was recorded in test mode.`,
+            dryRun: false,
+            note: `Created ${name} in Dentally (id ${newId}). Confirm to the owner that they have been added.`,
           });
         }
 
