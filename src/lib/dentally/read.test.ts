@@ -43,7 +43,7 @@ vi.mock("./client", () => ({
   },
 }));
 
-import { listPatients, listAppointments, listOutstanding, countPatients, dentallyReadKey } from "./read";
+import { listPatients, listAppointments, listAppointmentsSafe, listOutstanding, countPatients, dentallyReadKey } from "./read";
 
 beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "k");
@@ -211,6 +211,51 @@ describe("listOutstanding", () => {
     const out = await listOutstanding(["site-1", "site-2", "site-3"]);
     expect(out).toEqual([]);
     expect(spy).not.toHaveBeenCalled(); // patient scan skipped on the no-outstanding path
+  });
+});
+
+// listAppointmentsSafe (calendar go-live defect B3): the calendar must be able to
+// tell a genuine Dentally read failure apart from a day that is genuinely free,
+// and a failed read must never poison the cache with an empty result.
+describe("listAppointmentsSafe (B3: distinct failure signal, never cached)", () => {
+  it("reports success with the real rows when every site loads fine", async () => {
+    state.listAppointments = (async () => ({
+      appointments: [{ id: "a1", patient_id: "p1", site_id: "site-1", start_time: "2026-07-10T09:00:00Z", first_name: "A", last_name: "B" }],
+    })) as never;
+    const out = await listAppointmentsSafe(["site-1"]);
+    expect(out.failed).toBe(false);
+    expect(out.appointments).toHaveLength(1);
+  });
+
+  it("reports failed=true (and an empty list) when the only site throws", async () => {
+    state.listAppointments = (async () => {
+      throw new Error("dentally 500");
+    }) as never;
+    const out = await listAppointmentsSafe(["site-1"]);
+    expect(out.failed).toBe(true);
+    expect(out.appointments).toEqual([]);
+  });
+
+  it("reports failed=true when one of two sites throws and nothing at all came back", async () => {
+    state.listAppointments = ((a: { siteId?: string }) => {
+      if (a.siteId === "site-bad") throw new Error("dentally 500");
+      return Promise.resolve({ appointments: [] }); // site-2 genuinely has none today
+    }) as never;
+    const out = await listAppointmentsSafe(["site-bad", "site-2"]);
+    expect(out.failed).toBe(true);
+    expect(out.appointments).toEqual([]);
+  });
+
+  it("does NOT report failed when a failing site is offset by real data from another site", async () => {
+    state.listAppointments = ((a: { siteId?: string }) => {
+      if (a.siteId === "site-bad") throw new Error("dentally 500");
+      return Promise.resolve({
+        appointments: [{ id: "a1", patient_id: "p1", site_id: "site-ok", start_time: "2026-07-10T09:00:00Z", first_name: "A", last_name: "B" }],
+      });
+    }) as never;
+    const out = await listAppointmentsSafe(["site-bad", "site-ok"]);
+    expect(out.failed).toBe(false);
+    expect(out.appointments).toHaveLength(1);
   });
 });
 

@@ -1,84 +1,65 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { EmptyState } from "@/components/primitives";
+import { EmptyState, StatusPill } from "@/components/primitives";
 import { cn } from "@/lib/utils";
-import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarDays, AlertTriangle } from "lucide-react";
+import { londonDayKey } from "@/lib/time/london";
 import type { AppointmentRecord } from "@/lib/dentally/read";
+import {
+  dayKey,
+  shiftDay,
+  mondayOf,
+  hhmm,
+  longDate,
+  weekLabel,
+  dow,
+  dnum,
+  clampDayToWindow,
+  isWithinWindow,
+  stateDotClass,
+  stateLabel,
+  STATE_BADGE_TONE,
+  STATE_BADGE_LABEL,
+} from "./calendar-logic";
 
 // The diary board in the locked flat language: a display-type date header with
 // the count as a quiet caption, segment-style filters, and the day view as the
 // Home diary's hairline slot rows (time gutter, 7px status dot, name 600 with
 // the reason muted, quiet right meta; a tinted tag only for the no-show state).
 // The week grid stays a grid, with its chrome quieted to hairlines.
-
-const STATE_DOT: Record<string, string> = {
-  booked: "bg-status-blue",
-  completed: "bg-status-green",
-  did_not_attend: "bg-status-red",
-  cancelled: "bg-line-strong",
-  pending: "bg-status-blue",
-};
-const STATE_LABEL: Record<string, string> = {
-  booked: "Booked",
-  completed: "Completed",
-  did_not_attend: "No-show",
-  cancelled: "Cancelled",
-  pending: "Pending",
-};
-
-function dayKey(iso: string): string {
-  return iso.slice(0, 10);
-}
-function shiftDay(dayIso: string, by: number): string {
-  const d = new Date(`${dayIso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + by);
-  return d.toISOString().slice(0, 10);
-}
-function mondayOf(dayIso: string): string {
-  const d = new Date(`${dayIso}T00:00:00Z`);
-  const offset = (d.getUTCDay() + 6) % 7; // days since Monday
-  return shiftDay(dayIso, -offset);
-}
-function hhmm(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
-}
-function longDate(dayIso: string): string {
-  return new Date(`${dayIso}T00:00:00Z`).toLocaleDateString("en-GB", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-function weekLabel(dayIso: string): string {
-  const mon = mondayOf(dayIso);
-  const sun = shiftDay(mon, 6);
-  const fmt = (d: string, opts: Intl.DateTimeFormatOptions) =>
-    new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { ...opts, timeZone: "UTC" });
-  return `${fmt(mon, { day: "numeric", month: "short" })} – ${fmt(sun, { day: "numeric", month: "short", year: "numeric" })}`;
-}
-function dow(dayIso: string): string {
-  return new Date(`${dayIso}T00:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" });
-}
-function dnum(dayIso: string): number {
-  return new Date(`${dayIso}T00:00:00Z`).getUTCDate();
-}
+//
+// All date/time bucketing and formatting is delegated to ./calendar-logic (pure,
+// unit-tested there): times render in Europe/London (B1), "today" and every
+// day-bucket use the London calendar day, not a UTC slice (B2), and navigation
+// is clamped to the window the server actually fetched (B4, see windowFrom/To).
 
 export function CalendarBoard({
   appointments,
   sites,
   nowIso,
   initialSiteFilter = "all",
+  loadFailed = false,
+  windowFrom,
+  windowTo,
 }: {
   appointments: AppointmentRecord[];
   sites: { id: string; name: string }[];
   nowIso: string;
   initialSiteFilter?: string;
+  /** True when the Dentally read for this window failed outright (B3): render
+   *  an amber "could not load" notice instead of a confident empty diary. */
+  loadFailed?: boolean;
+  /** The [windowFrom, windowTo] day keys the server actually fetched. Navigation
+   *  is clamped inside this range (B4) so paging past it can never show an
+   *  unloaded, possibly fully-booked day as free. */
+  windowFrom: string;
+  windowTo: string;
 }) {
-  const today = nowIso.slice(0, 10);
-  const [day, setDay] = useState(today);
+  // "Today" MUST be the London calendar day, not a UTC slice of nowIso: between
+  // 00:00 and 01:00 BST the UTC day is still yesterday (B2).
+  const today = londonDayKey(new Date(nowIso));
+  const [day, setDay] = useState(() => clampDayToWindow(today, windowFrom, windowTo));
   const [siteFilter, setSiteFilter] = useState<string>(initialSiteFilter);
   const [view, setView] = useState<"day" | "week">("day");
   const siteName = (id: string) => sites.find((s) => s.id === id)?.name ?? id;
@@ -120,6 +101,9 @@ export function CalendarBoard({
   const strip = useMemo(() => Array.from({ length: 7 }, (_, i) => shiftDay(day, i - 3)), [day]);
 
   const step = view === "week" ? 7 : 1;
+  const canGoPrev = day > windowFrom;
+  const canGoNext = day < windowTo;
+  const goTo = (d: string) => setDay(clampDayToWindow(d, windowFrom, windowTo));
 
   return (
     <section>
@@ -165,40 +149,59 @@ export function CalendarBoard({
             ))}
           </div>
           <div className="flex items-center gap-1">
-            <NavBtn aria-label="Previous" onClick={() => setDay(shiftDay(day, -step))}>
+            <NavBtn aria-label="Previous" disabled={!canGoPrev} onClick={() => goTo(shiftDay(day, -step))}>
               <ChevronLeft size={16} />
             </NavBtn>
             <button
               type="button"
-              onClick={() => setDay(today)}
+              onClick={() => goTo(today)}
               className="pressable rounded-lg border border-line-strong bg-card px-3 py-1 text-xs font-medium text-ink hover:bg-card-muted"
             >
               Today
             </button>
-            <NavBtn aria-label="Next" onClick={() => setDay(shiftDay(day, step))}>
+            <NavBtn aria-label="Next" disabled={!canGoNext} onClick={() => goTo(shiftDay(day, step))}>
               <ChevronRight size={16} />
             </NavBtn>
           </div>
         </div>
       </header>
 
+      {loadFailed ? (
+        <div
+          role="alert"
+          className="mt-4 flex items-start gap-2 rounded-lg border border-tint-amber-line bg-tint-amber px-4 py-3 text-[13px] text-status-amber"
+        >
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+          <span>
+            <span className="font-semibold">We could not load the diary.</span> Dentally did not respond, so an
+            empty day below is NOT confirmation that it is free. Try refreshing shortly.
+          </span>
+        </div>
+      ) : null}
+
       {view === "day" ? (
         <>
           {/* Quiet 7-day strip: plain numbers, the selected day as the navy chip
-              (the mini-month idiom), today's numeral in blue. */}
+              (the mini-month idiom), today's numeral in blue. Days outside the
+              loaded window are shown but disabled (B4): their appointments were
+              never fetched, so treating them as clickable would risk showing an
+              unloaded, possibly fully-booked day as free. */}
           <div className="mt-4 grid grid-cols-7 gap-1.5">
             {strip.map((d) => {
               const isSel = d === day;
               const isToday = d === today;
               const count = countByDay.get(d) ?? 0;
+              const inWindow = isWithinWindow(d, windowFrom, windowTo);
               return (
                 <button
                   key={d}
                   type="button"
-                  onClick={() => setDay(d)}
+                  disabled={!inWindow}
+                  onClick={() => goTo(d)}
                   className={cn(
                     "pressable flex flex-col items-center rounded-lg px-1 py-2 transition-colors",
                     isSel ? "bg-navy" : "hover:bg-[#f7f9fc]",
+                    !inWindow && "cursor-not-allowed opacity-40 hover:bg-transparent",
                   )}
                 >
                   <span
@@ -232,48 +235,53 @@ export function CalendarBoard({
 
           {dayRows.length === 0 ? (
             <EmptyState
-              icon={CalendarDays}
-              title="Nothing booked"
-              description="No appointments on this day for the selected site."
+              icon={loadFailed ? AlertTriangle : CalendarDays}
+              title={loadFailed ? "Diary unavailable" : "Nothing booked"}
+              description={
+                loadFailed
+                  ? "Dentally could not be reached, so this is not confirmed as a free day."
+                  : "No appointments on this day for the selected site."
+              }
               className="mt-4"
             />
           ) : (
             <div className="mt-2">
-              {dayRows.map((a) => (
-                <div
-                  key={a.id}
-                  className="grid grid-cols-[46px_8px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line py-[11px] last:border-0"
-                >
-                  <span className="text-xs font-medium tabular-nums text-faint">{hhmm(a.start)}</span>
-                  <span
-                    aria-hidden
-                    title={STATE_LABEL[a.state] ?? a.state}
-                    className={cn("h-[7px] w-[7px] rounded-full", STATE_DOT[a.state] ?? "bg-line-strong")}
-                  />
-                  <span className="min-w-0 truncate">
-                    <span className="text-[13.5px] font-semibold text-navy">{a.patientName}</span>
-                    <span className="ml-2 text-[12.5px] text-muted">
-                      {a.reason ?? "Appointment"}
-                      {a.practitioner ? ` · ${a.practitioner}` : ""}
-                    </span>
-                    <span className="sr-only">{STATE_LABEL[a.state] ?? a.state}</span>
-                  </span>
-                  <span className="flex items-center gap-3">
-                    {sites.length > 1 ? (
-                      <span className="hidden text-[11.5px] text-faint sm:inline">{siteName(a.siteId)}</span>
-                    ) : null}
-                    {a.state === "did_not_attend" ? (
-                      <span className="rounded-md border border-tint-red-line bg-tint-red px-2 py-[2.5px] text-[11.5px] font-medium text-status-red">
-                        No-show
+              {dayRows.map((a) => {
+                const badgeTone = STATE_BADGE_TONE[a.state];
+                return (
+                  <div
+                    key={a.id}
+                    className="grid grid-cols-[46px_8px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line py-[11px] last:border-0"
+                  >
+                    <span className="text-xs font-medium tabular-nums text-faint">{hhmm(a.start)}</span>
+                    <span
+                      aria-hidden
+                      title={stateLabel(a.state)}
+                      className={cn("h-[7px] w-[7px] rounded-full", stateDotClass(a.state))}
+                    />
+                    <span className="min-w-0 truncate">
+                      <span className="text-[13.5px] font-semibold text-navy">{a.patientName}</span>
+                      <span className="ml-2 text-[12.5px] text-muted">
+                        {a.reason ?? "Appointment"}
+                        {a.practitioner ? ` · ${a.practitioner}` : ""}
                       </span>
-                    ) : a.state === "cancelled" ? (
-                      <span className="text-[11.5px] font-medium text-faint">Cancelled</span>
-                    ) : (
-                      <span className="text-[11.5px] font-medium text-muted">{a.durationMin} min</span>
-                    )}
-                  </span>
-                </div>
-              ))}
+                      <span className="sr-only">{stateLabel(a.state)}</span>
+                    </span>
+                    <span className="flex items-center gap-3">
+                      {sites.length > 1 ? (
+                        <span className="hidden text-[11.5px] text-faint sm:inline">{siteName(a.siteId)}</span>
+                      ) : null}
+                      {badgeTone ? (
+                        <StatusPill tone={badgeTone}>{STATE_BADGE_LABEL[a.state]}</StatusPill>
+                      ) : a.state === "cancelled" ? (
+                        <span className="text-[11.5px] font-medium text-faint">Cancelled</span>
+                      ) : (
+                        <span className="text-[11.5px] font-medium text-muted">{a.durationMin} min</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </>
@@ -284,15 +292,17 @@ export function CalendarBoard({
             {weekDays.map((d) => {
               const list = apptsByDay.get(d) ?? [];
               const isToday = d === today;
+              const inWindow = isWithinWindow(d, windowFrom, windowTo);
               return (
-                <div key={d} className="flex flex-col rounded-lg border border-line">
+                <div key={d} className={cn("flex flex-col rounded-lg border border-line", !inWindow && "opacity-50")}>
                   <button
                     type="button"
+                    disabled={!inWindow}
                     onClick={() => {
-                      setDay(d);
+                      goTo(d);
                       setView("day");
                     }}
-                    className="flex flex-col items-center border-b border-line py-2 transition-colors hover:bg-[#f7f9fc]"
+                    className="flex flex-col items-center border-b border-line py-2 transition-colors hover:bg-[#f7f9fc] disabled:cursor-not-allowed disabled:hover:bg-transparent"
                   >
                     <span className="text-[10px] font-medium uppercase tracking-wide text-faint">{dow(d)}</span>
                     <span className={cn("text-sm font-semibold tabular-nums", isToday ? "text-blue-royal" : "text-navy")}>
@@ -301,23 +311,28 @@ export function CalendarBoard({
                   </button>
                   <div className="flex flex-1 flex-col p-1.5">
                     {list.length === 0 ? (
-                      <span className="py-3 text-center text-[11px] text-faint">—</span>
+                      <span className="py-3 text-center text-[11px] text-faint">{inWindow ? "—" : "Not loaded"}</span>
                     ) : (
                       list.map((a) => (
                         <button
                           key={a.id}
                           type="button"
                           onClick={() => {
-                            setDay(d);
+                            goTo(d);
                             setView("day");
                           }}
                           className="rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-[#f7f9fc]"
                         >
                           <span className="flex items-center gap-1.5">
-                            <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full", STATE_DOT[a.state] ?? "bg-line-strong")} />
+                            <span
+                              aria-hidden
+                              title={stateLabel(a.state)}
+                              className={cn("h-[7px] w-[7px] shrink-0 rounded-full", stateDotClass(a.state))}
+                            />
                             <span className="text-[11px] font-medium tabular-nums text-navy">{hhmm(a.start)}</span>
                           </span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted">{a.patientName}</span>
+                          <span className="sr-only">{stateLabel(a.state)}</span>
                         </button>
                       ))
                     )}
@@ -365,7 +380,7 @@ function NavBtn({ children, onClick, ...rest }: React.ComponentProps<"button">) 
       type="button"
       onClick={onClick}
       {...rest}
-      className="pressable flex h-7 w-7 items-center justify-center rounded-lg border border-line-strong bg-card text-muted hover:bg-card-muted hover:text-navy"
+      className="pressable flex h-7 w-7 items-center justify-center rounded-lg border border-line-strong bg-card text-muted hover:bg-card-muted hover:text-navy disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-card disabled:hover:text-muted"
     >
       {children}
     </button>
