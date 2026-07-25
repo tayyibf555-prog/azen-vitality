@@ -14,11 +14,18 @@ import { isSystemEnabledForSend } from "@/lib/systems/repository";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// SLA failsafe. If the in-request intake contact did not fire (a send error, a
-// cold start, a crash mid-request), this sweep catches any lead still
-// uncontacted after the ~30s target and contacts it. contactLead is idempotent
-// enough for our purposes: it re-drafts and reuses the threaded conversation,
-// and only advances the stage to 'contacted' once a send succeeds.
+// SLA failsafe, and the ONLY send path for the public landing-page form. If the
+// in-request intake contact did not fire (a send error, a cold start, a crash
+// mid-request), this sweep catches any lead still uncontacted after the ~30s target
+// and contacts it. contactLead is idempotent enough for our purposes: it re-drafts
+// and reuses the threaded conversation, and only advances the stage to 'contacted'
+// once a send succeeds.
+//
+// /api/landing-lead deliberately records its lead and sends nothing, so that an
+// unauthenticated HTTP request can never itself cause an outbound message; its first
+// contact happens HERE instead, where the cron auth, the kill switch below and the
+// atomic claim all apply. Nothing extra is needed for that: such a lead is stage
+// 'new' with no first response, which is exactly what listUncontacted selects.
 
 const SLA_MS = 30_000;
 

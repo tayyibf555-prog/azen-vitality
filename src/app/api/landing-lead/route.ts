@@ -4,36 +4,41 @@ import { TREATMENTS } from "@/lib/treatments/catalog";
 import { getLivePageBySlug } from "@/lib/landing/repository";
 import { consumeBudget } from "@/lib/rate-budget";
 import { insertFunnelEvents, isValidSessionId } from "@/lib/funnel/events";
-import { contactLead } from "@/lib/speed-to-lead/contact";
 import {
   insertLead,
   findOpenLeadByAddress,
-  claimLeadForContact,
-  releaseLeadClaim,
+  findEarlierOpenLead,
+  setLeadStage,
   countRecentByContact,
 } from "@/lib/speed-to-lead/repository";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
-import { isSystemEnabledForSend } from "@/lib/systems/repository";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 
 export const dynamic = "force-dynamic";
 
 // PUBLIC lead-capture endpoint for the bespoke landing pages' embedded consultation
 // form (Invisalign, composite bonding, and any future bespoke page). A visitor's
-// enquiry POSTs JSON here; we record a Speed-to-lead lead (feeding the worklist),
-// emit the funnel `lead` event (feeding the A/B Leads column), then best-effort
-// first-contact the lead inside the request so they hear back quickly. The lead's
-// treatment interest + source are derived from the resolved LIVE page, never hardcoded.
+// enquiry POSTs JSON here; we record a Speed-to-lead lead (feeding the worklist) and
+// emit the funnel `lead` event (feeding the A/B Leads column). The lead's treatment
+// interest + source are derived from the resolved LIVE page, never hardcoded.
 //
 // ABUSE POSTURE (mirrors the smile-assessment + speed-to-lead intake routes): this
-// is unauthenticated and a lead can trigger a real first contact to a caller-
-// supplied number, so it validates hard, is bounded by the shared durable budget
-// guard AND a per-contact rate-limit, only ever records a lead for a LIVE landing
-// page, gates the outbound send behind the Speed-to-lead kill switch, and never
-// throws to the client. It exposes no keys.
+// is unauthenticated, so it validates hard, is bounded by the shared durable budget
+// guard PER IP and per landing slug AND by a per-contact rate-limit, only ever
+// records a lead for a LIVE landing page, and never throws to the client. It
+// exposes no keys.
+//
+// NO SEND IN THE REQUEST PATH. An inbound HTTP request must never itself be able to
+// cause a real outbound message: that is what turns an open form into a way to burn
+// the practice's Twilio and model spend. First contact is done by the Speed-to-lead
+// SLA sweep (/api/speed-to-lead/sweep), which sits behind cron auth, the owner kill
+// switch and the same atomic 'new' -> 'contacting' claim, so the patient is still
+// contacted exactly once.
 
 const BUDGET_LIMIT = 60; // requests per window, per landing slug
 const BUDGET_WINDOW_SECONDS = 60;
+const IP_BUDGET_LIMIT = 20; // enquiries per window, per caller IP
+const IP_BUDGET_WINDOW_SECONDS = 60 * 60;
 const CONTACT_RATE_LIMIT = 5; // max leads from one phone/email per hour
 const HOUR_MS = 60 * 60 * 1000;
 const VALID_CHANNELS: LeadChannel[] = ["sms", "email", "whatsapp"];
@@ -52,6 +57,13 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
 }
 
+/** The caller's IP as the edge reports it, or "unknown" when no header is present. */
+function clientIp(request: Request): string {
+  const fwd = request.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0]!.trim();
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
+}
+
 export async function POST(request: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
@@ -64,6 +76,16 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const clientSlug = str(body.clientSlug) ?? "";
     const landingSlug = str(body.landingSlug) ?? "";
+
+    // Durable, distributed ceiling PER CALLER first: the per-slug budget below bounds
+    // one page, this bounds one caller across every page, so a script cannot simply
+    // rotate slugs to keep spending. Same shared guard (api_budget) the smile-
+    // assessment submit route uses, so it holds across every serverless instance
+    // rather than per process, and cannot be reset by a cold start.
+    const ip = clientIp(request);
+    if (!(await consumeBudget(`landing-lead-ip:${ip}`, IP_BUDGET_LIMIT, IP_BUDGET_WINDOW_SECONDS))) {
+      return bad("Too many requests, please try again shortly.", 429);
+    }
 
     // Durable, distributed ceiling keyed per landing slug (bounds spam even for an
     // unknown slug). Fails OPEN on a DB blip so a transient outage degrades the cap
@@ -144,6 +166,11 @@ export async function POST(request: Request): Promise<Response> {
     // Built so only the chosen channel key is set (plus marketing): { [channel]: true }.
     const leadConsent: LeadConsent = { marketing: consent };
     leadConsent[channel] = true;
+    // WhatsApp reaches the same handset as SMS, and every other module records it
+    // that way (see the intake route's consent block). Without sms:true a WhatsApp
+    // lead gets its first message and then nothing: the nurture cadence requires
+    // consent.sms and would retire it un-nurtured on the very next sweep.
+    if (channel === "whatsapp") leadConsent.sms = true;
 
     // Derive the treatment interest + source from the resolved LIVE page rather than
     // hardcoding, so every landing page (bespoke or generic) records the right
@@ -165,6 +192,19 @@ export async function POST(request: Request): Promise<Response> {
       consent: leadConsent,
     });
 
+    // Double-submit race guard (the same post-insert re-check the intake route uses).
+    // There is no DB unique constraint on (site, contact), so two near-simultaneous
+    // submits can BOTH pass the pre-insert dedup above and create two leads, which
+    // the sweep would then first-contact separately: two texts to the same person.
+    // Re-check for a STRICTLY-earlier open lead; if one exists ours lost the race, so
+    // retire it and defer to the winner (which also keeps the A/B Leads count honest,
+    // exactly as the dedup branch above does).
+    const earlier = await findEarlierOpenLead(siteId, phone, email, sinceIso, lead.id, lead.createdAt);
+    if (earlier) {
+      await setLeadStage(lead.id, "lost");
+      return ok();
+    }
+
     // Emit the funnel `lead` event so the A/B Leads column reflects this conversion.
     // Best-effort: telemetry must never fail the enquiry (the lead is already saved).
     try {
@@ -175,28 +215,12 @@ export async function POST(request: Request): Promise<Response> {
       /* telemetry only */
     }
 
-    // Owner kill switch: only auto-contact when Speed-to-lead is ON. When off, the
-    // lead is still recorded (worklist + A/B) but no outbound send fires. Fail-closed
-    // once messaging is live. Mirrors the smile-assessment bridge's guard.
-    if (await isSystemEnabledForSend(client.id, "speed-to-lead")) {
-      // Claim the lead ('new' -> 'contacting') first, exactly as the SLA sweep does,
-      // so an in-flight sweep cannot first-contact the same brand-new lead twice.
-      if (await claimLeadForContact(lead.id)) {
-        try {
-          await contactLead(lead);
-        } catch {
-          // First contact will be retried by the SLA sweep; the lead is recorded.
-        } finally {
-          // Release a stranded claim ('contacting' -> 'new') so the sweep can retry.
-          try {
-            await releaseLeadClaim(lead.id);
-          } catch {
-            /* best effort */
-          }
-        }
-      }
-    }
-
+    // First contact is DELIBERATELY not fired here. The lead is left at stage 'new'
+    // with no first response, which is exactly what listUncontacted selects, so the
+    // Speed-to-lead SLA sweep picks it up on its next tick and contacts it there:
+    // behind cron auth, behind the owner kill switch (checked at the moment of the
+    // send, which is stricter than checking it here) and behind the same atomic
+    // 'new' -> 'contacting' claim, so there is still exactly one first contact.
     return ok();
   } catch {
     // Never throw to the client.

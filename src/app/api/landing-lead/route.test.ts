@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The public landing lead endpoint. A valid enquiry for a LIVE page must record a
 // Speed-to-lead lead AND emit the funnel `lead` event (with the right meta) that
-// feeds the A/B Leads column, then best-effort first-contact the lead. Invalid
-// enquiries and non-live / unknown pages must be rejected WITHOUT recording a lead.
+// feeds the A/B Leads column. It must NOT send anything in the request path: first
+// contact is the SLA sweep's job (see public-gates.test.ts). Invalid enquiries and
+// non-live / unknown pages must be rejected WITHOUT recording a lead.
 // getClient / phone normalisation are left real (pure); all I/O is mocked.
 
 vi.mock("server-only", () => ({}));
@@ -15,10 +16,14 @@ vi.mock("@/lib/funnel/events", () => ({
 }));
 vi.mock("@/lib/speed-to-lead/contact", () => ({ contactLead: vi.fn(async () => {}) }));
 vi.mock("@/lib/speed-to-lead/repository", () => ({
-  insertLead: vi.fn(async (input: Record<string, unknown>) => ({ id: "lead-1", ...input })),
+  insertLead: vi.fn(async (input: Record<string, unknown>) => ({
+    id: "lead-1",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...input,
+  })),
   findOpenLeadByAddress: vi.fn(async () => null),
-  claimLeadForContact: vi.fn(async () => true),
-  releaseLeadClaim: vi.fn(async () => {}),
+  findEarlierOpenLead: vi.fn(async () => null),
+  setLeadStage: vi.fn(async () => {}),
   countRecentByContact: vi.fn(async () => 0),
 }));
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabledForSend: vi.fn(async () => true) }));
@@ -135,11 +140,17 @@ describe("landing lead endpoint — happy path", () => {
       },
     ]);
 
-    // Best-effort first contact fired (system enabled).
-    expect(vi.mocked(contactLead)).toHaveBeenCalledTimes(1);
+    // UPDATED (public-endpoint abuse fix): this used to assert the route
+    // first-contacted the lead inside the request. That assertion encoded the defect:
+    // an unauthenticated HTTP request could itself cause a real outbound message, so
+    // anyone could burn Twilio and model spend at will. The send now belongs to the
+    // SLA sweep, so the request path must send nothing.
+    expect(vi.mocked(contactLead)).not.toHaveBeenCalled();
   });
 
-  it("records the lead + funnel event but does NOT contact when speed-to-lead is off", async () => {
+  it("records the lead + funnel event and never contacts in the request path", async () => {
+    // The kill switch no longer decides anything here (the sweep checks it at the
+    // moment of the send): ON or OFF, this route records and sends nothing.
     vi.mocked(isSystemEnabledForSend).mockResolvedValue(false);
 
     const res = await post(validBody());
