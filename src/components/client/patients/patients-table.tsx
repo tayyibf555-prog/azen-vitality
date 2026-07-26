@@ -15,7 +15,9 @@ import type { PatientAdminStatus } from "@/lib/patient-status/types";
 import type { NumberHealth } from "@/lib/messaging/number-health";
 import { PatientNotesPanel } from "./patient-notes-panel";
 import { PatientStatusManager } from "./patient-status-manager";
+import { PatientProfileEditor } from "./patient-profile-editor";
 import { PatientNumberHealth } from "./patient-number-health";
+import type { PatientProfile } from "@/lib/patient/profile";
 
 // The chip for a platform admin override (wins over Dentally's own active flag).
 const OVERRIDE_CHIP: Record<PatientAdminStatus, { tone: Tone; label: string }> = {
@@ -451,10 +453,14 @@ function PatientDrawer({
   // chip paints from initialHealth. null = the endpoint did not compute one (fall back).
   const [numberHealth, setNumberHealth] = useState<NumberHealth | null>(null);
   const [loading, setLoading] = useState(true);
+  // The record after a save in the editor below. The list row this drawer opened from is
+  // a snapshot, so once details have been edited we paint from the saved truth instead.
+  const [edited, setEdited] = useState<PatientProfile | null>(null);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setEdited(null);
     fetch(`/api/dentally/patients/${encodeURIComponent(patient.id)}?siteId=${encodeURIComponent(patient.siteId)}`, {
       cache: "no-store",
     })
@@ -481,7 +487,14 @@ function PatientDrawer({
   const nextAppt = [...appointments]
     .reverse()
     .find((a) => a.start > nowIso && (a.state === "booked" || a.state === "pending"));
-  const age = ageFrom(patient.dateOfBirth, now);
+
+  // Prefer the edited record over the list snapshot, so a saved change is visible at once
+  // rather than only after the page is reloaded.
+  const shownName = edited ? `${edited.first_name ?? ""} ${edited.last_name ?? ""}`.trim() || patient.name : patient.name;
+  const shownPhone = edited ? edited.mobile_phone : patient.phone;
+  const shownEmail = edited ? edited.email_address : patient.email;
+  const shownDob = edited ? edited.date_of_birth : patient.dateOfBirth;
+  const age = ageFrom(shownDob, now);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -489,7 +502,7 @@ function PatientDrawer({
       <div className="relative z-10 flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-2xl">
         <header className="flex items-start justify-between gap-4 border-b border-line bg-card px-6 py-5">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-semibold text-navy">{patient.name}</h2>
+            <h2 className="truncate text-lg font-semibold text-navy">{shownName}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill tone={headerChip.tone}>{headerChip.label}</StatusPill>
               <StatusPill tone="neutral">{getSite(patient.siteId)?.name ?? patient.siteId}</StatusPill>
@@ -515,6 +528,16 @@ function PatientDrawer({
             now={now}
           />
 
+          <PatientProfileEditor
+            // Remount on a different patient, so no half-edited form or stale snapshot
+            // can ever carry across from the record viewed before this one.
+            key={patient.id}
+            siteId={patient.siteId}
+            patientId={patient.id}
+            now={now}
+            onSaved={setEdited}
+          />
+
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat icon={Clock} label="Last seen" value={lastSeen ? relativeTime(lastSeen, now) : "No record"} />
             <Stat icon={CalendarPlus} label="Next appt" value={nextAppt ? hhmmDate(nextAppt.start) : "None booked"} />
@@ -537,14 +560,14 @@ function PatientDrawer({
                     <Field
                       icon={Phone}
                       label="Mobile"
-                      value={patient.phone ?? "Not on file"}
+                      value={shownPhone ?? "Not on file"}
                       trailing={<PatientNumberHealth health={numberHealth ?? initialHealth} />}
                     />
-                    <Field icon={Mail} label="Email" value={patient.email ?? "Not on file"} />
+                    <Field icon={Mail} label="Email" value={shownEmail ?? "Not on file"} />
                     <Field
                       icon={Cake}
                       label="Date of birth"
-                      value={patient.dateOfBirth ? `${fmtDob(patient.dateOfBirth)}${age != null ? ` · ${age} yrs` : ""}` : "Not on file"}
+                      value={shownDob ? `${fmtDob(shownDob)}${age != null ? ` · ${age} yrs` : ""}` : "Not on file"}
                     />
                     <Field icon={CalendarClock} label="Recall due" value={patient.recallDueAt ? relativeTime(patient.recallDueAt, now) : "Not set"} />
                     <Field
