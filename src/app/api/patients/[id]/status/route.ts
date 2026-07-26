@@ -24,6 +24,15 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   }
 
   const siteId = typeof body.siteId === "string" ? body.siteId : "";
+
+  // AUTHENTICATE BEFORE VALIDATING, matching the profile route. Validating first
+  // answered an unauthenticated caller with the list of accepted status values, which
+  // is a small thing to hand a stranger probing a clinical endpoint. No write was ever
+  // reachable without the guard, so this is tidying rather than a fix, but the two
+  // routes now behave identically and cannot drift.
+  const gate = await requirePatientAdmin(id, siteId);
+  if (gate instanceof Response) return gate;
+
   const status = body.status;
   if (!isPatientAdminStatus(status)) {
     return Response.json(
@@ -32,9 +41,6 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     );
   }
   const reason = typeof body.reason === "string" ? body.reason : null;
-
-  const gate = await requirePatientAdmin(id, siteId);
-  if (gate instanceof Response) return gate;
 
   try {
     const result = await applyStatusChange({
