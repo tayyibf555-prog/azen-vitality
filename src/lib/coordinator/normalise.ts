@@ -11,11 +11,19 @@ export interface PlanInput {
   id: string;
   name: string;
   plannedValue: number;
+  /**
+   * GBP still to be done on this plan. Live Dentally exposes no outstanding /
+   * balance field at all, so for a plan it reports as incomplete this is the whole
+   * private treatment value; a plan it reports as completed is 0. Where a source
+   * does carry an explicit outstanding figure (the local mock), that wins.
+   */
   amountOutstanding: number;
   acceptedAt: string;       // ISO
   // Optional lifecycle hint from Dentally. When present, a completed/declined
   // plan is not an opportunity. The mock signals completion via outstanding == 0.
   status?: string | null;
+  /** Live Dentally's own completion flag. A completed plan is never an opportunity. */
+  completed?: boolean;
   financePresented?: boolean;
 }
 
@@ -40,13 +48,14 @@ const TERMINAL_STATUSES = new Set(["completed", "complete", "declined", "rejecte
 
 /**
  * Map a single Dentally treatment plan + patient into a TreatmentOpportunity, or
- * null when the plan is not an opportunity: a terminal status (completed/declined)
- * or nothing left outstanding.
+ * null when the plan is not an opportunity: Dentally's own `completed` flag, a
+ * terminal status (completed/declined), or nothing left outstanding.
  */
 export function toTreatmentOpportunity(
   i: CoordinatorInput,
   now: Date,
 ): TreatmentOpportunity | null {
+  if (i.plan.completed === true) return null;
   const status = (i.plan.status ?? "").toLowerCase();
   if (TERMINAL_STATUSES.has(status)) return null;
   if (!(i.plan.amountOutstanding > 0)) return null;

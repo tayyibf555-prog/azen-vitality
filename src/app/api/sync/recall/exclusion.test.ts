@@ -1,8 +1,15 @@
-// Recall must NEVER classify an inactive or archived Dentally patient (deceased,
-// moved away, left the practice): a "your check-up is due" text to a deceased
-// patient's phone is the worst message this system could send. The sync also
-// settles any PREVIOUSLY-classified open recall rows for such a patient the
-// moment the flag lands, and spends no appointment reads on them.
+// Recall must NEVER classify an INACTIVE Dentally patient (deceased, moved away,
+// left the practice): a "your check-up is due" text to a deceased patient's phone
+// is the worst message this system could send. The sync also settles any
+// PREVIOUSLY-classified open recall rows for such a patient the moment the flag
+// lands, and spends no appointment reads on them.
+//
+// The sync used to test `active === false || archived === true`. Verified against
+// live Dentally on 2026-07-26: patient records carry NO `archived` field at all,
+// only `archived_reason`, so the second half of that test could never fire and was
+// dead code. It has been removed rather than repointed at `archived_reason`, which
+// would have WIDENED the excluded set. The set of excluded patients is unchanged:
+// `active === false` and nothing else. Both facts are pinned below.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -14,6 +21,8 @@ const store = vi.hoisted(() => ({
   statusSets: [] as Array<{ id: string; status: string }>,
   cadenceSets: [] as Array<{ id: string; status: string }>,
   apptCalls: [] as string[],
+  /** Force the site's run to blow up, to exercise the per-site failure contract. */
+  listTargetsThrows: false,
 }));
 
 const dent = vi.hoisted(() => ({
@@ -38,8 +47,9 @@ vi.mock("@/lib/dentally/client", () => ({
 vi.mock("@/lib/recall/repository", () => ({
   upsertTargets: vi.fn(async (ts: Array<{ id: string; status: string }>) => { store.upserted.push(...ts); }),
   listTargets: vi.fn(async (q: { statuses?: string[] }) => {
+    if (store.listTargetsThrows) throw new Error("supabase down");
     // First call collects open (due + in_cadence) rows for settlement; the later
-    // graduation reconcile asks for just "due" — return nothing there.
+    // graduation reconcile asks for just "due", so return nothing there.
     if (q.statuses?.includes("in_cadence")) return store.openTargets;
     return [];
   }),
@@ -78,7 +88,7 @@ async function run() {
   const res = await POST(
     new Request("http://localhost/api/sync/recall", { method: "POST", headers: { authorization: "Bearer rc-secret" } }),
   );
-  return (await res.json()) as { ok: boolean };
+  return (await res.json()) as { ok: boolean; failedSites: string[]; perSite: Array<{ error?: string }> };
 }
 
 beforeEach(() => {
@@ -88,23 +98,22 @@ beforeEach(() => {
   store.statusSets = [];
   store.cadenceSets = [];
   store.apptCalls = [];
+  store.listTargetsThrows = false;
   vi.clearAllMocks();
   vi.stubEnv("CRON_SECRET", "rc-secret");
 });
 afterEach(() => vi.unstubAllEnvs());
 
-describe("recall sync excludes inactive/archived patients", () => {
+describe("recall sync excludes inactive patients", () => {
   it("never classifies them, settles their open rows, and spends no appointment reads", async () => {
     store.patients = [
-      // Archived (e.g. deceased) with a recall due TODAY: would classify without the guard.
-      { id: "p-arch", first_name: "Ada", last_name: "Archived", archived: true, dentist_recall_date: TODAY, use_sms: true },
-      // Deactivated, mid-cadence from an earlier classification.
+      // Deactivated (e.g. deceased, left the practice), mid-cadence from an earlier
+      // classification. This is the flag that live Dentally actually sets.
       { id: "p-inact", first_name: "Ivy", last_name: "Inactive", active: false, dentist_recall_date: TODAY, use_sms: true },
       // Control: live patient, recall due today -> classified as usual.
       { id: "p-live", first_name: "Liam", last_name: "Live", active: true, dentist_recall_date: TODAY, use_sms: true },
     ];
     store.openTargets = [
-      { id: "site-1:p-arch:dentist", dentallyPatientId: "p-arch", status: "due", dueAt: TODAY },
       { id: "site-1:p-inact:dentist", dentallyPatientId: "p-inact", status: "in_cadence", dueAt: TODAY },
     ];
 
@@ -114,14 +123,53 @@ describe("recall sync excludes inactive/archived patients", () => {
     // Only the live patient is classified.
     expect(store.upserted.map((t) => t.id)).toEqual(["site-1:p-live:dentist"]);
 
-    // Both excluded patients' open rows are retired as 'exhausted' (not converted,
+    // The excluded patient's open row is retired as 'exhausted' (not converted,
     // not graduated - reactivation must not adopt them either).
-    expect(store.statusSets).toContainEqual({ id: "site-1:p-arch:dentist", status: "exhausted" });
     expect(store.statusSets).toContainEqual({ id: "site-1:p-inact:dentist", status: "exhausted" });
     // The running cadence is ended the same way.
     expect(store.cadenceSets).toContainEqual({ id: "cad-site-1:p-inact:dentist", status: "exhausted" });
 
-    // No Dentally appointment reads were spent on excluded patients.
+    // No Dentally appointment reads were spent on the excluded patient.
     expect(store.apptCalls).toEqual(["p-live"]);
+  });
+
+  it("does not exclude a patient who merely carries archived_reason", async () => {
+    // Live Dentally has no `archived` boolean; only `archived_reason` exists, and it
+    // is NOT an outreach exclusion. Pinning this stops a future reader "repairing"
+    // the removed test by pointing it at archived_reason, which would silently widen
+    // the excluded set and stop chasing patients who should be chased.
+    store.patients = [
+      { id: "p-reason", first_name: "Ada", last_name: "Reason", active: true, archived_reason: "lapsed", dentist_recall_date: TODAY, use_sms: true },
+    ];
+
+    await run();
+
+    expect(store.upserted.map((t) => t.id)).toEqual(["site-1:p-reason:dentist"]);
+    expect(store.statusSets).toEqual([]);
+    expect(store.apptCalls).toEqual(["p-reason"]);
+  });
+});
+
+describe("recall run reports a failed site", () => {
+  it("answers ok:false and names the site when one fails, instead of a green ok:true", async () => {
+    store.listTargetsThrows = true;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const out = await run();
+
+    // Still HTTP 200 (pg_cron's trigger_app_cron fires http_get and never sees the
+    // status), but unmistakably not ok: a site failing every tick used to leave the
+    // cron history looking perfectly green.
+    expect(out.ok).toBe(false);
+    expect(out.failedSites).toEqual(["site-1"]);
+    expect(out.perSite[0].error).toContain("supabase down");
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it("answers ok:true with an empty failedSites list on a clean run", async () => {
+    const out = await run();
+    expect(out.ok).toBe(true);
+    expect(out.failedSites).toEqual([]);
   });
 });

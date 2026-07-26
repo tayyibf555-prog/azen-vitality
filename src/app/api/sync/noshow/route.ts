@@ -37,10 +37,17 @@ const PER_PAGE = 100;
 // 300s function limit. Anything over the cap is reported as remaining and picked up
 // on the next cron tick (the appointment window is re-queried each run).
 const MAX_APPOINTMENTS_PER_RUN = 300;
-// Bound on the consent-map build (paged listPatients). Generous for a dental
-// practice's active list; a site larger than this leaves late-page patients out of
-// the map, and their appointments are safely skipped (never messaged) until covered.
-const MAX_PATIENT_PAGES = 200;
+// Bound on the consent-map build (paged listPatients). 800 pages = 80,000 patients,
+// comfortably clear of the practice's biggest site (N15, 27,565 real patients). The
+// previous 200-page bound was 20,000, so roughly 7,565 N15 patients fell off the end
+// of the map on EVERY run and their appointments were silently skipped. The bound now
+// exists only as a runaway guard: hitting it is LOUD (see consentTruncated), never
+// silent, because a truncated map reads as "covered everything" when it is not.
+const MAX_PATIENT_PAGES = 800;
+// Consent-map pages fetched concurrently. 276 sequential pages for N15 alone would
+// eat a third of the shared 300s budget and starve the last site; in batches the same
+// scan is seconds. Overshoot inside a batch just returns empty pages, which is cheap.
+const PATIENT_PAGE_BATCH = 8;
 // Concurrency for the per-patient risk-history fetches within a site. Bounded so a
 // site finishes fast — serial calls made the biggest site burn ~3 of the 5 function
 // minutes and starve the last site — without spiking concurrent Dentally load.
@@ -213,7 +220,23 @@ async function syncSite(
   client: DentallyClient,
   siteId: string,
   cfg: NoshowConfig,
-): Promise<{ siteId: string; pulled: number; upserted: number; enrolled: number; reanchored: number; reconciled: number; processed: number; remaining: number }> {
+): Promise<{
+  siteId: string;
+  pulled: number;
+  upserted: number;
+  enrolled: number;
+  reanchored: number;
+  reconciled: number;
+  processed: number;
+  remaining: number;
+  /** Patients in this site's consent map, and how many the site actually has. */
+  consentMapped: number;
+  consentExpected: number | null;
+  /** True when the map is known to be short (page bound hit, read error, or shortfall). */
+  consentIncomplete: boolean;
+  /** Appointments skipped this run because their patient was not in the map. */
+  consentMisses: number;
+}> {
   const now = new Date();
   const toDate = new Date(now.getTime() + cfg.leadDays * DAY);
   const dentallyId = dentallySiteId(siteId);
@@ -225,21 +248,78 @@ async function syncSite(
   // upsert — discarded the entire site's work. A patient ABSENT from this map is
   // treated exactly like the old failed-getPatient path: we skip their appointment
   // and never fabricate consent (never auto-enrol an unverified patient into SMS).
+  //
+  // Every way this map can come back INCOMPLETE is now counted and logged. A silent
+  // partial map is the worst failure mode this sync has: nothing errors, the run
+  // reports success, and a slice of the site's patients simply go undefended.
   const consentByPatient = new Map<string, ReturnType<typeof mapPatientConsent>>();
-  for (let pp = 1; pp <= MAX_PATIENT_PAGES; pp++) {
-    let rows: unknown[];
-    try {
-      const res = await client.listPatients({ siteId: dentallyId, page: pp, perPage: PER_PAGE });
-      rows = Array.isArray(res.patients) ? res.patients : [];
-    } catch {
-      break; // partial map: unknown patients are safely skipped; retried next run
+  let consentTruncated = false;   // hit the page bound without reaching a short page
+  let consentReadError = false;   // a page read failed part-way through
+  let consentPages = 0;
+  // The site's real patient count, straight from Dentally's index metadata (null on
+  // a source that exposes no total, e.g. the local mock). Purely for the coverage
+  // check below: it tells us whether the map we built actually covers the site.
+  let expectedPatients: number | null = null;
+  try {
+    expectedPatients = await client.countPatients(dentallyId);
+  } catch {
+    expectedPatients = null;
+  }
+
+  patient_pages: for (let pp = 1; pp <= MAX_PATIENT_PAGES; pp += PATIENT_PAGE_BATCH) {
+    const batch: number[] = [];
+    for (let k = 0; k < PATIENT_PAGE_BATCH && pp + k <= MAX_PATIENT_PAGES; k++) batch.push(pp + k);
+    const results = await Promise.all(
+      batch.map(async (page) => {
+        try {
+          const res = await client.listPatients({ siteId: dentallyId, page, perPage: PER_PAGE });
+          return Array.isArray(res.patients) ? res.patients : [];
+        } catch {
+          return null; // partial map: unknown patients are safely skipped; retried next run
+        }
+      }),
+    );
+    let done = false;
+    let failuresInBatch = 0;
+    for (const rows of results) {
+      if (rows === null) {
+        // A single failed page is a HOLE, not the end: those patients are skipped
+        // (and counted), but everyone on later pages is still worth mapping. Bailing
+        // out here is what used to cost the biggest site most of its book after one
+        // transient rate limit.
+        consentReadError = true;
+        failuresInBatch += 1;
+        continue;
+      }
+      consentPages += 1;
+      for (const raw of rows) {
+        const p = asRecord(raw);
+        const id = pickString(p, "id");
+        if (id) consentByPatient.set(id, mapPatientConsent(p));
+      }
+      if (rows.length < PER_PAGE) done = true;
     }
-    for (const raw of rows) {
-      const p = asRecord(raw);
-      const id = pickString(p, "id");
-      if (id) consentByPatient.set(id, mapPatientConsent(p));
-    }
-    if (rows.length < PER_PAGE) break;
+    // A whole batch failing means the source is down, not a transient hole: stop
+    // rather than hammer it for the remaining pages.
+    if (failuresInBatch === results.length) break patient_pages;
+    if (done) break patient_pages;
+    if (pp + PATIENT_PAGE_BATCH > MAX_PATIENT_PAGES) consentTruncated = true;
+  }
+
+  // Coverage check. `expectedPatients` counts the site's whole book (active and
+  // inactive); the map is built from the same unfiltered listing, so a shortfall is
+  // a genuine gap rather than a filter difference.
+  const consentShortfall =
+    expectedPatients !== null ? Math.max(0, expectedPatients - consentByPatient.size) : 0;
+  if (consentTruncated || consentReadError || consentShortfall > 0) {
+    console.error(
+      `[sync-noshow] site ${siteId}: consent map is INCOMPLETE — ${consentByPatient.size} patients mapped` +
+        (expectedPatients !== null ? ` of ${expectedPatients} at this site (${consentShortfall} missing)` : "") +
+        `, ${consentPages} pages read` +
+        (consentTruncated ? `, HIT the ${MAX_PATIENT_PAGES}-page bound` : "") +
+        (consentReadError ? ", a page read failed" : "") +
+        ". Appointments for unmapped patients are skipped and left undefended this run.",
+    );
   }
 
   // Load existing targets up front: needed for per-page status preservation (so an
@@ -260,6 +340,9 @@ async function syncSite(
   let processed = 0;
   let remaining = 0;
   let listingError = false;
+  // Appointments dropped because their patient was missing from the consent map.
+  // Surfaced per site so a partial map can never masquerade as full coverage.
+  let consentMisses = 0;
   // Reconciliation bookkeeping (findings #4/#5): every appointment id we actually
   // saw in the window this run, and the ones that came back in a TERMINAL state.
   // toNoshowTarget skips terminal appointments, so without tracking them here an
@@ -323,7 +406,10 @@ async function syncSite(
       // Consent from the site map. A MISS = we could not read this patient's consent,
       // so we skip (never fabricate), exactly as the old getPatient-failure path did.
       const consent = consentByPatient.get(appt.patientId);
-      if (!consent) continue;
+      if (!consent) {
+        consentMisses += 1;
+        continue;
+      }
 
       pageLive.push({ appt, consent });
       processed += 1;
@@ -484,7 +570,26 @@ async function syncSite(
   }
 
   await setSyncState(siteId, RESOURCE, now.toISOString());
-  return { siteId, pulled, upserted: allTargets.length, enrolled, reanchored, reconciled, processed, remaining };
+  if (consentMisses > 0) {
+    console.warn(
+      `[sync-noshow] site ${siteId}: ${consentMisses} appointment(s) skipped because the patient was not in the ` +
+        `consent map (${consentByPatient.size} patients mapped). Those appointments are UNDEFENDED this run.`,
+    );
+  }
+  return {
+    siteId,
+    pulled,
+    upserted: allTargets.length,
+    enrolled,
+    reanchored,
+    reconciled,
+    processed,
+    remaining,
+    consentMapped: consentByPatient.size,
+    consentExpected: expectedPatients,
+    consentIncomplete: consentTruncated || consentReadError || consentShortfall > 0,
+    consentMisses,
+  };
 }
 
 export async function POST(request: Request) {
@@ -517,14 +622,25 @@ export async function POST(request: Request) {
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
+    const failedSites: string[] = [];
     for (const siteId of ordered) {
       try {
         perSite.push(await syncSite(client, siteId, cfg));
       } catch (e) {
+        // A site that fails on every tick used to be invisible: the run still
+        // answered ok:true, so the cron history looked green for days. Name the
+        // failure in the body AND in the log.
+        console.error(`[sync-noshow] site ${siteId} failed`, e);
         perSite.push({ siteId, error: String(e) });
+        failedSites.push(siteId);
       }
     }
-    return Response.json({ ok: true, perSite });
+    // Deliberately still HTTP 200 with ok:false, not a 5xx: the caller is
+    // public.trigger_app_cron() from pg_cron, which fires the request from
+    // Postgres and records the SQL result (not the HTTP status) in
+    // cron.job_run_details, so a non-200 would be swallowed exactly where an
+    // operator looks. ok:false + failedSites is the signal that actually surfaces.
+    return Response.json({ ok: failedSites.length === 0, failedSites, perSite });
   } finally {
     await releaseCronLock("sync-noshow");
   }

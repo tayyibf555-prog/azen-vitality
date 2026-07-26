@@ -222,11 +222,17 @@ async function syncSite(
         remaining += 1;
         continue;
       }
-      // Inactive / archived in Dentally (deceased, moved away, left the practice):
-      // NEVER a recall candidate — a check-up reminder to a deceased patient's
-      // phone is the worst message this system could send. Kept in `pending` (not
-      // dropped) so any PREVIOUSLY-classified open rows for them are settled below.
-      const excluded = p.active === false || p.archived === true;
+      // Inactive in Dentally (deceased, moved away, left the practice): NEVER a
+      // recall candidate — a check-up reminder to a deceased patient's phone is the
+      // worst message this system could send. Kept in `pending` (not dropped) so any
+      // PREVIOUSLY-classified open rows for them are settled below.
+      //
+      // This used to also test `p.archived === true`. The live patient record has no
+      // `archived` field at all (only `archived_reason`), so that test could never
+      // fire against real Dentally: `active === false` is the one that does the work,
+      // and is the whole of the exclusion. Reading `archived_reason` instead would
+      // WIDEN the excluded set, so it is deliberately not done here.
+      const excluded = p.active === false;
       pending.push({ p, patient, page, excluded });
       processed += 1;
     }
@@ -295,7 +301,7 @@ async function syncSite(
       continue;
     }
 
-    // Inactive / archived: settle any open recall rows so an earlier classification
+    // Inactive: settle any open recall rows so an earlier classification
     // stops being chased the moment the flag lands in Dentally, and never classify.
     // 'exhausted' (not 'converted' — they did not book; not 'graduated' — they must
     // not be handed to reactivation, whose own filter also excludes them).
@@ -501,14 +507,31 @@ export async function POST(request: Request) {
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).
     const perSite: Array<Record<string, unknown>> = [];
+    const failedSites: string[] = [];
     for (const siteId of ordered) {
       try {
         perSite.push(await syncSite(client, siteId, cfg, allowance));
       } catch (e) {
+        // A site that fails on every tick used to be invisible: the run still
+        // answered ok:true, so the cron history looked green for days. Name the
+        // failure in the body AND in the log.
+        console.error(`[sync-recall] site ${siteId} failed`, e);
         perSite.push({ siteId, error: String(e) });
+        failedSites.push(siteId);
       }
     }
-    return Response.json({ ok: true, enrolBudget, enrolUnspent: allowance.remaining, perSite });
+    // Deliberately still HTTP 200 with ok:false, not a 5xx: the caller is
+    // public.trigger_app_cron() from pg_cron, which fires the request from
+    // Postgres and records the SQL result (not the HTTP status) in
+    // cron.job_run_details, so a non-200 would be swallowed exactly where an
+    // operator looks. ok:false + failedSites is the signal that actually surfaces.
+    return Response.json({
+      ok: failedSites.length === 0,
+      failedSites,
+      enrolBudget,
+      enrolUnspent: allowance.remaining,
+      perSite,
+    });
   } finally {
     await releaseCronLock("sync-recall");
   }
