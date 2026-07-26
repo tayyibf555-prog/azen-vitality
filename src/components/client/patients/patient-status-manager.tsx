@@ -5,11 +5,12 @@ import { StatusPill, type Tone } from "@/components/primitives";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn, relativeTime } from "@/lib/utils";
 import { Loader2, ShieldAlert, Check, X, History } from "lucide-react";
+import { isPatientAdminRole } from "@/lib/patient/roles";
 import type { DentallySyncResult, PatientAdminStatus } from "@/lib/patient-status/types";
 
-// Roles allowed to SEE and USE the control. This mirrors the server gate exactly; the
-// server (PATCH /api/patients/[id]/status) is the real enforcement, this only hides UI.
-const ALLOWED_ROLES = new Set(["client_owner", "client_coordinator", "agency_admin"]);
+// Roles allowed to SEE and USE the control come from lib/patient/roles, the same list the
+// server guard reads, so the two can never drift. The server (PATCH
+// /api/patients/[id]/status) is the real enforcement; this only hides UI.
 
 const STATUS_META: Record<PatientAdminStatus, { label: string; tone: Tone; blurb: string }> = {
   active: {
@@ -20,7 +21,11 @@ const STATUS_META: Record<PatientAdminStatus, { label: string; tone: Tone; blurb
   inactive: {
     label: "Inactive",
     tone: "neutral",
-    blurb: "Excluded from every campaign and recall. They can still book or text you, and you can still reply.",
+    // Names the three lifecycles that genuinely stop, because a manager marking someone
+    // inactive is quietly removing them from all the automated follow-up, and that
+    // consequence should be stated rather than discovered months later.
+    blurb:
+      "Takes them out of the automated follow-up: no recall reminders, no reactivation, and no treatment follow-ups from the coordinator. They can still book or text you, and you can still reply.",
   },
   do_not_contact: {
     label: "Do not contact",
@@ -82,7 +87,7 @@ export function PatientStatusManager({
   now: Date;
 }) {
   const { user } = useAuth();
-  const canManage = user ? ALLOWED_ROLES.has(user.role) : false;
+  const canManage = user ? isPatientAdminRole(user.role) : false;
 
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loaded, setLoaded] = useState(false);

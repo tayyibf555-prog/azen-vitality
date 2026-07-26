@@ -1,9 +1,12 @@
 // Guard chain + verbs for PATCH/GET /api/patients/[id]/status.
 //
 // Order enforced: requireUser -> role (owner/coordinator/agency only) -> client access
-// -> site access -> patient/site IDOR check. The role gate is the LOCAL function in the
-// route (not mocked), so it is exercised for real; the other guards are doubled.
+// -> site access -> patient/site IDOR check. The chain now lives in lib/patient/access
+// (shared with the profile-edit route) and is NOT mocked here, so the role gate and the
+// IDOR check are exercised for real; only the auth primitives underneath are doubled.
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("server-only", () => ({}));
 
 const h = vi.hoisted(() => ({
   requireUser: vi.fn(),
@@ -131,13 +134,35 @@ describe("site scope + IDOR", () => {
 describe("GET returns override + trail", () => {
   it("returns the current override and last audit entries", async () => {
     h.getOverride.mockResolvedValue({ status: "do_not_contact" });
-    h.listAudit.mockResolvedValue([{ id: "a1", toStatus: "do_not_contact" }]);
+    h.listAudit.mockResolvedValue([{ id: "a1", action: "set_status", toStatus: "do_not_contact" }]);
     const res = await get("p1", "site-cc");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.override.status).toBe("do_not_contact");
     expect(body.audit).toHaveLength(1);
-    expect(h.listAudit).toHaveBeenCalledWith("site-cc", "p1", 10);
+    // Reads a wider slice than it shows, because profile-edit rows share the table and
+    // are filtered out below; the caller still sees at most 10 status entries.
+    expect(h.listAudit).toHaveBeenCalledWith("site-cc", "p1", 50);
+  });
+
+  it("profile-edit rows never appear in the STATUS history", async () => {
+    // patient_admin_audit is shared with the profile editor. An 'edit:<field>' row
+    // carries a field VALUE in to_status, which the status reader coerces to 'active';
+    // showing it here would invent a status change that never happened.
+    h.listAudit.mockResolvedValue([
+      { id: "a1", action: "edit:mobile_phone", toStatus: "active" },
+      { id: "a2", action: "set_status", toStatus: "inactive" },
+    ]);
+    const body = await (await get("p1", "site-cc")).json();
+    expect(body.audit.map((a: { id: string }) => a.id)).toEqual(["a2"]);
+  });
+
+  it("shows at most 10 status entries even when many are read", async () => {
+    h.listAudit.mockResolvedValue(
+      Array.from({ length: 25 }, (_, i) => ({ id: `a${i}`, action: "set_status", toStatus: "active" })),
+    );
+    const body = await (await get("p1", "site-cc")).json();
+    expect(body.audit).toHaveLength(10);
   });
 
   it("GET is also role + site guarded (403 for a foreign site)", async () => {
