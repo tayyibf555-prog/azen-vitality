@@ -3,7 +3,7 @@
 // draft would freeze the cadence at the hasPending guard), without advancing the
 // cadence (so tomorrow continues where today stopped), and without touching the
 // human-approval path (high-value drafts send nothing by themselves).
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ReactivationTarget } from "@/lib/reactivation/types";
 
 vi.mock("@/lib/cron-lock", () => ({
@@ -154,10 +154,16 @@ describe("reactivation sweep daily contact limit", () => {
   });
 });
 
-describe("reactivation sweep 1-year lapse ceiling (send-time re-check)", () => {
-  it("exhausts a due cadence whose target aged past the window instead of messaging it", async () => {
+describe("reactivation sweep lapse ceiling (send-time re-check)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("exhausts a due cadence whose target aged past a CONFIGURED ceiling instead of messaging it", async () => {
+    // There is no upper bound on the lapse window by default any more (the practice
+    // asked for every lapsed patient to be reachable), so this pins the re-check
+    // against a ceiling that has actually been set.
+    vi.stubEnv("REACTIVATION_MAX_LAPSE_MONTHS", "12");
     arrange(2, 100, 25, 0);
-    // Age the FIRST target past the 1-year ceiling; the second stays in-window.
+    // Age the FIRST target past that ceiling; the second stays in-window.
     const overWindow = {
       ...target(1, 100),
       lastVisitAt: new Date(Date.now() - 400 * 86_400_000).toISOString(),

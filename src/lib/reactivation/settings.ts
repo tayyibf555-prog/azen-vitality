@@ -1,4 +1,5 @@
 import { serviceClient } from "@/lib/supabase/server";
+import { effectiveMaxLapseMonths } from "./normalise";
 
 // The owner-set daily contact limit for reactivation (table reactivation_settings,
 // migration 0038). Caps how many automated reactivation messages are queued per
@@ -60,6 +61,39 @@ export async function getDailyContactLimit(clientId: string): Promise<number> {
     console.error(`[reactivation] getDailyContactLimit(${clientId}) failed; using default ${DEFAULT_DAILY_CONTACT_LIMIT}`, err);
     return DEFAULT_DAILY_CONTACT_LIMIT;
   }
+}
+
+/**
+ * The practice's maximum lapse, in months, above which a patient is too cold to
+ * contact. UNLIMITED unless somebody sets one: the client asked for every lapsed
+ * patient to be reachable, and the outer edge is a business call they can make
+ * later without a code change.
+ *
+ * Precedence: the client's own reactivation_settings.max_lapse_months, else the
+ * deployment-wide REACTIVATION_MAX_LAPSE_MONTHS, else unlimited.
+ *
+ * Reads the whole row rather than the single column so this keeps working before
+ * the column exists, and degrades to the default on any read failure. That is NOT
+ * a hole in the safety story: how many patients are actually messaged is bounded by
+ * the daily contact limit, the per-run enrolment ceiling and the kill switch, none
+ * of which this touches.
+ */
+export async function getMaxLapseMonths(clientId: string): Promise<number> {
+  try {
+    const { data } = await serviceClient()
+      .from("reactivation_settings")
+      .select("*")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    const raw = (data as { max_lapse_months?: unknown } | null)?.max_lapse_months;
+    if (typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "")) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch (err) {
+    console.error(`[reactivation] getMaxLapseMonths(${clientId}) failed; using the deployment default`, err);
+  }
+  return effectiveMaxLapseMonths();
 }
 
 export async function setDailyContactLimit(clientId: string, limit: number): Promise<void> {

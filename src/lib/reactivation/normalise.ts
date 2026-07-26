@@ -1,10 +1,16 @@
 import type { ReactivationReason, ReactivationTarget } from "./types";
 
+/** "No outer edge on the lapse window." The practice asked for EVERY lapsed patient
+ *  to be reachable, not only those lapsed under a year, so this is the default. It is
+ *  a real number so the same `days <= max * 30` arithmetic works untouched. */
+export const UNLIMITED_MAX_LAPSE_MONTHS = Number.POSITIVE_INFINITY;
+
 export interface ReactivationConfig {
   lapseMonths: number;
-  /** Upper bound on the lapse window: a patient last seen longer ago than this is too
-   *  cold to be worth reactivating and is excluded (default 12 months = 1 year, the
-   *  practice's hard maximum — nobody lapsed longer than a year is auto-contacted). */
+  /** Upper bound on the lapse window: a patient last seen longer ago than this is
+   *  excluded. UNLIMITED by default. The practice can set an outer edge later,
+   *  per-client via reactivation_settings.max_lapse_months (see settings.ts) or
+   *  deployment-wide via REACTIVATION_MAX_LAPSE_MONTHS, without a code change. */
   maxLapseMonths: number;
   recallGraceDays: number;
   staleDays: number;
@@ -12,10 +18,12 @@ export interface ReactivationConfig {
 }
 
 export const DEFAULT_CONFIG: ReactivationConfig = {
-  // Lapsed-detection threshold. Must sit BELOW maxLapseMonths or the lapsed window
-  // is empty (9..12 months: recall's 60-day seam hands over well before 9 months).
+  // Lapsed-detection threshold, UNCHANGED: recall's 60-day seam hands over well
+  // before 9 months, so the two modules never chase the same patient at once. Must
+  // sit BELOW maxLapseMonths (trivially true while that is unlimited) or the lapsed
+  // window is empty.
   lapseMonths: 9,
-  maxLapseMonths: 12,
+  maxLapseMonths: UNLIMITED_MAX_LAPSE_MONTHS,
   recallGraceDays: 60,
   staleDays: 120,
   baselineValue: 80,
@@ -56,10 +64,11 @@ function daysBetween(fromIso: string, now: Date): number {
   return (now.getTime() - t) / DAY;
 }
 
-/** The effective hard lapse ceiling in months: the env override when it is a valid
- *  positive number, else the code default. A malformed override must degrade to the
- *  default, never to NaN — `x > NaN * 30` is always false, which would silently
- *  DELETE the ceiling and let years-lapsed patients be texted. */
+/** The deployment-wide lapse ceiling in months: the env override when it is a valid
+ *  positive number, else unlimited. A malformed override must degrade to the default,
+ *  never to NaN, since `x > NaN * 30` is always false, which reads as "no ceiling" whether
+ *  or not that is what the operator asked for. This is the value every choke point
+ *  uses when it is not handed a per-client one (see settings.getMaxLapseMonths). */
 export function effectiveMaxLapseMonths(): number {
   const raw = process.env.REACTIVATION_MAX_LAPSE_MONTHS;
   if (raw === undefined) return DEFAULT_CONFIG.maxLapseMonths;
@@ -73,7 +82,9 @@ export function effectiveMaxLapseMonths(): number {
   return n;
 }
 
-/** True when a stored last visit PROVABLY sits inside the hard lapse ceiling.
+/** True when a stored last visit PROVABLY sits inside the lapse window. With no
+ *  configured maximum that means "we can prove they attended at all"; with one it
+ *  means "and inside it".
  *  Fail closed: no visit, an unparseable date, and over-window all return false.
  *  Shared by every choke point that can start or continue contact for an EXISTING
  *  target row (manual enrol, manual draft, the sweep) — stored rows age while the
@@ -138,12 +149,12 @@ export function toReactivationTarget(
   // Skip regardless of reason. (undefined active => flag absent => treated as active.)
   if (i.patient.active === false) return null;
 
-  // Hard lapse ceiling (default 1 year): a patient we cannot PROVE was seen inside
-  // the window is excluded — that covers a last visit older than maxLapseMonths, NO
-  // recorded visit at all, and an unparseable date. Fail closed: "we miss you" must
-  // never go to someone whose relationship with the practice can't be verified as
-  // recent. (Stalled treatment plans for such patients still surface in the
-  // Treatment Coordinator worklist; they just don't get reactivation texts.)
+  // Lapse ceiling, UNLIMITED unless the practice configures one. What survives with
+  // no ceiling is the proof requirement: NO recorded visit at all, or an unparseable
+  // date, is still excluded. Fail closed: "we miss you" must never go to someone we
+  // cannot show ever attended, however far the outer edge is pushed out. (Stalled
+  // treatment plans for such patients still surface in the Treatment Coordinator
+  // worklist; they just don't get reactivation texts.)
   const sinceVisit = i.lastVisitAt ? daysBetween(i.lastVisitAt, now) : Number.POSITIVE_INFINITY;
   if (!Number.isFinite(sinceVisit) || sinceVisit > cfg.maxLapseMonths * 30) return null;
 

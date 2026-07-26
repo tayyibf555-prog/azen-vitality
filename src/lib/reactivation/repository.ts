@@ -228,12 +228,27 @@ export async function listTargets(args: {
   siteIds: string[];
   reasons?: ReactivationReason[];
   statuses?: ReactivationStatus[];
+  /** Optional row window. Left off, the caller gets everything the platform will
+   *  return; the enrolment pass sets one because the pool is now the whole lapsed
+   *  book rather than a 9 to 12 month band. */
+  limit?: number;
 }): Promise<ReactivationTarget[]> {
   const db = serviceClient();
-  let q = db.from("reactivation_target").select("*").in("site_id", args.siteIds);
-  if (args.reasons && args.reasons.length > 0) q = q.in("reason", args.reasons);
-  if (args.statuses && args.statuses.length > 0) q = q.in("status", args.statuses);
-  const { data, error } = await q.order("reactivation_score", { ascending: false });
+  let filter = db.from("reactivation_target").select("*").in("site_id", args.siteIds);
+  if (args.reasons && args.reasons.length > 0) filter = filter.in("reason", args.reasons);
+  if (args.statuses && args.statuses.length > 0) filter = filter.in("status", args.statuses);
+  // Most recently lapsed FIRST. With no upper bound on the lapse window the pool is
+  // roughly seven times larger, and ranking it by recoverable value alone buried a
+  // patient lapsed thirteen months behind one lapsed eight years, and the warmer, far
+  // more winnable patient must be worked first. Value still breaks ties. Rows with
+  // no last visit sort last (they are never contactable anyway; see normalise).
+  let query = filter
+    .order("last_visit_at", { ascending: false, nullsFirst: false })
+    .order("reactivation_score", { ascending: false });
+  if (typeof args.limit === "number" && Number.isFinite(args.limit) && args.limit > 0) {
+    query = query.limit(Math.floor(args.limit));
+  }
+  const { data, error } = await query;
   if (error) throw error;
   return (data as TargetRow[]).map(rowToTarget);
 }

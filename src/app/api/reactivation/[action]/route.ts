@@ -18,6 +18,7 @@ import {
 } from "@/lib/reactivation/repository";
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
 import { withinLapseWindow } from "@/lib/reactivation/normalise";
+import { getMaxLapseMonths } from "@/lib/reactivation/settings";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -45,6 +46,21 @@ function badRequest(message: string): Response {
   return Response.json({ error: message }, { status: 400 });
 }
 
+/** The lapse ceiling that applies to this target's practice. Unlimited unless the
+ *  practice has set an outer edge, so by default the only patients this refuses are
+ *  the ones with no provable visit at all. */
+async function maxLapseFor(target: ReactivationTarget): Promise<number> {
+  return getMaxLapseMonths(getSite(target.siteId)?.clientId ?? "vitality");
+}
+
+/** Refusal shown to a coordinator when a stored row sits outside the window. */
+function outsideWindow(what: string): Response {
+  return Response.json(
+    { error: `This patient's last visit is outside the reactivation window your practice has set, so ${what}.` },
+    { status: 409 },
+  );
+}
+
 /** YYYY-MM-DD shifted by whole days (UTC-safe). */
 function shiftYmd(ymd: string, days: number): string {
   return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
@@ -56,14 +72,12 @@ async function handleEnrol(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
-  // Hard lapse ceiling (1 year): stored rows age while the sync only re-pulls
-  // patients Dentally marks updated, so a stale worklist row can sit past the
-  // window. Manual enrolment must not start a cadence for such a patient.
-  if (!withinLapseWindow(target.lastVisitAt, new Date())) {
-    return Response.json(
-      { error: "This patient's last visit is outside the reactivation window (1 year maximum), so they can't be enrolled." },
-      { status: 409 },
-    );
+  // The practice's lapse ceiling: stored rows age while the sync only re-pulls
+  // patients Dentally marks updated, so a stale worklist row can sit past a window
+  // the practice has since narrowed. Manual enrolment must not start a cadence for
+  // such a patient, nor for one with no provable visit at all.
+  if (!withinLapseWindow(target.lastVisitAt, new Date(), await maxLapseFor(target))) {
+    return outsideWindow("they can't be enrolled");
   }
 
   let cadence = await getCadenceByTarget(targetId);
@@ -87,13 +101,10 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
-  // Same hard ceiling as enrolment: this path can auto-queue a real message for a
+  // Same ceiling as enrolment: this path can auto-queue a real message for a
   // dormant target without ever enrolling it, so it must re-check the window too.
-  if (!withinLapseWindow(target.lastVisitAt, new Date())) {
-    return Response.json(
-      { error: "This patient's last visit is outside the reactivation window (1 year maximum), so a message can't be drafted." },
-      { status: 409 },
-    );
+  if (!withinLapseWindow(target.lastVisitAt, new Date(), await maxLapseFor(target))) {
+    return outsideWindow("a message can't be drafted");
   }
 
   let cadence = await getCadenceByTarget(targetId);
@@ -188,15 +199,12 @@ async function handleApprove(body: Record<string, unknown>): Promise<Response> {
   const target = await getTarget(targetId);
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
-  // Hard lapse ceiling at APPROVE time too: a high-value draft is created while the
-  // patient is in-window but can sit awaiting approval; if they cross the 1-year
-  // boundary in the meantime, approving it must not text them. This was the one
-  // path that could still enqueue for an over-window patient.
-  if (!withinLapseWindow(target.lastVisitAt, new Date())) {
-    return Response.json(
-      { error: "This patient's last visit is now outside the reactivation window (1 year maximum), so this draft can't be sent." },
-      { status: 409 },
-    );
+  // The ceiling at APPROVE time too: a high-value draft is created while the patient
+  // is in-window but can sit awaiting approval; if the window moves under them in the
+  // meantime, approving it must not text them. This was the one path that could still
+  // enqueue for an out-of-window patient.
+  if (!withinLapseWindow(target.lastVisitAt, new Date(), await maxLapseFor(target))) {
+    return outsideWindow("this draft can't be sent");
   }
 
   // Verify the touch belongs to THIS target before approving, so a stray/foreign

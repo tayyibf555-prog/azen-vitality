@@ -20,7 +20,7 @@ import {
   listDueCadences,
   setTargetStatus,
 } from "@/lib/reactivation/repository";
-import { getDailyContactLimit, countContactedToday } from "@/lib/reactivation/settings";
+import { getDailyContactLimit, countContactedToday, getMaxLapseMonths } from "@/lib/reactivation/settings";
 import { withinLapseWindow } from "@/lib/reactivation/normalise";
 import { listOpenRecallPatientKeys } from "@/lib/recall/repository";
 import { SITES, dentallySiteId } from "@/lib/mock/clients";
@@ -54,6 +54,11 @@ const PATIENT_CONCURRENCY = 8;
 // thousands of targets; this is the ceiling on how many cadences one run may
 // start, on top of the daily-cap arithmetic in enrolmentBudget.
 const MAX_ENROLMENTS_PER_RUN = 25;
+// How many dormant rows one site's enrol pass reads. Removing the one year lapse cap
+// takes the addressable pool from ~4k to ~30k rows, so the pass reads a WINDOW of the
+// worklist (newest lapse first) rather than the whole book. Comfortably larger than
+// MAX_ENROLMENTS_PER_RUN so consent and exclusion skips inside it are absorbed.
+const ENROL_WINDOW = 1000;
 // One-time historical backfill uses a page-NUMBER cursor. Dentally's /v1/patients has
 // NO sort control (only updated_after/created_after/site_id filters), so the
 // updated_after high-water-mark + per-run cap strands older-updated patients on a
@@ -207,21 +212,24 @@ function envNum(name: string, fallback: number): number {
   return n;
 }
 
-function config(): ReactivationConfig {
+async function config(clientId: string): Promise<ReactivationConfig> {
   const cfg: ReactivationConfig = {
     lapseMonths: envNum("REACTIVATION_LAPSE_MONTHS", DEFAULT_CONFIG.lapseMonths),
-    maxLapseMonths: envNum("REACTIVATION_MAX_LAPSE_MONTHS", DEFAULT_CONFIG.maxLapseMonths),
+    // Unlimited unless the practice has set an outer edge (reactivation_settings)
+    // or the deployment has (REACTIVATION_MAX_LAPSE_MONTHS). Every lapsed patient
+    // is addressable by default, which is what the practice asked for.
+    maxLapseMonths: await getMaxLapseMonths(clientId),
     recallGraceDays: envNum("REACTIVATION_RECALL_GRACE_DAYS", DEFAULT_CONFIG.recallGraceDays),
     staleDays: envNum("REACTIVATION_STALE_DAYS", DEFAULT_CONFIG.staleDays),
     baselineValue: envNum("REACTIVATION_BASELINE_VALUE", DEFAULT_CONFIG.baselineValue),
   };
   // The lapsed window is lapseMonths..maxLapseMonths; lapse >= max empties it
   // silently (the ceiling excludes everyone before the lapse test runs). A
-  // misordered override reverts BOTH to the code defaults so the module keeps
-  // its intended behaviour, loudly.
+  // misordered setting reverts BOTH to the code defaults so the module keeps
+  // its intended behaviour, loudly. (Never trips while max is unlimited.)
   if (cfg.lapseMonths >= cfg.maxLapseMonths) {
     console.error(
-      `[reactivation] REACTIVATION_LAPSE_MONTHS (${cfg.lapseMonths}) >= max (${cfg.maxLapseMonths}); reverting both to defaults ${DEFAULT_CONFIG.lapseMonths}/${DEFAULT_CONFIG.maxLapseMonths}`,
+      `[reactivation] lapse months (${cfg.lapseMonths}) >= max lapse (${cfg.maxLapseMonths}); reverting both to defaults ${DEFAULT_CONFIG.lapseMonths}/${DEFAULT_CONFIG.maxLapseMonths}`,
     );
     cfg.lapseMonths = DEFAULT_CONFIG.lapseMonths;
     cfg.maxLapseMonths = DEFAULT_CONFIG.maxLapseMonths;
@@ -477,19 +485,25 @@ async function syncSite(
   // -------------------------------------------------------------------------
   let enrolled = 0;
   if (allowance.remaining > 0) {
-    const dormant = await listTargets({ siteIds: [siteId], statuses: ["dormant"] });
+    // A bounded window of the worklist, not the whole lapsed book: with no upper
+    // bound on the lapse window a site can hold tens of thousands of dormant rows,
+    // and pulling them all into a 300s function to pick at most 25 is waste. The
+    // window is ordered most-recently-lapsed first (see listTargets), which is
+    // exactly the order we want to spend a squeezed budget in.
+    const dormant = await listTargets({ siteIds: [siteId], statuses: ["dormant"], limit: ENROL_WINDOW });
     // One query for the site's cadences rather than a read per target: a target
     // that has ever been enrolled is never enrolled a second time.
     const alreadyEnrolled = new Set((await listCadences([siteId])).map((c) => c.targetId));
-    // listTargets orders by score, so a squeezed budget goes to the most
-    // recoverable patients first.
+    let considered = 0;
     for (const t of dormant) {
       if (allowance.remaining <= 0) break;
+      considered += 1;
       if (alreadyEnrolled.has(t.id)) continue;
-      // Hard lapse ceiling (1 year), the same gate the enrol action applies: a
-      // stored row ages while the sync only re-pulls patients Dentally marks
-      // updated, so a stale target can sit past the window.
-      if (!withinLapseWindow(t.lastVisitAt, now)) continue;
+      // The configured lapse ceiling (unlimited by default), the same gate the enrol
+      // action applies: a stored row ages while the sync only re-pulls patients
+      // Dentally marks updated, so a stale target can sit past a ceiling the practice
+      // has since set. Still refuses a target with no provable visit at all.
+      if (!withinLapseWindow(t.lastVisitAt, now, cfg.maxLapseMonths)) continue;
       // Step 1 is an SMS: no consent means a manual call, never a message.
       if (!t.consent.sms) continue;
       // Platform admin status (inactive / do not contact) excludes this patient.
@@ -503,6 +517,15 @@ async function syncSite(
       await setTargetStatus(t.id, "in_cadence");
       allowance.remaining -= 1;
       enrolled += 1;
+    }
+    // Observability for the one way the bounded window can misbehave: rows that can
+    // never be enrolled (no SMS consent, admin-excluded) stay dormant and sit at the
+    // top of a recency-ordered window for ever. If a FULL window yielded nobody, the
+    // window has silted up and needs widening, so say so rather than looking idle.
+    if (enrolled === 0 && considered >= ENROL_WINDOW) {
+      console.warn(
+        `[reactivation] site ${siteId}: no enrollable target in the newest ${ENROL_WINDOW} dormant rows; widen ENROL_WINDOW`,
+      );
     }
   }
 
@@ -540,7 +563,7 @@ export async function POST(request: Request) {
       apiKey,
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
     });
-    const cfg = config();
+    const cfg = await config("vitality");
     const sites = vitalitySiteIds();
     // TEMPORARY N15-first acceleration for the client handoff: while N15's one-time
     // historical backfill is unfinished, devote the whole run to N15 with a larger

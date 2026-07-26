@@ -82,6 +82,7 @@ vi.mock("@/lib/reactivation/repository", () => ({
 vi.mock("@/lib/reactivation/settings", () => ({
   getDailyContactLimit: async () => 25,
   countContactedToday: async () => 0,
+  getMaxLapseMonths: async () => Number.POSITIVE_INFINITY,
 }));
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => true }));
 vi.mock("@/lib/patient-status/repository", () => ({

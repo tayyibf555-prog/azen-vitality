@@ -15,6 +15,7 @@ const store = vi.hoisted(() => ({
   dueCadences: [] as unknown[],
   dailyLimit: 25,
   usedToday: 0,
+  maxLapseMonths: Number.POSITIVE_INFINITY,
   systemEnabled: true,
   excluded: new Set<string>(),
   openRecall: new Set<string>(),
@@ -57,6 +58,7 @@ vi.mock("@/lib/reactivation/repository", () => ({
 vi.mock("@/lib/reactivation/settings", () => ({
   getDailyContactLimit: async () => store.dailyLimit,
   countContactedToday: async () => store.usedToday,
+  getMaxLapseMonths: async () => store.maxLapseMonths,
 }));
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => store.systemEnabled }));
 vi.mock("@/lib/patient-status/repository", () => ({
@@ -105,6 +107,7 @@ beforeEach(() => {
   store.dueCadences = [];
   store.dailyLimit = 25;
   store.usedToday = 0;
+  store.maxLapseMonths = Number.POSITIVE_INFINITY;
   store.systemEnabled = true;
   store.excluded = new Set();
   store.openRecall = new Set();
@@ -156,9 +159,8 @@ describe("reactivation sync auto-enrolment", () => {
   it("never enrols a patient the sweep would refuse to message", async () => {
     store.dormant = [
       target("p-nosms", { consent: { sms: false, email: true, marketing: false } }),
-      // Last visit beyond the one year ceiling: the enrol action refuses these, so
-      // the sync must too, or the module would text patients it has disowned.
-      target("p-ancient", { lastVisitAt: new Date(Date.now() - 400 * DAY).toISOString() }),
+      // No visit on record: still refused. Removing the one year cap opened the
+      // window, it did not remove the requirement to prove the patient attended.
       target("p-novisit", { lastVisitAt: null }),
       target("p-excluded"),
       target("p-recall"),
@@ -173,5 +175,42 @@ describe("reactivation sync auto-enrolment", () => {
 
     expect(out.perSite[0].enrolled).toBe(1);
     expect(store.created.map((c) => c.targetId)).toEqual(["site-1:p-ok"]);
+  });
+
+  // The old assertion here was that a target lapsed 400 days was refused. That was
+  // the one year cap the practice has now asked us to drop: every lapsed patient is
+  // reachable, so a five year lapse enrols like any other.
+  it("enrols a patient lapsed five years, with no upper bound configured", async () => {
+    store.dormant = [target("p-5yr", { lastVisitAt: new Date(Date.now() - 1825 * DAY).toISOString() })];
+    const out = await run();
+
+    expect(out.perSite[0].enrolled).toBe(1);
+    expect(store.created.map((c) => c.targetId)).toEqual(["site-1:p-5yr"]);
+  });
+
+  it("refuses beyond the maximum lapse once the practice sets one", async () => {
+    store.maxLapseMonths = 24;
+    store.dormant = [
+      target("p-5yr", { lastVisitAt: new Date(Date.now() - 1825 * DAY).toISOString() }),
+      target("p-13mo", { lastVisitAt: new Date(Date.now() - 400 * DAY).toISOString() }),
+    ];
+    const out = await run();
+
+    expect(out.perSite[0].enrolled).toBe(1);
+    expect(store.created.map((c) => c.targetId)).toEqual(["site-1:p-13mo"]);
+  });
+
+  it("holds every bound with a pool the size of the whole lapsed book", async () => {
+    // ~30k active patients have no appointment in the last 12 months. One sweep must
+    // still start at most the per-run ceiling of cadences, and no more than what is
+    // left of the day's contact budget.
+    store.dormant = Array.from({ length: 30_000 }, (_, i) => target(`p-${i}`));
+    store.dailyLimit = 500;
+    expect((await run()).perSite[0].enrolled).toBe(MAX_ENROLMENTS_PER_RUN);
+
+    store.created = [];
+    store.dailyLimit = 12;
+    store.usedToday = 9;
+    expect((await run()).perSite[0].enrolled).toBe(3);
   });
 });

@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { toReactivationTarget, type ReactivationInput } from "./normalise";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import {
+  toReactivationTarget,
+  withinLapseWindow,
+  effectiveMaxLapseMonths,
+  DEFAULT_CONFIG,
+  UNLIMITED_MAX_LAPSE_MONTHS,
+  type ReactivationInput,
+} from "./normalise";
 
 const NOW = new Date("2026-06-18T09:00:00Z");
 
@@ -12,7 +19,7 @@ function base(p: Partial<ReactivationInput> = {}): ReactivationInput {
       archived: false, archived_reason: null,
       dentist_recall_date: null, hygienist_recall_date: null,
     },
-    // ~10 months before NOW: inside the lapsed window (lapseMonths=9 .. maxLapseMonths=12).
+    // ~10 months before NOW: past the lapsed threshold (lapseMonths = 9).
     lastVisitAt: "2025-08-15T00:00:00Z",
     futureBookingExists: false,
     plan: null,
@@ -60,18 +67,52 @@ describe("toReactivationTarget", () => {
     expect(toReactivationTarget(base(), NOW)).not.toBeNull();
   });
 
-  it("skips a patient last seen beyond the 1-year cap (too cold to reactivate)", () => {
-    // Long-gone rows: excluded despite otherwise classifying as 'lapsed'.
-    expect(toReactivationTarget(base({ lastVisitAt: "2017-06-15T00:00:00Z" }), NOW)).toBeNull();
-    // Just over a year (~13.5 months) is over the hard maximum too.
-    expect(toReactivationTarget(base({ lastVisitAt: "2025-05-01T00:00:00Z" }), NOW)).toBeNull();
-    // Inside the window (~10 months) still qualifies.
+  it("targets a patient lapsed years ago: there is NO upper bound by default", () => {
+    // The practice asked for every lapsed patient to be reachable, not only those
+    // lapsed under a year. Nine years gone still classifies as 'lapsed'.
+    const ancient = toReactivationTarget(base({ lastVisitAt: "2017-06-15T00:00:00Z" }), NOW);
+    expect(ancient).not.toBeNull();
+    expect(ancient!.reason).toBe("lapsed");
+    // Five years, and just over a year, likewise.
+    expect(toReactivationTarget(base({ lastVisitAt: "2021-06-15T00:00:00Z" }), NOW)).not.toBeNull();
+    expect(toReactivationTarget(base({ lastVisitAt: "2025-05-01T00:00:00Z" }), NOW)).not.toBeNull();
+  });
+
+  it("still excludes beyond a maximum lapse WHEN the practice configures one", () => {
+    const capped = { ...DEFAULT_CONFIG, maxLapseMonths: 24 };
+    // Five years gone is outside a 24-month ceiling.
+    expect(toReactivationTarget(base({ lastVisitAt: "2021-06-15T00:00:00Z" }), NOW, capped)).toBeNull();
+    // ~13.5 months is inside it.
+    expect(toReactivationTarget(base({ lastVisitAt: "2025-05-01T00:00:00Z" }), NOW, capped)).not.toBeNull();
+  });
+
+  it("keeps the LOWER bound: a patient seen inside the lapse threshold is not a target", () => {
+    // ~8 months (lapseMonths = 9), no recall date, no plan, no future booking.
+    expect(toReactivationTarget(base({ lastVisitAt: "2025-10-20T00:00:00Z" }), NOW)).toBeNull();
+    // ~10 months crosses the threshold.
     expect(toReactivationTarget(base({ lastVisitAt: "2025-08-15T00:00:00Z" }), NOW)).not.toBeNull();
   });
 
-  it("fails closed on an unknown last visit: no provable recent relationship, no text", () => {
-    // No recorded visit cannot be proven inside the 1-year window, so exclude —
-    // even though 'no recent visit' would otherwise classify as lapsed.
+  it("keeps the recall seam at 60 days overdue", () => {
+    const recent = { lastVisitAt: "2026-06-01T00:00:00Z" };
+    // 34 days overdue: still recall's patient, reactivation must not claim them.
+    expect(
+      toReactivationTarget(
+        base({ ...recent, patient: { ...base().patient, dentist_recall_date: "2026-05-15T00:00:00Z" } }),
+        NOW,
+      ),
+    ).toBeNull();
+    // 79 days overdue: past the 60-day seam, reactivation adopts them.
+    const handed = toReactivationTarget(
+      base({ ...recent, patient: { ...base().patient, dentist_recall_date: "2026-03-31T00:00:00Z" } }),
+      NOW,
+    );
+    expect(handed!.reason).toBe("overdue_recall");
+  });
+
+  it("fails closed on an unknown last visit: no provable relationship, no text", () => {
+    // Removing the upper bound must NOT open the door to patients with no visit on
+    // record at all: "we miss you" can only go to someone we can prove attended.
     expect(toReactivationTarget(base({ lastVisitAt: null }), NOW)).toBeNull();
     // An unparseable date is equally unprovable.
     expect(toReactivationTarget(base({ lastVisitAt: "not-a-date" }), NOW)).toBeNull();
@@ -167,5 +208,51 @@ describe("toReactivationTarget", () => {
       NOW,
     );
     expect(t).toBeNull();
+  });
+});
+
+describe("withinLapseWindow (the shared send-time re-check)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("admits a patient lapsed five years by default: no upper bound", () => {
+    expect(withinLapseWindow("2021-06-15T00:00:00Z", NOW)).toBe(true);
+    expect(withinLapseWindow("2009-01-01T00:00:00Z", NOW)).toBe(true);
+  });
+
+  it("excludes beyond an explicitly configured maximum", () => {
+    expect(withinLapseWindow("2021-06-15T00:00:00Z", NOW, 24)).toBe(false);
+    expect(withinLapseWindow("2025-05-01T00:00:00Z", NOW, 24)).toBe(true);
+  });
+
+  it("honours the deployment-wide env override at every choke point", () => {
+    vi.stubEnv("REACTIVATION_MAX_LAPSE_MONTHS", "12");
+    expect(withinLapseWindow("2021-06-15T00:00:00Z", NOW)).toBe(false);
+    expect(withinLapseWindow("2025-08-15T00:00:00Z", NOW)).toBe(true);
+  });
+
+  it("still fails closed with no provable visit, whatever the ceiling", () => {
+    expect(withinLapseWindow(null, NOW)).toBe(false);
+    expect(withinLapseWindow("not-a-date", NOW)).toBe(false);
+  });
+});
+
+describe("effectiveMaxLapseMonths", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("defaults to unlimited", () => {
+    expect(effectiveMaxLapseMonths()).toBe(UNLIMITED_MAX_LAPSE_MONTHS);
+    expect(DEFAULT_CONFIG.maxLapseMonths).toBe(UNLIMITED_MAX_LAPSE_MONTHS);
+  });
+
+  it("reads a valid positive override", () => {
+    vi.stubEnv("REACTIVATION_MAX_LAPSE_MONTHS", "18");
+    expect(effectiveMaxLapseMonths()).toBe(18);
+  });
+
+  it("falls back to unlimited on a malformed override rather than to NaN", () => {
+    vi.stubEnv("REACTIVATION_MAX_LAPSE_MONTHS", "18m");
+    expect(effectiveMaxLapseMonths()).toBe(UNLIMITED_MAX_LAPSE_MONTHS);
+    vi.stubEnv("REACTIVATION_MAX_LAPSE_MONTHS", "0");
+    expect(effectiveMaxLapseMonths()).toBe(UNLIMITED_MAX_LAPSE_MONTHS);
   });
 });
