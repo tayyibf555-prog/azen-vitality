@@ -120,7 +120,7 @@ function mapPatient(p: Raw, fallbackId: string): PatientInput {
 
 /**
  * Map one raw treatment plan. Returns null when the plan cannot be read at all
- * (no id, or no value we can trust) — the caller records those separately so an
+ * (no id, or no value we can trust). The caller records those separately so an
  * unreadable plan drops out of the run WITHOUT being mistaken for a settled one.
  */
 function mapPlan(tp: Raw): PlanInput | null {
@@ -306,7 +306,7 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
   // Backfill vs incremental (mirrors the recall/reactivation syncs, which hit the
   // exact same trap): Dentally's /v1/patients has NO sort control, so an
   // updated_after high-water mark + a per-run cap STRANDS almost the whole base on
-  // a from-scratch pass — the first run's mark jumps to the newest updated_at among
+  // a from-scratch pass: the first run's mark jumps to the newest updated_at among
   // its 300 patients and every older-updated patient is filtered out forever.
   // Until the one-time full pass finishes we page EVERY patient by page number
   // (cursor in sync_state.backfill_page/backfill_done); after that we switch to
@@ -322,7 +322,7 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
   //    Both bound the run, so the plan reads below can never become unbounded.
   //
   //    Inactive in Dentally (deceased, moved away, left the practice): NEVER an
-  //    opportunity — chasing a deceased patient's unpaid plan is the worst message
+  //    opportunity, because chasing a deceased patient's unpaid plan is the worst message
   //    this system could send. Kept in `pending` (not dropped) so any
   //    PREVIOUSLY-stored open opportunity for them is settled below.
   //
@@ -424,7 +424,7 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
     );
   }
 
-  // 4. Build opportunities. One per patient — the highest-value open plan — which
+  // 4. Build opportunities. One per patient, the highest-value open plan, which
   //    keeps the worklist a ranked shortlist rather than one row per plan.
   const opportunities = [];
   let unreadablePlans = 0;

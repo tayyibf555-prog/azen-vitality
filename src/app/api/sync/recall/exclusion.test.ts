@@ -49,7 +49,7 @@ vi.mock("@/lib/recall/repository", () => ({
   listTargets: vi.fn(async (q: { statuses?: string[] }) => {
     if (store.listTargetsThrows) throw new Error("supabase down");
     // First call collects open (due + in_cadence) rows for settlement; the later
-    // graduation reconcile asks for just "due" — return nothing there.
+    // graduation reconcile asks for just "due", so return nothing there.
     if (q.statuses?.includes("in_cadence")) return store.openTargets;
     return [];
   }),

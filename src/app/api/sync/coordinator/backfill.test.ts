@@ -8,7 +8,7 @@
 // module held zero rows on every run, silently.
 //
 // Backfill: Dentally's /v1/patients has no sort, so the updated_after high-water
-// mark strands older-updated patients on a from-scratch pass — backfill pages EVERY
+// mark strands older-updated patients on a from-scratch pass, so backfill pages EVERY
 // patient by page NUMBER (cursor in sync_state.backfill_page/backfill_done) until a
 // short page, then switches to updated_after incremental.
 //
@@ -432,7 +432,7 @@ describe("coordinator historical backfill (page cursor)", () => {
     expect(doneWrite).toBeTruthy();
     expect(Number.isNaN(Date.parse(doneWrite!.highWaterMark ?? ""))).toBe(false);
     // The WHOLE base was processed: all 350 patients (each with an open plan) became
-    // opportunities across the two runs — nothing stranded past the first run's cap.
+    // opportunities across the two runs, nothing stranded past the first run's cap.
     const seen = new Set(store.upserts.flat());
     expect(seen.size).toBe(350);
   });
