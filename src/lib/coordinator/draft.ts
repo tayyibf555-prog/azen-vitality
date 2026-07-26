@@ -11,7 +11,11 @@ export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel,
     "Write a short outreach message to a patient who accepted treatment but has not completed it.",
     "Rules:",
     "- Lead with the patient by first name and the specific treatment.",
-    "- Reference the outstanding value in GBP using the £ symbol.",
+    // The figure we hold is the VALUE OF THE TREATMENT STILL TO BE DONE, taken from
+    // the plan. Live Dentally exposes no billed balance, so the message must never
+    // tell a patient they owe money: that would be a factual claim we cannot stand up.
+    "- You may mention the cost of the remaining treatment in GBP using the £ symbol.",
+    "- Never say the patient owes money, is in debt, or has a balance outstanding.",
     "- Offer to discuss finance or a payment plan.",
     "- Give one clear next step (book a call or an appointment).",
     "- Under 90 words. Friendly, not pushy.",
@@ -28,7 +32,7 @@ export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel,
     `Patient: ${o.patientName}`,
     `Treatment: ${o.treatment}`,
     `Planned value (GBP): ${o.plannedValue}`,
-    `Outstanding (GBP): ${o.amountOutstanding}`,
+    `Remaining treatment value (GBP): ${o.amountOutstanding}`,
     `Accepted at: ${o.acceptedAt}`,
     `Finance already presented: ${o.financePresented ? "yes" : "no"}`,
   ].join("\n");
@@ -46,7 +50,7 @@ export async function draftOutreach(
   const usps = await listActiveUspTexts(getSite(o.siteId)?.clientId ?? "");
   const { system, user } = buildDraftPrompt(o, channel, usps);
   const rationale =
-    `£${o.amountOutstanding} outstanding on ${o.treatment}, ` +
+    `£${o.amountOutstanding} of ${o.treatment} still to complete, ` +
     `${o.financePresented ? "finance presented" : "finance not yet presented"}.`;
   const msg = await client.messages.create({
     model: SONNET,

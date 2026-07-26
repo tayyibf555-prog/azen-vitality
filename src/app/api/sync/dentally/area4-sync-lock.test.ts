@@ -1,45 +1,44 @@
-// AREA 4 (sync overlap locks): the dentally sync route must take the shared
-// cron lease-lock before touching Dentally, skip cleanly when another run
-// holds it, and always release its own lease. Without the lock, a slow run
-// overlapping the next hourly tick would double the Dentally load and race
-// the high-water mark. The lock module and Dentally client are mocked; no
-// network or database is touched.
+// The whole-practice dentally sync is RETIRED (superseded by /api/sync/coordinator,
+// which writes the same treatment_opportunity rows with the live field names and a
+// real backfill cursor). This file used to prove the route took the shared cron
+// lease-lock; those assertions were deleted with the behaviour they described.
+//
+// What matters now is that the route is inert and says so: it must still reject an
+// unauthorized caller, must answer 410 Gone to an authorized one, and must never
+// touch Dentally, the database or the cron lock again. A retired endpoint that
+// quietly answered 200 would look healthy while syncing nothing, which is exactly
+// the failure this retirement exists to end.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const fakes = vi.hoisted(() => ({
-  acquireCronLock: vi.fn<(name: string, ttl: number) => Promise<boolean>>(),
-  releaseCronLock: vi.fn(async (_name: string) => {}),
-  listTreatmentPlans: vi.fn(async (_args: unknown) => ({ treatment_plans: [] })),
-  getPatient: vi.fn(async (_id: unknown) => ({ patient: {} })),
+  acquireCronLock: vi.fn(async () => true),
+  releaseCronLock: vi.fn(async () => {}),
+  listTreatmentPlans: vi.fn(async () => ({ treatment_plans: [] })),
+  getPatient: vi.fn(async () => ({ patient: {} })),
+  upsertOpportunities: vi.fn(async () => {}),
+  setSyncState: vi.fn(async () => {}),
 }));
 
 vi.mock("@/lib/cron-lock", () => ({
-  acquireCronLock: (name: string, ttl: number) => fakes.acquireCronLock(name, ttl),
-  releaseCronLock: (name: string) => fakes.releaseCronLock(name),
+  acquireCronLock: () => fakes.acquireCronLock(),
+  releaseCronLock: () => fakes.releaseCronLock(),
 }));
 vi.mock("@/lib/dentally/client", () => ({
   DentallyClient: class DentallyClient {
     constructor(_opts: unknown) {}
-    listTreatmentPlans(args: unknown) {
-      return fakes.listTreatmentPlans(args as never);
-    }
-    getPatient(id: string) {
-      return fakes.getPatient(id as never);
-    }
+    listTreatmentPlans() { return fakes.listTreatmentPlans(); }
+    getPatient() { return fakes.getPatient(); }
   },
 }));
 vi.mock("@/lib/coordinator/repository", () => ({
   getSyncState: vi.fn(async () => null),
-  setSyncState: vi.fn(async () => {}),
-  upsertOpportunities: vi.fn(async () => {}),
-}));
-vi.mock("@/lib/mock/clients", () => ({
-  SITES: [{ id: "site-1", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
-  dentallySiteId: (id: string) => id,
-  siteIdFromDentally: (id: string) => id,
+  setSyncState: () => fakes.setSyncState(),
+  upsertOpportunities: () => fakes.upsertOpportunities(),
 }));
 
-import { POST } from "./route";
+import { POST, GET } from "./route";
 
 function syncRequest(auth = "Bearer area4-test-secret"): Request {
   return new Request("http://localhost/api/sync/dentally", {
@@ -49,10 +48,7 @@ function syncRequest(auth = "Bearer area4-test-secret"): Request {
 }
 
 beforeEach(() => {
-  fakes.acquireCronLock.mockReset();
-  fakes.releaseCronLock.mockClear();
-  fakes.listTreatmentPlans.mockClear();
-  fakes.getPatient.mockClear();
+  vi.clearAllMocks();
   vi.stubEnv("CRON_SECRET", "area4-test-secret");
   vi.stubEnv("DENTALLY_API_KEY", "area4-test-key");
 });
@@ -61,51 +57,46 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("sync/dentally cron lock", () => {
-  it("skips the run (and never calls Dentally) when the lock is held", async () => {
-    fakes.acquireCronLock.mockResolvedValue(false);
-
+describe("sync/dentally is retired", () => {
+  it("answers 410 Gone and points at the coordinator sync", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await POST(syncRequest());
-    const body = await res.json();
+    const body = (await res.json()) as { ok: boolean; retired: boolean; supersededBy: string };
 
-    expect(body).toEqual({ ok: true, skipped: "another run in progress" });
+    expect(res.status).toBe(410);
+    expect(body.ok).toBe(false);
+    expect(body.retired).toBe(true);
+    expect(body.supersededBy).toBe("/api/sync/coordinator");
+    // Loud, so a re-enabled cron job is noticed rather than assumed healthy.
+    expect(errors).toHaveBeenCalledOnce();
+    errors.mockRestore();
+  });
+
+  it("touches no Dentally endpoint, no database write and no cron lock", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await POST(syncRequest());
+
     expect(fakes.listTreatmentPlans).not.toHaveBeenCalled();
-    // We did not win the lease, so we must not clobber the other run's lease.
-    expect(fakes.releaseCronLock).not.toHaveBeenCalled();
-  });
-
-  it("acquires a unique lease (sync-dentally, maxDuration + 10) and releases after the run", async () => {
-    fakes.acquireCronLock.mockResolvedValue(true);
-
-    const res = await POST(syncRequest());
-    const body = await res.json();
-
-    expect(body.ok).toBe(true);
-    expect(body.perSite).toHaveLength(1);
-    expect(fakes.acquireCronLock).toHaveBeenCalledWith("sync-dentally", 310);
-    expect(fakes.listTreatmentPlans).toHaveBeenCalled();
-    expect(fakes.releaseCronLock).toHaveBeenCalledWith("sync-dentally");
-  });
-
-  it("releases the lease even when the Dentally pull fails", async () => {
-    fakes.acquireCronLock.mockResolvedValue(true);
-    fakes.listTreatmentPlans.mockRejectedValueOnce(new Error("dentally down"));
-
-    const res = await POST(syncRequest());
-    const body = await res.json();
-
-    expect(body.ok).toBe(true);
-    expect(body.perSite[0].error).toContain("dentally down");
-    expect(fakes.releaseCronLock).toHaveBeenCalledWith("sync-dentally");
-  });
-
-  it("rejects an unauthorized caller BEFORE touching the lock", async () => {
-    fakes.acquireCronLock.mockResolvedValue(true);
-
-    const res = await POST(syncRequest("Bearer wrong"));
-
-    expect(res.status).toBe(401);
+    expect(fakes.getPatient).not.toHaveBeenCalled();
+    expect(fakes.upsertOpportunities).not.toHaveBeenCalled();
+    expect(fakes.setSyncState).not.toHaveBeenCalled();
     expect(fakes.acquireCronLock).not.toHaveBeenCalled();
     expect(fakes.releaseCronLock).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("still rejects an unauthorized caller before anything else", async () => {
+    const res = await POST(syncRequest("Bearer wrong"));
+    expect(res.status).toBe(401);
+  });
+
+  it("keeps the pg_cron GET contract", () => {
+    expect(GET).toBe(POST);
+  });
+
+  it("no longer imports the Dentally client or the opportunity repository", () => {
+    const code = readFileSync(resolve(__dirname, "route.ts"), "utf8");
+    expect(code).not.toMatch(/^import .*dentally\/client/m);
+    expect(code).not.toMatch(/^import .*coordinator\/repository/m);
   });
 });
