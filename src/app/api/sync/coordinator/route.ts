@@ -293,6 +293,12 @@ interface SiteResult {
   unreadablePlans: number;
   /** Stored open opportunities re-checked on top of this run's patient window. */
   rechecked: number;
+  /**
+   * True when the backfill made NO forward progress and cannot on the next tick
+   * either: page 1 failed, so the saved cursor is 0 and the run restarts where it
+   * began. Reported so a permanently stalled site is not mistaken for a quiet one.
+   */
+  stalled?: boolean;
   /** True when Dentally ignored the patient_id filter: retirement was suppressed. */
   planFilterIgnored: boolean;
   mode: string;
@@ -313,7 +319,11 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
   // the updated_after mark, which then only ever sees the small changed set.
   const cursor = await getBackfillCursor(siteId, RESOURCE);
   const backfilling = !cursor.done;
-  const startPage = backfilling && cursor.page ? cursor.page + 1 : 1;
+  // `cursor.page != null`, NOT a truthiness test: a saved cursor of 0 means "page 1
+  // failed, start again there", and treating 0 as absent made that indistinguishable
+  // from "no cursor yet". Both resume at page 1, so this is a clarity fix rather than
+  // a behaviour change, but the zero-progress guard below depends on the distinction.
+  const startPage = backfilling && cursor.page != null ? cursor.page + 1 : 1;
   const mainState = backfilling ? null : await getSyncState(siteId, RESOURCE);
   const updatedAfter = backfilling ? undefined : (mainState?.highWaterMark ?? undefined);
 
@@ -529,6 +539,23 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
 
   const safeCursor = firstFailedPage !== null ? firstFailedPage - 1 : lastCompletedPage;
   const backfillComplete = backfilling && reachedEnd && firstFailedPage === null;
+
+  // ZERO-PROGRESS GUARD. If the very first page fails, safeCursor is 0, the next run
+  // starts at page 1 again, and the backfill re-scans the same page forever making no
+  // progress at all. The likeliest cause is the plan source ignoring the patient_id
+  // filter (planFilterIgnored), which fails EVERY patient on EVERY page, so the stall
+  // is total and permanent rather than a transient bad page. That must never be
+  // silent: a run that scanned nothing and advanced nothing looks identical in the
+  // cron history to a healthy no-op. Surface it so the site is reported as failed.
+  const noForwardProgress = backfilling && firstFailedPage !== null && safeCursor <= 0 && startPage === 1;
+  if (noForwardProgress) {
+    console.error(
+      `[sync/coordinator] ${siteId}: backfill made NO forward progress, page 1 failed and the cursor cannot advance` +
+        (planFilterIgnored
+          ? ". The plan source ignored the patient_id filter, so every patient on every page fails. This stalls permanently until the source honours it."
+          : ". Every patient on the first page failed to scan."),
+    );
+  }
   if (backfilling) {
     if (backfillComplete) {
       await setBackfillCursor(siteId, RESOURCE, { page: lastCompletedPage, done: true, highWaterMark: now.toISOString() });
@@ -554,6 +581,9 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
     planFilterIgnored,
     mode,
     backfillPage: backfilling ? safeCursor : null,
+    // Reported per site so a permanently stalled backfill is distinguishable from a
+    // healthy quiet run, which is exactly the confusion C4 set out to remove.
+    stalled: noForwardProgress || undefined,
   };
 }
 
@@ -594,7 +624,12 @@ export async function POST(request: Request) {
     const failedSites: string[] = [];
     for (const siteId of vitalitySiteIds()) {
       try {
-        perSite.push({ ...(await syncSite(client, siteId)) });
+        const result = await syncSite(client, siteId);
+        perSite.push({ ...result });
+        // A stalled backfill is a failure even though nothing threw: the site made no
+        // forward progress and will make none on the next tick either. Counting it as
+        // a failed site is the whole point of C4, otherwise it reads as a healthy run.
+        if (result.stalled) failedSites.push(siteId);
       } catch (e) {
         // A site that fails on every tick used to be invisible: the run still
         // answered ok:true, so the cron history looked green for days. Name the

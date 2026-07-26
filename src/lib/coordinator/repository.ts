@@ -210,11 +210,30 @@ export async function listOpportunities(args: {
   if (args.statuses && args.statuses.length > 0) {
     query = query.in("status", args.statuses);
   }
-  const { data, error } = await query.order("priority_score", {
-    ascending: false,
-  });
-  if (error) throw error;
-  return (data as OpportunityRow[]).map(rowToOpportunity);
+  // PAGE EXPLICITLY. This select used to be unbounded, which quietly relied on
+  // PostgREST's default max-rows: past that ceiling it returns a truncated set with no
+  // error and no signal. That was survivable while nothing depended on completeness,
+  // but the coordinator's retire step and re-check rotation now do, and a silently
+  // short list would retire opportunities that are still open. Paging in fixed blocks
+  // makes the read complete, with an absolute ceiling so a runaway table cannot
+  // exhaust memory, and a loud warning if that ceiling is ever reached.
+  const PAGE = 1000;
+  const MAX_ROWS = 50_000;
+  const rows: OpportunityRow[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
+    const { data, error } = await query
+      .order("priority_score", { ascending: false })
+      .order("id", { ascending: true }) // tiebreak, so paging cannot repeat or skip a row
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const batch = (data ?? []) as OpportunityRow[];
+    rows.push(...batch);
+    if (batch.length < PAGE) return rows.map(rowToOpportunity);
+  }
+  console.warn(
+    `[coordinator] listOpportunities hit the ${MAX_ROWS} row ceiling for sites ${args.siteIds.join(", ")}; the result is truncated`,
+  );
+  return rows.map(rowToOpportunity);
 }
 
 export async function getOpportunity(

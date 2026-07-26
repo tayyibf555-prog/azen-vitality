@@ -48,8 +48,23 @@ export function Worklist({
     return map;
   }, [cadences]);
 
+  // MOST RECENTLY LAPSED FIRST, then value. This deliberately mirrors the server's
+  // own ordering (listTargets orders by last_visit_at DESC NULLS LAST, then score).
+  //
+  // It used to sort by score alone, which was fine while reactivation only looked
+  // back twelve months. Now that the cap is gone the pool spans years, and score
+  // rises with historic spend, so a patient last seen eight years ago outranks one
+  // last seen thirteen months ago by a wide margin. Sorting by score alone would fill
+  // the visible worklist with the least winnable people and bury the ones worth
+  // ringing today. A missing last visit sorts last: those are the coldest of all.
   const ranked = useMemo(
-    () => [...targets].sort((a, b) => b.reactivationScore - a.reactivationScore),
+    () =>
+      [...targets].sort((a, b) => {
+        const av = a.lastVisitAt ? Date.parse(a.lastVisitAt) : Number.NEGATIVE_INFINITY;
+        const bv = b.lastVisitAt ? Date.parse(b.lastVisitAt) : Number.NEGATIVE_INFINITY;
+        if (av !== bv) return bv - av;
+        return b.reactivationScore - a.reactivationScore;
+      }),
     [targets],
   );
   const rows = useMemo(

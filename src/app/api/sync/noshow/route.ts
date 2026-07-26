@@ -49,8 +49,8 @@ const MAX_PATIENT_PAGES = 800;
 // scan is seconds. Overshoot inside a batch just returns empty pages, which is cheap.
 const PATIENT_PAGE_BATCH = 8;
 // Concurrency for the per-patient risk-history fetches within a site. Bounded so a
-// site finishes fast — serial calls made the biggest site burn ~3 of the 5 function
-// minutes and starve the last site — without spiking concurrent Dentally load.
+// site finishes fast, serial calls made the biggest site burn ~3 of the 5 function
+// minutes and starve the last site, without spiking concurrent Dentally load.
 const HISTORY_CONCURRENCY = 10;
 
 // ===========================================================================
@@ -244,8 +244,8 @@ async function syncSite(
   // Consent + name lookup for the whole site, built ONCE from paged listPatients
   // (server-filtered by site) instead of a getPatient call per appointment. On the
   // biggest site that per-appointment call doubled the Dentally load and tripped the
-  // rate limit / function time limit mid-run, which — with a single end-of-loop
-  // upsert — discarded the entire site's work. A patient ABSENT from this map is
+  // rate limit / function time limit mid-run, which, with a single end-of-loop
+  // upsert, discarded the entire site's work. A patient ABSENT from this map is
   // treated exactly like the old failed-getPatient path: we skip their appointment
   // and never fabricate consent (never auto-enrol an unverified patient into SMS).
   //
@@ -313,7 +313,7 @@ async function syncSite(
     expectedPatients !== null ? Math.max(0, expectedPatients - consentByPatient.size) : 0;
   if (consentTruncated || consentReadError || consentShortfall > 0) {
     console.error(
-      `[sync-noshow] site ${siteId}: consent map is INCOMPLETE — ${consentByPatient.size} patients mapped` +
+      `[sync-noshow] site ${siteId}: consent map is INCOMPLETE, ${consentByPatient.size} patients mapped` +
         (expectedPatients !== null ? ` of ${expectedPatients} at this site (${consentShortfall} missing)` : "") +
         `, ${consentPages} pages read` +
         (consentTruncated ? `, HIT the ${MAX_PATIENT_PAGES}-page bound` : "") +
@@ -372,7 +372,7 @@ async function syncSite(
     }
     pulled += rawAppts.length;
 
-    // Phase 1 — classify the page with NO per-appointment I/O: map, cap, terminal,
+    // Phase 1, classify the page with NO per-appointment I/O: map, cap, terminal,
     // consent. Collect the live (consented, non-terminal) appointments so their risk
     // history can be fetched in a bounded-concurrency batch below, rather than one
     // slow serial call each (which starved the last site in a shared 300s function).
@@ -415,10 +415,10 @@ async function syncSite(
       processed += 1;
     }
 
-    // Phase 2 — fetch each live patient's risk history ONCE, in bounded-concurrency
+    // Phase 2, fetch each live patient's risk history ONCE, in bounded-concurrency
     // batches (dedup by patient; a patient already cached from an earlier page is
     // skipped). A failed read caches null so Phase 3 skips that patient's
-    // appointments — never messaging on an unread record — and retries next run.
+    // appointments, never messaging on an unread record, and retries next run.
     const needHistory = [...new Set(pageLive.map((x) => x.appt.patientId))].filter(
       (pid) => !historyCache.has(pid),
     );
@@ -433,7 +433,7 @@ async function syncSite(
       }
     });
 
-    // Phase 3 — build targets from the cached history (no I/O). A null history is a
+    // Phase 3, build targets from the cached history (no I/O). A null history is a
     // failed read for that patient: skip, exactly like the old serial skip-on-fail.
     const pageTargets: NoshowTarget[] = [];
     for (const { appt, consent } of pageLive) {
@@ -488,7 +488,7 @@ async function syncSite(
   // its cadence row but has it re-anchored to the new appointment time.
   //
   // Existing cadences are read in ONE batched query (was a getCadenceByTarget
-  // round-trip per target — ~250 sequential DB reads per site, which ate the shared
+  // round-trip per target, ~250 sequential DB reads per site, which ate the shared
   // 300s budget and starved the last site). Writes stay per-target (they are few).
   const eligible = allTargets.filter(
     (t) => t.status === "scheduled" && t.consent.sms && enrolment(new Date(t.appointmentStartAt), now) !== null,
@@ -519,7 +519,7 @@ async function syncSite(
   }
 
   // Reconcile appointments that ended terminally in Dentally, or (only when the whole
-  // window was covered this run) vanished from it — the dominant reception-cancel path.
+  // window was covered this run) vanished from it, the dominant reception-cancel path.
   // Without this the target keeps status 'scheduled' with a live cadence, the sweep
   // keeps sending "please confirm" for a dead appointment, and a cancelled slot never
   // reaches the waitlist.
@@ -614,7 +614,7 @@ export async function POST(request: Request) {
     });
     const cfg = config();
     // Rotate which site goes first each run (by hour), so a budget squeeze can
-    // never PERMANENTLY starve whichever site happens to be listed last — every
+    // never PERMANENTLY starve whichever site happens to be listed last, every
     // site leads once every N cycles and worst-case staleness is bounded.
     const sites = vitalitySiteIds();
     const offset = sites.length > 0 ? new Date().getUTCHours() % sites.length : 0;

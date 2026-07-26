@@ -223,7 +223,7 @@ async function syncSite(
         continue;
       }
       // Inactive in Dentally (deceased, moved away, left the practice): NEVER a
-      // recall candidate — a check-up reminder to a deceased patient's phone is the
+      // recall candidate, a check-up reminder to a deceased patient's phone is the
       // worst message this system could send. Kept in `pending` (not dropped) so any
       // PREVIOUSLY-classified open rows for them are settled below.
       //
