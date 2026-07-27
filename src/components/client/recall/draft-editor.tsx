@@ -163,7 +163,7 @@ export function DraftEditor({
       {phase === "drafting" ? (
         <div className="flex items-center justify-center gap-2 rounded-lg border border-line bg-card-muted py-6 text-sm text-muted">
           <Loader2 size={16} className="animate-spin" />
-          Drafting with Claude
+          Drafting
         </div>
       ) : null}
 

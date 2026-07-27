@@ -68,7 +68,7 @@ export function DraftEditor({
     setConsentBlocked(false);
     try {
       const data = await post("draft", { opportunityId: opportunity.id, channel });
-      // The route returns the persisted touch, whose body is the Claude draft.
+      // The route returns the persisted touch, whose body is the AI draft.
       const draftBody = (data as { touch?: { body?: string } }).touch?.body ?? "";
       setBody(draftBody);
       setRationale(data.rationale ?? null);
@@ -166,7 +166,7 @@ export function DraftEditor({
       {phase === "drafting" ? (
         <div className="flex items-center justify-center gap-2 rounded-lg border border-line bg-card-muted py-6 text-sm text-muted">
           <Loader2 size={16} className="animate-spin" />
-          Drafting with Claude
+          Drafting
         </div>
       ) : null}
 

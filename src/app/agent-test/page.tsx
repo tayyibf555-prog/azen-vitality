@@ -1,7 +1,7 @@
 "use client";
 
 // DEV/TEST harness UI for the booking agent. Chat with the agent in the browser
-// (live Claude + mock Dentally diary, no Twilio/SMS). Remove or gate before prod.
+// (live AI + mock Dentally diary, no Twilio/SMS). Remove or gate before prod.
 
 import { useRef, useState } from "react";
 
@@ -62,7 +62,7 @@ export default function AgentTestPage() {
         </span>
       </div>
       <p style={{ fontSize: 13, color: "#64748B", marginTop: 0 }}>
-        Live Claude, mock diary. Patient: Harold Pemberton. No real texts are sent.
+        Live AI, mock diary. Patient: Harold Pemberton. No real texts are sent.
       </p>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0" }}>
