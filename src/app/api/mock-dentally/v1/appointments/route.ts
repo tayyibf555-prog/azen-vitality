@@ -1,11 +1,12 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
 import {
-  appointmentsForPatient,
-  appointmentsForSite,
   addAppointment,
   findPatient,
+  MOCK_APPOINTMENTS as MOCK_APPOINTMENTS_BASE,
+  resolveMockSiteId,
   type MockAppointment,
 } from "@/app/api/mock-dentally/_fixtures";
+import { generatedAppointments } from "@/app/api/mock-dentally/_dashboard-fixtures";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,8 @@ function serialise(a: MockAppointment) {
     state: a.state,
     reason: a.reason ?? null,
     practitioner: a.practitioner ?? null,
+    practitioner_id: a.practitioner_id ?? null,
+    notes: a.notes ?? null,
   };
 }
 
@@ -51,17 +54,23 @@ export async function GET(request: Request): Promise<Response> {
   if (unauthorized) return unauthorized;
   const url = new URL(request.url);
   const patientId = url.searchParams.get("patient_id");
-  const siteId = url.searchParams.get("site_id");
+  // Accept the real Dentally site UUID as well as our internal id.
+  const siteId = resolveMockSiteId(url.searchParams.get("site_id"));
   const on = url.searchParams.get("on"); // exact YYYY-MM-DD
   const after = url.searchParams.get("after"); // YYYY-MM-DD, exclusive
   const before = url.searchParams.get("before"); // YYYY-MM-DD, exclusive
   const includeCancelled = url.searchParams.get("cancelled") === "true";
 
+  // The hand-written fixtures are pinned to fixed dates in June 2026; the generated
+  // book rolls with today. Both are served from the one list, exactly as one
+  // practice's diary would be.
+  const book = [...MOCK_APPOINTMENTS_BASE, ...generatedAppointments()];
+
   let rows: MockAppointment[];
   if (patientId) {
-    rows = appointmentsForPatient(patientId);
+    rows = book.filter((a) => a.patient_id === patientId);
   } else if (siteId) {
-    rows = appointmentsForSite(siteId);
+    rows = book.filter((a) => a.site_id === siteId);
   } else {
     rows = [];
   }

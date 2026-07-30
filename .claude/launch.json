@@ -4,20 +4,43 @@
     {
       "name": "azen-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000
     },
     {
       "name": "azen-web-3001",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "-p", "3001"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3001"
+      ],
       "port": 3001
     },
     {
       "name": "azen-prod",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["next", "start", "-p", "3000"],
+      "runtimeArgs": [
+        "next",
+        "start",
+        "-p",
+        "3000"
+      ],
       "port": 3000
+    },
+    {
+      "name": "azen-web-noauth-3002",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "SUPABASE_SERVICE_ROLE_KEY= DENTALLY_BASE_URL=http://localhost:3002/api/mock-dentally npm run dev -- -p 3002"
+      ],
+      "port": 3002
     }
   ]
 }

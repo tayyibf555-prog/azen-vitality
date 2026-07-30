@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { NavProgressBar } from "@/components/platform/nav-progress";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { LogOut, Search } from "lucide-react";
+import { LogOut, PanelLeftOpen, Search, Wand2 } from "lucide-react";
 import { categoriesForRole } from "@/lib/nav";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { SidebarShortcuts, useModKey } from "@/components/platform/sidebar-shortcuts";
 import { useMobileNav } from "@/components/platform/mobile-nav";
+import { wantsCompactRail } from "@/lib/nav-rail";
 import { cn } from "@/lib/utils";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -76,6 +77,22 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
   const activeKey = browseKey ?? routeCategoryKey;
   const current = categories.find((c) => c.key === activeKey) ?? categories[0];
 
+  // Pages that are themselves the work (the practice dashboard) ask for a thin
+  // icon rail instead of the full nav, which hands roughly 240px back to the
+  // content. It is a wide-screen trade only: below lg the sidebar is an
+  // off-canvas drawer, where its width costs the page nothing, so it stays whole.
+  //
+  // The user can always take the full nav back for the current page. The
+  // override records WHICH page it was taken on rather than a bare flag, so
+  // navigating away drops it without an effect having to reset anything, and the
+  // rail is compact again next time she lands here.
+  const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  const expandRail = () => setExpandedFor(pathname);
+  const compact = wantsCompactRail(pathname, base) && expandedFor !== pathname;
+
+  const railIcon =
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
+
   // Vertical tabs keyboard pattern: arrows/Home/End move the rail selection and
   // focus together (roving tabindex), so the rail is fully keyboard-operable.
   const onRailKeyDown = (e: React.KeyboardEvent) => {
@@ -113,13 +130,19 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
           // Inside the floating shell at lg the sidebar fills the shell height
           // (h-full) rather than the full viewport, so its foot never clips.
           "lg:sticky lg:z-auto lg:h-full lg:max-w-none lg:translate-x-0",
+          compact && "lg:w-[56px]",
           navOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
       {/* Client context. The mark is a white glyph sitting directly on the blue
           gradient at every breakpoint (matching the mobile drawer and the
           production navy chrome), with no white tile behind it. */}
-      <div className="flex items-center gap-4 px-5 py-5">
+      <div
+        className={cn(
+          "flex items-center gap-4 px-5 py-5",
+          compact && "lg:justify-center lg:gap-0 lg:px-0 lg:py-3",
+        )}
+      >
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -128,10 +151,74 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
             className="h-11 w-11 object-contain brightness-0 invert lg:h-9 lg:w-9"
           />
         </span>
-        <p className="truncate text-sm font-semibold text-on-navy">{client ? client.name : "Vitality Dental"}</p>
+        <p className={cn("truncate text-sm font-semibold text-on-navy", compact && "lg:hidden")}>
+          {client ? client.name : "Vitality Dental"}
+        </p>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      {/* The compact rail. Wide screens only, and only on a page that asked for
+          it; the drawer below lg always gets the full nav underneath. Every icon
+          carries its name, and each area button hands the full nav straight back
+          with that area open, so nothing here is a dead end. */}
+      {compact ? (
+        <div className="hidden min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-1 lg:flex">
+          <button
+            type="button"
+            onClick={expandRail}
+            aria-label="Expand navigation"
+            aria-expanded={false}
+            title="Expand navigation"
+            className={cn(railIcon, "text-on-navy-muted hover:bg-white/10 hover:text-on-navy")}
+          >
+            <PanelLeftOpen size={17} />
+          </button>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
+            aria-label={`Search anything (${modKey}K)`}
+            title={`Search anything (${modKey}K)`}
+            className={cn(railIcon, "text-on-navy-muted hover:bg-white/10 hover:text-on-navy")}
+          >
+            <Search size={17} />
+          </button>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("azen:open-copilot"))}
+            aria-label={`Ask the co-pilot (${modKey}J)`}
+            title={`Ask the co-pilot (${modKey}J)`}
+            className={cn(railIcon, "text-on-navy-muted hover:bg-white/10 hover:text-on-navy")}
+          >
+            <Wand2 size={17} />
+          </button>
+          <span aria-hidden className="my-1 h-px w-6 shrink-0 bg-white/15" />
+          {categories.map((c) => {
+            const CIcon = c.icon;
+            const onRoute = c.key === routeCategoryKey;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => {
+                  setBrowseKey(c.key);
+                  expandRail();
+                }}
+                aria-label={`${c.label}${onRoute ? ", current area" : ""}`}
+                title={c.label}
+                className={cn(
+                  railIcon,
+                  onRoute
+                    ? "bg-white/15 text-white"
+                    : "text-on-navy-muted hover:bg-white/10 hover:text-on-navy",
+                )}
+              >
+                <CIcon size={17} />
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <div className={cn("flex min-h-0 flex-1", compact && "lg:hidden")}>
         {/* Category rail */}
         <div
           role="tablist"
@@ -239,13 +326,21 @@ export function ClientSidebar({ disabledSlugs = [] }: { disabledSlugs?: string[]
       </div>
 
       {/* User chip + logout */}
-      <div className="border-t border-navy-line px-3 py-3">
+      <div className={cn("border-t border-navy-line px-3 py-3", compact && "lg:px-1 lg:py-2")}>
         {user ? (
-          <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-soft text-xs font-semibold text-on-navy">
+          <div
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg px-2 py-1.5",
+              compact && "lg:flex-col lg:gap-1.5 lg:px-0",
+            )}
+          >
+            <span
+              title={compact ? `${user.name}, ${ROLE_LABELS[user.role] ?? user.role}` : undefined}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-soft text-xs font-semibold text-on-navy"
+            >
               {initialsOf(user.name)}
             </span>
-            <div className="min-w-0 flex-1">
+            <div className={cn("min-w-0 flex-1", compact && "lg:hidden")}>
               <p className="truncate text-xs font-semibold text-on-navy">{user.name}</p>
               <p className="truncate text-[11px] text-on-navy-muted">
                 {ROLE_LABELS[user.role] ?? user.role}

@@ -246,6 +246,53 @@ export class DentallyClient {
     return this.get<{ patient_notes: unknown[] }>("/v1/patient_notes", { patient_id: patientId });
   }
 
+  /**
+   * Payments, for the dashboard takings strip. CALIBRATED against live Dentally on 2026-07-30 by the project owner's own read-only probe, NOT by the code below.
+   *
+   * Dentally IGNORES every date filter on this endpoint: filter[from], from and
+   * dated_on_from all come back with the whole set (40,243 rows). It DOES honour
+   * site_id (which drops that to 7,784). Results are returned NEWEST FIRST.
+   *
+   * So no date parameter is sent at all. Sending one would suggest to a reader
+   * that the window is filtered upstream when it is not, which is precisely the
+   * mistake that cost the no-show sync a whole run's budget. A period total is
+   * built by paging from page 1 backwards through time and stopping once
+   * `dated_on` passes the boundary. That is cheap for today and yesterday; the
+   * 7, 30 and 90 day cells are served from the stored daily rollup instead.
+   *
+   * Field notes: `amount` is a STRING ("27.9"), `dated_on` is a bare YYYY-MM-DD
+   * with no time zone, and `deleted` is a boolean that must be excluded from
+   * totals. The `status` vocabulary is not verified; do not branch on it.
+   */
+  listPayments(a: { siteId?: string; page?: number; perPage?: number }) {
+    return this.get<{ payments: unknown[] }>("/v1/payments", {
+      site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
+  /**
+   * NHS claims, for the dashboard UDA block.
+   *
+   * PROVENANCE: the field names, types and row count below come from a READ-ONLY
+   * probe of live Dentally run by the project owner on 2026-07-30, not from this
+   * code and not from any automated run. `expected_uda` and `awarded_uda` are
+   * STRINGS ("1.56"), `submitted_date` is a bare YYYY-MM-DD, and 52,875 rows
+   * existed at that time. Re-probe before trusting these if the shape ever looks
+   * wrong: nothing in this repo re-verifies them.
+   *
+   * No date parameter is sent, on the same reasoning as listPayments: filtering
+   * is confirmed ignored on /v1/payments and was NOT confirmed working here, so
+   * assuming it works would be assuming the more convenient answer. Callers page
+   * from newest backwards and stop at their boundary. Only "submitted" is a
+   * confirmed claim_status value, so an unfamiliar status must count toward
+   * neither the completed nor the invalid UDA total.
+   */
+  listNhsClaims(a: { siteId?: string; page?: number; perPage?: number }) {
+    return this.get<{ nhs_claims: unknown[] }>("/v1/nhs_claims", {
+      site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
   getAvailability(a: AvailabilityArgs) {
     return this.get<{ availability: unknown[] }>("/v1/appointments/availability", {
       start_time: a.startTime,

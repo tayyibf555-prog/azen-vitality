@@ -6,8 +6,10 @@ import {
   addPatient,
   dobForPatient,
   genderForPatient,
+  resolveMockSiteId,
   type MockPatient,
 } from "@/app/api/mock-dentally/_fixtures";
+import { patientCreatedAt } from "@/app/api/mock-dentally/_dashboard-fixtures";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +43,10 @@ function serialise(p: MockPatient) {
     date_of_birth: dobForPatient(p.id),
     gender: genderForPatient(p.id),
     last_visit_at: lastVisitAt(p.id),
+    // Registration date, which the dashboard's "new patients" count needs. Without
+    // it the count is genuinely unsourceable and the panel reports it as such, so a
+    // deterministic date is generated per patient rather than left off.
+    created_at: patientCreatedAt(p.id),
     updated_at: "2026-06-17T00:00:00Z",
   };
 }
@@ -50,7 +56,7 @@ export async function GET(request: Request): Promise<Response> {
   const unauthorized = unauthorizedIfMissingBearer(request);
   if (unauthorized) return unauthorized;
   const url = new URL(request.url);
-  const siteId = url.searchParams.get("site_id");
+  const siteId = resolveMockSiteId(url.searchParams.get("site_id"));
   const phone = url.searchParams.get("mobile_phone");
   const query = url.searchParams.get("query");
   let all = siteId ? patientsForSite(siteId) : MOCK_PATIENTS;

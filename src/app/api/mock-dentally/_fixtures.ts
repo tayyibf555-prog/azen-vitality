@@ -30,6 +30,8 @@
 //     marketing:0 — NO consent on any channel.
 // ===========================================================================
 
+import { siteIdFromDentally } from "@/lib/mock/clients";
+
 export interface MockPatient {
   id: string;
   first_name: string;
@@ -56,6 +58,11 @@ export interface MockTreatmentPlan {
   amount_outstanding: number;
   accepted_at: string; // ISO
   updated_at: string; // ISO
+  /** ISO instant the plan was completed, or null when it is still open. Present as a
+   *  FIELD on every row (even set to null) on purpose: that is how "no plans finished
+   *  in this window" is told apart from "this source does not expose finish dates",
+   *  which the dashboard must report as unavailable rather than as zero. */
+  completed_at?: string | null;
 }
 
 export interface MockPaymentPlan {
@@ -424,6 +431,14 @@ export interface MockAppointment {
   reason?: string;
   practitioner?: string;
   duration?: number; // minutes
+  /** Live Dentally shape: the appointment's practitioner id, which the dashboard's
+   *  person filter and its per-clinician UDA breakdown match on. Older fixtures
+   *  carried only the display name, so this is optional. */
+  practitioner_id?: string;
+  /** Free text typed onto the booking, shown under the reason in the dashboard's
+   *  appointment list. Field NAME unverified against live; readers must tolerate
+   *  its absence rather than assume it. */
+  notes?: string;
 }
 
 export interface MockInvoice {
@@ -436,6 +451,11 @@ export interface MockInvoice {
   amount_outstanding: number;
   paid: boolean;
   status: string;
+  /** Bare YYYY-MM-DD the invoice was raised. Optional because the hand-written rows
+   *  below carry no date: they exist to give a patient a balance, not to be totalled
+   *  over a window. The dashboard's INVOICED panel counts only dated invoices and
+   *  discloses how many it had to leave out. */
+  date?: string;
 }
 
 // Appointment history. Past visits set "last visit"; a future one marks an
@@ -586,6 +606,26 @@ export const PATIENT_GENDER: Record<string, "Female" | "Male"> = {
 };
 
 // --- Lookups --------------------------------------------------------------
+
+/**
+ * Accept a site_id in EITHER form.
+ *
+ * The app sends the real Dentally site UUID (dentallySiteId), because that is
+ * what live expects. The fixtures below are keyed on our internal id
+ * ("site-cc"). Before this, every site-scoped read against the mock came back
+ * empty in dev while working perfectly against live, which is the worst way
+ * round for a mock to fail: nothing errors, the screen simply says the practice
+ * did nothing today.
+ *
+ * Resolving through siteIdFromDentally means a request built for live works
+ * against the mock unchanged, and an internal id still works for anything that
+ * passes one directly. Unknown values pass through and match nothing.
+ */
+export function resolveMockSiteId(raw: string | null): string | null {
+  if (raw === null || raw.length === 0) return null;
+  return siteIdFromDentally(raw) ?? raw;
+}
+
 export function findPatient(id: string): MockPatient | undefined {
   return MOCK_PATIENTS.find((p) => p.id === id);
 }
