@@ -121,6 +121,15 @@ export interface AppointmentRecord {
   state: string;
   reason: string | null;
   practitioner: string | null;
+  /**
+   * The Dentally practitioner id. The diary groups appointments into one column
+   * per clinician, and that grouping MUST key on this rather than on the
+   * `practitioner` display name: two clinicians can share a surname, a name can
+   * be recorded inconsistently, and a name is not what /v1/practitioners returns
+   * as its key. Null when Dentally omits it, which the diary shows as an
+   * explicit unassigned column rather than silently dropping the appointment.
+   */
+  practitionerId: string | null;
 }
 
 export interface OutstandingRecord {
@@ -350,6 +359,7 @@ function toAppointment(r: Record<string, unknown>, fallbackSiteId: string): Appo
     state: normaliseAppointmentState(r.state),
     reason: str(r.reason),
     practitioner: str(r.practitioner),
+    practitionerId: str(r.practitioner_id),
   };
 }
 
