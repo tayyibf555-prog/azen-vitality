@@ -346,14 +346,3 @@ h1, h2, h3, h4 {
   font-weight: 600;
 }
 
-/*
-  The content column is capped at 1400px, which is right for a page of prose or
-  a form and wrong for a wide dense band of figures: on a 1600px screen the cap
-  leaves a dead margin either side of the practice dashboard.
-
-  A page opts out by putting data-wide on its root element. Nothing else is
-  affected: the rule only matches a content column that directly contains one.
-*/
-.app-frame main > div:has(> [data-wide]) {
-  max-width: none;
-}

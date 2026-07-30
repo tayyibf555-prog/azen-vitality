@@ -135,10 +135,9 @@ export function PracticeDashboard({
   );
 
   return (
-    // data-wide releases the shell's 1400px content cap for this page only. A
-    // dense band of figures wants the width the compact rail just handed back;
-    // every other module keeps the cap.
-    <div data-wide className="space-y-3">
+    // The dashboard wants width, and takes it the same way every other page does:
+    // the shared sidebar collapse toggle. No per-page override any more.
+    <div className="space-y-3">
       {/* A line, not a hero. The section headings below carry the structure. */}
       <h1 className="text-[15px] font-semibold tracking-[-0.3px] text-navy">Dashboard</h1>
 

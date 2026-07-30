@@ -385,14 +385,16 @@ export function navForRole(role: Role): NavGroup[] {
 }
 
 // ---------------------------------------------------------------------------
-// Sidebar categories: the two-level "rail + panel" navigation.
+// Sidebar categories: the five collapsible AREAS of the single-level sidebar.
 //
 // The flat 9-group sidebar showed all ~29 modules at once, which overwhelmed
-// non-technical staff. Instead the sidebar shows a slim category rail (five
-// plain-English buckets a receptionist thinks in) and the panel lists ONLY the
-// selected category's modules. Categories reference CLIENT_NAV items by slug so
-// CLIENT_NAV stays the single source of truth for labels/icons/roles/notes
-// (command palette, placeholder pages and the systems catalog keep reading it).
+// non-technical staff. Instead the sidebar groups them into five plain-English
+// buckets a receptionist thinks in. The area holding the current page is open
+// and the rest are shut to a labelled header, so the column stays short but
+// every module is one click from anywhere. Categories reference CLIENT_NAV items
+// by slug so CLIENT_NAV stays the single source of truth for labels, icons,
+// roles and notes (the command palette, the placeholder pages and the systems
+// catalog keep reading it).
 // ---------------------------------------------------------------------------
 
 export interface NavCategory {
