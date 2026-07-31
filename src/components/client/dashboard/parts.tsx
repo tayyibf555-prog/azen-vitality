@@ -127,6 +127,51 @@ export function FigureLabel({ children }: { children: React.ReactNode }) {
   return <span className="block text-[11px] font-medium text-muted">{children}</span>;
 }
 
+/**
+ * A counted figure with its label stacked UNDERNEATH it, in blue.
+ *
+ * This is how Dentally prints the patient, treatment plan and UDA counts, and
+ * reproducing it is the point: those six figures are the ones a practice manager
+ * reads at a glance, and on our previous label-left-figure-right rows they were
+ * 12.5px and lost against the money. Stacked, the numeral leads and the label
+ * explains it, which is the correct order for a figure somebody is scanning for.
+ *
+ * Blue rather than navy because Dentally colours exactly these figures and no
+ * others, which is what makes the column readable as counts rather than as more
+ * money. blue-royal is the lead blue and stays well above AA at this size.
+ *
+ * Numerals stay tabular so a column of them aligns, and the practice has
+ * five-digit counts (49,403 active patients), so nothing here may assume three.
+ */
+export function StackStat({
+  metric,
+  label,
+  decimals = 0,
+}: {
+  metric: Metric;
+  label: string;
+  /** UDAs are measured to the hundredth, because a contract is. */
+  decimals?: 0 | 2;
+}) {
+  return (
+    <div className="min-w-0 py-[3px]">
+      {metric.value === null ? (
+        <Unavailable reason={metric.reason} className="block text-[13px]" />
+      ) : (
+        <b className="block truncate text-[20px] font-bold leading-[1.15] tracking-[-0.5px] tabular-nums text-blue-royal">
+          {decimals === 2
+            ? metric.value.toLocaleString("en-GB", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            : num(metric.value)}
+        </b>
+      )}
+      <span className="mt-[1px] block truncate text-[10.5px] font-medium text-muted">{label}</span>
+    </div>
+  );
+}
+
 /** A label-and-figure pair on one dense line, figure right aligned. */
 export function Line({
   label,

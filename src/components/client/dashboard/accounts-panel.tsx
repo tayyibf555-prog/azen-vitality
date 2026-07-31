@@ -67,11 +67,11 @@ export function AccountsPanelView({
         </p>
       ) : (
         <ol className="mt-2 divide-y divide-line border-t border-line">
-          {panel.top.map((account, index) => (
+          {/* No rank numeral. Dentally does not print one, and it earns nothing:
+              the list is already sorted by amount, so the position IS the rank,
+              and the numeral competed with the money for the eye. */}
+          {panel.top.map((account) => (
             <li key={account.patientId} className="flex items-baseline gap-2 py-[3px]">
-              <span className="w-3 shrink-0 text-right text-[10px] font-medium tabular-nums text-faint">
-                {index + 1}
-              </span>
               <Link
                 href={`/c/${clientSlug}/patients?patient=${encodeURIComponent(account.patientId)}`}
                 className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-blue-deep underline-offset-2 hover:underline"

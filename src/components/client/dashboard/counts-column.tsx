@@ -4,7 +4,7 @@ import type { PatientsPanel, PlansPanel, UdaProgressPanel, UdaWindowPanel } from
 import { cn } from "@/lib/utils";
 import { CaveatMark } from "./caveat";
 import type { Caveat } from "./caveats";
-import { Count, PanelTitle, Uda, Unavailable } from "./parts";
+import { PanelTitle, StackStat, Unavailable } from "./parts";
 
 // ---------------------------------------------------------------------------
 // The fourth column of the middle band: PATIENTS and TREATMENT PLANS as two
@@ -23,15 +23,6 @@ import { Count, PanelTitle, Uda, Unavailable } from "./parts";
 // against an invented denominator is exactly the kind of figure that gets
 // believed.
 // ---------------------------------------------------------------------------
-
-function MiniStat({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-2 py-[2px]">
-      <span className="text-[11px] font-medium text-muted">{label}</span>
-      {children}
-    </div>
-  );
-}
 
 function SubHeading({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
   return (
@@ -167,34 +158,24 @@ export function CountsColumn({
     <section aria-label="Patients, treatment plans and UDAs" className="flex h-full min-w-0 flex-col">
       <PanelTitle>Patients and plans</PanelTitle>
 
+      {/* Stacked blue numerals with the label underneath, exactly as Dentally
+          prints these six. See StackStat for why the order matters. */}
       <div className="grid grid-cols-2 gap-x-4 pt-2">
         <div className="min-w-0">
           <SubHeading>Patients</SubHeading>
           <div className="pt-[3px]">
-            <MiniStat label="New">
-              <Count metric={patients.newCount} />
-            </MiniStat>
-            <MiniStat label="Seen">
-              <Count metric={patients.seenCount} />
-            </MiniStat>
-            <MiniStat label="Active">
-              <Count metric={patients.activeCount} />
-            </MiniStat>
+            <StackStat metric={patients.newCount} label="new" />
+            <StackStat metric={patients.seenCount} label="seen" />
+            <StackStat metric={patients.activeCount} label="active" />
           </div>
         </div>
 
         <div className="min-w-0">
           <SubHeading>Treatment plans</SubHeading>
           <div className="pt-[3px]">
-            <MiniStat label="Started">
-              <Count metric={plans.started} />
-            </MiniStat>
-            <MiniStat label="Finished">
-              <Count metric={plans.finished} />
-            </MiniStat>
-            <MiniStat label="Open">
-              <Count metric={plans.open} />
-            </MiniStat>
+            <StackStat metric={plans.started} label="started" />
+            <StackStat metric={plans.finished} label="finished" />
+            <StackStat metric={plans.open} label="open" />
           </div>
         </div>
       </div>
@@ -226,21 +207,21 @@ export function CountsColumn({
               </p>
             ) : claimsUnavailable ? (
               <>
-                <MiniStat label="Completed">
-                  <Uda metric={uda.completedUda} />
-                </MiniStat>
-                <MiniStat label="Invalid">
-                  <Uda metric={uda.invalidUda} />
-                </MiniStat>
+                <StackStat metric={uda.completedUda} label="completed" decimals={2} />
+                <StackStat metric={uda.invalidUda} label="invalid" decimals={2} />
               </>
             ) : (
               <>
-                <MiniStat label="Completed">
-                  <Uda metric={{ value: mine?.completedUda ?? 0, reason: null }} />
-                </MiniStat>
-                <MiniStat label="Invalid">
-                  <Uda metric={{ value: mine?.invalidUda ?? 0, reason: null }} />
-                </MiniStat>
+                <StackStat
+                  metric={{ value: mine?.completedUda ?? 0, reason: null }}
+                  label="completed"
+                  decimals={2}
+                />
+                <StackStat
+                  metric={{ value: mine?.invalidUda ?? 0, reason: null }}
+                  label="invalid"
+                  decimals={2}
+                />
               </>
             )}
           </div>
@@ -252,12 +233,8 @@ export function CountsColumn({
               picker's neighbour, rather than staggering. */}
           <div aria-hidden className="mt-1 h-[22px]" />
           <div className="pt-[3px]">
-            <MiniStat label="Completed">
-              <Uda metric={uda.completedUda} />
-            </MiniStat>
-            <MiniStat label="Invalid">
-              <Uda metric={uda.invalidUda} />
-            </MiniStat>
+            <StackStat metric={uda.completedUda} label="completed" decimals={2} />
+            <StackStat metric={uda.invalidUda} label="invalid" decimals={2} />
           </div>
         </div>
       </div>

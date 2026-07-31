@@ -145,9 +145,16 @@ export function AppointmentsDonut({
 
   return (
     <section aria-label="Appointments" className="flex h-full min-w-0 flex-col">
+      {/* The total sits on the heading line, where Dentally puts it, rather than
+          in the ring. It reads as the panel's headline figure there, it lines up
+          with the other three panels' headline figures across the band, and it
+          leaves the ring to do the one job a ring is good at: the proportions. */}
       <PanelTitle
         right={
           <span className="flex items-center gap-1.5">
+            <span className="text-[12.5px] font-bold tabular-nums tracking-[-0.2px] text-navy">
+              {num(total)}
+            </span>
             <CaveatMark caveats={caveats} onOpen={onOpenCaveat} />
           </span>
         }
@@ -203,12 +210,6 @@ export function AppointmentsDonut({
               ),
             )}
           </svg>
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[22px] font-bold leading-[1.1] tabular-nums tracking-[-0.6px] text-navy">
-              {num(total)}
-            </span>
-            <span className="text-[10px] font-medium uppercase tracking-[0.07em] text-muted">total</span>
-          </div>
         </div>
 
         <dl className="w-full min-w-0">
