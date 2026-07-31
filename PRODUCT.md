@@ -45,6 +45,20 @@ What that means in practice:
 - **Dense is correct.** These are operational screens read all day by people with other jobs. More real information per screen is better, provided it is aligned, ordered and legible. Do not remove a figure to make a screen calmer.
 - **Do not move, merge or drop panels** to improve a composition. If a panel exists in Dentally, it exists here, in the same place.
 
+### Density is data, not chrome
+
+The distinction that went wrong once already, so it is written down. Dense means **more information per screen**. It does not mean more decoration, more labelling, or more commentary about the information.
+
+A count from our own dashboard against Dentally's, on the same day, same practice: ours carried 21 uppercase micro-labels, five "LIVE" tags, five caveat chips (three of them styled as amber warnings) and four inline information marks. Dentally's carried one line of grey text: "Stats updated 31/07/26 20:22". Ours held no more actual data. It simply shouted, and the owner's verdict was that ours looked worse.
+
+So:
+
+- **Every element must be a fact or an action.** Explanations of facts, provenance of facts, and reassurance about facts are none of those and must be quiet by default and reachable on demand.
+- **Never repeat a label the eye can infer.** A "LIVE" tag on all five cells of one strip tells a reader nothing that the strip's own heading did not.
+- **Warning colours are for warnings.** Amber on a caveat that is merely an explanation trains people to ignore amber, and a screen with five amber chips reads as five problems before a single figure has been read.
+- **Prefer sentence case for panel headings.** A screen of letterspaced uppercase micro-caps is harder to scan, not denser.
+- Honesty about data is non-negotiable and is not what this is about. Keep the reason a figure is missing or partial; attach it to that figure, quietly, rather than to a row of chips across the screen.
+
 ## Strategic principles
 
 **Familiar beats clever.** Clinicians were trained on conventions (FDI charting, the appointment state letters, blue for NHS and orange for private). Reproduce them exactly. Inventing a better notation is a way of losing.
