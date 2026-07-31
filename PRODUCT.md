@@ -31,6 +31,20 @@ An operations platform for a UK dental group: four practices in London, roughly 
 
 Dentally itself. The practice manager rates it highly and says it is "really self-explanatory, really nice to use". It is not the enemy, it is the standard. Anything replacing it must be at least as legible and at least as fast, or clinicians will simply refuse.
 
+## The house style, settled
+
+**Copy Dentally's interface. Make it better and more modern. Do not make it minimal.**
+
+This is the owner's standing instruction and it has been given three times, because the work keeps drifting back. Treat any drift as a defect.
+
+What that means in practice:
+
+- **Copy the layout, the density and the conventions.** Same panels, same positions, same notation, same information in the same place. Familiarity is the feature; a user moving across should not have to look for anything.
+- **Modernise the execution, not the structure.** Better type, better spacing rhythm, better colour, cleaner edges, smoother states. Dentally's 2015 chrome is what gets improved. Its layout is what gets kept.
+- **Minimalism is wrong here and is not a matter of taste.** Airy spacing, big empty margins, few elements per screen, "clean" reductions that hide information behind a click. All of it has been explicitly rejected. The owner's words on an earlier attempt: "it just looks all over the place", "we dont need to have it looking minimalstic anymore".
+- **Dense is correct.** These are operational screens read all day by people with other jobs. More real information per screen is better, provided it is aligned, ordered and legible. Do not remove a figure to make a screen calmer.
+- **Do not move, merge or drop panels** to improve a composition. If a panel exists in Dentally, it exists here, in the same place.
+
 ## Strategic principles
 
 **Familiar beats clever.** Clinicians were trained on conventions (FDI charting, the appointment state letters, blue for NHS and orange for private). Reproduce them exactly. Inventing a better notation is a way of losing.
