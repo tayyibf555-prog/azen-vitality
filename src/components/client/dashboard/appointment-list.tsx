@@ -61,12 +61,20 @@ function typeBarColour(typeKey: string): string {
   return TYPE_BARS[(h >>> 0) % TYPE_BARS.length];
 }
 
-/** Confirmed reads green and pending amber, as it does in Dentally. */
-function statePill(row: AppointmentRow): { tone: "success" | "warning" | "danger" | "info"; quiet: false } | { quiet: true; dot: string } {
+/**
+ * Confirmed reads green and pending amber, as it does in Dentally.
+ *
+ * One state, one colour, across the product: amber means "awaiting confirmation"
+ * and nothing else, so cancelled takes the neutral tone rather than warning (on
+ * the diary an amber cancelled block would be the loudest thing on the screen and
+ * would read as pending from two metres); and green means "confirmed" and nothing
+ * else, so the completed quiet dot is the muted grey.
+ */
+function statePill(row: AppointmentRow): { tone: "success" | "warning" | "danger" | "info" | "neutral"; quiet: false } | { quiet: true; dot: string } {
   const key = row.state.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-  if (row.bucket === "completed") return { quiet: true, dot: "bg-status-green" };
+  if (row.bucket === "completed") return { quiet: true, dot: "bg-muted" };
   if (row.bucket === "dna") return { tone: "danger", quiet: false };
-  if (row.bucket === "cancelled") return { tone: "warning", quiet: false };
+  if (row.bucket === "cancelled") return { tone: "neutral", quiet: false };
   if (key === "confirmed") return { tone: "success", quiet: false };
   if (key === "arrived" || key === "checked_in" || key === "in_surgery" || key === "in_treatment") {
     return { tone: "info", quiet: false };

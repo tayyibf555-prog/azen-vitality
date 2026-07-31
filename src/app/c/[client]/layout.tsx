@@ -64,8 +64,15 @@ export default async function ClientLayout({
         <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:my-3 lg:mr-3 lg:h-auto lg:min-h-0 lg:overflow-hidden lg:rounded-[18px]">
           <ClientTopbar selected={selectedSite} />
           <div className="min-h-0 flex-1 lg:overflow-y-auto">
-            <main>
-              <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">{children}</div>
+            {/* The two :has() variants are gated on a marker only the diary sets
+                (data-diary), so every other /c page is byte-identical. The diary
+                needs a DEFINITE height for its own two-axis scroller, and needs
+                to reach past the 1400px cap: on a 1920 reception monitor that cap
+                throws away 388px, which is four clinician columns. */}
+            <main className="lg:has-[[data-diary]]:h-full">
+              <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-6 lg:px-8 lg:py-7 lg:has-[[data-diary]]:h-full">
+                {children}
+              </div>
             </main>
           </div>
         </div>

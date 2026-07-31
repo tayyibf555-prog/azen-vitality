@@ -26,9 +26,25 @@ export function dayKey(iso: string): string {
 }
 
 /**
+ * The same London calendar day, or null when the instant cannot be parsed.
+ *
+ * dayKey THROWS on an unparseable value (Intl.DateTimeFormat.format rejects an
+ * invalid Date with a RangeError), and toAppointment maps a missing Dentally
+ * start_time to "". One such row anywhere in the loaded sixty-day window would
+ * otherwise take the whole diary down mid-render. Every other layer already
+ * defends this (londonMinutes returns NaN, layoutColumn drops the row,
+ * blockTimes returns null), so this is the last unguarded seam. The caller is
+ * expected to SURFACE what it could not place rather than drop it quietly.
+ */
+export function safeDayKey(iso: string): string | null {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : londonDayKey(d);
+}
+
+/**
  * Add/subtract whole days from a YYYY-MM-DD day key. Anchored at UTC midnight
- * so the arithmetic is a pure calendar-day step, never a wall-clock instant , 
- * the key itself is already the correct London day (from dayKey/londonDayKey),
+ * so the arithmetic is a pure calendar-day step, never a wall-clock instant. The
+ * key itself is already the correct London day (from dayKey/londonDayKey),
  * so stepping it in UTC cannot introduce a DST-shift artefact.
  */
 export function shiftDay(dayIso: string, by: number): string {
@@ -64,8 +80,8 @@ export function isWithinWindow(day: string, min: string, max: string): boolean {
 
 /**
  * A London wall-clock "HH:MM" for an appointment's ISO start. MUST use the
- * Europe/London zone, never UTC (B1), during BST (UTC+1) a UTC-formatted
- * time reads an hour early for every single appointment.
+ * Europe/London zone, never UTC (B1): during BST (UTC+1) a UTC-formatted time
+ * reads an hour early for every single appointment.
  */
 export function hhmm(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-GB", {
@@ -122,15 +138,22 @@ export function dnum(dayIso: string): number {
 // every call site, and STATE_BADGE_TONE/LABEL surface a StatusPill for the
 // states staff most need to notice.
 
+// The mapping is Dentally's own, matching the practice dashboard
+// (appointment-list.tsx: "Confirmed reads green and pending amber, as it does in
+// Dentally"). Two colours for confirmed across two screens is the inconsistency
+// that costs clinician trust, so one state means one colour everywhere:
+// confirmed and its legacy stand-in "booked" are green, arrived takes the full
+// status-blue (bg-blue-light is a pale sky blue and weak at 7px), and completed
+// moves to the muted grey so green cannot mean two things at once.
 export const STATE_DOT: Record<string, string> = {
   pending: "bg-status-amber",
-  confirmed: "bg-status-blue",
-  arrived: "bg-blue-light",
+  confirmed: "bg-status-green",
+  arrived: "bg-status-blue",
   in_surgery: "bg-navy",
-  completed: "bg-status-green",
+  completed: "bg-muted",
   did_not_attend: "bg-status-red",
   cancelled: "bg-line-strong",
-  booked: "bg-status-blue", // the mock's legacy stand-in for confirmed
+  booked: "bg-status-green", // the mock's legacy stand-in for confirmed
 };
 
 export const STATE_LABEL: Record<string, string> = {

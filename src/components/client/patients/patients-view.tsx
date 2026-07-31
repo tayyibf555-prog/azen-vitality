@@ -1,7 +1,7 @@
 import { PageHeader } from "@/components/primitives";
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
-import { listPatients, countPatients, type PatientRecord } from "@/lib/dentally/read";
+import { listPatients, countPatients, getPatientById, type PatientRecord } from "@/lib/dentally/read";
 import { getPatientCounts } from "@/lib/patient-count/repository";
 import { listOverridesForSites } from "@/lib/patient-status/repository";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
@@ -19,7 +19,14 @@ function HeaderStat({ label, value, hint }: { label: string; value: string | num
   );
 }
 
-export async function PatientsView({ clientSlug }: { clientSlug: string }) {
+export async function PatientsView({
+  clientSlug,
+  patientId = null,
+}: {
+  clientSlug: string;
+  /** A single record to open on arrival (?patient=), resolved server-side. */
+  patientId?: string | null;
+}) {
   const client = getClient(clientSlug);
   if (!client) {
     return <PageHeader title="Patients" description="This client could not be found." />;
@@ -57,6 +64,17 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
     }
   } catch {
     patients = [];
+  }
+
+  // The one arriving record, fetched by id rather than found in the slice: on a
+  // 52,090 patient book most ids are outside the loaded rows, and the table used
+  // to strip the parameter and do nothing. Null means the read failed or the
+  // patient does not exist, which the table says out loud rather than swallowing.
+  // Scoped to the sites in view: a record outside the current scope is not shown.
+  let initialPatient: PatientRecord | null = null;
+  if (patientId) {
+    initialPatient = await getPatientById(patientId);
+    if (initialPatient && !scope.siteIds.includes(initialPatient.siteId)) initialPatient = null;
   }
 
   const nowIso = new Date().toISOString();
@@ -117,6 +135,8 @@ export async function PatientsView({ clientSlug }: { clientSlug: string }) {
         initialFilter="active"
         overrides={overrides}
         lookups={lookups}
+        requestedPatientId={patientId}
+        initialPatient={initialPatient}
       />
     </>
   );

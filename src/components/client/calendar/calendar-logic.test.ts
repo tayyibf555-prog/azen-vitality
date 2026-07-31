@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   dayKey,
+  safeDayKey,
   shiftDay,
   mondayOf,
   clampDayToWindow,
@@ -29,6 +30,28 @@ describe("dayKey (B2: London-day bucketing, not a UTC slice)", () => {
 
   it("keeps a summer midday appointment on the same day", () => {
     expect(dayKey("2026-06-27T12:00:00Z")).toBe("2026-06-27");
+  });
+});
+
+// A Dentally row with a missing start_time reaches the board as start === "".
+// dayKey THROWS on that (Intl rejects an invalid Date), and the board buckets
+// every appointment in the whole loaded window, so one bad row anywhere took the
+// entire diary down mid-render rather than costing that one row.
+describe("safeDayKey (an unparseable start must not take the diary down)", () => {
+  it("throws through dayKey, which is exactly why safeDayKey exists", () => {
+    expect(() => dayKey("")).toThrow(RangeError);
+    expect(() => dayKey("not a date")).toThrow(RangeError);
+  });
+
+  it("returns null instead of throwing, for every unparseable form", () => {
+    expect(safeDayKey("")).toBeNull();
+    expect(safeDayKey("not a date")).toBeNull();
+    expect(safeDayKey("0000-00-00T00:00:00Z")).toBeNull();
+  });
+
+  it("agrees with dayKey on everything that IS parseable, London day and all", () => {
+    expect(safeDayKey("2026-06-27T23:30:00Z")).toBe("2026-06-28");
+    expect(safeDayKey("2026-01-15T09:00:00Z")).toBe("2026-01-15");
   });
 });
 
@@ -115,6 +138,36 @@ describe("stateDotClass / stateLabel (B5: every state visually distinct)", () =>
 
   it("falls back to the neutral grey for an unrecognised state", () => {
     expect(stateDotClass("some_new_state")).toBe("bg-line-strong");
+  });
+
+  it("gives all eight states mutually distinct colours", () => {
+    const states = [
+      "pending",
+      "confirmed",
+      "booked",
+      "arrived",
+      "in_surgery",
+      "completed",
+      "cancelled",
+      "did_not_attend",
+    ];
+    // booked is the mock's stand-in for confirmed and deliberately shares its
+    // colour; the other seven must all differ from one another.
+    const distinct = states.filter((s) => s !== "booked").map(stateDotClass);
+    expect(new Set(distinct).size).toBe(distinct.length);
+  });
+
+  it("agrees with the dashboard's Dentally-derived mapping", () => {
+    // One state, one colour, everywhere: confirmed reads green (not blue) so the
+    // diary and the dashboard cannot disagree about what green means.
+    expect(stateDotClass("confirmed")).toBe("bg-status-green");
+    expect(stateDotClass("booked")).toBe("bg-status-green");
+    expect(stateDotClass("arrived")).toBe("bg-status-blue");
+  });
+
+  it("separates completed from both confirmed and cancelled", () => {
+    expect(stateDotClass("completed")).not.toBe(stateDotClass("confirmed"));
+    expect(stateDotClass("completed")).not.toBe(stateDotClass("cancelled"));
   });
 
   it("labels every known state and falls back to the raw value otherwise", () => {

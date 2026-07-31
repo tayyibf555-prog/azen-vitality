@@ -108,7 +108,7 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Calendar",
         icon: CalendarDays,
         status: "live",
-        note: "The live Dentally diary. Move day by day, filter by site, and see who is booked in and their appointment state.",
+        note: "The live Dentally diary. One column per clinician, day by day, with each appointment's state.",
       },
       {
         slug: "patients",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import { StatusPill, DataTable, EmptyState, type Column, type Tone } from "@/components/primitives";
 import { cn, gbp, num, relativeTime } from "@/lib/utils";
 import { getSite } from "@/lib/mock";
@@ -83,11 +83,18 @@ export function PatientsTable({
   initialFilter = "active",
   overrides = {},
   lookups = {},
+  requestedPatientId = null,
+  initialPatient = null,
 }: {
   patients: PatientRecord[];
   nowIso: string;
   clientSlug: string;
   initialFilter?: PatientFilter;
+  /** The id that arrived as ?patient=, so a record that could not be resolved is
+   *  reported rather than silently doing nothing. */
+  requestedPatientId?: string | null;
+  /** That record, resolved SERVER-side by id. Null when it could not be loaded. */
+  initialPatient?: PatientRecord | null;
   /** Platform admin overrides keyed by dentally patient id, for the site(s) in scope.
    *  Covers rows from the initial slice, search and filter alike (site-wide map). */
   overrides?: Record<string, PatientAdminStatus>;
@@ -98,10 +105,14 @@ export function PatientsTable({
 }) {
   const now = useMemo(() => new Date(nowIso), [nowIso]);
   const searchParams = useSearchParams();
-  const router = useRouter();
   const pathname = usePathname();
   const [q, setQ] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => (initialPatient ? initialPatient.id : null),
+  );
+  // True when a ?patient= arrived that the server could not resolve. Saying so is
+  // the point: a link from the diary that quietly does nothing is worse than none.
+  const unresolvedPatient = Boolean(requestedPatientId) && initialPatient === null;
   const [filter, setFilter] = useState<PatientFilter>(initialFilter);
   // Server-side search: the initial `patients` prop is only a bounded first slice, so
   // to reach anyone beyond it we query Dentally directly (debounced). `serverResults`
@@ -191,21 +202,34 @@ export function PatientsTable({
     [usingInitialSlice, patients, filterRows],
   );
 
-  // Open a patient directly when arriving via the command palette (?patient=id).
-  // Resolve against whichever rows are currently loaded (slice, filter, or search).
+  // Open a patient directly when arriving via the diary panel or the command
+  // palette (?patient=id). Resolve against whichever rows are currently loaded
+  // (slice, filter, or search), and otherwise against the record the SERVER
+  // resolved by id, which is what makes the link work for any of the 52,000
+  // patients rather than only those in the loaded slice.
   useEffect(() => {
     const pid = searchParams.get("patient");
     if (!pid) return;
     const inLoaded = loadedRows.some((p) => p.id === pid);
     const inSearch = serverResults?.some((p) => p.id === pid) ?? false;
-    if (inLoaded || inSearch) setSelectedId(pid);
+    if (inLoaded || inSearch || initialPatient?.id === pid) setSelectedId(pid);
     // Consume the one-shot ?patient instruction: strip it from the URL so a refresh
     // lands on the clean list instead of re-opening the same record every time.
+    //
+    // window.history.replaceState, NEVER router.replace. This page is
+    // force-dynamic and awaits searchParams, so router.replace re-runs it with no
+    // ?patient, the server then resolves no initialPatient, and the drawer that
+    // had just opened for a patient OUTSIDE the loaded slice (most of a 52,000
+    // patient book, which is the whole reason the server resolves it by id) loses
+    // the only record backing it and closes again on its own. The native history
+    // API integrates with the Next router and syncs useSearchParams without
+    // re-rendering the server component, so the address bar is cleaned and the
+    // record in hand survives.
     const sp = new URLSearchParams(searchParams.toString());
     sp.delete("patient");
     const qs = sp.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [searchParams, loadedRows, serverResults, router, pathname]);
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
+  }, [searchParams, loadedRows, serverResults, initialPatient, pathname]);
 
   // Precedence: an active search overrides the filter; otherwise the selected segment
   // (server-rendered slice for the initial segment, fetched rows for the rest).
@@ -219,7 +243,7 @@ export function PatientsTable({
   const selected =
     loadedRows.find((p) => p.id === selectedId) ??
     serverResults?.find((p) => p.id === selectedId) ??
-    null;
+    (initialPatient && initialPatient.id === selectedId ? initialPatient : null);
 
   const emptyCopy = FILTER_EMPTY[filter];
 
@@ -326,6 +350,12 @@ export function PatientsTable({
             </div>
           </div>
         </header>
+
+        {unresolvedPatient ? (
+          <p className="border-b border-line px-3 pt-2.5 text-[11px] text-muted">
+            That patient record could not be loaded.
+          </p>
+        ) : null}
 
         <p className="flex items-center gap-2 border-b border-line px-3 py-2.5 text-caption text-muted">
           {searchActive ? "Search results" : FILTER_CAPTION[filter]}

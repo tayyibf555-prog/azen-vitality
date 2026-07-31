@@ -69,12 +69,45 @@ export interface PractitionerRecord {
  * practitioner picker degrades to empty rather than breaking the page.
  */
 export async function listSitePractitioners(internalSiteId: string): Promise<PractitionerRecord[]> {
+  return (await listSitePractitionersSafe(internalSiteId)).practitioners;
+}
+
+export interface PractitionersRead {
+  practitioners: PractitionerRecord[];
+  /**
+   * True when the read could not be trusted.
+   *
+   * The plain wrapper above returns [] on any error, which on the diary would
+   * collapse the column set to only the clinicians derivable from the day's
+   * appointments: a clinician with an empty list day would VANISH, and a
+   * half-staffed diary would look correctly staffed and correctly free. A caller
+   * that must tell an outage apart from a quiet day reads this instead of
+   * guessing from an empty array. A failed read is deliberately NEVER cached.
+   */
+  failed: boolean;
+}
+
+const PRACTITIONERS_CACHE_KEY = (siteId: string) => `practitioners:${siteId}`;
+
+/**
+ * Like listSitePractitioners, but reporting whether the read failed, and cached
+ * on success with the same 60 second TTL as the appointment reads (so paging the
+ * diary day by day does not re-fetch the column set every time).
+ */
+export async function listSitePractitionersSafe(internalSiteId: string): Promise<PractitionersRead> {
+  const cacheKey = PRACTITIONERS_CACHE_KEY(internalSiteId);
+  if (!process.env.VITEST) {
+    const hit = readCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as PractitionersRead;
+  }
+
   const client = dentallyFromEnv();
   const siteUuid = dentallySiteId(internalSiteId);
+  let result: PractitionersRead;
   try {
     const res = await client.listPractitioners(siteUuid);
     const rows = Array.isArray(res.practitioners) ? res.practitioners : [];
-    return rows
+    const practitioners = rows
       .map((raw) => {
         const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
         const user = (r.user && typeof r.user === "object" ? r.user : {}) as Record<string, unknown>;
@@ -87,10 +120,16 @@ export async function listSitePractitioners(internalSiteId: string): Promise<Pra
       })
       .filter((p) => p.id !== "" && p.active && p.siteMatch)
       .map(({ id, name }) => ({ id, name }));
+    result = { practitioners, failed: false };
   } catch (err) {
     console.error("[dentally] listSitePractitioners failed", err);
-    return [];
+    result = { practitioners: [], failed: true };
   }
+
+  if (!process.env.VITEST && !result.failed) {
+    readCache.set(cacheKey, { at: Date.now(), value: result });
+  }
+  return result;
 }
 
 export interface PatientRecord {
@@ -120,6 +159,15 @@ export interface AppointmentRecord {
   durationMin: number;
   state: string;
   reason: string | null;
+  /**
+   * Whatever the receptionist typed on the booking ("nervous patient, allow extra
+   * time", "needs pre med, check with dentist", "interpreter booked"). The single
+   * most operationally useful field on a diary block, and the reason the block
+   * carries a note dot that survives truncation. The live field NAME is
+   * unverified, so it is read defensively (notes, then note) and renders as
+   * nothing at all when absent, never as an empty line.
+   */
+  note: string | null;
   practitioner: string | null;
   /**
    * The Dentally practitioner id. The diary groups appointments into one column
@@ -144,6 +192,17 @@ export interface OutstandingRecord {
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
+}
+/**
+ * A Dentally record id as a string, or null when it is absent.
+ *
+ * Ids arrive as NUMBERS from real Dentally and as strings from the mock, so any
+ * id used as a join key has to normalise both. A finite number becomes its
+ * decimal string; anything else falls back to the string rule.
+ */
+function idOf(v: unknown): string | null {
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : null;
+  return str(v);
 }
 function num(v: unknown): number {
   return typeof v === "number" ? v : Number(v) || 0;
@@ -350,7 +409,13 @@ function toAppointment(r: Record<string, unknown>, fallbackSiteId: string): Appo
     id: String(r.id ?? ""),
     patientId: String(r.patient_id ?? ""),
     patientName: str(r.patient_name) ?? "Patient",
-    siteId: str(r.site_id) ?? fallbackSiteId,
+    // Mapped through siteIdFromDentally, exactly as toPatient does. Real Dentally
+    // sends a site UUID while every consumer filters on our internal id
+    // ("site-cc"), so an unmapped value would make the diary drop every row and
+    // show a confident "Nothing booked" on every day. When Dentally gives an id
+    // we do not know, the row is attributed to the site it was QUERIED from,
+    // which is what the dashboard read already does. It can never return a raw UUID.
+    siteId: siteIdFromDentally(str(r.site_id) ?? "") ?? fallbackSiteId,
     start: str(r.start_time) ?? "",
     finish: str(r.finish_time),
     durationMin: num(r.duration) || 30,
@@ -358,8 +423,18 @@ function toAppointment(r: Record<string, unknown>, fallbackSiteId: string): Appo
     // downstream sets (diary gaps, brief gap count) compare did_not_attend-style.
     state: normaliseAppointmentState(r.state),
     reason: str(r.reason),
+    // The live field name is unverified, so both spellings are tried before
+    // giving up. Absent stays null and the diary simply draws nothing.
+    note: str(r.notes) ?? str(r.note),
     practitioner: str(r.practitioner),
-    practitionerId: str(r.practitioner_id),
+    // NUMERIC on live Dentally, a string only in the mock (see
+    // lib/booking/slots.ts and write.ts, which both already branch on it).
+    // str() alone returns null for a number, which would send EVERY live
+    // appointment into the diary's "Unassigned" column and leave every
+    // clinician's column reading "Nothing booked" for a fully booked day. The
+    // practitioner LIST id is built with String(), so both sides of the join
+    // must normalise the same way.
+    practitionerId: idOf(r.practitioner_id),
   };
 }
 
@@ -420,6 +495,16 @@ export interface AppointmentsRead {
    * empty-diary lie back to every reader for the rest of the TTL.
    */
   failed: boolean;
+  /**
+   * The sites whose own read threw, whether or not any other site returned rows.
+   *
+   * `failed` is a whole-request verdict and is deliberately conservative, so it
+   * stays false when one site failed and another site's real data came back. A
+   * caller that shows ONE site at a time out of a multi-site read (the diary's
+   * site switcher) cannot use that verdict: switching to the failed site would
+   * draw a confident empty day. It reads this list instead.
+   */
+  failedSiteIds: string[];
 }
 
 /**
@@ -443,7 +528,7 @@ export async function listAppointmentsSafe(
   }
 
   const client = dentallyFromEnv();
-  let anyFailed = false;
+  const failedSiteIds: string[] = [];
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
       try {
@@ -461,7 +546,7 @@ export async function listAppointmentsSafe(
         return rows.map((a) => toAppointment(a as Record<string, unknown>, siteId));
       } catch (err) {
         console.error(`[dentally] listAppointments (safe) failed for site ${siteId}; skipping this site`, err);
-        anyFailed = true;
+        failedSiteIds.push(siteId);
         return [] as AppointmentRecord[];
       }
     }),
@@ -470,11 +555,15 @@ export async function listAppointmentsSafe(
   // A failure only needs surfacing when it could plausibly explain the empty
   // result: if another site's real data still came back, the diary is showing
   // what it genuinely has, not lying about a day being free. Every-site-failed
-  // always lands here too (0 rows can ever be collected in that case).
-  const failed = siteIds.length > 0 && anyFailed && appointments.length === 0;
+  // always lands here too (0 rows can ever be collected in that case). A caller
+  // that slices this result down to ONE site reads failedSiteIds, not this.
+  const failed = siteIds.length > 0 && failedSiteIds.length > 0 && appointments.length === 0;
 
-  const result: AppointmentsRead = { appointments, failed };
-  if (!process.env.VITEST && !failed) {
+  const result: AppointmentsRead = { appointments, failed, failedSiteIds };
+  // A PARTIAL read is not cached either. Caching it would serve one practice's
+  // missing day back to every reader for the rest of the TTL, which is the same
+  // empty-diary lie as the all-sites-failed case, just narrower.
+  if (!process.env.VITEST && failedSiteIds.length === 0) {
     readCache.set(cacheKey, { at: Date.now(), value: result });
   }
   return result;

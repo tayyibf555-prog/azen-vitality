@@ -202,7 +202,7 @@ export interface DiaryColumn {
  * plus an "Unassigned" column at the end IF and only if something that day has
  * no practitioner.
  *
- * Clinicians with nothing booked still get a column — an empty column is the
+ * Clinicians with nothing booked still get a column: an empty column is the
  * information that they are free, and dropping it would make a quiet day look
  * fully staffed. The unassigned column is conditional because it is an
  * exception: showing it permanently would imply a queue that usually is not

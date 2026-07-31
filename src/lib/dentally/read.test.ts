@@ -24,17 +24,28 @@ function makePager(total: number, key: "patients" | "appointments" | "treatment_
   return { fn, pagesSeen };
 }
 
-const state = vi.hoisted(() => ({
-  listPatients: (_a: unknown): Promise<unknown> => Promise.resolve({ patients: [] }),
-  listAppointments: (_a: unknown): Promise<unknown> => Promise.resolve({ appointments: [] }),
-  listTreatmentPlans: (_a: unknown): Promise<unknown> => Promise.resolve({ treatment_plans: [] }),
-  listInvoices: (_a: unknown): Promise<unknown> => Promise.resolve({ invoices: [] }),
-  countPatients: (_s: unknown): Promise<number | null> => Promise.resolve(null),
+/** The stubbed client surface. Declared as a type so the defaults below can be
+ *  zero-argument arrows (nothing to name, nothing left unused) while tests are
+ *  still free to reassign them with implementations that DO read the argument. */
+interface ClientStubs {
+  listPatients: (arg: unknown) => Promise<unknown>;
+  listAppointments: (arg: unknown) => Promise<unknown>;
+  listTreatmentPlans: (arg: unknown) => Promise<unknown>;
+  listInvoices: (arg: unknown) => Promise<unknown>;
+  countPatients: (siteId: unknown) => Promise<number | null>;
+}
+
+const state = vi.hoisted<ClientStubs>(() => ({
+  listPatients: () => Promise.resolve({ patients: [] }),
+  listAppointments: () => Promise.resolve({ appointments: [] }),
+  listTreatmentPlans: () => Promise.resolve({ treatment_plans: [] }),
+  listInvoices: () => Promise.resolve({ invoices: [] }),
+  countPatients: () => Promise.resolve(null),
 }));
 
 vi.mock("./client", () => ({
   DentallyClient: class {
-    constructor(_o: unknown) {}
+    constructor() {}
     listPatients(a: unknown) { return state.listPatients(a); }
     listAppointments(a: unknown) { return state.listAppointments(a); }
     listTreatmentPlans(a: unknown) { return state.listTreatmentPlans(a); }
@@ -256,6 +267,68 @@ describe("listAppointmentsSafe (B3: distinct failure signal, never cached)", () 
     const out = await listAppointmentsSafe(["site-bad", "site-ok"]);
     expect(out.failed).toBe(false);
     expect(out.appointments).toHaveLength(1);
+  });
+
+  // The diary loads every scoped site in ONE call and slices it down to one
+  // practice client-side, so the whole-request verdict above is not enough: with
+  // one practice failing and another returning rows, `failed` is false and the
+  // site switcher would draw a confident empty day for the failed practice.
+  it("names the sites that actually threw, even when another site returned rows", async () => {
+    state.listAppointments = ((a: { siteId?: string }) => {
+      if (a.siteId === "site-part-bad") throw new Error("dentally 500");
+      return Promise.resolve({
+        appointments: [{ id: "a1", patient_id: "p1", site_id: "site-part-ok", start_time: "2026-07-10T09:00:00Z", first_name: "A", last_name: "B" }],
+      });
+    }) as never;
+    const out = await listAppointmentsSafe(["site-part-bad", "site-part-ok"]);
+    expect(out.failed).toBe(false);
+    expect(out.failedSiteIds).toEqual(["site-part-bad"]);
+  });
+
+  it("reports no failed sites at all on a clean read", async () => {
+    state.listAppointments = (async () => ({ appointments: [] })) as never;
+    const out = await listAppointmentsSafe(["site-clean"]);
+    expect(out.failedSiteIds).toEqual([]);
+  });
+});
+
+// Practitioner ids arrive as NUMBERS from real Dentally and as strings only from
+// the local mock (see lib/booking/slots.ts and write.ts, which both branch on
+// it). The diary joins appointments to columns on this id, and the practitioner
+// LIST id is built with String(), so a number dropped to null here sent every
+// live appointment into "Unassigned" and left every clinician column reading
+// "Nothing booked" on a fully booked day.
+describe("toAppointment practitioner id (live sends a number, the mock a string)", () => {
+  it("keeps a NUMERIC practitioner id, as its decimal string", async () => {
+    state.listAppointments = (async () => ({
+      appointments: [
+        { id: "a1", patient_id: "p1", site_id: "site-pid-1", start_time: "2026-08-03T09:00:00+01:00", practitioner_id: 77 },
+      ],
+    })) as never;
+    const out = await listAppointmentsSafe(["site-pid-1"]);
+    expect(out.appointments[0].practitionerId).toBe("77");
+  });
+
+  it("keeps a STRING practitioner id unchanged (the mock's shape)", async () => {
+    state.listAppointments = (async () => ({
+      appointments: [
+        { id: "a1", patient_id: "p1", site_id: "site-pid-2", start_time: "2026-08-03T09:00:00+01:00", practitioner_id: "prac-1" },
+      ],
+    })) as never;
+    const out = await listAppointmentsSafe(["site-pid-2"]);
+    expect(out.appointments[0].practitionerId).toBe("prac-1");
+  });
+
+  it("stays null when there is genuinely no practitioner, so the Unassigned column is honest", async () => {
+    state.listAppointments = (async () => ({
+      appointments: [
+        { id: "a1", patient_id: "p1", site_id: "site-pid-3", start_time: "2026-08-03T09:00:00+01:00" },
+        { id: "a2", patient_id: "p2", site_id: "site-pid-3", start_time: "2026-08-03T10:00:00+01:00", practitioner_id: null },
+        { id: "a3", patient_id: "p3", site_id: "site-pid-3", start_time: "2026-08-03T11:00:00+01:00", practitioner_id: "" },
+      ],
+    })) as never;
+    const out = await listAppointmentsSafe(["site-pid-3"]);
+    expect(out.appointments.map((a) => a.practitionerId)).toEqual([null, null, null]);
   });
 });
 
