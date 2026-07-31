@@ -59,6 +59,10 @@ So:
 - **Prefer sentence case for panel headings.** A screen of letterspaced uppercase micro-caps is harder to scan, not denser.
 - Honesty about data is non-negotiable and is not what this is about. Keep the reason a figure is missing or partial; attach it to that figure, quietly, rather than to a row of chips across the screen.
 
+**And the obvious wrong fix, which is banned.** Removing chrome is not the same as removing information, and this section is not permission to go minimal. The target is Dentally's screen with better execution. It is never a sparser screen than Dentally's, and never an emptier one.
+
+The test to apply: put the screen beside Dentally's equivalent. If ours shows **less** information, it has failed, however clean it looks. It should show the same information, and look better while doing it: better type and rhythm, better spacing, better hierarchy, better colour, better alignment, better edges and surfaces. The improvement is in the quality of the execution, and it should read as more considered and more polished, not as more empty. Airy layouts, generous margins and few elements per screen have been rejected four separate times and are not coming back.
+
 ## Strategic principles
 
 **Familiar beats clever.** Clinicians were trained on conventions (FDI charting, the appointment state letters, blue for NHS and orange for private). Reproduce them exactly. Inventing a better notation is a way of losing.
