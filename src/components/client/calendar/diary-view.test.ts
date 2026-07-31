@@ -22,10 +22,17 @@ import {
   stateGlyph,
   weekdayOf,
   blockInnerHeight,
+  blockBodyText,
+  blockLeadLine,
+  bodyLineCount,
+  multidaySpanKeys,
+  parseSpan,
+  ruleMarks,
+  shortPatientName,
   BLOCK_PAD_Y,
-  LINE_META_PX,
-  LINE_NAME_PX,
-  LINE_SHORT_NAME_PX,
+  LINE_BODY_PX,
+  LINE_LEAD_PX,
+  MULTIDAY_SPANS,
   PX_PER_5MIN,
   type DiaryAppointment,
   type FocusItem,
@@ -142,17 +149,19 @@ describe("blockEdges (rounds the EDGES, never the height)", () => {
 });
 
 describe("blockTier", () => {
-  it("switches at 34, 20 and 13 pixels", () => {
-    expect(blockTier(34, 1)).toBe("full");
-    expect(blockTier(33, 1)).toBe("single");
-    expect(blockTier(20, 1)).toBe("single");
+  it("switches at 32, 20 and 13 pixels", () => {
+    expect(blockTier(32, 1)).toBe("full");
+    expect(blockTier(31, 1)).toBe("lead");
+    expect(blockTier(20, 1)).toBe("lead");
     expect(blockTier(19, 1)).toBe("name");
     expect(blockTier(13, 1)).toBe("name");
     expect(blockTier(12, 1)).toBe("bar");
   });
 
-  it("caps at single with two lanes and at name with three, and leaves one lane uncapped", () => {
-    expect(blockTier(200, 2)).toBe("single");
+  it("caps at lead with two lanes and at name with three, and leaves one lane uncapped", () => {
+    // Tighter than it was, because the body now WRAPS rather than truncating: a
+    // half-width 56px column cannot wrap a body without one word per line.
+    expect(blockTier(200, 2)).toBe("lead");
     expect(blockTier(200, 3)).toBe("name");
     expect(blockTier(200, 8)).toBe("name");
     expect(blockTier(200, 1)).toBe("full");
@@ -166,9 +175,9 @@ describe("blockTier", () => {
   it("matches the duration matrix at every zoom", () => {
     const expected: Record<number, Record<Zoom, string>> = {
       5: { compact: "bar", normal: "bar", roomy: "name" },
-      10: { compact: "name", normal: "single", roomy: "single" },
-      15: { compact: "single", normal: "full", roomy: "full" },
-      20: { compact: "single", normal: "full", roomy: "full" },
+      10: { compact: "name", normal: "lead", roomy: "full" },
+      15: { compact: "lead", normal: "full", roomy: "full" },
+      20: { compact: "full", normal: "full", roomy: "full" },
       30: { compact: "full", normal: "full", roomy: "full" },
       60: { compact: "full", normal: "full", roomy: "full" },
     };
@@ -182,44 +191,81 @@ describe("blockTier", () => {
   });
 });
 
-// A tier that admits a line its own threshold height cannot fit renders a
-// patient name with its descenders sliced off, which on a diary read from two
-// metres is the difference between a legible day and a suspicious one. The
-// thresholds and the block's own chrome therefore have to be checked together:
-// they used to be set independently, and every boundary was 10px too generous.
-describe("blockTier thresholds actually FIT the lines each tier draws", () => {
-  it("a block at the 'full' threshold fits both a name line and a meta line", () => {
-    expect(blockTier(34, 1)).toBe("full");
-    expect(blockInnerHeight(34, "full")).toBeGreaterThanOrEqual(LINE_NAME_PX + LINE_META_PX);
+describe("bodyLineCount", () => {
+  it("derives the clamp count from the drawn height", () => {
+    expect(bodyLineCount(32)).toBe(1); // the "full" threshold
+    expect(bodyLineCount(60)).toBe(3); // 25 minutes at Normal
+    expect(bodyLineCount(96)).toBe(4); // 40 minutes at Normal, the cap
+    expect(bodyLineCount(200)).toBe(4);
   });
 
-  it("a block at the 'single' threshold fits its name line", () => {
-    expect(blockTier(20, 1)).toBe("single");
-    expect(blockInnerHeight(20, "single")).toBeGreaterThanOrEqual(LINE_NAME_PX);
+  it("never returns fewer than one line, even for a block below the full tier", () => {
+    expect(bodyLineCount(0)).toBe(1);
+    expect(bodyLineCount(12)).toBe(1);
+  });
+});
+
+// A tier that admits a line its own threshold height cannot fit renders text
+// with its descenders sliced off, which on a diary read from two metres is the
+// difference between a legible day and a suspicious one. The thresholds and the
+// block's own chrome therefore have to be checked together: they used to be set
+// independently, and every boundary was 10px too generous.
+describe("blockTier thresholds actually FIT the lines each tier draws", () => {
+  // The "name" tier draws one 9.5px line at leading-none: the state glyph beside
+  // the short patient name, with no time. It has no shared constant because it is
+  // the only place that size is used.
+  const NAME_TIER_LINE_PX = 9.5;
+
+  it("a block at the 'full' threshold fits the lead line and one body line", () => {
+    expect(blockTier(32, 1)).toBe("full");
+    expect(blockInnerHeight(32, "full")).toBeGreaterThanOrEqual(LINE_LEAD_PX + LINE_BODY_PX);
+  });
+
+  it("a block at the 'lead' threshold fits its lead line", () => {
+    expect(blockTier(20, 1)).toBe("lead");
+    expect(blockInnerHeight(20, "lead")).toBeGreaterThanOrEqual(LINE_LEAD_PX);
   });
 
   it("a block at the 'name' threshold fits the short name line", () => {
     expect(blockTier(13, 1)).toBe("name");
-    expect(blockInnerHeight(13, "name")).toBeGreaterThanOrEqual(LINE_SHORT_NAME_PX);
+    expect(blockInnerHeight(13, "name")).toBeGreaterThanOrEqual(NAME_TIER_LINE_PX);
   });
 
   it("padding only ever tightens as the block shortens", () => {
-    expect(BLOCK_PAD_Y.full).toBeGreaterThanOrEqual(BLOCK_PAD_Y.single);
-    expect(BLOCK_PAD_Y.single).toBeGreaterThanOrEqual(BLOCK_PAD_Y.name);
+    expect(BLOCK_PAD_Y.full).toBeGreaterThanOrEqual(BLOCK_PAD_Y.lead);
+    expect(BLOCK_PAD_Y.lead).toBeGreaterThanOrEqual(BLOCK_PAD_Y.name);
   });
 
   it("holds at every threshold across every zoom, for the real drawn heights", () => {
-    const need: Record<string, number> = {
-      full: LINE_NAME_PX + LINE_META_PX,
-      single: LINE_NAME_PX,
-      name: LINE_SHORT_NAME_PX,
-      bar: 0,
-    };
     for (const zoom of ZOOMS) {
       for (const mins of [5, 10, 15, 20, 30, 45, 60]) {
         const { height } = blockEdges(540, 540 + mins, 540, zoom);
         const tier = blockTier(height, 1);
-        expect(`${mins}@${zoom}: ${blockInnerHeight(height, tier) >= need[tier]}`).toBe(
+        const need =
+          tier === "full"
+            ? LINE_LEAD_PX + LINE_BODY_PX
+            : tier === "lead"
+              ? LINE_LEAD_PX
+              : tier === "name"
+                ? NAME_TIER_LINE_PX
+                : 0;
+        expect(`${mins}@${zoom}: ${blockInnerHeight(height, tier) >= need}`).toBe(
+          `${mins}@${zoom}: true`,
+        );
+      }
+    }
+  });
+
+  // The clamp count and the tier threshold are derived from the SAME two line
+  // heights, so a block can never be asked to draw more lines than it has room
+  // for. This is the invariant that stops the two drifting apart again.
+  it("the clamped body always fits inside the block that asked for it", () => {
+    for (const zoom of ZOOMS) {
+      for (let mins = 5; mins <= 120; mins += 5) {
+        const { height } = blockEdges(540, 540 + mins, 540, zoom);
+        if (blockTier(height, 1) !== "full") continue;
+        const needed = LINE_LEAD_PX + bodyLineCount(height) * LINE_BODY_PX;
+        expect(`${mins}@${zoom}: ${blockInnerHeight(height, "full") >= needed}`).toBe(
           `${mins}@${zoom}: true`,
         );
       }
@@ -299,14 +345,16 @@ describe("stateGlyph", () => {
 
 describe("interiorGaps", () => {
   const span = (startMin: number, endMin: number) => ({ startMin, endMin });
+  /** A clinician who is in all day, so the geometry cases isolate the geometry. */
+  const ALL_DAY = [span(0, 1440)];
 
   it("never labels the run before the first block or after the last", () => {
-    const gaps = interiorGaps([span(600, 630)], 480, 1140, "normal");
+    const gaps = interiorGaps([span(600, 630)], 480, 1140, "normal", ALL_DAY);
     expect(gaps).toEqual([]);
   });
 
   it("labels a gap that is strictly between two blocks", () => {
-    const gaps = interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal");
+    const gaps = interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal", ALL_DAY);
     expect(gaps).toHaveLength(1);
     expect(gaps[0].minutes).toBe(30);
     expect(gaps[0].top).toBe(72);
@@ -314,32 +362,80 @@ describe("interiorGaps", () => {
   });
 
   it("drops a gap shorter than fifteen minutes", () => {
-    expect(interiorGaps([span(540, 570), span(580, 610)], 540, 1080, "normal")).toEqual([]);
+    expect(interiorGaps([span(540, 570), span(580, 610)], 540, 1080, "normal", ALL_DAY)).toEqual([]);
   });
 
   it("drops a gap that would be under twenty pixels tall at this zoom", () => {
     // 15 minutes: 24px at Compact, but only 20px is needed, so it survives there;
     // it is the 20px floor rather than the minute floor that bites on short gaps.
-    expect(interiorGaps([span(540, 570), span(585, 615)], 540, 1080, "compact")).toHaveLength(1);
+    expect(interiorGaps([span(540, 570), span(585, 615)], 540, 1080, "compact", ALL_DAY)).toHaveLength(1);
     // A gap under the pixel floor at the smallest zoom is dropped, not clipped.
-    expect(interiorGaps([span(540, 570), span(582, 612)], 540, 1080, "compact")).toEqual([]);
+    expect(interiorGaps([span(540, 570), span(582, 612)], 540, 1080, "compact", ALL_DAY)).toEqual([]);
   });
 
   it("returns nothing for an empty column or a single block", () => {
-    expect(interiorGaps([], 540, 1080, "normal")).toEqual([]);
-    expect(interiorGaps([span(600, 660)], 540, 1080, "normal")).toEqual([]);
+    expect(interiorGaps([], 540, 1080, "normal", ALL_DAY)).toEqual([]);
+    expect(interiorGaps([span(600, 660)], 540, 1080, "normal", ALL_DAY)).toEqual([]);
   });
 
   it("counts a cancelled or did-not-attend block as occupying its span", () => {
     // The middle block is a cancellation; the hole around it must NOT be labelled
     // as one 90 minute gap, because the cancelled block already reads as the hole.
-    const gaps = interiorGaps([span(540, 570), span(600, 630), span(660, 690)], 540, 1080, "normal");
+    const gaps = interiorGaps([span(540, 570), span(600, 630), span(660, 690)], 540, 1080, "normal", ALL_DAY);
     expect(gaps.map((g) => g.minutes)).toEqual([30, 30]);
   });
 
   it("merges overlapping blocks before looking for a gap", () => {
-    const gaps = interiorGaps([span(540, 600), span(550, 620), span(660, 690)], 540, 1080, "normal");
+    const gaps = interiorGaps([span(540, 600), span(550, 620), span(660, 690)], 540, 1080, "normal", ALL_DAY);
     expect(gaps.map((g) => g.minutes)).toEqual([40]);
+  });
+
+  // THE FIGURE IS A CLAIM ABOUT BOOKABLE TIME. Everything below is the difference
+  // between the label a receptionist reads and the capacity that actually exists.
+
+  it("labels NOTHING when there is no working time to measure against", () => {
+    // No availability, no claim. A figure with no source is exactly the confident
+    // empty this screen refuses.
+    expect(interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal")).toEqual([]);
+    expect(interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal", [])).toEqual([]);
+  });
+
+  it("cuts the gap down to the clinician's actual session", () => {
+    // Blocks at 09:00 and 15:00, but the session ends at 12:00. The bookable hole
+    // is 10:00 to 12:00, not 09:30 to 15:00.
+    const gaps = interiorGaps(
+      [span(540, 570), span(900, 930)],
+      540,
+      1080,
+      "normal",
+      [span(540, 720)],
+    );
+    expect(gaps.map((g) => g.minutes)).toEqual([150]);
+  });
+
+  it("subtracts a break, and splits the label either side of it", () => {
+    // 12:00 to 12:30 booked, 15:00 to 15:30 booked, lunch 13:00 to 14:00. The
+    // reader must see 30m and 60m, never one 150m span across the lunch hour.
+    const gaps = interiorGaps(
+      [span(720, 750), span(900, 930)],
+      540,
+      1080,
+      "normal",
+      [span(540, 1080)],
+      [span(780, 840)],
+    );
+    expect(gaps.map((g) => g.minutes)).toEqual([30, 60]);
+  });
+
+  it("labels each part of a session that is split by off time", () => {
+    const gaps = interiorGaps(
+      [span(540, 570), span(900, 930)],
+      540,
+      1080,
+      "normal",
+      [span(540, 660), span(780, 930)],
+    );
+    expect(gaps.map((g) => g.minutes)).toEqual([90, 120]);
   });
 });
 
@@ -373,6 +469,176 @@ describe("accessibleSentence", () => {
 
   it("carries the raw value for an unrecognised state", () => {
     expect(accessibleSentence(appt({ state: "some_new_state" }), null, 1)).toContain("some_new_state.");
+  });
+
+  // Funding reaches the reader through a 3px rail, and colour must never be the
+  // only carrier. At the 'lead' tier and below the body text is not drawn at all,
+  // so this sentence is the ONLY channel left besides the rail.
+  it("names the funding after the clinician and before the state", () => {
+    expect(accessibleSentence(appt({ note: null }), "Jin Kim", 1, "nhs")).toBe(
+      "09:20 to 09:50, 30 minutes. Jaya Sharma. Examination. Jin Kim. NHS. Confirmed.",
+    );
+    expect(accessibleSentence(appt({ note: null }), "Jin Kim", 1, "private")).toContain(
+      "Jin Kim. Private. Confirmed.",
+    );
+    expect(accessibleSentence(appt({ note: null }), "Jin Kim", 1, "udc")).toContain(
+      "Jin Kim. UDC. Confirmed.",
+    );
+  });
+
+  it("says NOTHING at all for unresolvable funding, never the word unknown", () => {
+    const s = accessibleSentence(appt({ note: null }), "Jin Kim", 1, "unknown");
+    expect(s).toBe("09:20 to 09:50, 30 minutes. Jaya Sharma. Examination. Jin Kim. Confirmed.");
+    expect(s.toLowerCase()).not.toContain("unknown");
+    // Defaulting the argument must behave identically to passing "unknown".
+    expect(accessibleSentence(appt({ note: null }), "Jin Kim", 1)).toBe(s);
+  });
+});
+
+describe("shortPatientName", () => {
+  it("prints the reference's form: initial, full stop, no space, surname", () => {
+    expect(shortPatientName("Nadia Lamprell")).toBe("N.Lamprell");
+    expect(shortPatientName("Jaya Sharma")).toBe("J.Sharma");
+  });
+
+  it("uses the LAST word as the surname, so a middle name is dropped not the surname", () => {
+    expect(shortPatientName("Ana Maria Ferreira")).toBe("A.Ferreira");
+  });
+
+  it("returns a single word unchanged, so a non-person diary column stays readable", () => {
+    expect(shortPatientName("Unassigned")).toBe("Unassigned");
+    expect(shortPatientName("  Lamprell  ")).toBe("Lamprell");
+  });
+
+  it("returns an empty string for an empty name rather than a stray full stop", () => {
+    expect(shortPatientName("")).toBe("");
+    expect(shortPatientName("   ")).toBe("");
+  });
+});
+
+describe("blockLeadLine", () => {
+  it("is the start time then the short name", () => {
+    expect(blockLeadLine(appt({ patientName: "Nadia Lamprell" }))).toBe("09:20 N.Lamprell");
+  });
+
+  it("falls back to the name alone when the start cannot be parsed, never a fake time", () => {
+    const line = blockLeadLine(appt({ start: "not-a-date", patientName: "Nadia Lamprell" }));
+    expect(line).toBe("N.Lamprell");
+    expect(line).not.toContain(":");
+  });
+});
+
+describe("blockBodyText", () => {
+  it("joins funding, the type label, the raw reason and the note with single spaces", () => {
+    const text = blockBodyText(
+      appt({ reason: "Hygienist", note: "needs pre med, check with dentist" }),
+      "nhs",
+    );
+    expect(text).toBe("NHS Hygienist needs pre med, check with dentist");
+  });
+
+  it("prints the raw reason beside the label when the two say different things", () => {
+    // "Check up" canonicalises onto the "Checkup" row, so the practice's own
+    // wording is kept alongside the tidy label rather than being overwritten.
+    const text = blockBodyText(appt({ reason: "Check up", note: null }), "private");
+    expect(text).toBe("Private Checkup Check up");
+  });
+
+  it("does not print the reason twice when it already equals its label", () => {
+    expect(blockBodyText(appt({ reason: "Extraction", note: null }), "unknown")).toBe("Extraction");
+    // A pure difference of case is not a difference worth printing twice.
+    expect(blockBodyText(appt({ reason: "scale & polish", note: null }), "private")).toBe(
+      "Private Scale & Polish",
+    );
+  });
+
+  it("omits unresolvable funding entirely, so nothing can be read as a fact", () => {
+    const text = blockBodyText(appt({ reason: "Examination", note: null }), "unknown");
+    expect(text).toBe("Examination");
+    expect(text.toLowerCase()).not.toContain("unknown");
+  });
+
+  it("returns an empty string when there is genuinely nothing to say", () => {
+    expect(blockBodyText(appt({ reason: null, note: null }), "unknown")).toBe("");
+  });
+
+  it("keeps an unrecognised reason verbatim rather than inventing a tidy name", () => {
+    expect(blockBodyText(appt({ reason: "Denture reline", note: null }), "unknown")).toBe(
+      "Denture reline",
+    );
+  });
+});
+
+describe("ruleMarks", () => {
+  const bounds = { startMin: 540, endMin: 660 }; // 09:00 to 11:00
+
+  it("emits three DISJOINT sets: an hour is never also a half, a half never a five", () => {
+    const { fives, halves, hours } = ruleMarks(bounds, "normal");
+    expect(hours).toEqual([540, 600, 660]);
+    expect(halves).toEqual([570, 630]);
+    for (const m of fives) {
+      expect(m % 30).not.toBe(0);
+      expect(m % 60).not.toBe(0);
+    }
+    const all = [...fives, ...halves, ...hours];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("covers every five minute mark inside the bounds exactly once", () => {
+    const { fives, halves, hours } = ruleMarks(bounds, "roomy");
+    expect([...fives, ...halves, ...hours].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 25 }, (_, i) => 540 + i * 5),
+    );
+  });
+
+  it("SUPPRESSES the five minute rules at compact, where 8px apart is moire", () => {
+    const { fives, halves, hours } = ruleMarks(bounds, "compact");
+    expect(fives).toEqual([]);
+    expect(halves).toEqual([570, 630]);
+    expect(hours).toEqual([540, 600, 660]);
+  });
+
+  it("returns empty sets for unusable bounds rather than looping", () => {
+    expect(ruleMarks({ startMin: Number.NaN, endMin: 600 }, "normal")).toEqual({
+      fives: [],
+      halves: [],
+      hours: [],
+    });
+  });
+});
+
+describe("parseSpan / multidaySpanKeys", () => {
+  it("offers 3, 5 and 7 and defaults to 5 for anything else", () => {
+    expect(MULTIDAY_SPANS).toEqual([3, 5, 7]);
+    expect(parseSpan("3")).toBe(3);
+    expect(parseSpan("5")).toBe(5);
+    expect(parseSpan("7")).toBe(7);
+    expect(parseSpan("4")).toBe(5);
+    expect(parseSpan("")).toBe(5);
+    expect(parseSpan(null)).toBe(5);
+    expect(parseSpan("rubbish")).toBe(5);
+  });
+
+  it("runs FORWARD from the anchor and is never week-aligned", () => {
+    // 2026-08-05 is a Wednesday. Week-aligning would throw the reader back to
+    // Monday the 3rd, which is not what the reference's own URL does.
+    expect(multidaySpanKeys("2026-08-05", 5)).toEqual([
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-08",
+      "2026-08-09",
+    ]);
+  });
+
+  it("crosses a month boundary correctly", () => {
+    expect(multidaySpanKeys("2026-07-31", 3)).toEqual(["2026-07-31", "2026-08-01", "2026-08-02"]);
+  });
+
+  it("clamps the span to 1..7 and returns nothing for an unparseable anchor", () => {
+    expect(multidaySpanKeys("2026-08-05", 0)).toHaveLength(1);
+    expect(multidaySpanKeys("2026-08-05", 99)).toHaveLength(7);
+    expect(multidaySpanKeys("nonsense", 5)).toEqual([]);
   });
 });
 

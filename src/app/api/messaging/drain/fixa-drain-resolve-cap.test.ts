@@ -36,6 +36,7 @@ const fakes = vi.hoisted(() => {
   };
   return {
     modules: {
+      diary: makeModule(),
       reactivation: makeModule(),
       recall: makeModule(),
       noshow: makeModule(),
@@ -57,6 +58,7 @@ function repoMock(name: keyof typeof fakes.modules) {
   };
 }
 
+vi.mock("@/lib/calendar/repository", () => repoMock("diary"));
 vi.mock("@/lib/reactivation/repository", () => repoMock("reactivation"));
 vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
@@ -89,7 +91,7 @@ vi.mock("@/lib/messaging/frequency", () => ({
 
 import { POST } from "./route";
 
-const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
 const fetchSpy = vi.fn(async () => { throw new Error("network egress attempted in test"); });
 
 function seed(module: (typeof ALL_SOURCES)[number]): FakeRow {

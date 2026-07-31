@@ -83,6 +83,15 @@ export interface Site {
   timezone: string;
   /** Local opening windows, used by the after-hours capture module. */
   openingHours?: OpeningHours;
+  /**
+   * The practice number PATIENT copy quotes ("please call us on ...").
+   *
+   * null until the owner supplies the real numbers, and the copy builder REFUSES
+   * to draft rather than falling back: a guessed phone number in a text to a
+   * patient is not acceptable, and a message inviting someone to ring a number
+   * that is not the practice is worse than sending nothing.
+   */
+  publicPhone?: string | null;
 }
 
 export interface SessionUser {

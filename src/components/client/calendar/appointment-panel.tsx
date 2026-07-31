@@ -1,21 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { StatusPill } from "@/components/primitives";
 import { cn } from "@/lib/utils";
+import { FUNDING_LABEL, type FundingCode } from "@/lib/calendar/funding";
+import type { Proposal } from "@/lib/calendar/propose";
 import { longDate, safeDayKey, stateDotClass, stateLabel, STATE_BADGE_TONE } from "./calendar-logic";
 import { blockTimes, stateGlyph, type DiaryAppointment } from "./diary-view";
+import { typeLabelFor } from "./treatment-type";
+import { WRITE_GATE_OFF_PANEL, WRITE_GATE_ON_PANEL } from "./move-copy";
+import { RescheduleSuggestions } from "./reschedule-suggestions";
 
 // ---------------------------------------------------------------------------
-// The read-only detail panel.
+// The appointment detail panel.
 //
-// It shows only what is already in hand: no second fetch, no balance, no recall,
-// no history. It carries no control that changes anything, and it says so in
-// plain words at the foot, which is the single most important line on the
-// screen: without it a clinician who tries to drag a block concludes the
-// software is broken.
+// It shows what is already in hand plus two things it has to fetch: the record of
+// every time this appointment has been MOVED, and, on request, replacement times
+// that are both available and clinically suitable.
+//
+// The foot of the panel is the single most important line on the screen, and it
+// must be ACCURATE about what this diary can currently do. With the Dentally
+// write gate shut it says so plainly, because a clinician who drags a block and
+// sees nothing happen concludes the software is broken. With the gate open it
+// says how to move an appointment and that every move is confirmed first.
+//
+// APPOINTMENT UPDATE IS UNPROVEN AGAINST LIVE DENTALLY. createAppointment has
+// been exercised against the real API; PUT /v1/appointments/:id has not. Nothing
+// in this panel presents it as verified.
 // ---------------------------------------------------------------------------
 
 function PanelTitle({ children }: { children: React.ReactNode }) {
@@ -38,26 +51,101 @@ function Row({ label, value }: { label: string; value: string }) {
 const FOCUSABLE =
   'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
+interface MoveRow {
+  id: string;
+  createdAt: string;
+  actorEmail: string | null;
+  actorRole: string | null;
+  fromStartAt: string | null;
+  toStartAt: string | null;
+  outcome: string;
+  detail: string | null;
+  touchId: string | null;
+  notifyIntent: boolean;
+}
+
+const MOVE_OUTCOME_LABEL: Record<string, string> = {
+  saved: "Saved",
+  refused: "Refused",
+  not_saved: "Did not save",
+  unknown: "Not confirmed",
+};
+
 export function AppointmentPanel({
   appointment,
   clinicianName,
   siteName,
+  siteId,
+  dayKey,
+  funding = "unknown",
+  fundingFailed = false,
   clientSlug,
+  canMove = false,
+  writeEnabled = false,
+  moveBlockedReason = null,
+  onPickProposal,
   onClose,
 }: {
   appointment: DiaryAppointment;
   clinicianName: string | null;
   siteName: string;
+  siteId: string;
+  /** The London day this appointment sits on, for the proposal read. */
+  dayKey: string;
+  /** Resolved from the PATIENT's payment plan, never from the appointment. */
+  funding?: FundingCode;
+  /** True when the funding read itself failed, which is a DIFFERENT fact from
+   *  "nothing on file" and gets its own words rather than an omitted row. */
+  fundingFailed?: boolean;
   clientSlug: string;
+  /** Role-gated and read-gated, from the same list the server enforces. */
+  canMove?: boolean;
+  /** isDentallyWriteEnabled(). The foot of the panel says which it is. */
+  writeEnabled?: boolean;
+  /** Set when a read failed and moving is therefore refused at this site. */
+  moveBlockedReason?: string | null;
+  onPickProposal?: (p: Proposal) => void;
   onClose: () => void;
 }) {
   const headingId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const [moves, setMoves] = useState<MoveRow[] | null>(null);
+  const [movesFailed, setMovesFailed] = useState(false);
 
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
+
+  // The move record. A FAILED read is reported as failed and never as an empty
+  // history: migration 0063 is checked in but not applied, so locally this
+  // genuinely cannot be read, and "this has never been moved" would be a lie.
+  useEffect(() => {
+    if (!siteId) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ site: siteId });
+    fetch(`/api/calendar/appointment/${encodeURIComponent(appointment.id)}?${params.toString()}`, {
+      headers: { accept: "application/json" },
+    })
+      .then(async (res) => {
+        const body = (await res.json()) as { ok?: boolean; moves?: MoveRow[]; failed?: boolean };
+        if (!res.ok || body.ok !== true) throw new Error("move history read failed");
+        return body;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setMoves(body.moves ?? []);
+        setMovesFailed(body.failed === true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMoves([]);
+        setMovesFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appointment.id, siteId]);
 
   // Escape closes, and Tab is trapped inside the panel while it is open.
   const onKeyDown = useCallback(
@@ -92,6 +180,14 @@ export function AppointmentPanel({
   const tone = STATE_BADGE_TONE[appointment.state];
   const label = stateLabel(appointment.state);
   const glyph = stateGlyph(appointment.state);
+  const typeLabel = typeLabelFor(appointment.reason);
+  // Three distinct answers, never collapsed into two: we could not find out, we
+  // asked and there is nothing on file, and the code itself.
+  const fundingValue = fundingFailed
+    ? "Could not be loaded"
+    : funding === "unknown"
+      ? "Not on file"
+      : FUNDING_LABEL[funding];
 
   return (
     <div className="fixed inset-0 z-30 flex justify-end">
@@ -152,7 +248,15 @@ export function AppointmentPanel({
               />
               <Row label="Length" value={times ? `${times.minutes} minutes` : "Not recorded"} />
               <Row label="Reason" value={appointment.reason ?? "No reason recorded"} />
+              {/* The type label only when it says something the raw reason did
+                  not: repeating the same words on two rows is noise, not density. */}
+              {typeLabel && typeLabel.toLowerCase() !== (appointment.reason ?? "").trim().toLowerCase() ? (
+                <Row label="Treatment type" value={typeLabel} />
+              ) : null}
               <Row label="Clinician" value={clinicianName ?? appointment.practitioner ?? "Not assigned"} />
+              {/* NEVER omitted. A failed read and an empty record look identical on
+                  the grid, so the panel is where the two are told apart in words. */}
+              <Row label="Funding" value={fundingValue} />
               <Row label="Site" value={siteName} />
               <Row label="State" value={label} />
             </div>
@@ -168,6 +272,66 @@ export function AppointmentPanel({
             </section>
           ) : null}
 
+          {/* Replacement times, on request. A slot only appears when the clinician
+              genuinely has availability then AND is suited to the treatment; the
+              filter runs on the server before the ordering, so nothing here can
+              relax it. */}
+          {canMove && onPickProposal ? (
+            <section>
+              <PanelTitle>Cancel or reschedule</PanelTitle>
+              <div className="pt-1.5">
+                <RescheduleSuggestions
+                  siteId={siteId}
+                  appointmentId={appointment.id}
+                  day={dayKey}
+                  onPick={onPickProposal}
+                />
+              </div>
+            </section>
+          ) : null}
+
+          {/* Every move on this appointment: who, when, and what happened to the
+              patient's text. Automated and manual action alike is shown rather
+              than made to feel magical. */}
+          <section>
+            <PanelTitle>Moved</PanelTitle>
+            <div className="pt-1.5">
+              {movesFailed ? (
+                <p className="text-[11.5px] leading-[1.45] text-ink">
+                  The move record could not be read, so this list is not the whole story.
+                </p>
+              ) : moves === null ? (
+                <p className="text-[11.5px] text-muted">Reading the move record.</p>
+              ) : moves.length === 0 ? (
+                <p className="text-[11.5px] text-muted">This appointment has not been moved.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {moves.map((m) => (
+                    <li key={m.id} className="text-[11.5px] leading-[1.45] text-ink">
+                      <span className="font-semibold tabular-nums text-navy">
+                        {MOVE_OUTCOME_LABEL[m.outcome] ?? m.outcome}
+                      </span>{" "}
+                      {m.actorEmail ?? "somebody"}
+                      {m.actorRole ? ` (${m.actorRole})` : ""}
+                      {m.createdAt ? `, ${new Date(m.createdAt).toLocaleString("en-GB")}` : ""}.
+                      {m.detail ? ` ${m.detail}` : ""}
+                      {m.outcome === "saved" ? (
+                        <span className="text-muted">
+                          {" "}
+                          {m.touchId
+                            ? "A text was queued for the patient."
+                            : m.notifyIntent
+                              ? "No text was queued."
+                              : "No text was asked for."}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+
           <section>
             <PanelTitle>Reference</PanelTitle>
             <p className="pt-1 text-[10px] tabular-nums text-faint">{appointment.id}</p>
@@ -182,8 +346,18 @@ export function AppointmentPanel({
                 Open patient file
               </Link>
             ) : null}
+            {/* ACCURATE about what this diary can currently do, in every state,
+                and in the order the reader can act on. The ROLE comes first: a
+                receptionist who may not move anything does not need to be told to
+                reload the page, and a reload would not help them. */}
             <p className="text-[11px] text-muted">
-              This diary is read only. Appointments are booked and changed in Dentally.
+              {!canMove
+                ? "Appointments are moved by the practice manager and the practice owners."
+                : moveBlockedReason
+                  ? moveBlockedReason
+                  : writeEnabled
+                    ? WRITE_GATE_ON_PANEL
+                    : WRITE_GATE_OFF_PANEL}
             </p>
           </div>
         </div>

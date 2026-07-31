@@ -112,6 +112,21 @@ export function weekLabel(dayIso: string): string {
   return `${fmt(mon, { day: "numeric", month: "short" })}, ${fmt(sun, { day: "numeric", month: "short", year: "numeric" })}`;
 }
 
+/**
+ * "31 Jul, 2 Aug 2026" for a run of `span` days starting AT `dayIso`.
+ *
+ * Multiday is anchor-forward, not Monday-anchored, so weekLabel is the wrong
+ * label for it: with Friday selected and a span of three, weekLabel announces
+ * the Monday-to-Sunday range while the grid draws Friday, Saturday and Sunday.
+ */
+export function spanLabel(dayIso: string, span: number): string {
+  const last = shiftDay(dayIso, Math.max(1, Math.round(span)) - 1);
+  const fmt = (d: string, opts: Intl.DateTimeFormatOptions) =>
+    new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { ...opts, timeZone: "UTC" });
+  if (last === dayIso) return longDate(dayIso);
+  return `${fmt(dayIso, { day: "numeric", month: "short" })}, ${fmt(last, { day: "numeric", month: "short", year: "numeric" })}`;
+}
+
 /** "Thu" for a day key. */
 export function dow(dayIso: string): string {
   return new Date(`${dayIso}T00:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" });

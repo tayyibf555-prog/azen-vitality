@@ -133,6 +133,7 @@ const fakes = vi.hoisted(() => {
   };
   return {
     modules: {
+      diary: makeModule(),
       reactivation: makeModule(),
       recall: makeModule(),
       noshow: makeModule(),
@@ -157,6 +158,7 @@ function repoMock(name: keyof typeof fakes.modules) {
   };
 }
 
+vi.mock("@/lib/calendar/repository", () => repoMock("diary"));
 vi.mock("@/lib/reactivation/repository", () => repoMock("reactivation"));
 vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
@@ -199,7 +201,10 @@ vi.mock("@/lib/messaging/frequency", () => ({
 import { addSuppression } from "@/lib/messaging/suppression";
 import { POST } from "./route";
 
-const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
+// "diary" is the reschedule notice raised when an appointment is moved. It is a
+// source like any other and must be covered by the STOP guard: a patient who
+// opted out is not texted about a move either.
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
 type Source = (typeof ALL_SOURCES)[number];
 
 const SITE = "site-stop";

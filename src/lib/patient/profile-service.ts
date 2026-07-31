@@ -1,6 +1,7 @@
 import "server-only";
 import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { applyStatusChange } from "@/lib/patient-status/service";
+import { invalidateFundingCache } from "@/lib/calendar/funding-source";
 import { insertProfileAudit } from "./profile-audit";
 import {
   buildAuditRows,
@@ -145,6 +146,13 @@ export async function applyProfileEdit(input: {
       console.error(`[patient-profile] updatePatient failed for ${patientId}`, err);
       result = "failed";
     }
+  }
+
+  // 5b. The diary's funding cache holds a patient's plan for five minutes, so a
+  //     patient switched between plans here would keep the old rail and the old
+  //     word on the diary until it aged out. Dropped as soon as the write lands.
+  if (result === "synced" && changed.includes("payment_plan_id")) {
+    invalidateFundingCache(patientId);
   }
 
   // 6. The audit trail, including a refused write (recorded as an attempt, so a rejected

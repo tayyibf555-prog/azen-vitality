@@ -18,8 +18,11 @@
 // ---------------------------------------------------------------------------
 
 import type { Weekday } from "@/lib/types";
+import { FUNDING_LABEL, type FundingCode } from "@/lib/calendar/funding";
+import { mergeSpans } from "@/lib/calendar/working-spans";
 import { diaryColumns, effectiveMinutes, labelMinutes, londonMinutes, type DiaryColumn } from "./diary-grid";
 import { stateLabel } from "./calendar-logic";
+import { typeLabelFor } from "./treatment-type";
 
 // --- zoom, and the layout constants the grid is built from ---------------------
 
@@ -134,10 +137,10 @@ export function blockEdges(
 
 // --- the degrade ladder -------------------------------------------------------
 
-export type BlockTier = "full" | "single" | "name" | "bar";
+export type BlockTier = "full" | "lead" | "name" | "bar";
 
-const TIER_RANK: Record<BlockTier, number> = { full: 3, single: 2, name: 1, bar: 0 };
-const RANK_TIER: BlockTier[] = ["bar", "name", "single", "full"];
+const TIER_RANK: Record<BlockTier, number> = { full: 3, lead: 2, name: 1, bar: 0 };
+const RANK_TIER: BlockTier[] = ["bar", "name", "lead", "full"];
 
 /**
  * The height of each line a block can draw, and the 1px hairline top and bottom.
@@ -145,29 +148,47 @@ const RANK_TIER: BlockTier[] = ["bar", "name", "single", "full"];
  * These are the numbers the thresholds below are DERIVED from, so the two can
  * never drift apart: the tier decides what exists, and a tier that admits a line
  * its own threshold cannot fit is a name rendered with its descenders sliced off.
- *   name line: 12.5px at leading-[1.1]  = 13.75
- *   meta line: 10px   at leading-[1.2]  = 12
- *   short-block name: 10px at leading-none = 10
+ *
+ * The block now carries the reference's dense WRAPPED text rather than a name
+ * line and one truncated meta line, so there are exactly two line heights:
+ *   lead line: 10px  at leading-[1.15] = 11.5   (time + short patient name, bold)
+ *   body line: 9.5px at leading-[1.25] = 11.875, rounded to 12 for the arithmetic
  */
-export const LINE_NAME_PX = 13.75;
-export const LINE_META_PX = 12;
-export const LINE_SHORT_NAME_PX = 10;
+export const LINE_LEAD_PX = 11.5;
+export const LINE_BODY_PX = 12;
 export const BLOCK_BORDER_PX = 2;
 
 /**
  * The vertical padding AppointmentBlock draws at each tier.
  *
  * It TIGHTENS as the block shortens rather than staying at a flat 4px, which is
- * what lets the 34 / 20 / 13 thresholds below stay where they are while the text
- * they admit genuinely fits. A flat 4px made every boundary 8px too generous, so
- * a 15 minute booking at Normal drew a patient name and a meta line into 24px of
- * usable space and clipped both.
+ * what lets the 32 / 20 / 13 thresholds below stay where they are while the text
+ * they admit genuinely fits.
  */
-export const BLOCK_PAD_Y: Record<BlockTier, number> = { full: 3, single: 2, name: 0, bar: 0 };
+export const BLOCK_PAD_Y: Record<BlockTier, number> = { full: 3, lead: 3, name: 0, bar: 0 };
 
 /** The usable height inside a block of this outer height at this tier. */
 export function blockInnerHeight(heightPx: number, tier: BlockTier): number {
   return heightPx - BLOCK_BORDER_PX - 2 * BLOCK_PAD_Y[tier];
+}
+
+/**
+ * How many WRAPPED body lines fit under the lead line in a block this tall.
+ *
+ * 19.5 is 2px of border plus 6px of padding plus the 11.5px lead line, so this
+ * is derived from the constants above rather than guessed:
+ *   32px  (the "full" threshold)      -> 1 line
+ *   60px  (25 minutes at Normal)      -> 3
+ *   96px  (40 minutes at Normal)      -> 4, the cap
+ *
+ * Capped at four because beyond that it is a wall of text and the reference
+ * itself tops out at four. The block clamps with -webkit-line-clamp at exactly
+ * this count, so text fills the block and stops on a WHOLE line: nothing is ever
+ * half-drawn with its descenders sliced off.
+ */
+export function bodyLineCount(heightPx: number): number {
+  const fits = Math.floor((heightPx - 19.5) / LINE_BODY_PX);
+  return Math.min(4, Math.max(1, fits));
 }
 
 /**
@@ -180,23 +201,50 @@ export function blockInnerHeight(heightPx: number, tier: BlockTier): number {
  * NOT floored to a 24px WCAG target: drawing a 5 minute appointment at a
  * 10 minute height is a lie about the booking.
  *
- * Lanes cap the tier because a clash halves the width: two lanes in a 112px
- * column is 56px, three is 34px, and a meta line there is noise. Column width
- * alone never caps it; line 2 truncates instead.
+ * Lanes cap the tier because a clash halves the width, and the cap is TIGHTER
+ * than it was now that the body wraps rather than truncating: a half-width 56px
+ * column cannot wrap a body without putting one word on each line, and a 34px
+ * third of a column cannot carry a lead line either.
  */
 export function blockTier(heightPx: number, lanes: number): BlockTier {
   const byHeight: BlockTier =
-    heightPx >= 34 ? "full" : heightPx >= 20 ? "single" : heightPx >= 13 ? "name" : "bar";
-  const cap: BlockTier = lanes >= 3 ? "name" : lanes >= 2 ? "single" : "full";
+    heightPx >= 32 ? "full" : heightPx >= 20 ? "lead" : heightPx >= 13 ? "name" : "bar";
+  const cap: BlockTier = lanes >= 3 ? "name" : lanes >= 2 ? "lead" : "full";
   return RANK_TIER[Math.min(TIER_RANK[byHeight], TIER_RANK[cap])];
 }
 
+/** A large enough off span to carry the word "Off" rather than being bare grey. */
+export const OFF_LABEL_MIN_PX = 60;
+
 // --- the eight state treatments -----------------------------------------------
 
+/**
+ * FILL HAS MOVED TO THE TREATMENT TYPE. `fill`, `hairline`, `nameInk` and
+ * `metaInk` below are RETAINED but are no longer read by the block for anything
+ * except the three states that genuinely override the type surface:
+ *
+ *   cancelled   forced to white (--card) with a dashed border and no spine. The
+ *               ONE state that replaces the type fill, because it is the one
+ *               state whose meaning is "this space is available", and
+ *               availability is now the fill channel's other job.
+ *   in_surgery  keeps the type fill at 100% and takes a 2px solid navy border.
+ *   completed   the type fill at 55%, mixed toward --card rather than faded with
+ *               opacity, which would fade the text with it.
+ *
+ * did_not_attend KEEPS its type fill with the 45 degree hatch OVER it, because
+ * the slot was consumed.
+ *
+ * State therefore reaches the reader through four channels, none of them hue:
+ *   1. the 3px left SPINE, in --status-*, which survives a fully wrapped block
+ *   2. the CORNER LETTER top right (P C B clock S tick X DNA), the exact
+ *      notation the practice was trained on
+ *   3. BORDER WEIGHT: 1px --type-N-line normally, 2px --navy for in_surgery
+ *   4. the non-hue treatments: dashed, hatched, 55% fill
+ */
 export interface BlockStyle {
-  /** The block's fill. */
+  /** Retained. Read only for cancelled, in_surgery and completed. */
   fill: string;
-  /** The 1px hairline round the block. */
+  /** Retained. Read only for cancelled's dashed border. */
   hairline: string;
   /** The hairline on hover: the state's own status colour, so the fill never changes. */
   hoverHairline: string;
@@ -391,21 +439,36 @@ export interface InteriorGap {
 
 /**
  * The ONE quantified statement this screen makes about empty time: a span lying
- * strictly BETWEEN two drawn blocks in the same column.
+ * strictly BETWEEN two drawn blocks in the same column, INSIDE the clinician's
+ * working time and OUTSIDE their breaks.
  *
  * Gaps before the first block and after the last are never returned, because
- * those are the ones that would presume working hours, and no data source in the
- * repo supports that claim (there is no working-hours, session, rota or room
- * endpoint on the Dentally client, and rota_staff carries no practitioner id).
+ * those are the ones that would presume working hours at the edges of the day.
  * Cancelled and did-not-attend blocks count as occupying their span, so the hole
  * around a cancellation is never double-labelled: the cancelled block's own
  * subtractive treatment is the signal there.
+ *
+ * WHY THE INTERSECTION EXISTS. An earlier note here said no data source in the
+ * repo supported a working-hours claim. That was true before Dentally's own
+ * availability was read; it is not true now, and `working` is exactly that
+ * source, sitting in the same object as these blocks. Without the intersection,
+ * a column with appointments at 12:00 and 15:00 and a lunch hour at 13:00
+ * printed "150m" across a span the grid itself was drawing GREY for off and
+ * blocking out for lunch: the one number a receptionist reads as bookable,
+ * overstating real capacity by the whole off and break portion.
+ *
+ * `working` empty means "we cannot say", and NOTHING is labelled. That is the
+ * correct direction: a figure is a claim, and a claim needs a source.
  */
 export function interiorGaps(
   placed: readonly { startMin: number; endMin: number }[],
   boundsStartMin: number,
   boundsEndMin: number,
   zoom: Zoom,
+  /** The clinician's white sessions. Omitted or empty means no gap is labelled. */
+  working: readonly { startMin: number; endMin: number }[] = [],
+  /** Breaks. A note does not consume time and does not subtract. */
+  breaks: readonly { startMin: number; endMin: number }[] = [],
 ): InteriorGap[] {
   const spans = placed
     .filter((s) => Number.isFinite(s.startMin) && Number.isFinite(s.endMin) && s.endMin > s.startMin)
@@ -420,15 +483,59 @@ export function interiorGaps(
     else merged.push({ ...s });
   }
 
+  const workable = mergeSpans(working);
+  if (workable.length === 0) return [];
+  const blocked = mergeSpans(breaks);
+
   const out: InteriorGap[] = [];
   for (let i = 1; i < merged.length; i += 1) {
     const gapStart = Math.max(merged[i - 1].endMin, boundsStartMin);
     const gapEnd = Math.min(merged[i].startMin, boundsEndMin);
-    const minutes = gapEnd - gapStart;
-    if (minutes < 15) continue;
-    const { top, height } = blockEdges(gapStart, gapEnd, boundsStartMin, zoom);
-    if (height < 20) continue;
-    out.push({ top, height, minutes });
+    if (gapEnd <= gapStart) continue;
+    // The hole, cut down to the time the clinician is actually here, then cut
+    // again around their breaks. What survives is genuinely bookable.
+    for (const piece of subtractSpans(intersectSpans({ startMin: gapStart, endMin: gapEnd }, workable), blocked)) {
+      const minutes = piece.endMin - piece.startMin;
+      if (minutes < 15) continue;
+      const { top, height } = blockEdges(piece.startMin, piece.endMin, boundsStartMin, zoom);
+      if (height < 20) continue;
+      out.push({ top, height, minutes });
+    }
+  }
+  return out;
+}
+
+/** The parts of `span` that lie inside `spans` (already merged). */
+function intersectSpans(
+  span: { startMin: number; endMin: number },
+  spans: readonly { startMin: number; endMin: number }[],
+): { startMin: number; endMin: number }[] {
+  const out: { startMin: number; endMin: number }[] = [];
+  for (const s of spans) {
+    const startMin = Math.max(span.startMin, s.startMin);
+    const endMin = Math.min(span.endMin, s.endMin);
+    if (endMin > startMin) out.push({ startMin, endMin });
+  }
+  return out;
+}
+
+/** `pieces` with every part of `blocked` (already merged) removed. */
+function subtractSpans(
+  pieces: readonly { startMin: number; endMin: number }[],
+  blocked: readonly { startMin: number; endMin: number }[],
+): { startMin: number; endMin: number }[] {
+  if (blocked.length === 0) return [...pieces];
+  const out: { startMin: number; endMin: number }[] = [];
+  for (const piece of pieces) {
+    let cursor = piece.startMin;
+    for (const b of blocked) {
+      if (b.endMin <= cursor) continue;
+      if (b.startMin >= piece.endMin) break;
+      if (b.startMin > cursor) out.push({ startMin: cursor, endMin: Math.min(b.startMin, piece.endMin) });
+      cursor = Math.max(cursor, b.endMin);
+      if (cursor >= piece.endMin) break;
+    }
+    if (cursor < piece.endMin) out.push({ startMin: cursor, endMin: piece.endMin });
   }
   return out;
 }
@@ -466,9 +573,73 @@ export function blockTimes(appt: {
 }
 
 /**
- * Line 2 of a block: time, then duration, then reason, then whatever the
- * receptionist typed, joined with " · ". Missing parts are omitted entirely and
- * never rendered as an empty segment.
+ * "Nadia Lamprell" -> "N.Lamprell". First initial, a full stop, NO space, then
+ * the surname, exactly as the reference prints it.
+ *
+ * A single-word name returns itself rather than being cut to an initial: a
+ * record reading "UDC Diary" or one carrying only a surname must stay readable.
+ * The FULL name is never lost - it stays in the block's title attribute, in the
+ * accessible sentence and in the detail panel.
+ */
+export function shortPatientName(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+  if (words.length === 1) return words[0];
+  const initial = [...words[0]][0] ?? "";
+  return `${initial}.${words[words.length - 1]}`;
+}
+
+/**
+ * Line 1 of a block, always drawn above "bar": "09:30 N.Lamprell".
+ *
+ * Falls back to the name alone when the start cannot be parsed, rather than
+ * printing a placeholder time. An invented time on a diary is a clinical error.
+ */
+export function blockLeadLine(appt: DiaryAppointment): string {
+  const short = shortPatientName(appt.patientName);
+  const times = blockTimes(appt);
+  return times ? `${times.startLabel} ${short}` : short;
+}
+
+/**
+ * The block's WRAPPED body: one string, segments joined by a SINGLE SPACE.
+ *
+ * A single space and not " · ", because the reference runs these segments
+ * together as flowing text rather than as a delimited list. Missing segments are
+ * omitted entirely and never rendered as an empty separator.
+ *
+ * Order: the funding code, then the treatment type's label, then the RAW reason
+ * when it differs from that label, then the booking note verbatim. So:
+ *   "NHS Scale & Polish Hygienist appointment needs pre med, check with dentist"
+ *
+ * We do NOT invent price or deposit fields. The reference's
+ * "Price: 99.00 Deposit: 15.00 Booked by patient via Dentally Portal" is
+ * Dentally's own booking-note text; AppointmentRecord carries no money at all,
+ * and our equivalent is appt.note, rendered verbatim.
+ */
+export function blockBodyText(appt: DiaryAppointment, funding: FundingCode): string {
+  const parts: string[] = [];
+  const fundingLabel = FUNDING_LABEL[funding];
+  if (fundingLabel !== "") parts.push(fundingLabel);
+
+  const label = typeLabelFor(appt.reason);
+  if (label) parts.push(label);
+
+  const reason = appt.reason?.trim() ?? "";
+  // The raw reason only when it says something the label did not: an exact match
+  // (case and spacing aside) would otherwise print the same words twice.
+  if (reason !== "" && reason.toLowerCase() !== (label ?? "").toLowerCase()) parts.push(reason);
+
+  const note = appt.note?.trim() ?? "";
+  if (note !== "") parts.push(note);
+
+  return parts.join(" ");
+}
+
+/**
+ * The block's native title attribute: time, duration, reason, note, joined with
+ * " · ". Retained for the tooltip and unchanged; the block's own drawn text is
+ * now blockLeadLine plus blockBodyText.
  */
 export function blockMetaLine(appt: DiaryAppointment): string {
   const times = blockTimes(appt);
@@ -490,11 +661,22 @@ export function blockMetaLine(appt: DiaryAppointment): string {
  * nothing is visible at all. The range is spelled with "to" because a dash is
  * read as a pause and not a range. The clinician is always named, because a
  * half-width lane-1 block is visually ambiguous about which column it is in.
+ *
+ * FUNDING sits after the clinician and before the state:
+ *   "09:30 to 10:00, 30 minutes. Nadia Lamprell. Scale & Polish. Femi Osei. NHS. Confirmed."
+ * It is here at EVERY tier, which is what stops the 3px rail being the only
+ * carrier: at "lead" and below the body text is not drawn, so the rail and this
+ * sentence are how funding reaches the reader.
+ *
+ * "unknown" contributes NOTHING, not the word "unknown". An unresolvable patient
+ * must render nothing at all, in ink and in speech alike, so that a reader can
+ * never take an absence for a fact.
  */
 export function accessibleSentence(
   appt: DiaryAppointment,
   clinicianName: string | null,
   lanes: number,
+  funding: FundingCode = "unknown",
 ): string {
   const times = blockTimes(appt);
   const parts: string[] = [];
@@ -505,10 +687,77 @@ export function accessibleSentence(
   if (appt.reason) parts.push(`${appt.reason}.`);
   if (appt.note) parts.push(`Note: ${appt.note}.`);
   if (clinicianName) parts.push(`${clinicianName}.`);
+  const fundingLabel = FUNDING_LABEL[funding];
+  if (fundingLabel !== "") parts.push(`${fundingLabel}.`);
   const others = Math.max(0, lanes - 1);
   const clash = others > 0 ? `, double booked with ${others} other${others === 1 ? "" : "s"}` : "";
   parts.push(`${stateLabel(appt.state)}${clash}.`);
   return parts.join(" ");
+}
+
+// --- the rules ----------------------------------------------------------------
+
+export interface RuleMarks {
+  /** Every 5 minute mark that is NOT also a half hour or an hour. */
+  fives: number[];
+  /** Every 30 minute mark that is NOT also an hour. */
+  halves: number[];
+  hours: number[];
+}
+
+/**
+ * The three rule weights, computed ONCE and DISJOINT by construction.
+ *
+ * A 30 is never also emitted as a 5 and a 60 never also as a 30, so the grid
+ * cannot draw two rules of different weights on the same pixel and leave a
+ * half-hour line looking like a hairline.
+ *
+ * The 5 minute rules are SUPPRESSED at "compact": eight pixels between rules is
+ * moire, and a rule you cannot count is noise rather than hierarchy.
+ */
+export function ruleMarks(bounds: { startMin: number; endMin: number }, zoom: Zoom): RuleMarks {
+  const fives: number[] = [];
+  const halves: number[] = [];
+  const hours: number[] = [];
+  if (!Number.isFinite(bounds.startMin) || !Number.isFinite(bounds.endMin)) {
+    return { fives, halves, hours };
+  }
+  const drawFives = zoom !== "compact";
+  for (let m = Math.ceil(bounds.startMin / 5) * 5; m <= bounds.endMin; m += 5) {
+    if (m % 60 === 0) hours.push(m);
+    else if (m % 30 === 0) halves.push(m);
+    else if (drawFives) fives.push(m);
+  }
+  return { fives, halves, hours };
+}
+
+// --- multiday -----------------------------------------------------------------
+
+/** The spans the multiday view offers. Seven is week view's own span. */
+export const MULTIDAY_SPANS = [3, 5, 7] as const;
+
+export type MultidaySpan = (typeof MULTIDAY_SPANS)[number];
+
+/** The ?span= value, defaulting to 5 for anything unrecognised or unset. */
+export function parseSpan(raw: string | null): MultidaySpan {
+  const n = Number(raw);
+  return (MULTIDAY_SPANS as readonly number[]).includes(n) ? (n as MultidaySpan) : 5;
+}
+
+/**
+ * The day keys a multiday view draws: the anchor day, then FORWARD.
+ *
+ * Anchor-forward and never week-aligned. The reference's own URL
+ * (/calendar/multiday/2026-08-05) confirms it, and a practice manager checking a
+ * clinician's next five days does not want to be thrown back to Monday.
+ */
+export function multidaySpanKeys(anchorDayKey: string, span: number): string[] {
+  const n = Math.max(1, Math.min(7, Math.floor(span)));
+  const base = Date.parse(`${anchorDayKey}T00:00:00Z`);
+  if (Number.isNaN(base)) return [];
+  return Array.from({ length: n }, (_, i) =>
+    new Date(base + i * 86_400_000).toISOString().slice(0, 10),
+  );
 }
 
 // --- counts -------------------------------------------------------------------

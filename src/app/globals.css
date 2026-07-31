@@ -224,6 +224,46 @@ h1, h2, h3, h4 {
 }
 
 /*
+  DRAGGING AN APPOINTMENT.
+
+  .pressable holds transform: scale(0.97) for the WHOLE gesture, and a transformed
+  element becomes the containing block for its own absolutely positioned children,
+  which changes the very geometry the drop maths runs against. It is suppressed
+  while a drag is in flight, and the body attribute is set and cleared by the drag
+  reducer rather than by any component. Text selection is suppressed for the same
+  span, or dragging across a column selects every patient name it passes.
+*/
+body[data-diary-dragging] .pressable:active {
+  transform: none !important;
+}
+body[data-diary-dragging] {
+  user-select: none;
+  cursor: grabbing;
+}
+
+/*
+  The saving bar: a 3px navy line running along the top edge of a block whose move
+  is in flight. Under reduced motion it becomes a STATIC bar rather than
+  disappearing, because at the shortest tier it is the only mark the block carries.
+*/
+@keyframes diary-saving {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.diary-saving-bar {
+  animation: diary-saving 1.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .diary-saving-bar {
+    animation: none;
+  }
+}
+
+/*
   Translucent chrome for the pinned topbar: a material layer the content scrolls
   under (semi-transparent fill + blur + saturate), with a soft scroll-edge fade
   below instead of a hard 1px border. Falls back to a solid bar when the user
@@ -328,6 +368,52 @@ h1, h2, h3, h4 {
 
   /* Any straggler rounded-card boxes soften to the small-radius language. */
   --radius-card-px: 10px;
+
+  /* -----------------------------------------------------------------------
+     THE DIARY'S TREATMENT-TYPE PALETTE.
+
+     On the practice's own Dentally screen a block's FILL tracks the TREATMENT
+     TYPE, not the appointment state. Thirteen slots: 0 is neutral ("type not
+     recorded"), 1 to 12 are hues, each owned by one clinical family. The
+     mapping from a reason string to a slot lives in
+     src/components/client/calendar/treatment-type.ts, as data rather than as
+     an algorithm.
+
+     Every fill sits near L*92, so 9.5px of its own --type-N-ink on it clears
+     AA. Every ink is a dark tint OF ITS OWN FILL, never black and never grey:
+     the reference's dark red-brown on salmon.
+
+     Raw CSS variables, deliberately NOT added to @theme inline. Thirteen
+     families times three roles would mint 39 Tailwind utility classes that
+     nothing outside the diary would ever use. They are consumed as
+     style={{ background: "var(--type-8-fill)" }}.
+     ----------------------------------------------------------------------- */
+  --type-0-fill: #eef1f6;  --type-0-line: #d8dee8;  --type-0-ink: #33405c;  /* neutral */
+  --type-1-fill: #dbe8fa;  --type-1-line: #b7d1f2;  --type-1-ink: #1c4f88;  /* blue */
+  --type-2-fill: #d5eef2;  --type-2-line: #aadde5;  --type-2-ink: #14606c;  /* cyan */
+  --type-3-fill: #d7f0e4;  --type-3-line: #ade1c9;  --type-3-ink: #14684b;  /* teal */
+  --type-4-fill: #e0f0d3;  --type-4-line: #c3e2ab;  --type-4-ink: #3d6b21;  /* green */
+  --type-5-fill: #ecf0cd;  --type-5-line: #dbe3a4;  --type-5-ink: #5d6417;  /* lime */
+  --type-6-fill: #fbeecd;  --type-6-line: #f4dda3;  --type-6-ink: #7d5a11;  /* amber */
+  --type-7-fill: #fce3cf;  --type-7-line: #f7c9a6;  --type-7-ink: #8a4b16;  /* orange */
+  --type-8-fill: #fbdcd6;  --type-8-line: #f5bdb1;  --type-8-ink: #8f3c2e;  /* salmon */
+  --type-9-fill: #fbdbe6;  --type-9-line: #f4b8ce;  --type-9-ink: #8c2f55;  /* rose */
+  --type-10-fill: #f6dbf1; --type-10-line: #ecb9e4; --type-10-ink: #7c2f70; /* magenta */
+  --type-11-fill: #e6dcf8; --type-11-line: #cbb8f0; --type-11-ink: #4f3391; /* lavender */
+  --type-12-fill: #dcdefa; --type-12-line: #b8bdf2; --type-12-ink: #33398f; /* indigo */
+
+  /* Funding. A 3px vertical rail on a block's left edge, NEVER a fill: the fill
+     belongs to the treatment type. Blue for NHS and orange for private are the
+     conventions clinicians here were trained on, reproduced exactly. */
+  --fund-nhs: #1c4f88;
+  --fund-private: #c2600f;
+  --fund-udc: #5b6472;
+
+  /* GREY MEANS OFF: the default background of every diary column body, onto
+     which working time is painted white. Deliberately DARKER than --card-muted
+     (#eef4fb, already a card surface) so a grey column can never be misread as
+     a panel. On the reference screen this is the majority of the diary. */
+  --diary-off: #dde3ec;
 
   background: var(--card);
 }

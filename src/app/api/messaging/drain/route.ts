@@ -26,6 +26,13 @@ import {
   markOutboxBlocked as markRecallBlocked,
 } from "@/lib/recall/repository";
 import {
+  listQueuedOutbox as listDiaryQueued,
+  claimOutbox as claimDiary,
+  recordOutboxSent as recordDiarySent,
+  markOutboxFailed as markDiaryFailed,
+  markOutboxBlocked as markDiaryBlocked,
+} from "@/lib/calendar/repository";
+import {
   listQueuedOutbox as listNoshowQueued,
   claimOutbox as claimNoshow,
   recordOutboxSent as recordNoshowSent,
@@ -116,6 +123,12 @@ interface OutboxSource {
 // its slot to outreach, then outreach in priority order (recall > reactivation >
 // coordinator > reviews).
 const SOURCES: OutboxSource[] = [
+  // The diary drains FIRST, ahead of even the no-show confirmations. "Your
+  // appointment has been moved to a new time" is the most time-critical
+  // transactional message this platform sends: a patient who does not receive it
+  // arrives at the wrong hour, so it must never lose its once-per-day slot to
+  // anything else. Its own listQueuedOutbox additionally honours quiet hours.
+  { name: "diary", list: listDiaryQueued, claim: claimDiary, recordSent: recordDiarySent, markFailed: markDiaryFailed, markBlocked: markDiaryBlocked, transactional: true },
   { name: "noshow", list: listNoshowQueued, claim: claimNoshow, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked, transactional: true },
   { name: "recall", list: listRecallQueued, claim: claimRecall, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
   { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },

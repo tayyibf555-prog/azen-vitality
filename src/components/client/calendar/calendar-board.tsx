@@ -1,21 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { londonDayKey } from "@/lib/time/london";
 import type { OpeningHours } from "@/lib/types";
 import type { AppointmentRecord } from "@/lib/dentally/read";
+import { windowsFor } from "@/lib/calendar/availability";
+import type { FundingCode } from "@/lib/calendar/funding";
+import { entriesForColumn, occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
+import { columnWorkState, workingSpans } from "@/lib/calendar/working-spans";
+import type { Proposal } from "@/lib/calendar/propose";
 import {
   clampDayToWindow,
   dnum,
   dow,
   isWithinWindow,
   longDate,
-  mondayOf,
   safeDayKey,
   shiftDay,
+  spanLabel,
   weekLabel,
 } from "./calendar-logic";
 import {
@@ -31,23 +36,40 @@ import {
   dayCaption,
   dayCounts,
   initialFocus,
+  multidaySpanKeys,
   nextFocus,
   openingWindowFor,
   orderColumns,
   parseOpeningWindow,
+  parseSpan,
   resolveSolo,
   sortByStart,
   weekColumn,
   DIARY_ZOOM_COOKIE,
+  MULTIDAY_SPANS,
+  UNASSIGNED_KEY,
   type DiaryAppointment,
   type FocusKey,
   type FocusPos,
+  type MultidaySpan,
   type Zoom,
 } from "./diary-view";
 import { DiaryDay, type DayColumnInput } from "./diary-day";
-import { DiaryWeek, type WeekDayInput } from "./diary-week";
+import { DiaryDays, weekDayKeys as weekKeysOf, type DayColumnDayInput } from "./diary-week";
 import { AppointmentPanel } from "./appointment-panel";
 import { blockDomId } from "./appointment-block";
+import { EntryDialog, type EntryDraft } from "./entry-dialog";
+import { useDiaryDay, type DiaryDaySeed } from "./use-diary-day";
+import { useDiaryMove, type MoveColumn, type PendingMove } from "./use-diary-move";
+import { MoveConfirmDialog } from "./move-confirm-dialog";
+import {
+  MOVE_BLOCKED_BY_ENTRIES,
+  MOVE_BLOCKED_BY_APPOINTMENTS,
+  MOVE_BLOCKED_BY_PENDING,
+  MOVE_BLOCKED_BY_READ,
+  type NotifyBlocker,
+} from "./move-copy";
+import type { GridDrag } from "./diary-day";
 
 // ---------------------------------------------------------------------------
 // The diary board: the chrome round the grid, and the state that drives it.
@@ -59,16 +81,21 @@ import { blockDomId } from "./appointment-block";
 // inherits. Solo is the one column control, it is visibly pressed, and it does
 // not survive a fresh visit.
 //
-// Nothing here counts free time. White space is visible by construction (blocks
-// are tinted, empty grid is white) and is never framed, shaded or labelled,
-// because the only opening-hours source in the repo is our own config, which has
-// never been verified against the practice and is already contradicted by live
-// availability running past the configured close. The single exception is a gap
-// bounded on both sides by a drawn block, which is a fact about the booked day
-// rather than a claim about who is working.
+// WORKING TIME NOW COMES FROM DENTALLY'S OWN AVAILABILITY, not from our config.
+// The config was never verified against the practice and is already contradicted
+// by live windows running past its close, so it survives only as the drawn
+// EXTENT of the grid and makes no claim about who is in. The grid starts GREY and
+// white sessions are painted onto it, so a clinician can only ever read as
+// available because Dentally positively said so. Three textures, three claims:
+// white we asked and they are working, grey we asked and they are not, hatch we
+// did not get an answer.
 //
-// Only ZOOM persists. Day, view, site and solo are addressable in the URL and
-// deliberately not remembered, so the diary always opens on today with every
+// FIVE failure signals, none conflated, each per SITE: appointments,
+// practitioners, availability, funding, breaks and notes. Every derived figure
+// from a failed read prints "Not loaded", never a zero and never a blank.
+//
+// Only ZOOM persists. Day, view, span, site and solo are addressable in the URL
+// and deliberately not remembered, so the diary always opens on today with every
 // column showing, and a mode cannot be left set wrong on a shared machine.
 //
 // All date/time bucketing and formatting is delegated to ./calendar-logic and
@@ -78,12 +105,21 @@ import { blockDomId } from "./appointment-block";
 // and a failed read is told apart from a genuinely empty day end to end (B3).
 // ---------------------------------------------------------------------------
 
-type View = "day" | "week";
+type View = "day" | "week" | "multiday";
+
+/** The view's columns are DAYS rather than clinicians. Week is multiday with a
+ *  span of seven anchored to Monday, so the two share one component. */
+function isDayPerColumn(view: View): boolean {
+  return view === "week" || view === "multiday";
+}
 
 export interface SiteOption {
   id: string;
   name: string;
   openingHours?: OpeningHours;
+  /** null until the owner supplies real numbers. A patient text that cannot name
+   *  a number to ring back is not sent at all, and the dialog says so. */
+  publicPhone?: string | null;
 }
 
 export interface PractitionersForSite {
@@ -196,6 +232,11 @@ function practitionersBySiteFailed(
   return entry ? entry.failed : whole;
 }
 
+// Stable identities, so a failed funding or entries read does not mint a new
+// object on every render and re-run every column memo underneath it.
+const EMPTY_FUNDING: Record<string, FundingCode> = {};
+const EMPTY_ENTRIES: DiaryEntryRecord[] = [];
+
 /** The minute spans a day's appointments occupy, for dayBounds. */
 function spansOf(appts: readonly DiaryAppointment[]): { startMin: number; endMin: number }[] {
   return appts
@@ -216,10 +257,14 @@ export function CalendarBoard({
   loadFailed = false,
   failedSiteIds = [],
   practitionersFailed = false,
+  diarySeed = null,
   windowFrom,
   windowTo,
   clientSlug,
   initialZoom = "normal",
+  canMove = false,
+  writeEnabled = false,
+  messagingDryRun = false,
 }: {
   appointments: AppointmentRecord[];
   sites: SiteOption[];
@@ -239,10 +284,22 @@ export function CalendarBoard({
    *  what the day's appointments imply, so a clinician with an empty day may be
    *  missing entirely. */
   practitionersFailed?: boolean;
+  /** The initially selected day's availability, funding and breaks, resolved on
+   *  the server so the first paint is already correct with no client round trip. */
+  diarySeed?: DiaryDaySeed | null;
   windowFrom: string;
   windowTo: string;
   clientSlug: string;
   initialZoom?: Zoom;
+  /** True when this reader's ROLE may move an appointment. Read from the SAME
+   *  list the server enforces (PATIENT_ADMIN_ROLES), so the two cannot drift.
+   *  Hiding the affordance is courtesy; the server gate is the enforcement. */
+  canMove?: boolean;
+  /** isDentallyWriteEnabled(). False locally, and the panel says so plainly
+   *  rather than letting a clinician discover it by trying. */
+  writeEnabled?: boolean;
+  /** MESSAGING_DRY_RUN: a queued text is simulated, never delivered. */
+  messagingDryRun?: boolean;
 }) {
   // "Today" MUST be the London calendar day, never a UTC slice of nowIso.
   const serverToday = londonDayKey(new Date(nowIso));
@@ -257,7 +314,14 @@ export function CalendarBoard({
     const wanted = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : serverToday;
     return clampDayToWindow(wanted, windowFrom, windowTo);
   });
-  const [view, setView] = useState<View>(() => (searchParams.get("view") === "week" ? "week" : "day"));
+  const [view, setView] = useState<View>(() => {
+    const v = searchParams.get("view");
+    return v === "week" || v === "multiday" ? v : "day";
+  });
+  // Span lives in the URL and never in a cookie: only zoom persists, and a span
+  // one person set is a span the next person on a shared reception machine
+  // inherits.
+  const [span, setSpan] = useState<MultidaySpan>(() => parseSpan(searchParams.get("span")));
   const [siteId, setSiteId] = useState(() => {
     const s = searchParams.get("site");
     return s && sites.some((x) => x.id === s) ? s : initialSite;
@@ -269,13 +333,26 @@ export function CalendarBoard({
   const [weekZoom, setWeekZoom] = useState<Zoom>("compact");
   const [selected, setSelected] = useState<DiaryAppointment | null>(null);
   const [focus, setFocus] = useState<FocusPos | null>(null);
+  const [entryDraft, setEntryDraft] = useState<{ draft: EntryDraft; day: string } | null>(null);
+  const [entryBusy, setEntryBusy] = useState(false);
+  const [entryError, setEntryError] = useState<string | null>(null);
+  // Bumped after a saved break or note, to refetch the days on screen.
+  const [entryNonce, setEntryNonce] = useState(0);
+
+  // THE OPTIMISTIC OVERLAY, owned here rather than inside useDiaryMove, because
+  // it has to be merged over the server prop BEFORE the columns that the move
+  // hook is then given are derived. `appointments` is a server prop and every
+  // derived value is a useMemo over it, so there is no appointment state to
+  // mutate: the overlay is the only way a move can show before it has landed.
+  const [pendingMoves, setPendingMoves] = useState<Map<string, PendingMove>>(() => new Map());
 
   const liveClock = useSyncExternalStore(subscribeClock, readClock, readServerClock);
   const now = useMemo(() => (liveClock ? new Date(liveClock) : null), [liveClock]);
 
   const today = now ? londonDayKey(now) : serverToday;
-  const zoom = view === "week" ? weekZoom : dayZoom;
-  const setZoom = (z: Zoom) => (view === "week" ? setWeekZoom(z) : setDayZoom(z));
+  const dayPerColumn = isDayPerColumn(view);
+  const zoom = dayPerColumn ? weekZoom : dayZoom;
+  const setZoom = (z: Zoom) => (dayPerColumn ? setWeekZoom(z) : setDayZoom(z));
 
   const goTo = useCallback(
     (d: string) => setDay(clampDayToWindow(d, windowFrom, windowTo)),
@@ -301,10 +378,60 @@ export function CalendarBoard({
     ? practitionersBySiteFailed(practitionersBySite, site.id, practitionersFailed)
     : practitionersFailed;
 
-  const siteAppointments = useMemo(
-    () => sortByStart(appointments.filter((a) => (site ? a.siteId === site.id : false))),
-    [appointments, site],
-  );
+  const baseById = useMemo(() => {
+    const m = new Map<string, AppointmentRecord>();
+    for (const a of appointments) m.set(a.id, a);
+    return m;
+  }, [appointments]);
+
+  // The overlay entries that are still doing work. An entry whose values the
+  // SERVER PROP now carries is dropped rather than re-applied, so a refresh can
+  // never double-apply a move and the overlay never outlives the truth it stood
+  // in for. Derived rather than pruned in an effect: an effect that sets state
+  // from a prop is a cascading render, and this is a plain function of the two.
+  const activePending = useMemo(() => {
+    if (pendingMoves.size === 0) return pendingMoves;
+    const next = new Map<string, PendingMove>();
+    for (const [id, p] of pendingMoves) {
+      const row = baseById.get(id);
+      const settled =
+        p.status === "saved" &&
+        row !== undefined &&
+        Date.parse(row.start) === Date.parse(p.startTime) &&
+        (row.practitionerId ?? null) === p.practitionerId;
+      if (!settled) next.set(id, p);
+    }
+    return next.size === pendingMoves.size ? pendingMoves : next;
+  }, [pendingMoves, baseById]);
+
+  const siteAppointments = useMemo(() => {
+    const base = appointments.filter((a) => (site ? a.siteId === site.id : false));
+    if (activePending.size === 0) return sortByStart(base);
+    return sortByStart(
+      base.map((a) => {
+        const p = activePending.get(a.id);
+        // "unknown" alone falls back to the server prop. We could not find out
+        // whether the write landed, so the diary asserts nothing and lets the next
+        // refresh answer; the sticky alert carries the words meanwhile.
+        //
+        // "failed" and "held" DO draw from the overlay, because the overlay was
+        // written with the move's own `from` end, which is the last position we
+        // have positive evidence for. The server prop is not that: inside the
+        // refresh window after a confirmed move it still holds the pre-move time,
+        // so falling back to it drew the appointment somewhere it is not while the
+        // alert named the right place. People act on the grid.
+        if (!p || p.status === "unknown") return a;
+        return {
+          ...a,
+          start: p.startTime,
+          finish: p.finishTime,
+          durationMin: p.durationMin,
+          practitionerId: p.practitionerId,
+          practitioner: p.practitionerName || a.practitioner,
+        };
+      }),
+    );
+  }, [appointments, site, activePending]);
 
   // Rows whose start cannot be parsed are bucketed OUT rather than fed to dayKey,
   // which throws a RangeError on an invalid date and would take the whole diary
@@ -331,6 +458,49 @@ export function CalendarBoard({
 
   const dayAppointments = useMemo(() => byDay.get(day) ?? [], [byDay, day]);
 
+  // ONE date label for the heading and the live region, so what is announced and
+  // what is printed can never disagree. Multiday is anchor-FORWARD, so weekLabel
+  // (Monday to Sunday of the containing week) is the wrong range for it.
+  const rangeLabel =
+    view === "day" ? longDate(day) : view === "week" ? weekLabel(day) : spanLabel(day, span);
+
+  // The days this view actually draws. Week is Monday-anchored; multiday runs
+  // FORWARD from the selected day, which is what the reference's own URL does and
+  // what a practice manager checking a clinician's next five days expects.
+  const viewDayKeys = useMemo(() => {
+    if (view === "day") return [day];
+    if (view === "week") return weekKeysOf(day);
+    return multidaySpanKeys(day, span);
+  }, [view, day, span]);
+
+  // --- availability, funding and breaks --------------------------------------
+  //
+  // Scoped to the days ON SCREEN, never to the loaded sixty-day window. The first
+  // day is seeded from the server, so the first paint costs no round trip.
+  const diaryDay = useDiaryDay(site?.id ?? "", viewDayKeys, diarySeed, entryNonce);
+
+  // PRACTITIONERS FAILED IMPLIES AVAILABILITY FAILED: the practitioner id set is
+  // the only thing scoping an availability read to a site, so a partial or wrong
+  // set could return another practice's windows with nothing in the response to
+  // catch it. The server sets the flag at source; this is the client-side guard
+  // for the case where the column read failed and no request was worth making.
+  const availabilityFailed = diaryDay.availabilityFailed || columnsFailed;
+  const fundingFailed = diaryDay.fundingFailed;
+  const entriesFailed = diaryDay.entriesFailed;
+
+  // PENDING IS NOT FAILED. While the read is in flight the columns keep the hatch,
+  // because painting grey or white before Dentally has answered would be a claim
+  // we cannot support. But the ALERTS stay silent: "Working hours could not be
+  // read" flashing on every day change is a false alarm, and PRODUCT.md is
+  // explicit that a warning colour on something that is not a warning trains
+  // people to ignore the ones that are.
+  const diaryPending = diaryDay.loading;
+
+  // No rail is drawn ANYWHERE when the funding read failed, which looks identical
+  // to "not on file", which is exactly why the board says so in words as well.
+  const funding = fundingFailed ? EMPTY_FUNDING : diaryDay.funding;
+  const entries = entriesFailed ? EMPTY_ENTRIES : diaryDay.entries;
+
   const practitioners = useMemo(
     () => practitionersBySite[site?.id ?? ""]?.practitioners ?? [],
     [practitionersBySite, site],
@@ -341,7 +511,9 @@ export function CalendarBoard({
     [practitioners, dayAppointments],
   );
 
-  const dayColumns: DayColumnInput[] = useMemo(() => {
+  // The clinician columns WITHOUT their working time, which the solo resolution,
+  // the rail counts and the keyboard path all key off. columnWork adds the rest.
+  const dayColumns = useMemo(() => {
     const byKey = new Map<string, DiaryAppointment[]>();
     for (const a of dayAppointments) {
       const k = columnKey(a.practitionerId);
@@ -356,6 +528,55 @@ export function CalendarBoard({
       appointments: byKey.get(columnKey(c.id)) ?? [],
     }));
   }, [allColumns, dayAppointments]);
+
+  // Everything about WORKING TIME for one column on one day, in one place, so day
+  // view and the day-per-column views cannot answer it differently.
+  //
+  // workingSpans = availability windows UNION that clinician's own booked spans.
+  // Bookings count as working time because a booking is proof of a session even
+  // when availability says nothing, and because whether Dentally's windows already
+  // exclude booked time is UNPROVEN: the union is correct under both readings.
+  // The clinician-days whose availability could belong to ANOTHER of this
+  // client's practices. Their windows are already stripped server side; this set
+  // is what lets the column say so rather than reading as "Not working".
+  const unconfirmedKeys = useMemo(
+    () => new Set(diaryDay.unconfirmed.map((u) => `${u.practitionerId}|${u.dayKey}`)),
+    [diaryDay.unconfirmed],
+  );
+
+  const columnWork = useCallback(
+    (practitionerId: string | null, dayKey: string, appts: readonly DiaryAppointment[]) => {
+      const windows = windowsFor(diaryDay.windows, practitionerId, dayKey);
+      // OCCUPYING spans only. A cancelled or did-not-attend row does not prove
+      // anybody was in the building, and including it here was the one way white
+      // could appear with nothing positive behind it: one cancelled Saturday
+      // booking painted an hour the clinician was not there for, and the drop
+      // validator then accepted a patient into it.
+      const apptSpans = spansOf(appts.filter((a) => a.state !== "cancelled" && a.state !== "did_not_attend"));
+      const presenceConfirmed =
+        practitionerId === null || !unconfirmedKeys.has(`${practitionerId}|${dayKey}`);
+      return {
+        workState: columnWorkState({
+          availabilityFailed,
+          // A failed APPOINTMENT read hatches the column too: the union includes
+          // appointments, so a missing set would shrink the white area and make
+          // booked time read as off.
+          appointmentsFailed: readFailed,
+          windows,
+          apptSpans,
+          presenceConfirmed,
+        }),
+        workingSpans: presenceConfirmed ? workingSpans(windows, apptSpans) : [],
+        entries: entriesForColumn(entries, practitionerId, dayKey),
+      };
+    },
+    [diaryDay.windows, availabilityFailed, readFailed, entries, unconfirmedKeys],
+  );
+
+  const dayGridColumns: DayColumnInput[] = useMemo(
+    () => dayColumns.map((c) => ({ ...c, ...columnWork(c.id, day, c.appointments) })),
+    [dayColumns, columnWork, day],
+  );
 
   // A soloed key that does not match any column on the day now in view is
   // IGNORED rather than filtering every column away, and the drop is SAID rather
@@ -376,16 +597,26 @@ export function CalendarBoard({
     const sp = new URLSearchParams();
     sp.set("day", day);
     sp.set("view", view);
+    // Span is meaningful only in multiday; writing it in every view would put a
+    // parameter in the URL that the grid is not honouring.
+    if (view === "multiday") sp.set("span", String(span));
     if (isAllSites) sp.set("site", siteId);
     // effectiveSolo, not solo: the URL states what is actually DRAWN, so a link
     // pasted into a staff group can never open on a different set of columns.
     if (effectiveSolo) sp.set("clinician", effectiveSolo);
     window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
-  }, [day, view, siteId, effectiveSolo, isAllSites]);
+  }, [day, view, span, siteId, effectiveSolo, isAllSites]);
 
   const visibleDayColumns = useMemo(
     () => (effectiveSolo ? dayColumns.filter((c) => c.key === effectiveSolo) : dayColumns),
     [dayColumns, effectiveSolo],
+  );
+
+  /** The same set, carrying each column's working time and its breaks and notes. */
+  const visibleGridColumns = useMemo(
+    () =>
+      effectiveSolo ? dayGridColumns.filter((c) => c.key === effectiveSolo) : dayGridColumns,
+    [dayGridColumns, effectiveSolo],
   );
 
   // The week's one clinician: whoever is soloed, else the first column. Week view
@@ -397,14 +628,9 @@ export function CalendarBoard({
     [dayColumns, effectiveSolo],
   );
 
-  const weekDayKeys = useMemo(() => {
-    const mon = mondayOf(day);
-    return Array.from({ length: 7 }, (_, i) => shiftDay(mon, i));
-  }, [day]);
-
-  const weekAppointmentsByDay = useMemo(() => {
+  const spanAppointmentsByDay = useMemo(() => {
     const m = new Map<string, DiaryAppointment[]>();
-    for (const k of weekDayKeys) {
+    for (const k of viewDayKeys) {
       const all = byDay.get(k) ?? [];
       m.set(
         k,
@@ -412,7 +638,13 @@ export function CalendarBoard({
       );
     }
     return m;
-  }, [weekDayKeys, byDay, weekColumnKey]);
+  }, [viewDayKeys, byDay, weekColumnKey]);
+
+  // The clinician whose days the day-per-column views draw, as a PRACTITIONER ID
+  // rather than a column key. Unassigned is not a person and has no availability,
+  // so it resolves to null and its column reads as off unless something is booked
+  // in it, which is the honest answer.
+  const spanPractitionerId = weekColumnKey === UNASSIGNED_KEY ? null : weekColumnKey;
 
   // --- the drawn extent ------------------------------------------------------
 
@@ -424,9 +656,12 @@ export function CalendarBoard({
       // outside the window still extends the grid: a 07:15 emergency is never clipped.
       return dayBounds(spansOf(dayAppointments), openMin, closeMin);
     }
+    // Our own opening hours survive ONLY as the drawn extent. They widen the grid
+    // across the span and make no claim at all about who is working: that is now
+    // Dentally's availability, painted as white sessions on the grey.
     let openMin = Number.POSITIVE_INFINITY;
     let closeMin = Number.NEGATIVE_INFINITY;
-    for (const k of weekDayKeys) {
+    for (const k of viewDayKeys) {
       const w = openingWindowFor(site?.openingHours, k);
       openMin = Math.min(openMin, w.openMin);
       closeMin = Math.max(closeMin, w.closeMin);
@@ -436,9 +671,9 @@ export function CalendarBoard({
       openMin = fallback.openMin;
       closeMin = fallback.closeMin;
     }
-    const all = weekDayKeys.flatMap((k) => weekAppointmentsByDay.get(k) ?? []);
+    const all = viewDayKeys.flatMap((k) => spanAppointmentsByDay.get(k) ?? []);
     return dayBounds(spansOf(all), openMin, closeMin);
-  }, [view, site, day, dayAppointments, weekDayKeys, weekAppointmentsByDay]);
+  }, [view, site, day, dayAppointments, viewDayKeys, spanAppointmentsByDay]);
 
   // --- the now-line ----------------------------------------------------------
 
@@ -452,24 +687,38 @@ export function CalendarBoard({
   }, [now, view, day, bounds, nowMin, zoom]);
   const nowLabel = Number.isFinite(nowMin) ? labelMinutes(nowMin) : null;
 
-  const weekDays: WeekDayInput[] = useMemo(
+  const spanColumns: DayColumnDayInput[] = useMemo(
     () =>
-      weekDayKeys.map((k) => {
+      viewDayKeys.map((k) => {
         const inWindow = isWithinWindow(k, windowFrom, windowTo);
         const isToday = k === today;
+        const appts = spanAppointmentsByDay.get(k) ?? [];
         const nowTop =
           now && isToday && nowFraction(now, k, bounds) !== null
             ? blockEdges(nowMin, nowMin, bounds.startMin, zoom).top
             : null;
         return {
           dayKey: k,
-          appointments: weekAppointmentsByDay.get(k) ?? [],
+          appointments: appts,
           inWindow,
           isToday,
           nowTop,
+          ...columnWork(spanPractitionerId, k, appts),
         };
       }),
-    [weekDayKeys, weekAppointmentsByDay, windowFrom, windowTo, today, now, bounds, nowMin, zoom],
+    [
+      viewDayKeys,
+      spanAppointmentsByDay,
+      spanPractitionerId,
+      columnWork,
+      windowFrom,
+      windowTo,
+      today,
+      now,
+      bounds,
+      nowMin,
+      zoom,
+    ],
   );
 
   // --- counts ----------------------------------------------------------------
@@ -482,17 +731,17 @@ export function CalendarBoard({
   const caption = useMemo(() => {
     if (readFailed) return `${siteName} · Counts unavailable`;
     if (view === "day") return dayCaption(siteName, dayCounts(dayAppointments));
-    // Week view draws ONE clinician, so its caption counts exactly what is drawn
-    // and names whose week it is. Counting the whole practice here put a figure
-    // like "212 booked" directly above a grid showing about sixteen blocks. The
-    // whole-practice-per-day figures stay on the seven-day strip, which is on
-    // screen in both views.
-    const drawn = weekDayKeys.flatMap((k) => weekAppointmentsByDay.get(k) ?? []);
+    // The day-per-column views draw ONE clinician, so the caption counts exactly
+    // what is drawn and names whose days they are. Counting the whole practice
+    // here put a figure like "212 booked" directly above a grid showing about
+    // sixteen blocks. The whole-practice-per-day figures stay on the seven-day
+    // strip, which is on screen in every view.
+    const drawn = viewDayKeys.flatMap((k) => spanAppointmentsByDay.get(k) ?? []);
     return dayCaption(
       `${siteName} · ${weekClinicianName ?? "No clinician"}`,
       dayCounts(drawn),
     );
-  }, [readFailed, siteName, view, dayAppointments, weekDayKeys, weekAppointmentsByDay, weekClinicianName]);
+  }, [readFailed, siteName, view, dayAppointments, viewDayKeys, spanAppointmentsByDay, weekClinicianName]);
 
   const strip = useMemo(() => Array.from({ length: 7 }, (_, i) => shiftDay(day, i - 3)), [day]);
   const stripCounts = useMemo(() => {
@@ -503,23 +752,23 @@ export function CalendarBoard({
   }, [strip, byDay, readFailed]);
 
   // The figure beside each rail chip counts the SAME span the grid is drawing:
-  // that clinician's day in day view, that clinician's week in week view. A day
-  // count sitting beside a week grid is a number that quietly means something
-  // other than what the reader is looking at.
+  // that clinician's day in day view, that clinician's whole span in the
+  // day-per-column views. A day count sitting beside a five-day grid is a number
+  // that quietly means something other than what the reader is looking at.
   const railCounts = useMemo(() => {
     const m = new Map<string, number>();
     if (countsUnavailable) return m;
-    if (view === "week") {
-      const weekRows = weekDayKeys.flatMap((k) => byDay.get(k) ?? []);
+    if (dayPerColumn) {
+      const spanRows = viewDayKeys.flatMap((k) => byDay.get(k) ?? []);
       for (const c of dayColumns) {
-        const mine = weekRows.filter((a) => columnKey(a.practitionerId) === c.key);
+        const mine = spanRows.filter((a) => columnKey(a.practitionerId) === c.key);
         m.set(c.key, dayCounts(mine).booked);
       }
       return m;
     }
     for (const c of dayColumns) m.set(c.key, dayCounts(c.appointments).booked);
     return m;
-  }, [dayColumns, countsUnavailable, view, weekDayKeys, byDay]);
+  }, [dayColumns, countsUnavailable, dayPerColumn, viewDayKeys, byDay]);
 
   // --- keyboard --------------------------------------------------------------
 
@@ -529,10 +778,10 @@ export function CalendarBoard({
         ? visibleDayColumns.map((c) =>
             c.appointments.map((a) => ({ id: a.id, startMin: londonMinutes(a.start) })),
           )
-        : weekDays.map((d) =>
+        : spanColumns.map((d) =>
             d.inWindow ? d.appointments.map((a) => ({ id: a.id, startMin: londonMinutes(a.start) })) : [],
           ),
-    [view, visibleDayColumns, weekDays],
+    [view, visibleDayColumns, spanColumns],
   );
 
   // On today the tab stop starts at the first appointment at or after now in the
@@ -551,9 +800,218 @@ export function CalendarBoard({
     document.getElementById(blockDomId(pos.id))?.focus();
   };
 
-  const step = view === "week" ? 7 : 1;
+  // The day-per-column views step by their own span, so [ and ] always move the
+  // grid by exactly what is on screen.
+  const step = view === "week" ? 7 : view === "multiday" ? span : 1;
+
+  // --- moving an appointment -------------------------------------------------
+
+  /** The spans that CONSUME a clinician's time. cancelled and DNA do not. */
+  const occupiedOf = useCallback(
+    (appts: readonly DiaryAppointment[]) =>
+      appts
+        .filter((a) => a.state !== "cancelled" && a.state !== "did_not_attend")
+        .map((a) => {
+          const startMin = londonMinutes(a.start);
+          return { startMin, endMin: startMin + effectiveMinutes(a), appointmentId: a.id };
+        })
+        .filter((s) => Number.isFinite(s.startMin)),
+    [],
+  );
+
+  // Every column a move could land on, in ONE shape whichever view is drawn, so
+  // the drop validator cannot be given different facts by different views.
+  const moveColumns: MoveColumn[] = useMemo(() => {
+    if (view === "day") {
+      return dayGridColumns.map((c) => ({
+        key: c.key,
+        practitionerId: c.id,
+        name: c.name,
+        dayKey: day,
+        workState: c.workState,
+        workingSpans: c.workingSpans,
+        occupied: occupiedOf(c.appointments),
+        breaks: occupyingEntries(c.entries, c.id).map((e) => ({
+          startMin: e.startMin,
+          endMin: e.endMin,
+        })),
+      }));
+    }
+    // In the day-per-column views the column axis is DAYS for one clinician, so
+    // moving left or right changes the DAY and the clinician is unchanged.
+    return spanColumns
+      .filter((d) => d.inWindow)
+      .map((d) => ({
+        key: d.dayKey,
+        practitionerId: spanPractitionerId,
+        name: weekClinicianName ?? "",
+        dayKey: d.dayKey,
+        workState: d.workState,
+        workingSpans: d.workingSpans,
+        occupied: occupiedOf(d.appointments),
+        breaks: occupyingEntries(d.entries, spanPractitionerId).map((e) => ({
+          startMin: e.startMin,
+          endMin: e.endMin,
+        })),
+      }));
+  }, [
+    view,
+    dayGridColumns,
+    day,
+    spanColumns,
+    spanPractitionerId,
+    weekClinicianName,
+    occupiedOf,
+  ]);
+
+  const appointmentsById = useMemo(() => {
+    const m = new Map<string, DiaryAppointment>();
+    for (const a of siteAppointments) m.set(a.id, a);
+    return m;
+  }, [siteAppointments]);
+
+  // A read we did not get REFUSES the move rather than warning about it. During a
+  // Dentally availability outage the diary is read only, which is the correct
+  // direction for a patient-safety write: an unverifiable move is refused, never
+  // guessed. The server enforces the same thing independently.
+  //
+  // PENDING IS NOT FAILED here either. Until this was gated, stepping to the next
+  // day and opening a block while the fetch was still in flight printed "could
+  // not be read ... Reload the page" at a moment when nothing had failed and a
+  // reload would not have helped: the same false alarm the alerts and the column
+  // headers were already careful about. Moves are still refused while pending,
+  // because there is nothing to check them against yet; only the WORDS differ.
+  //
+  // The three sentences are also kept apart by CAUSE. A failed APPOINTMENT read is
+  // not a failed working-hours read, and telling a receptionist the wrong thing
+  // failed sends them looking in the wrong place.
+  const moveBlockedReason = diaryPending
+    ? MOVE_BLOCKED_BY_PENDING
+    : availabilityFailed
+      ? MOVE_BLOCKED_BY_READ
+      : readFailed
+        ? MOVE_BLOCKED_BY_APPOINTMENTS
+        : entriesFailed
+          ? MOVE_BLOCKED_BY_ENTRIES
+          : null;
+
+  const focusedColumnKey =
+    activeFocus === null
+      ? null
+      : view === "day"
+        ? (visibleDayColumns[activeFocus.colIndex]?.key ?? null)
+        : (spanColumns[activeFocus.colIndex]?.dayKey ?? null);
+
+  const move = useDiaryMove(
+    {
+      siteId: site?.id ?? "",
+      bounds,
+      zoom,
+      columns: moveColumns,
+      allowed: canMove,
+      blockedReason: moveBlockedReason,
+      suspended: selected !== null || entryDraft !== null,
+      focusedId: activeFocus?.id ?? null,
+      focusedColumnKey,
+      appointmentsById,
+    },
+    activePending,
+    setPendingMoves,
+  );
+
+  const gridDrag: GridDrag = useMemo(
+    () => ({
+      enabled: move.allowed,
+      draggingId: move.draggingId,
+      pending: move.pending,
+      preview: move.preview,
+      registerColumn: move.registerColumn,
+      onBlockPointerDown: move.onBlockPointerDown,
+      swallowClick: move.swallowClick,
+    }),
+    [
+      move.allowed,
+      move.draggingId,
+      move.pending,
+      move.preview,
+      move.registerColumn,
+      move.onBlockPointerDown,
+      move.swallowClick,
+    ],
+  );
+
+  // The clinician list the confirmation dialog offers. Always the FULL day column
+  // set, and never Unassigned, which is not a person and has no availability.
+  const moveClinicians = useMemo(() => {
+    const list = dayColumns
+      .filter((c) => c.id !== null)
+      .map((c) => ({ id: c.id as string, name: c.name }));
+    // A slot proposed on another day can name a clinician who has no column
+    // today, and a select that cannot show its own value is a trap.
+    const chosen = move.proposal?.to;
+    if (chosen?.practitionerId && !list.some((c) => c.id === chosen.practitionerId)) {
+      list.push({ id: chosen.practitionerId, name: chosen.practitionerName ?? chosen.practitionerId });
+    }
+    return list;
+  }, [dayColumns, move.proposal]);
+
+  // What the dialog may honestly claim about the patient's text. The one thing it
+  // can know for certain BEFORE the write is whether the practice has a phone
+  // number at all; consent and suppression are checked at drain time, which is
+  // why the dialog says "will be texted" and the post-move line reports what
+  // actually happened.
+  const notifyBlocker: NotifyBlocker =
+    site?.publicPhone && site.publicPhone.trim() !== "" ? "none" : "no_phone";
+
+  // lastMove retires itself after UNDO_WINDOW_MS inside the hook, so this is
+  // never an offer of a button that would no longer work.
+  const undoOffered = move.lastMove !== null;
+
+  // --- breaks and notes ------------------------------------------------------
+
+  /** Open the dialog on a fresh entry, prefilled from wherever the reader is. */
+  const openNewEntry = useCallback(
+    (startMin: number, dayKey: string, practitionerId: string | null) => {
+      const start = Math.max(0, Math.min(1435, Math.round(startMin / 5) * 5));
+      setEntryError(null);
+      setEntryDraft({
+        day: dayKey,
+        draft: {
+          kind: "break",
+          title: "",
+          body: "",
+          startMin: start,
+          endMin: Math.min(1440, start + 60),
+          practitionerId,
+        },
+      });
+    },
+    [],
+  );
+
+  const openExistingEntry = useCallback((entry: DiaryEntryRecord) => {
+    setEntryError(null);
+    setEntryDraft({
+      day: entry.day,
+      draft: {
+        id: entry.id,
+        kind: entry.kind,
+        title: entry.title,
+        body: entry.body ?? "",
+        startMin: entry.startMin,
+        endMin: entry.endMin,
+        practitionerId: entry.practitionerId,
+      },
+    });
+  }, []);
 
   const onGridKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    // The move handler runs FIRST and says whether it took the key. It has to:
+    // undo is Ctrl+Z, which the metaKey/ctrlKey early return below would swallow,
+    // and while a move is in progress the arrows belong to the move rather than
+    // to the roving tab stop.
+    if (move.onKeyDown(event)) return;
+
     const target = event.target as HTMLElement | null;
     if (
       target &&
@@ -587,6 +1045,18 @@ export function CalendarBoard({
     } else if (lower === "w") {
       event.preventDefault();
       setView("week");
+    } else if (lower === "n") {
+      // 'n' is free: the grid handler claims only the arrows, Home, End, t, [, ],
+      // d, w and s. It prefills from wherever the reader already is, so adding a
+      // break never costs a hunt for the right time.
+      event.preventDefault();
+      if (view === "day") {
+        const col = activeFocus ? visibleDayColumns[activeFocus.colIndex] : null;
+        openNewEntry(activeFocus?.startMin ?? bounds.startMin, day, col?.id ?? null);
+      } else {
+        const col = activeFocus ? spanColumns[activeFocus.colIndex] : null;
+        openNewEntry(activeFocus?.startMin ?? bounds.startMin, col?.dayKey ?? day, spanPractitionerId);
+      }
     } else if (lower === "s" && view === "day" && activeFocus) {
       event.preventDefault();
       const col = visibleDayColumns[activeFocus.colIndex];
@@ -610,6 +1080,53 @@ export function CalendarBoard({
   const selectedClinician = selected
     ? dayColumns.find((c) => c.key === columnKey(selected.practitionerId))?.name ?? null
     : null;
+
+  /**
+   * A slot picked from the reschedule suggestions goes through the SAME dialog and
+   * the SAME write route as a drag. There is one commit path, not two.
+   */
+  const onPickProposal = useCallback(
+    (p: Proposal) => {
+      const appt = selected;
+      if (!appt) return;
+      const startMin = londonMinutes(appt.start);
+      move.openProposal({
+        appointment: appt,
+        from: {
+          dayKey: safeDayKey(appt.start) ?? day,
+          startMin,
+          endMin: startMin + effectiveMinutes(appt),
+          practitionerId: appt.practitionerId,
+          practitionerName: selectedClinician,
+        },
+        to: {
+          dayKey: p.dayKey,
+          startMin: p.startMin,
+          endMin: p.endMin,
+          practitionerId: p.practitionerId,
+          practitionerName: p.practitionerName,
+        },
+        fromSuggestion: true,
+      });
+      // The panel closes so the confirmation is the only thing on screen: a
+      // blocking clinical write must not be answered past another dialog.
+      closePanel();
+    },
+    [selected, selectedClinician, day, move, closePanel],
+  );
+
+  // A CONFIRMED move invalidates the appointment cache server side, so the board
+  // may now ask for the truth. Until it arrives the optimistic overlay stays
+  // authoritative, and the effect above drops each entry only once the server
+  // prop genuinely carries it.
+  const router = useRouter();
+  const refreshedFor = useRef<number | null>(null);
+  useEffect(() => {
+    const at = move.lastMove?.at ?? null;
+    if (at === null || refreshedFor.current === at) return;
+    refreshedFor.current = at;
+    router.refresh();
+  }, [move.lastMove, router]);
 
   // --- chrome ----------------------------------------------------------------
 
@@ -635,6 +1152,72 @@ export function CalendarBoard({
     [goTo],
   );
 
+  const saveEntry = useCallback(
+    async (value: EntryDraft) => {
+      if (!site || !entryDraft) return;
+      setEntryBusy(true);
+      setEntryError(null);
+      try {
+        const res = await fetch("/api/diary/entry", {
+          method: value.id ? "PATCH" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            siteId: site.id,
+            id: value.id,
+            day: entryDraft.day,
+            kind: value.kind,
+            title: value.title,
+            body: value.body,
+            startMin: value.startMin,
+            endMin: value.endMin,
+            practitionerId: value.practitionerId,
+          }),
+        });
+        const payload = (await res.json()) as { ok?: boolean; error?: string };
+        if (!res.ok || payload.ok !== true) {
+          // The server's own words, verbatim. A generic shrug here would leave a
+          // reader unable to tell a validation slip from an outage.
+          setEntryError(payload.error ?? "That could not be saved. The diary has not been changed.");
+          return;
+        }
+        setEntryDraft(null);
+        setEntryNonce((n) => n + 1);
+      } catch {
+        setEntryError("That could not be saved. The diary has not been changed.");
+      } finally {
+        setEntryBusy(false);
+      }
+    },
+    [site, entryDraft],
+  );
+
+  const deleteEntry = useCallback(
+    async (id: string) => {
+      if (!site) return;
+      setEntryBusy(true);
+      setEntryError(null);
+      try {
+        const res = await fetch("/api/diary/entry", {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ siteId: site.id, id }),
+        });
+        const payload = (await res.json()) as { ok?: boolean; error?: string };
+        if (!res.ok || payload.ok !== true) {
+          setEntryError(payload.error ?? "That could not be removed. The diary has not been changed.");
+          return;
+        }
+        setEntryDraft(null);
+        setEntryNonce((n) => n + 1);
+      } catch {
+        setEntryError("That could not be removed. The diary has not been changed.");
+      } finally {
+        setEntryBusy(false);
+      }
+    },
+    [site],
+  );
+
   const emptyDay = view === "day" && !readFailed && dayAppointments.length === 0;
 
   // One line of standing context under the command bar, so nothing about WHAT is
@@ -646,9 +1229,22 @@ export function CalendarBoard({
       `Week view shows one clinician: ${weekClinicianName ?? "none available"}. Pick another below. The seven-day strip counts the whole practice.`,
     );
   }
+  if (view === "multiday") {
+    notes.push(
+      `Multiday shows one clinician across ${span} days from ${longDate(day)}: ${weekClinicianName ?? "none available"}. Pick another below.`,
+    );
+  }
   if (view === "day" && soloDropped) {
     notes.push("The clinician you picked is not in this day's diary, so every clinician is shown.");
   }
+
+  // The clinician list the entry dialog offers, plus the site-wide option it adds
+  // itself. Always the FULL day column set, never the soloed subset: a break can
+  // legitimately be hung on a clinician who is not the one currently drawn.
+  const entryClinicians = useMemo(
+    () => dayColumns.filter((c) => c.id !== null).map((c) => ({ id: c.id, name: c.name })),
+    [dayColumns],
+  );
 
   return (
     <div data-diary className="flex min-h-0 flex-col gap-2 lg:h-full">
@@ -684,12 +1280,19 @@ export function CalendarBoard({
         </div>
 
         <h1 className="min-w-0 shrink-0 truncate text-[15px] font-semibold tracking-[-0.3px] tabular-nums text-navy">
-          {view === "day" ? longDate(day) : weekLabel(day)}
+          {rangeLabel}
         </h1>
 
         <p className="hidden min-w-0 truncate text-[11px] font-medium tabular-nums text-muted sm:block">
           {caption}
         </p>
+        {/* A missing rail is visually identical to "not on file", so the absence
+            has to be stated where the figures are, not only in the alert above. */}
+        {fundingFailed && !diaryPending ? (
+          <span className="hidden shrink-0 rounded-md border border-tint-amber-line bg-tint-amber px-1.5 py-[1px] text-[10px] font-semibold text-ink sm:inline">
+            Funding: not loaded
+          </span>
+        ) : null}
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {isAllSites && sites.length > 1 ? (
@@ -702,14 +1305,38 @@ export function CalendarBoard({
             </Segment>
           ) : null}
           <div className="hidden lg:block">
-            <Segment label="Day or week view">
-              {(["day", "week"] as View[]).map((v) => (
+            <Segment label="View">
+              {(["day", "week", "multiday"] as View[]).map((v) => (
                 <SegmentBtn key={v} active={view === v} onClick={() => setView(v)} className="capitalize">
                   {v}
                 </SegmentBtn>
               ))}
             </Segment>
           </div>
+          {view === "multiday" ? (
+            <div className="hidden lg:block">
+              <Segment label="Days shown">
+                {MULTIDAY_SPANS.map((n) => (
+                  <SegmentBtn key={n} active={span === n} onClick={() => setSpan(n)}>
+                    {n}
+                  </SegmentBtn>
+                ))}
+              </Segment>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() =>
+              openNewEntry(
+                bounds.startMin + 240,
+                day,
+                view === "day" ? null : spanPractitionerId,
+              )
+            }
+            className="pressable hidden h-6 shrink-0 rounded-md border border-line-strong bg-card px-2 text-[11px] font-medium text-ink transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25 lg:block"
+          >
+            Add break or note
+          </button>
           <div className="hidden lg:block">
             <Segment label="Row height">
               {(["compact", "normal", "roomy"] as Zoom[]).map((z) => (
@@ -840,6 +1467,39 @@ export function CalendarBoard({
           the appointments that loaded, so a clinician with an empty day may be missing.
         </Alert>
       ) : null}
+      {/* THREE SEPARATE SENTENCES for three separate reads, never one shrug. Each
+          absence looks different on the grid and each needs its own words. */}
+      {availabilityFailed && !diaryPending ? (
+        <Alert>
+          Working hours could not be read for {siteName}. The diary cannot say who is working today.
+          Booked appointments below are still correct.
+        </Alert>
+      ) : null}
+      {fundingFailed && !diaryPending ? (
+        <Alert>
+          Funding could not be read for {siteName}. No appointment shows NHS or private today.
+        </Alert>
+      ) : null}
+      {entriesFailed && !diaryPending ? (
+        <Alert>Breaks and notes could not be read for {siteName}.</Alert>
+      ) : null}
+      {/* A move that did not save, or one we could not verify. It stays until it
+          is dismissed or the day changes, because it is the only place the
+          reader learns that what they see is not what Dentally holds. */}
+      {move.alert ? (
+        <Alert>
+          <span className="flex flex-wrap items-baseline gap-2">
+            <span>{move.alert}</span>
+            <button
+              type="button"
+              onClick={move.dismissAlert}
+              className="text-[11px] font-semibold text-navy underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
+            >
+              Dismiss
+            </button>
+          </span>
+        </Alert>
+      ) : null}
       {undated.length > 0 ? (
         <Alert>
           {undated.length === 1
@@ -856,25 +1516,78 @@ export function CalendarBoard({
         </p>
       ) : null}
 
+      {/* What is happening to a move, in words, for the shortest blocks where no
+          outline is legible and for anyone reading across a desk. */}
+      {move.savingLine || undoOffered ? (
+        <p className={cn("flex shrink-0 flex-wrap items-baseline gap-2 text-[11px]", bleed)}>
+          {move.savingLine ? (
+            <span className="font-medium tabular-nums text-ink">{move.savingLine}</span>
+          ) : null}
+          {undoOffered && move.lastMove ? (
+            <>
+              <span className="font-medium tabular-nums text-ink">
+                Moved {move.lastMove.patientShort} to {labelMinutes(move.lastMove.to.startMin)}
+                {move.lastMove.to.practitionerName ? ` with ${move.lastMove.to.practitionerName}` : ""}.
+              </span>
+              {/* What actually happened to the text, read back from the stored
+                  provider rather than assumed from the intent. A simulated send
+                  can never be reported as a real one. */}
+              {move.lastMove.notify?.queued ? (
+                messagingDryRun ? (
+                  <span className="rounded-[3px] border border-tint-amber-line bg-tint-amber px-1 font-semibold text-status-amber">
+                    Text simulated, not delivered
+                  </span>
+                ) : (
+                  <span className="font-medium text-muted">Text queued</span>
+                )
+              ) : move.lastMove.notify?.reason === "no_phone" ? (
+                <span className="font-medium text-muted">
+                  No text sent: no practice phone number is configured
+                </span>
+              ) : move.lastMove.notify?.reason === "time_unchanged" ? (
+                <span className="font-medium text-muted">No text sent: the time did not change</span>
+              ) : null}
+              <button
+                type="button"
+                onClick={move.undo}
+                className="rounded-md border border-line-strong bg-card px-2 py-[1px] text-[11px] font-semibold text-navy transition-colors hover:bg-card-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
+              >
+                Undo
+              </button>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+
       <p id={instructionsId} className="sr-only">
         Use the arrow keys to move between appointments, Home and End for the first and last in a
         column, Enter to open an appointment, and Escape to close it. Press t for today, square
-        brackets to change day, d for day view, w for week view, and s to show only the focused
-        clinician.
+        brackets to change day, d for day view, w for week view, s to show only the focused
+        clinician, and n to add a break or a note. Press M on an appointment to move it, R to resize
+        it. In move mode the arrow keys shift the time by five minutes and Shift with an arrow by
+        thirty; left and right change clinician. Enter opens a confirmation. Escape cancels.
       </p>
       <p role="status" className="sr-only">
-        {view === "day" ? longDate(day) : weekLabel(day)}. {caption}.
+        {rangeLabel}. {caption}.
+      </p>
+      {/* A SECOND live region, dedicated to moving. The one above carries the date
+          and the caption, would not retrigger on a move (dayCounts does not
+          change) and would fight the day-change announcement. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {move.status}
       </p>
 
       {view === "day" ? (
         <DiaryDay
-          columns={visibleDayColumns}
+          columns={visibleGridColumns}
           bounds={bounds}
           zoom={zoom}
           ariaLabel={`Diary, ${longDate(day)}, ${siteName}`}
           soloKey={effectiveSolo}
           onSolo={onSolo}
           countsUnavailable={countsUnavailable}
+          funding={funding}
+          hoursPending={diaryPending}
           nowTop={dayNowTop}
           nowLabel={nowLabel}
           focusedId={activeFocus?.id ?? null}
@@ -882,26 +1595,32 @@ export function CalendarBoard({
             setFocus({ colIndex, id: appt.id, startMin: londonMinutes(appt.start) })
           }
           onOpen={openAppointment}
+          onOpenEntry={openExistingEntry}
           onKeyDown={onGridKeyDown}
           describedById={instructionsId}
+          drag={gridDrag}
         />
       ) : (
-        <DiaryWeek
-          days={weekDays}
+        <DiaryDays
+          days={spanColumns}
           clinicianName={weekClinicianName}
           bounds={bounds}
           zoom={zoom}
-          ariaLabel={`Diary, ${weekLabel(day)}, ${weekClinicianName ?? "no clinician selected"}, ${siteName}`}
+          ariaLabel={`Diary, ${view === "week" ? weekLabel(day) : `${span} days from ${longDate(day)}`}, ${weekClinicianName ?? "no clinician selected"}, ${siteName}`}
           countsUnavailable={countsUnavailable}
+          funding={funding}
+          hoursPending={diaryPending}
           onPickDay={onPickDay}
           focusedId={activeFocus?.id ?? null}
           onFocusItem={(colIndex, appt) =>
             setFocus({ colIndex, id: appt.id, startMin: londonMinutes(appt.start) })
           }
           onOpen={openAppointment}
+          onOpenEntry={openExistingEntry}
           onKeyDown={onGridKeyDown}
           describedById={instructionsId}
           selectedDay={day}
+          drag={gridDrag}
         />
       )}
 
@@ -910,8 +1629,53 @@ export function CalendarBoard({
           appointment={selected}
           clinicianName={selectedClinician}
           siteName={siteName}
+          siteId={site?.id ?? ""}
+          dayKey={safeDayKey(selected.start) ?? day}
+          funding={funding[selected.patientId] ?? "unknown"}
+          fundingFailed={fundingFailed}
           clientSlug={clientSlug}
+          // The RAW role gate, not move.allowed: the panel tells a reader whose
+          // role forbids moving something different from a reader whose role
+          // allows it but whose reads failed, and move.allowed folds the two.
+          canMove={canMove}
+          writeEnabled={writeEnabled}
+          moveBlockedReason={moveBlockedReason}
+          onPickProposal={onPickProposal}
           onClose={closePanel}
+        />
+      ) : null}
+
+      {/* The confirmation. Dropping a block does not commit anything: this does,
+          and there is exactly ONE of it, reached identically by the pointer and by
+          the keyboard. */}
+      {move.proposal ? (
+        <MoveConfirmDialog
+          proposal={move.proposal}
+          clinicians={moveClinicians}
+          busy={move.proposalBusy}
+          error={move.proposalError}
+          refusal={move.proposalRefusal}
+          notifyBlocker={notifyBlocker}
+          dryRun={messagingDryRun}
+          onEdit={move.editProposal}
+          onNo={move.cancelProposal}
+          onYes={move.confirmProposal}
+        />
+      ) : null}
+
+      {entryDraft ? (
+        <EntryDialog
+          draft={entryDraft.draft}
+          day={entryDraft.day}
+          clinicians={entryClinicians}
+          busy={entryBusy}
+          error={entryError}
+          onSave={saveEntry}
+          onDelete={deleteEntry}
+          onCancel={() => {
+            setEntryDraft(null);
+            setEntryError(null);
+          }}
         />
       ) : null}
     </div>

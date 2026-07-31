@@ -36,6 +36,7 @@ import {
 import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { DentallyError } from "@/lib/dentally/client";
 import { normaliseGender, ageFromDob } from "@/lib/patient/demographics";
+import { readPlanId } from "@/lib/calendar/funding";
 import { listTargets } from "@/lib/reactivation/repository";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { getAgentAnalytics } from "@/lib/agent/repository";
@@ -345,6 +346,10 @@ async function rawPatientSearch(siteId: string, query: string): Promise<PatientR
         gender: null,
         smsConsent: false,
         emailConsent: false,
+        // Read from the row rather than defaulted: this IS a real Dentally patient
+        // payload, and a hard-coded null here would report "no plan on file" for a
+        // patient who has one.
+        paymentPlanId: readPlanId(r),
       });
     }
     if (rows.length < DEDUPE_SEARCH_PER_PAGE) break; // short page => last page for this site

@@ -15,7 +15,16 @@ import { CLIENT_NAV } from "@/lib/nav";
 // workstream, so it has no CLIENT_NAV page yet but still needs an owner kill switch.
 // "whatsapp-agent" is headless: the inbound WhatsApp agent is switched separately
 // from outbound WhatsApp sending ('whatsapp'), but they share one nav module.
-const HEADLESS_SYSTEM_SLUGS = new Set(["online-booking", "outreach", "whatsapp-agent"]);
+// "calendar-writes" is headless for exactly the same reason as "whatsapp-agent":
+// moving an appointment is switched separately from reading the diary, but both
+// live on the one 'calendar' nav module. The owner needs to be able to stop diary
+// writes without hiding the diary.
+const HEADLESS_SYSTEM_SLUGS = new Set([
+  "online-booking",
+  "outreach",
+  "whatsapp-agent",
+  "calendar-writes",
+]);
 
 describe("systems catalog", () => {
   it("every non-headless system slug is a real CLIENT_NAV module", () => {
@@ -48,13 +57,16 @@ describe("systems catalog", () => {
     for (const [source, slug] of Object.entries(DRAIN_SOURCE_TO_SLUG)) {
       expect(isControllableSystem(slug), `${source} -> ${slug} not controllable`).toBe(true);
     }
-    // The drain has exactly these six outbox sources.
+    // The drain has exactly these seven outbox sources.
     expect(Object.keys(DRAIN_SOURCE_TO_SLUG).sort()).toEqual(
-      ["coordinator", "noshow", "outreach", "reactivation", "recall", "reviews"].sort(),
+      ["coordinator", "diary", "noshow", "outreach", "reactivation", "recall", "reviews"].sort(),
     );
     // The tricky remaps are correct.
     expect(DRAIN_SOURCE_TO_SLUG.noshow).toBe("no-show-defence");
     expect(DRAIN_SOURCE_TO_SLUG.coordinator).toBe("treatment-coordinator");
+    // The diary's reschedule texts are stopped by the same switch that stops the
+    // moves themselves, so a halted write can never still text the patient.
+    expect(DRAIN_SOURCE_TO_SLUG.diary).toBe("calendar-writes");
   });
 
   it("SYSTEM_BY_SLUG resolves and isControllableSystem rejects unknowns", () => {

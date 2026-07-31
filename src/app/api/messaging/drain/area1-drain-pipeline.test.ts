@@ -52,6 +52,7 @@ const fakes = vi.hoisted(() => {
   return {
     makeModule,
     modules: {
+      diary: makeModule(),
       reactivation: makeModule(),
       recall: makeModule(),
       noshow: makeModule(),
@@ -80,6 +81,7 @@ function repoMock(name: keyof typeof fakes.modules) {
   };
 }
 
+vi.mock("@/lib/calendar/repository", () => repoMock("diary"));
 vi.mock("@/lib/reactivation/repository", () => repoMock("reactivation"));
 vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
@@ -123,7 +125,8 @@ vi.mock("@/lib/messaging/frequency", () => ({
 // pipeline runs, gated by MESSAGING_DRY_RUN and the stubbed global fetch.
 import { POST } from "./route";
 
-const ALL_SOURCES = ["reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
+// "diary" is the reschedule notice raised when an appointment is moved.
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
 const fetchSpy = vi.fn(async () => { throw new Error("network egress attempted in test"); });
 
 function seed(module: (typeof ALL_SOURCES)[number], overrides: Partial<FakeRow> = {}): FakeRow {
@@ -209,7 +212,7 @@ describe("shared messaging drain", () => {
     const json = await res.json();
 
     expect(res.status).toBe(200);
-    expect(json).toMatchObject({ ok: true, drained: 7, sent: 7, failed: 0, blocked: 0 });
+    expect(json).toMatchObject({ ok: true, drained: 8, sent: 8, failed: 0, blocked: 0 });
     // No module outbox forgotten: the drain reports one section per source.
     expect(Object.keys(json.perSource).sort()).toEqual([...ALL_SOURCES].sort());
     for (const m of ALL_SOURCES) {

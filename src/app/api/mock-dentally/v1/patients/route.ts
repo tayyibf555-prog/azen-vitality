@@ -6,6 +6,7 @@ import {
   addPatient,
   dobForPatient,
   genderForPatient,
+  paymentPlanForPatient,
   resolveMockSiteId,
   type MockPatient,
 } from "@/app/api/mock-dentally/_fixtures";
@@ -42,6 +43,10 @@ function serialise(p: MockPatient) {
     hygienist_recall_date: p.hygienist_recall_date ?? null,
     date_of_birth: dobForPatient(p.id),
     gender: genderForPatient(p.id),
+    // Funding lives HERE, on the patient, not on the appointment. Emitted flat,
+    // as live Dentally does. A patient with no plan on file carries null and must
+    // resolve to no funding mark at all, never to a default.
+    payment_plan_id: p.payment_plan_id ?? paymentPlanForPatient(p.id),
     last_visit_at: lastVisitAt(p.id),
     // Registration date, which the dashboard's "new patients" count needs. Without
     // it the count is genuinely unsourceable and the panel reports it as such, so a

@@ -7,7 +7,14 @@ import {
   listSitePractitionersSafe,
   type AppointmentRecord,
 } from "@/lib/dentally/read";
+import { loadDiaryDay } from "@/lib/calendar/day-load";
+import { londonDayKey } from "@/lib/time/london";
+import { authEnforced } from "@/lib/auth/guard";
+import { getSessionUser } from "@/lib/auth/session";
+import { isPatientAdminRole } from "@/lib/patient/roles";
+import { isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { CalendarBoard, type PractitionersForSite } from "./calendar-board";
+import type { DiaryDaySeed } from "./use-diary-day";
 import { DIARY_ZOOM_COOKIE, parseZoom } from "./diary-view";
 
 function isoDate(d: Date): string {
@@ -96,17 +103,78 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
   // so the first paint is already the right density and nothing corrects itself.
   const zoom = parseZoom((await cookies()).get(DIARY_ZOOM_COOKIE)?.value);
 
+  const initialSite = scope.isAllSites ? sites[0]?.id ?? "" : scope.selection;
+  const initialDay = londonDayKey(now);
+
+  // The initially selected day's availability, funding and breaks, resolved HERE
+  // so the first paint is already correct: no flash of a grey grid, and no client
+  // round trip before a receptionist can read who is working.
+  //
+  // For the SELECTED DAY ONLY, deliberately. Availability is one call per range,
+  // but funding fans out over the day's distinct PATIENTS, so resolving the loaded
+  // sixty-day window would be hundreds to thousands of patient reads on every page
+  // load against live Dentally and would compete with the sync jobs for the rate
+  // budget. Every other day is fetched by the board as it is navigated to.
+  let diarySeed: DiaryDaySeed | null = null;
+  if (initialSite) {
+    const perSite = practitionersBySite[initialSite];
+    const payload = await loadDiaryDay({
+      clientId: client.id,
+      siteId: initialSite,
+      dayKeys: [initialDay],
+      practitionerIds: (perSite?.practitioners ?? []).map((p) => p.id),
+      // A failed practitioner read IMPLIES a failed availability read, and no
+      // availability call is issued at all: the practitioner id set is the only
+      // thing scoping availability to this site.
+      practitionersFailed: perSite ? perSite.failed : practitionersFailed,
+      appointments,
+    });
+    diarySeed = {
+      siteId: payload.siteId,
+      dayKeys: payload.dayKeys,
+      windows: payload.windows,
+      funding: payload.funding,
+      entries: payload.entries,
+      unconfirmed: payload.unconfirmed,
+      availabilityFailed: payload.availabilityFailed,
+      fundingFailed: payload.fundingFailed,
+      entriesFailed: payload.entriesFailed,
+    };
+  }
+
+  // WHO MAY MOVE AN APPOINTMENT, decided from the SAME list the server enforces
+  // (PATIENT_ADMIN_ROLES: client_owner, client_coordinator, agency_admin), so the
+  // two cannot drift. client_coordinator is how the practice manager is
+  // represented here, and gating this on owner-only would lock out the diary's
+  // primary user.
+  //
+  // When sign-in is not configured at all, every guard in the platform is a no-op
+  // and there is no role to read, so the affordance is shown. That is NOT a hole:
+  // the write route deliberately departs from that permissive default and fails
+  // CLOSED with a plain 503, so the reader is told rather than silently ignored.
+  const user = authEnforced() ? await getSessionUser() : null;
+  const canMove = !authEnforced() || isPatientAdminRole(user?.role);
+
   return (
     <CalendarBoard
       appointments={appointments}
-      sites={sites.map((s) => ({ id: s.id, name: s.name, openingHours: s.openingHours }))}
+      sites={sites.map((s) => ({
+        id: s.id,
+        name: s.name,
+        openingHours: s.openingHours,
+        publicPhone: s.publicPhone ?? null,
+      }))}
+      canMove={canMove}
+      writeEnabled={isDentallyWriteEnabled()}
+      messagingDryRun={process.env.MESSAGING_DRY_RUN === "true"}
       practitionersBySite={practitionersBySite}
       nowIso={now.toISOString()}
-      initialSite={scope.isAllSites ? sites[0]?.id ?? "" : scope.selection}
+      initialSite={initialSite}
       isAllSites={scope.isAllSites}
       loadFailed={loadFailed}
       failedSiteIds={failedSiteIds}
       practitionersFailed={practitionersFailed}
+      diarySeed={diarySeed}
       windowFrom={windowFrom}
       windowTo={windowTo}
       clientSlug={clientSlug}

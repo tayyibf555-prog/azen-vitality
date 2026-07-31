@@ -1,5 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
-import { findPatient } from "@/app/api/mock-dentally/_fixtures";
+import { findPatient, paymentPlanForPatient } from "@/app/api/mock-dentally/_fixtures";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +44,10 @@ export async function GET(
       use_email: patient.use_email,
       marketing: patient.marketing,
       active: patient.active,
+      // Funding lives on the PATIENT, not the appointment, so this single-patient
+      // read is how the diary resolves NHS / Private / UDC. Null means no plan on
+      // file, which must render as no funding mark rather than as a default.
+      payment_plan_id: patient.payment_plan_id ?? paymentPlanForPatient(patient.id),
     },
   });
 }
@@ -90,6 +94,7 @@ export async function PUT(
       use_email: patient.use_email,
       marketing: patient.marketing,
       active: typeof patch.active === "boolean" ? patch.active : patient.active,
+      payment_plan_id: patient.payment_plan_id ?? paymentPlanForPatient(patient.id),
     },
   });
 }

@@ -1,0 +1,164 @@
+// ===========================================================================
+// IS THIS DROP LEGAL?
+//
+// PURE, no I/O, and used by BOTH the client and the server so they cannot
+// diverge. The client refuses a bad drop before the confirmation dialog; the
+// server re-runs exactly these checks against inputs it fetched itself, because
+// nothing the client claims is trusted.
+//
+// An appointment against the wrong clinician or the wrong time is a
+// patient-safety event, so every refusal is explicit and carries its own
+// sentence. Nothing is ever "permitted with a warning".
+// ===========================================================================
+
+import type { ColumnWorkState, Span } from "./working-spans";
+import { firstOverlap, spanContainedIn } from "./working-spans";
+
+export interface MoveContext {
+  /** null = the Unassigned column, which is not a person. */
+  targetPractitionerId: string | null;
+  targetPractitionerName: string;
+  workState: ColumnWorkState;
+  /** The union of availability windows and that clinician's own booked spans. */
+  workingSpans: readonly Span[];
+  /** Booked spans that CONSUME the clinician's time (cancelled and DNA excluded). */
+  occupiedSpans: readonly (Span & { appointmentId?: string })[];
+  /** Break spans only. A note does not block a drop. */
+  breakSpans: readonly Span[];
+  /** The drawn extent of the day. */
+  bounds: Span;
+  /** Excluded from occupancy, so a five minute nudge onto itself is legal. */
+  movingAppointmentId: string;
+}
+
+export interface MoveProposal {
+  appointmentId: string;
+  startMin: number;
+  endMin: number;
+  practitionerId: string | null;
+  dayKey: string;
+}
+
+export type MoveRefusalCode =
+  | "unassigned"
+  | "hours_unknown"
+  | "site_unconfirmed"
+  | "outside_day"
+  | "outside_hours"
+  | "occupied"
+  | "on_break";
+
+export type MoveValidation =
+  | { ok: true }
+  | { ok: false; code: MoveRefusalCode; message: string };
+
+function hhmm(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  return `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Six checks, in a fixed order. The order is part of the contract: when several
+ * apply, the reader is told the most fundamental reason first.
+ *
+ *  1 unassigned     Unassigned is not a person and has no availability, so it is
+ *                   settled before anything that would consult availability.
+ *  2 hours_unknown  A read that failed REFUSES the move. It does not warn. The
+ *                   whole point of building availability first was so a drop
+ *                   could be checked, and a feature that silently stops checking
+ *                   is worse than one that stops working.
+ *  3 outside_day    Outside the drawn extent.
+ *  4 outside_hours  The GREY check. The whole span must lie inside the union of
+ *                   the clinician's availability windows and their own bookings.
+ *  5 occupied       The day's own appointments are subtracted EXPLICITLY rather
+ *                   than trusting the window to have excluded them, because
+ *                   whether Dentally's windows exclude booked time is unproven.
+ *  6 on_break       A break occupies; a note does not.
+ */
+export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation {
+  const name = ctx.targetPractitionerName.trim() === "" ? "this clinician" : ctx.targetPractitionerName;
+
+  if (p.practitionerId === null || ctx.targetPractitionerId === null) {
+    return {
+      ok: false,
+      code: "unassigned",
+      message: "An appointment cannot be moved to Unassigned. Choose a clinician.",
+    };
+  }
+
+  if (ctx.workState === "unknown") {
+    return {
+      ok: false,
+      code: "hours_unknown",
+      message: `Working hours could not be read for ${name}, so this move cannot be checked.`,
+    };
+  }
+
+  // The cross-site refusal. Availability carries no site, so a clinician who
+  // works at more than one of these practices can only be placed HERE by a
+  // site-scoped booking. Without one, their windows may belong to another
+  // practice entirely, and a drop into them books a patient with somebody who is
+  // not in the building. See site-presence.ts.
+  if (ctx.workState === "unconfirmed") {
+    return {
+      ok: false,
+      code: "site_unconfirmed",
+      message: `${name} works across more than one practice and nothing confirms they are at this one that day, so this move cannot be checked.`,
+    };
+  }
+
+  const span: Span = { startMin: p.startMin, endMin: p.endMin };
+  if (span.endMin <= span.startMin || span.startMin < ctx.bounds.startMin || span.endMin > ctx.bounds.endMin) {
+    return {
+      ok: false,
+      code: "outside_day",
+      message: "That is outside the diary's hours for this day.",
+    };
+  }
+
+  if (!spanContainedIn(span, ctx.workingSpans)) {
+    return {
+      ok: false,
+      code: "outside_hours",
+      message: `The proposed time is outside ${name}'s working hours.`,
+    };
+  }
+
+  const others = ctx.occupiedSpans.filter((s) => s.appointmentId !== ctx.movingAppointmentId);
+  const clash = firstOverlap(span, others);
+  if (clash) {
+    return {
+      ok: false,
+      code: "occupied",
+      message: `${name} already has an appointment at ${hhmm(clash.startMin)}.`,
+    };
+  }
+
+  if (firstOverlap(span, ctx.breakSpans)) {
+    return {
+      ok: false,
+      code: "on_break",
+      message: `${name} has a break booked at that time.`,
+    };
+  }
+
+  return { ok: true };
+}
+
+export const MIN_DURATION_MIN = 5;
+export const MAX_DURATION_MIN = 480;
+
+/**
+ * A duration the server will accept: 5 to 480 minutes, on a five minute mark.
+ *
+ * Returns null rather than clamping silently when the input is not a number: a
+ * duration we cannot read is a 400, not a guess.
+ */
+export function normaliseDurationMin(raw: unknown): number | null {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  if (rounded < MIN_DURATION_MIN || rounded > MAX_DURATION_MIN) return null;
+  if (rounded % MIN_DURATION_MIN !== 0) return null;
+  return rounded;
+}

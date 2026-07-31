@@ -3,6 +3,8 @@ import { DentallyClient } from "./client";
 import { normaliseAppointmentState } from "./appointment-state";
 import { dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 import { normaliseGender, type Gender } from "@/lib/patient/demographics";
+import { readPlanId } from "@/lib/calendar/funding";
+import { londonDayStartIso, londonDayEndIso } from "@/lib/calendar/availability";
 
 /**
  * The Dentally API key for READ / sync operations (listing patients, appointments,
@@ -72,6 +74,20 @@ export async function listSitePractitioners(internalSiteId: string): Promise<Pra
   return (await listSitePractitionersSafe(internalSiteId)).practitioners;
 }
 
+/**
+ * Read through a caller-supplied Dentally client instead of the environment one.
+ *
+ * The move path uses this so the guard reads and the write it guards go to the
+ * SAME Dentally instance. write.ts takes its own DENTALLY_WRITE_BASE_URL
+ * precisely so writes can be pointed at a sandbox, and a guard answered by a
+ * different instance than the one being written to is not a guard at all.
+ * Supplying a client also bypasses the 60 second read cache, because a
+ * patient-safety write must not be approved on a minute-old picture.
+ */
+export interface ThroughClient {
+  client?: DentallyClient;
+}
+
 export interface PractitionersRead {
   practitioners: PractitionerRecord[];
   /**
@@ -94,14 +110,20 @@ const PRACTITIONERS_CACHE_KEY = (siteId: string) => `practitioners:${siteId}`;
  * on success with the same 60 second TTL as the appointment reads (so paging the
  * diary day by day does not re-fetch the column set every time).
  */
-export async function listSitePractitionersSafe(internalSiteId: string): Promise<PractitionersRead> {
+export async function listSitePractitionersSafe(
+  internalSiteId: string,
+  opts: ThroughClient = {},
+): Promise<PractitionersRead> {
   const cacheKey = PRACTITIONERS_CACHE_KEY(internalSiteId);
-  if (!process.env.VITEST) {
+  // A caller that supplied its OWN client bypasses the cache in both directions.
+  // Reading it would answer a question about one Dentally instance with another
+  // instance's answer, and writing to it would poison every read-path caller.
+  if (!process.env.VITEST && !opts.client) {
     const hit = readCache.get(cacheKey);
     if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as PractitionersRead;
   }
 
-  const client = dentallyFromEnv();
+  const client = opts.client ?? dentallyFromEnv();
   const siteUuid = dentallySiteId(internalSiteId);
   let result: PractitionersRead;
   try {
@@ -126,7 +148,7 @@ export async function listSitePractitionersSafe(internalSiteId: string): Promise
     result = { practitioners: [], failed: true };
   }
 
-  if (!process.env.VITEST && !result.failed) {
+  if (!process.env.VITEST && !result.failed && !opts.client) {
     readCache.set(cacheKey, { at: Date.now(), value: result });
   }
   return result;
@@ -147,6 +169,16 @@ export interface PatientRecord {
   gender: Gender | null;
   smsConsent: boolean;
   emailConsent: boolean;
+  /**
+   * The patient's Dentally payment plan id, or null when there is none on file.
+   *
+   * Funding (NHS / Private / UDC) is a PATIENT-level fact: an appointment payload
+   * carries no payment plan at all, so the diary resolves the day's distinct
+   * patients and reads the plan from here. Null covers both "absent" and "plan
+   * zero", and an id outside this practice's whitelist stays a raw number so the
+   * caller can resolve it to "unknown" rather than to a guessed "private".
+   */
+  paymentPlanId: number | null;
 }
 
 export interface AppointmentRecord {
@@ -234,6 +266,7 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
     gender: normaliseGender(r.gender),
     smsConsent: bool(r.use_sms),
     emailConsent: bool(r.use_email),
+    paymentPlanId: readPlanId(r),
   };
 }
 
@@ -564,6 +597,131 @@ export async function listAppointmentsSafe(
   // missing day back to every reader for the rest of the TTL, which is the same
   // empty-diary lie as the all-sites-failed case, just narrower.
   if (!process.env.VITEST && failedSiteIds.length === 0) {
+    readCache.set(cacheKey, { at: Date.now(), value: result });
+  }
+  return result;
+}
+
+/**
+ * Drop every cached appointment window whose site set intersects `siteIds`.
+ *
+ * WHY THIS HAS TO EXIST. listAppointmentsSafe caches a successful window for 60s
+ * under `apptssafe:<sites>:<from>:<to>` and had no invalidation hook, so a
+ * router.refresh() straight after a CONFIRMED appointment move repainted the OLD
+ * time for up to a minute. To the person who just moved it that reads as a silent
+ * revert: the very failure the read-back confirmation exists to prevent, produced
+ * by the cache that makes the page fast. The move route calls this after a
+ * confirmed write, and only then may the board refresh.
+ *
+ * Deliberately keyed on INTERSECTION, not equality: the diary reads one site at a
+ * time, but Home and the daily brief read all three in one key, and that combined
+ * entry holds the same stale row.
+ */
+export function invalidateAppointmentsCache(siteIds: string[]): void {
+  if (siteIds.length === 0) return;
+  const wanted = new Set(siteIds);
+  const prefix = "apptssafe:";
+  for (const key of [...readCache.keys()]) {
+    if (!key.startsWith(prefix)) continue;
+    // `apptssafe:<a|b|c>:<from>:<to>`: site ids carry no colon, so the first
+    // segment after the prefix is the whole site set.
+    const sitePart = key.slice(prefix.length).split(":")[0] ?? "";
+    if (sitePart.split("|").some((s) => wanted.has(s))) readCache.delete(key);
+  }
+}
+
+/**
+ * The raw availability rows for one site's practitioners across a day range.
+ *
+ * This is the diary's "who is actually working" read, and it is the honest source:
+ * our own opening-hours config has never been checked against the practice and is
+ * already contradicted by live windows running past its configured close.
+ *
+ * Three decisions worth stating:
+ *  - NO `duration` is sent. The diary wants the raw WINDOW so it can shade a
+ *    session; chunking it into bookable slots at the parse seam (which the booking
+ *    path does) throws away exactly the shape the grid needs.
+ *  - An EMPTY practitioner list issues NO call at all and is not a failure. It is
+ *    the correct answer for a site whose practitioner read returned nobody.
+ *  - A FAILED read is NEVER cached. Caching it would serve "nobody is working" back
+ *    to every reader for the rest of the TTL, and on a busy Monday that is a
+ *    receptionist ringing patients to cancel a day that is in fact fully staffed.
+ *
+ * Returns raw rows: parsing, day-splitting and the untagged-row policy belong to
+ * parseAvailabilityWindows, which is pure and tested.
+ */
+/** Availability rows per page, and the ceiling on how many pages are walked. */
+const AVAILABILITY_PER_PAGE = 100;
+const AVAILABILITY_MAX_PAGES = 20;
+
+export async function listDiaryAvailabilitySafe(
+  args: {
+    siteId: string;
+    practitionerIds: readonly string[];
+    fromDayKey: string;
+    toDayKey: string;
+  },
+  opts: ThroughClient = {},
+): Promise<{ rows: unknown[]; failed: boolean }> {
+  const ids = [...args.practitionerIds].filter((id) => id !== "");
+  if (ids.length === 0) return { rows: [], failed: false };
+
+  const cacheKey = `diaryavail:${args.siteId}:${[...ids].sort().join("|")}:${args.fromDayKey}:${args.toDayKey}`;
+  if (!process.env.VITEST && !opts.client) {
+    const hit = readCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as { rows: unknown[]; failed: boolean };
+  }
+
+  const client = opts.client ?? dentallyFromEnv();
+  let result: { rows: unknown[]; failed: boolean };
+  try {
+    // PAGED, like every other list read here, and safe whether or not this
+    // endpoint actually pages. Rows are keyed and de-duplicated, so an endpoint
+    // that IGNORES page simply returns the same set on page two, contributes
+    // nothing new and ends the walk. A short page ends it too. Only a walk that
+    // keeps producing new rows until the ceiling is a FAILED read, because the
+    // alternative is presenting a truncated week as "these clinicians are not
+    // working": a positive claim that the practice is shut, from a partial read.
+    const rows: unknown[] = [];
+    const seen = new Set<string>();
+    let complete = false;
+    for (let page = 1; page <= AVAILABILITY_MAX_PAGES; page += 1) {
+      const res = await client.getAvailability({
+        practitionerIds: ids,
+        startTime: londonDayStartIso(args.fromDayKey),
+        finishTime: londonDayEndIso(args.toDayKey),
+        page,
+        perPage: AVAILABILITY_PER_PAGE,
+      });
+      const batch = Array.isArray(res.availability) ? res.availability : [];
+      let added = 0;
+      for (const raw of batch) {
+        const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        const key = `${String(r.practitioner_id ?? "")}|${String(r.start_time ?? "")}|${String(r.finish_time ?? "")}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(raw);
+        added += 1;
+      }
+      if (batch.length < AVAILABILITY_PER_PAGE || added === 0) {
+        complete = true;
+        break;
+      }
+    }
+    if (!complete) {
+      console.error(
+        `[dentally] getAvailability for site ${args.siteId} did not run out of pages within ${AVAILABILITY_MAX_PAGES}; treating the read as failed`,
+      );
+      result = { rows: [], failed: true };
+    } else {
+      result = { rows, failed: false };
+    }
+  } catch (err) {
+    console.error(`[dentally] getAvailability failed for site ${args.siteId}`, err);
+    result = { rows: [], failed: true };
+  }
+
+  if (!process.env.VITEST && !result.failed && !opts.client) {
     readCache.set(cacheKey, { at: Date.now(), value: result });
   }
   return result;

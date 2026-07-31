@@ -39,6 +39,8 @@ export interface AvailabilityArgs {
   startTime: string;  // ISO datetime
   finishTime: string; // ISO datetime
   duration?: number;  // minutes
+  page?: number;
+  perPage?: number;
 }
 
 export class DentallyClient {
@@ -293,11 +295,24 @@ export class DentallyClient {
     });
   }
 
+  /**
+   * Availability windows per practitioner.
+   *
+   * page and per_page are SENT, like every other list read on this client. It is
+   * not known whether this endpoint pages, and that is exactly why: if it does,
+   * a caller taking the first response as the whole answer would silently lose
+   * every window past the cut, and the diary renders a missing window as "this
+   * clinician is not working" - a positive claim that the practice is shut,
+   * produced by a partial read. Sending the parameters is harmless if they are
+   * ignored and correct if they are not.
+   */
   getAvailability(a: AvailabilityArgs) {
     return this.get<{ availability: unknown[] }>("/v1/appointments/availability", {
       start_time: a.startTime,
       finish_time: a.finishTime,
       duration: a.duration,
+      page: a.page ?? 1,
+      per_page: a.perPage ?? 100,
       "practitioner_ids[]": a.practitionerIds,
     });
   }

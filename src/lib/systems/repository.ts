@@ -39,6 +39,37 @@ export async function isSystemEnabled(clientId: string, slug: string): Promise<b
 }
 
 /**
+ * isSystemEnabled for a system that writes to a PATIENT RECORD: fail CLOSED,
+ * always, whatever MESSAGING_DRY_RUN says.
+ *
+ * isSystemEnabledForSend below ties its fail direction to the messaging dry-run
+ * flag, which is right for a Twilio send and wrong for a Dentally write: under
+ * the staged configuration the owner actually runs (real writes, simulated
+ * texts) a transient toggle-read error would re-arm a switch the owner had just
+ * turned off, and the write would land in a real diary. A switch we cannot read
+ * is treated as OFF here. A skipped move self-heals on the next click; a move
+ * written against the owner's explicit instruction does not.
+ */
+export async function isSystemEnabledStrict(clientId: string, slug: string): Promise<boolean> {
+  try {
+    const { data, error } = await serviceClient()
+      .from(TABLE)
+      .select("enabled")
+      .eq("client_id", clientId)
+      .eq("module_slug", slug)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? Boolean(data.enabled) : true; // no row => enabled
+  } catch (err) {
+    console.error(
+      `[systems] isSystemEnabledStrict(${clientId}, ${slug}) failed; failing CLOSED (disabled)`,
+      err,
+    );
+    return false;
+  }
+}
+
+/**
  * The set of DISABLED system slugs for a client, in one query. Used by the drain
  * (and any batch consumer) so it can skip disabled systems without a read per
  * source. Never throws: on error returns an empty set (all enabled).

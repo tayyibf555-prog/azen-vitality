@@ -38,15 +38,10 @@ import {
   type MockInvoice,
 } from "@/app/api/mock-dentally/_fixtures";
 import { MOCK_SITE_IDS } from "@/app/api/mock-dentally/_finance-fixtures";
+import { ROSTER, hasEmptyBook, sessionFor } from "@/app/api/mock-dentally/_rota";
 import { londonDayKey } from "@/lib/time/london";
 
 const DAY_MS = 86_400_000;
-
-/** Matches the practitioners /v1/practitioners returns for every site. */
-const PRACTITIONERS = [
-  { id: "prac-1", name: "Dana Hale" },
-  { id: "prac-2", name: "Femi Osei" },
-] as const;
 
 // --- Deterministic pseudo-randomness (same generator as _finance-fixtures) ---
 
@@ -173,6 +168,11 @@ function patientsForSiteId(siteId: string): { id: string; name: string }[] {
  * "appointments remaining to be completed" filter is for.
  */
 function stateFor(rand: () => number, daysBack: number, slotHour: number, nowHourLondon: number): string {
+  // A FUTURE day (daysBack < 0) has not happened yet: nothing on it can be
+  // completed, cancelled-by-attendance or missed. Without this branch the
+  // slot-hour comparison below would file tomorrow's 09:00 as "Completed"
+  // whenever the fixture is built after 09:00 today.
+  if (daysBack < 0) return rand() < 0.6 ? "Confirmed" : "booked";
   if (daysBack > 0) {
     const roll = rand();
     if (roll < 0.78) return "Completed";
@@ -191,6 +191,20 @@ function stateFor(rand: () => number, daysBack: number, slotHour: number, nowHou
   return rand() < 0.6 ? "Confirmed" : "booked";
 }
 
+/**
+ * One site's bookings for one day, placed INSIDE the rota sessions.
+ *
+ * Appointments used to be spread 09:00 to 17:30 across two invented
+ * practitioners regardless of who was actually at the site. That makes
+ * grey-means-off incoherent: the diary derives working time as the union of
+ * availability and BOOKINGS, so a booking outside every session forces white
+ * onto a column that ought to read "Not working", and a booking against a
+ * clinician who is at another site that day is simply wrong.
+ *
+ * So: only clinicians rostered at THIS site on THIS day get bookings, only
+ * inside their own session, on a five minute grid, and never overlapping
+ * themselves.
+ */
 function appointmentsForSiteDay(
   siteId: string,
   day: string,
@@ -199,49 +213,66 @@ function appointmentsForSiteDay(
 ): MockAppointment[] {
   const dow = weekday(day);
   if (dow === 0) return []; // Closed on Sundays.
+
+  // Who is genuinely at this site today, with their session, minus the
+  // clinician-days deliberately left with an empty book (_rota.ts EMPTY_BOOK).
+  const working = (ROSTER[siteId] ?? [])
+    .filter((p) => p.active && !hasEmptyBook(p.id, day))
+    .map((p) => ({ id: p.id, name: `${p.first} ${p.last}`, session: sessionFor(p.id, day) }))
+    .filter((p): p is { id: string; name: string; session: { siteId: string; startMin: number; endMin: number } } =>
+      p.session !== null && p.session.siteId === siteId,
+    );
+  if (working.length === 0) return [];
+
   const rand = seeded(`diary|${siteId}|${day}`);
   const base = DAILY_SLOTS[siteId] ?? 8;
   const target = dow === 6 ? Math.max(2, Math.round(base * 0.4)) : base + Math.floor(rand() * 5) - 2;
   const patients = patientsForSiteId(siteId);
 
+  // A walking cursor per clinician, so one clinician never double-books.
+  const cursor = new Map(working.map((p) => [p.id, p.session.startMin]));
   const rows: MockAppointment[] = [];
-  // Slots run 09:00 to 17:30 on a fifteen minute grid, walking forward so two
-  // appointments at one site never overlap.
-  let minutesFromNine = 0;
   for (let i = 0; i < Math.max(0, target); i += 1) {
-    if (minutesFromNine >= 8.5 * 60) break;
-    const hour = 9 + Math.floor(minutesFromNine / 60);
-    const minute = minutesFromNine % 60;
+    const clinician = working[i % working.length];
+    const startMin = cursor.get(clinician.id) ?? clinician.session.startMin;
     const duration = pick(rand, [15, 30, 30, 30, 45, 60]);
+    if (startMin + duration > clinician.session.endMin) continue; // their day is full
     const patient = pick(rand, patients);
-    const practitioner = pick(rand, PRACTITIONERS);
     rows.push({
       id: `appt-gen-${siteId}-${day}-${i}`,
       patient_id: patient.id,
       patient_name: patient.name,
       site_id: siteId,
-      start_time: londonInstant(day, hour, minute),
+      start_time: londonInstant(day, Math.floor(startMin / 60), startMin % 60),
       duration,
-      state: stateFor(rand, daysBack, hour, nowHourLondon),
+      state: stateFor(rand, daysBack, Math.floor(startMin / 60), nowHourLondon),
       reason: pick(rand, REASONS),
-      practitioner: practitioner.name,
-      practitioner_id: practitioner.id,
+      practitioner: clinician.name,
+      practitioner_id: clinician.id,
       // Roughly a third of bookings carry a note, as in the real diary.
       notes: rand() < 0.34 ? pick(rand, NOTES) : undefined,
     });
-    // Leave a gap sometimes, so the day is not a solid unbroken block.
-    minutesFromNine += duration + (rand() < 0.25 ? 15 : 0);
+    // Leave a gap sometimes, so the day is not a solid unbroken block. Both the
+    // duration and the gap are multiples of five, and every session boundary is
+    // on a five minute mark, so every start time lands on the diary's own grid.
+    cursor.set(clinician.id, startMin + duration + (rand() < 0.25 ? 15 : 0));
   }
   return rows;
 }
 
 /** How far back the generated book runs. Matches the longest strip period. */
 const DIARY_HISTORY_DAYS = 90;
+/**
+ * How far FORWARD it runs. The diary loads today-14 to today+45, and a book that
+ * stopped at today would leave drag-and-drop with almost nothing to drag and make
+ * free capacity read as roughly 100% on every future day.
+ */
+const DIARY_FUTURE_DAYS = 45;
 
 function buildAppointments(today: string): MockAppointment[] {
   const nowHourLondon = Number(londonHourMinute(new Date()).slice(0, 2));
   const rows: MockAppointment[] = [];
-  for (let back = 0; back < DIARY_HISTORY_DAYS; back += 1) {
+  for (let back = -DIARY_FUTURE_DAYS; back < DIARY_HISTORY_DAYS; back += 1) {
     const day = shift(today, -back);
     for (const siteId of MOCK_SITE_IDS) {
       rows.push(...appointmentsForSiteDay(siteId, day, back, nowHourLondon));
@@ -253,6 +284,16 @@ function buildAppointments(today: string): MockAppointment[] {
 let appointmentCache: { day: string; rows: MockAppointment[] } | null = null;
 
 /**
+ * In-session edits to generated rows, applied on read.
+ *
+ * The generated book is rebuilt from a seeded PRNG, so a PUT cannot simply mutate
+ * it: the next rebuild would discard the change. Overrides live beside it and are
+ * layered on top. They live HERE rather than in _fixtures.ts because _fixtures.ts
+ * is imported BY this file and the reverse would be circular.
+ */
+const generatedOverrides = new Map<string, Partial<MockAppointment>>();
+
+/**
  * The generated rolling appointment book, newest day last (the route sorts and
  * filters). Rebuilt once per London day, so a long-lived dev server does not
  * keep serving yesterday's "today".
@@ -260,7 +301,33 @@ let appointmentCache: { day: string; rows: MockAppointment[] } | null = null;
 export function generatedAppointments(): MockAppointment[] {
   const day = todayKey();
   if (appointmentCache?.day !== day) appointmentCache = { day, rows: buildAppointments(day) };
-  return appointmentCache.rows;
+  const rows = appointmentCache.rows;
+  if (generatedOverrides.size === 0) return rows;
+  return rows.map((r) => {
+    const patch = generatedOverrides.get(r.id);
+    return patch ? { ...r, ...patch } : r;
+  });
+}
+
+/** One generated appointment by id, with any in-session edit applied. */
+export function findGeneratedAppointment(id: string): MockAppointment | undefined {
+  return generatedAppointments().find((a) => a.id === id);
+}
+
+/**
+ * Edit a generated appointment (reschedule, resize, reassign, cancel). Returns the
+ * updated row, or undefined when the id is not a generated one. Every row the
+ * diary renders comes from generatedAppointments(), so without this a PUT against
+ * anything visible in the diary 404s.
+ */
+export function updateGeneratedAppointment(
+  id: string,
+  patch: Partial<MockAppointment>,
+): MockAppointment | undefined {
+  const current = findGeneratedAppointment(id);
+  if (!current) return undefined;
+  generatedOverrides.set(id, { ...(generatedOverrides.get(id) ?? {}), ...patch });
+  return { ...current, ...patch };
 }
 
 // --- Dated invoices ---------------------------------------------------------

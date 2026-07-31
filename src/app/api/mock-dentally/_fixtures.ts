@@ -47,6 +47,15 @@ export interface MockPatient {
   archived_reason?: string | null;
   dentist_recall_date?: string | null;
   hygienist_recall_date?: string | null;
+  /**
+   * The patient's payment plan, which is where FUNDING lives. Funding is a
+   * PATIENT-level fact in Dentally, not an appointment-level one: an appointment
+   * payload carries no plan at all. This practice's own live-calibrated ids are
+   * 1 = NHS, 2 = Private, 47752 = UDC (src/lib/patient/profile.ts). Optional
+   * because "no plan on file" is a real and common state that must resolve to
+   * nothing rather than to a guessed default.
+   */
+  payment_plan_id?: number;
 }
 
 export interface MockTreatmentPlan {
@@ -604,6 +613,37 @@ export const PATIENT_GENDER: Record<string, "Female" | "Male"> = {
   "pat-013": "Female", "pat-014": "Male", "pat-015": "Female",
   "pat-016": "Male", "pat-017": "Female", "pat-018": "Male",
 };
+
+// Payment plan per patient, which is what the diary resolves FUNDING from.
+//
+// The spread is deliberate rather than tidy, because the case most likely to be
+// got wrong is the UNRESOLVABLE one and it has to be reachable in dev:
+//   9 on plan 1 (NHS), 9 on plan 2 (Private), 2 on 47752 (UDC),
+//   2 with the field ABSENT entirely (pat-009, pat-012),
+//   1 with payment_plan_id 0 (pat-015), which is "no plan", not plan zero,
+//   1 on a real-looking id OUTSIDE this practice's whitelist (pat-018, 90210).
+// The last four must all render as no funding mark at all. None of them may ever
+// be inferred as private.
+export const PATIENT_PAYMENT_PLAN: Record<string, number> = {
+  "pat-001": 1, "pat-004": 1, "pat-007": 1, "pat-010": 1, "pat-013": 1,
+  "pat-016": 1, "pat-019": 1, "pat-023": 1, "pat-025": 1,
+  "pat-002": 2, "pat-005": 2, "pat-008": 2, "pat-011": 2, "pat-014": 2,
+  "pat-017": 2, "pat-020": 2, "pat-021": 2, "pat-024": 2,
+  "pat-003": 47752, "pat-006": 47752,
+  "pat-015": 0,
+  "pat-018": 90210,
+};
+
+for (const p of MOCK_PATIENTS) {
+  const planId = PATIENT_PAYMENT_PLAN[p.id];
+  if (planId !== undefined) p.payment_plan_id = planId;
+}
+
+/** The patient's payment plan id, or null when there is none on file. */
+export function paymentPlanForPatient(patientId: string): number | null {
+  const planId = PATIENT_PAYMENT_PLAN[patientId];
+  return planId === undefined ? null : planId;
+}
 
 // --- Lookups --------------------------------------------------------------
 

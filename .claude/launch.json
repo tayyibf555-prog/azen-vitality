@@ -41,6 +41,15 @@
         "SUPABASE_SERVICE_ROLE_KEY= DENTALLY_BASE_URL=http://localhost:3002/api/mock-dentally npm run dev -- -p 3002"
       ],
       "port": 3002
+    },
+    {
+      "name": "azen-web-authed-3002",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DENTALLY_BASE_URL=http://localhost:3002/api/mock-dentally npm run dev -- -p 3002"
+      ],
+      "port": 3002
     }
   ]
 }

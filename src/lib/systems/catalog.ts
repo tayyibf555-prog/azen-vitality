@@ -135,6 +135,12 @@ export const SYSTEMS: SystemDef[] = [
   },
   // --- Operations ---
   {
+    slug: "calendar-writes",
+    label: "Diary appointment moves",
+    group: "Operations",
+    halts: "Appointments can no longer be moved, reassigned or resized from the diary.",
+  },
+  {
     slug: "rota",
     label: "Staff rota",
     group: "Operations",
@@ -173,6 +179,10 @@ export const SYSTEM_SLUGS: string[] = SYSTEMS.map((s) => s.slug);
  * enqueue to the shared drain appear here.
  */
 export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
+  // The owner's kill switch for diary moves also stops the texts those moves
+  // generate: switching the write off but leaving the notice on would text a
+  // patient about a change that never happened.
+  diary: "calendar-writes",
   reactivation: "reactivation",
   recall: "recall",
   noshow: "no-show-defence",
