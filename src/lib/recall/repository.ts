@@ -159,11 +159,17 @@ export async function listTargets(args: {
   siteIds: string[];
   recallTypes?: RecallType[];
   statuses?: RecallStatus[];
+  /** One patient's targets only. Added for the patient record's Recalls tab, which
+   *  wants at most two rows: without it, opening a record read the whole site's
+   *  recall worklist and threw away everything but this patient. Filtered in the
+   *  query, not after it. */
+  dentallyPatientId?: string;
 }): Promise<RecallTarget[]> {
   const db = serviceClient();
   let q = db.from("recall_target").select("*").in("site_id", args.siteIds);
   if (args.recallTypes && args.recallTypes.length > 0) q = q.in("recall_type", args.recallTypes);
   if (args.statuses && args.statuses.length > 0) q = q.in("status", args.statuses);
+  if (args.dentallyPatientId) q = q.eq("dentally_patient_id", args.dentallyPatientId);
   const { data, error } = await q.order("due_at", { ascending: true });
   if (error) throw error;
   return (data as TargetRow[]).map(rowToTarget);

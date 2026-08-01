@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { StatusPill, type Tone } from "@/components/primitives";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { cn, relativeTime } from "@/lib/utils";
 import { Loader2, ShieldAlert, Check, X, History } from "lucide-react";
 import { isPatientAdminRole } from "@/lib/patient/roles";
+import { FAILED_COPY } from "@/lib/patient/tabs";
 import type { DentallySyncResult, PatientAdminStatus } from "@/lib/patient-status/types";
 
 // Roles allowed to SEE and USE the control come from lib/patient/roles, the same list the
@@ -74,6 +76,7 @@ export function PatientStatusManager({
   patientId,
   dentallyActive,
   status,
+  statusUnavailable = false,
   onChange,
   now,
 }: {
@@ -83,14 +86,22 @@ export function PatientStatusManager({
   dentallyActive: boolean;
   /** The platform override status lifted to the drawer, or null when none is set. */
   status: PatientAdminStatus | null;
+  /** The SERVER's own override read threw before this rendered. */
+  statusUnavailable?: boolean;
   onChange: (next: PatientAdminStatus | null) => void;
   now: Date;
 }) {
   const { user } = useAuth();
   const canManage = user ? isPatientAdminRole(user.role) : false;
+  const router = useRouter();
 
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // The authoritative status read below THREW. Held rather than swallowed: with no
+  // override loaded this control falls back to Dentally's active flag, so a patient
+  // the practice marked do_not_contact would present as ordinary and active. On a
+  // suppression marker the safe-looking default is the wrong one.
+  const [loadFailed, setLoadFailed] = useState(false);
   // The status the user has selected in the menu and is about to confirm.
   const [pending, setPending] = useState<PatientAdminStatus | null>(null);
   const [reason, setReason] = useState("");
@@ -105,13 +116,20 @@ export function PatientStatusManager({
       cache: "no-store",
     })
       .then((r) => r.json())
-      .then((d: { override?: { status?: PatientAdminStatus } | null; audit?: AuditEntry[] }) => {
+      .then((d: { ok?: boolean; override?: { status?: PatientAdminStatus } | null; audit?: AuditEntry[] }) => {
         if (!alive) return;
+        if (d.ok === false) {
+          setLoadFailed(true);
+          return;
+        }
+        setLoadFailed(false);
         setAudit(d.audit ?? []);
         // Sync the lifted status to the server truth (may differ from the list hint).
         onChange(d.override?.status ?? null);
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) setLoadFailed(true);
+      })
       .finally(() => alive && setLoaded(true));
     return () => {
       alive = false;
@@ -124,6 +142,9 @@ export function PatientStatusManager({
   // own active flag. This is the chip the practice sees.
   const effective: PatientAdminStatus = status ?? (dentallyActive ? "active" : "inactive");
   const meta = STATUS_META[effective];
+  // Either the server render or this component's own read failed. Either way we do
+  // not know this patient's status and must not print one.
+  const unavailable = statusUnavailable || loadFailed;
 
   // Show Dentally's own flag as secondary ONLY when an override exists AND they disagree
   // (e.g. platform 'inactive' but Dentally still 'active'). do_not_contact has no Dentally
@@ -147,6 +168,10 @@ export function PatientStatusManager({
         setResult({ ok: false, message: d.error ? `Could not update status: ${d.error}` : "Could not update status." });
       } else {
         onChange(d.status);
+        // The record page's header chip is rendered from a SERVER layout that survives
+        // tab navigation, so without this the header still read "Active" after this
+        // control was set to "Do not contact", and stayed wrong for the session.
+        router.refresh();
         setResult({ ok: true, message: dentallyResultCopy(d.dentally ?? "skipped") });
         // Refresh the audit trail so the new entry appears immediately.
         fetch(`/api/patients/${encodeURIComponent(patientId)}/status?siteId=${encodeURIComponent(siteId)}`, {
@@ -167,10 +192,19 @@ export function PatientStatusManager({
 
   return (
     <section className="space-y-3 rounded-xl border border-line bg-card-muted/30 px-4 py-3.5">
+      {unavailable ? (
+        <p className="rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-[12.5px] text-status-amber">
+          {FAILED_COPY.status}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">Status</span>
-          <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+          {unavailable ? (
+            <StatusPill tone="neutral">{FAILED_COPY.statusChip}</StatusPill>
+          ) : (
+            <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+          )}
           {showDentallySecondary ? (
             <span className="text-[11px] text-faint">Dentally: {dentallyActive ? "active" : "inactive"}</span>
           ) : null}

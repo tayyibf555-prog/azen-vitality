@@ -5,7 +5,6 @@ import { listPatients, countPatients, getPatientById, type PatientRecord } from 
 import { getPatientCounts } from "@/lib/patient-count/repository";
 import { listOverridesForSites } from "@/lib/patient-status/repository";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
-import { loadNumberHealthByPatient, type NumberHealth } from "@/lib/messaging/number-health";
 import { PatientsTable } from "./patients-table";
 
 /** A quiet big-numeral text stat for the header row (was a boxed stat card). */
@@ -22,10 +21,18 @@ function HeaderStat({ label, value, hint }: { label: string; value: string | num
 export async function PatientsView({
   clientSlug,
   patientId = null,
+  basePath,
 }: {
   clientSlug: string;
   /** A single record to open on arrival (?patient=), resolved server-side. */
   patientId?: string | null;
+  /**
+   * "/c/<client>" or "/owner/<client>". Every record link the table builds hangs off
+   * it, so an owner clicking a patient stays in the owner tree instead of being sent
+   * into the client one. Defaults to the client tree, which is where it is used
+   * without an explicit base path.
+   */
+  basePath?: string;
 }) {
   const client = getClient(clientSlug);
   if (!client) {
@@ -78,13 +85,14 @@ export async function PatientsView({
   }
 
   const nowIso = new Date().toISOString();
-  // The active slice shown in the table. Hoisted so its number-health verdicts are
-  // batched in ONE query here (mirroring the overrides load) and passed to the table,
-  // rather than each opened record fetching its own.
+  // The active slice shown in the table.
+  //
+  // Its number-health verdicts used to be batched in ONE query here so the drawer's
+  // deliverability chip painted instantly. The drawer is gone: a patient now opens
+  // either the record page or the quick overview, and BOTH resolve number health
+  // server-side for the one patient being read. Batching it for ~300 rows that will
+  // not use it is a query per page view for nothing, so it was dropped.
   const activePatients = patients.filter((p) => p.active);
-  const lookups: Record<string, NumberHealth> = await loadNumberHealthByPatient(
-    activePatients.map((p) => ({ id: p.id, phone: p.phone })),
-  );
   // Recall count below is over the bounded slice, NOT the whole book, hence the
   // caption under the header.
   const activeInSlice = activePatients.length;
@@ -132,9 +140,9 @@ export async function PatientsView({
         patients={activePatients}
         nowIso={nowIso}
         clientSlug={clientSlug}
+        basePath={basePath ?? `/c/${clientSlug}`}
         initialFilter="active"
         overrides={overrides}
-        lookups={lookups}
         requestedPatientId={patientId}
         initialPatient={initialPatient}
       />

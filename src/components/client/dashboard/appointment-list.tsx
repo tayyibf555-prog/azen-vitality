@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PatientLink } from "@/components/platform/patient-link";
 import { useMemo } from "react";
 import { StatusPill } from "@/components/primitives";
 import { PERIOD_LABELS, type DashboardPeriod } from "@/lib/dashboard/period";
@@ -200,12 +200,17 @@ function Row({ row, showDay, clientSlug }: { row: AppointmentRow; showDay: boole
             {row.patientName}
           </span>
         ) : (
-          <Link
-            href={`/c/${clientSlug}/patients?patient=${encodeURIComponent(row.patientId)}`}
-            className="block truncate text-[12.5px] font-semibold leading-[1.2] text-blue-deep underline-offset-2 hover:underline"
+          // The QUICK OVERVIEW, opened in place. This used to navigate to the
+          // patients LIST with ?patient=, which left the dashboard entirely.
+          <PatientLink
+            patientId={row.patientId}
+            siteId={row.siteId}
+            basePath={`/c/${clientSlug}`}
+            patientName={row.patientName}
+            className="block truncate text-[12.5px] font-semibold leading-[1.2] text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
           >
             {row.patientName}
-          </Link>
+          </PatientLink>
         )}
         <span title={second} className="block truncate text-[11px] font-medium leading-[1.25] text-muted">
           {second}

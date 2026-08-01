@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PatientLink } from "@/components/platform/patient-link";
 import { formatPenceGbp } from "@/lib/dashboard/money";
 import type { AccountsPanel as Panel } from "@/lib/dashboard/view";
 import { num } from "@/lib/utils";
@@ -72,12 +72,21 @@ export function AccountsPanelView({
               and the numeral competed with the money for the eye. */}
           {panel.top.map((account) => (
             <li key={account.patientId} className="flex items-baseline gap-2 py-[3px]">
-              <Link
-                href={`/c/${clientSlug}/patients?patient=${encodeURIComponent(account.patientId)}`}
-                className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-blue-deep underline-offset-2 hover:underline"
+              {/* The QUICK OVERVIEW, opened in place: you are reading the dashboard
+                  and want to check one thing about one debtor, not leave the page.
+                  A row with no site id (the whole-group view, or a patient missing
+                  from the attribution map) links straight to the record instead,
+                  because every patient read is site-scoped and a site is never
+                  guessed. */}
+              <PatientLink
+                patientId={account.patientId}
+                siteId={account.siteId}
+                basePath={`/c/${clientSlug}`}
+                patientName={account.patientName ?? undefined}
+                className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
               >
                 {account.patientName ?? `Patient ${account.patientId}`}
-              </Link>
+              </PatientLink>
               <span className="shrink-0 text-[12.5px] font-bold tabular-nums tracking-[-0.2px] text-navy">
                 {formatPenceGbp(account.owedPence)}
               </span>

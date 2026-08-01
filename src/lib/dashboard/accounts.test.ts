@@ -12,8 +12,19 @@ describe("computeOutstandingAccounts", () => {
     const result = computeOutstandingAccounts({
       balances: [bal("p1", 50_000, "Aisha Begum"), bal("p1", 25_000), bal("p2", 60_000, "Rajesh Patel")],
     });
-    expect(result.top[0]).toEqual({ patientId: "p1", patientName: "Aisha Begum", owedPence: 75_000 });
-    expect(result.top[1]).toEqual({ patientId: "p2", patientName: "Rajesh Patel", owedPence: 60_000 });
+    expect(result.top[0]).toEqual({
+      patientId: "p1",
+      patientName: "Aisha Begum",
+      // No siteByPatientId supplied here, so the site is unknown rather than guessed.
+      siteId: null,
+      owedPence: 75_000,
+    });
+    expect(result.top[1]).toEqual({
+      patientId: "p2",
+      patientName: "Rajesh Patel",
+      siteId: null,
+      owedPence: 60_000,
+    });
     expect(result.totalOwedPence).toBe(135_000);
   });
 

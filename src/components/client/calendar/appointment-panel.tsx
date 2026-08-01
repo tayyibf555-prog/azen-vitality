@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { StatusPill } from "@/components/primitives";
@@ -12,6 +11,7 @@ import { blockTimes, stateGlyph, type DiaryAppointment } from "./diary-view";
 import { typeLabelFor } from "./treatment-type";
 import { WRITE_GATE_OFF_PANEL, WRITE_GATE_ON_PANEL } from "./move-copy";
 import { RescheduleSuggestions } from "./reschedule-suggestions";
+import { PatientLink } from "@/components/platform/patient-link";
 
 // ---------------------------------------------------------------------------
 // The appointment detail panel.
@@ -339,12 +339,20 @@ export function AppointmentPanel({
 
           <div className="mt-auto space-y-2 border-t border-line pt-3">
             {appointment.patientId ? (
-              <Link
-                href={`/c/${clientSlug}/patients?patient=${encodeURIComponent(appointment.patientId)}`}
+              // The QUICK OVERVIEW, opened in place. You are mid-move in the diary and
+              // usually only need to check one thing; this used to navigate to the
+              // patients LIST with ?patient=, which left the diary before the overlay
+              // had even opened. A plain click opens the overview; cmd/middle-click
+              // still opens the full record in a new tab, which was impossible before.
+              <PatientLink
+                patientId={appointment.patientId}
+                siteId={siteId}
+                basePath={`/c/${clientSlug}`}
+                patientName={appointment.patientName}
                 className="inline-block text-[12.5px] font-medium text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
               >
                 Open patient file
-              </Link>
+              </PatientLink>
             ) : null}
             {/* ACCURATE about what this diary can currently do, in every state,
                 and in the order the reader can act on. The ROLE comes first: a

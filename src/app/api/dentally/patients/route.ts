@@ -1,35 +1,30 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listPatients, searchPatients, type PatientRecord } from "@/lib/dentally/read";
+import type { PatientListRow } from "@/lib/patient/list-row";
 import { listTargets } from "@/lib/recall/repository";
 import { requireUser, requireClientAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
-// The row shape returned to the command palette and the patients table. A superset
-// of the palette's fields (id/name/phone/siteId), so it stays compatible.
-interface PatientRow {
-  id: string;
-  name: string;
-  phone: string | null;
-  email: string | null;
-  siteId: string;
-  active: boolean;
-  lastVisitAt: string | null;
-  recallDueAt: string | null;
-}
+/**
+ * The row shape returned to the command palette and the patients table.
+ *
+ * It is now the FULL PatientRecord, not a reduced eight-field subset.
+ *
+ * Why that mattered: the subset dropped dateOfBirth, gender, title, the consent
+ * flags, archivedReason and paymentPlanId, so a record opened from SEARCH (which
+ * comes through this endpoint) showed a confident "Not on file" date of birth and a
+ * confident "No marketing consent" for a patient who had both. A false negative on a
+ * clinical record is worse than a slower payload, and the payload difference is a few
+ * scalars per row.
+ *
+ * `partial` marks a row that is NOT a full Dentally read (see recallRows below).
+ */
+type PatientRow = PatientListRow;
 
 function toRow(p: PatientRecord): PatientRow {
-  return {
-    id: p.id,
-    name: p.name,
-    phone: p.phone,
-    email: p.email,
-    siteId: p.siteId,
-    active: p.active,
-    lastVisitAt: p.lastVisitAt,
-    recallDueAt: p.recallDueAt,
-  };
+  return p;
 }
 
 type PatientFilter = "active" | "recall" | "lapsed" | "all";
@@ -51,15 +46,30 @@ async function recallRows(siteIds: string[]): Promise<PatientRow[]> {
   }
   return [...byPatient.values()]
     .sort((a, b) => b.overdueDays - a.overdueDays)
-    .map((t) => ({
+    .map<PatientRow>((t) => ({
       id: t.dentallyPatientId,
       name: t.patientName,
+      title: null,
       phone: null,
       email: null,
       siteId: t.siteId,
       active: true,
+      archivedReason: null,
       lastVisitAt: t.lastVisitAt,
       recallDueAt: t.dueAt,
+      dentistRecallAt: t.recallType === "dentist" ? t.dueAt : null,
+      hygienistRecallAt: t.recallType === "hygienist" ? t.dueAt : null,
+      dateOfBirth: null,
+      gender: null,
+      smsConsent: t.consent.sms,
+      emailConsent: t.consent.email,
+      paymentPlanId: null,
+      // recall_target genuinely does not hold contact details, a date of birth or a
+      // payment plan, so those nulls are NOT facts about the patient. Marked partial
+      // so the table renders a dash with "Not loaded in this view" rather than the
+      // claim "No contact", which is what it printed before and which was wrong for
+      // every recall row. A dash is not a claim; "No contact" is.
+      partial: true,
     }));
 }
 

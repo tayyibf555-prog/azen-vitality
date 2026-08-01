@@ -224,8 +224,21 @@ export class DentallyClient {
       page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
-  getPatientInvoices(patientId: string) {
-    return this.get<{ invoices: unknown[] }>("/v1/invoices", { patient_id: patientId });
+  /**
+   * ONE patient's invoices, PAGED.
+   *
+   * It used to send patient_id alone. Dentally caps a page at ~100 rows, so a
+   * long-standing patient's invoice history stopped at the first page with no
+   * marker, and Balance, Lifetime spend, Total invoiced and Total paid were all
+   * reduced over the truncated array and printed as confident fact. A patient with
+   * 40 invoices whose 3 unpaid ones fell past the first page read "Balance £0.00" on
+   * the record while the dashboard debtors panel, which pages the index properly,
+   * listed them owing hundreds.
+   */
+  getPatientInvoices(patientId: string, page = 1, perPage = 100) {
+    return this.get<{ invoices: unknown[] }>("/v1/invoices", {
+      patient_id: patientId, page, per_page: perPage,
+    });
   }
   /**
    * List invoices for the outstanding-balance scan. With `patientId` it is one
@@ -244,8 +257,16 @@ export class DentallyClient {
       paid: a.paid === undefined ? undefined : String(a.paid),
     });
   }
-  getPatientNotes(patientId: string) {
-    return this.get<{ patient_notes: unknown[] }>("/v1/patient_notes", { patient_id: patientId });
+  /**
+   * ONE patient's clinical notes, PAGED. Same defect as getPatientInvoices had, and
+   * this is the ONE stream on the record where a dropped row can be an allergy or a
+   * medication warning: a patient of fifteen years with 200 notes rendered the most
+   * recent page as if it were the whole history.
+   */
+  getPatientNotes(patientId: string, page = 1, perPage = 100) {
+    return this.get<{ patient_notes: unknown[] }>("/v1/patient_notes", {
+      patient_id: patientId, page, per_page: perPage,
+    });
   }
 
   /**

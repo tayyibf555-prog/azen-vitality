@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Check, History, Loader2, Pencil, ShieldAlert, X } from "lucide-react";
 import { cn, relativeTime } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/mock-auth";
@@ -85,6 +86,7 @@ export function PatientProfileEditor({
 }) {
   const { user } = useAuth();
   const canEdit = user ? isPatientAdminRole(user.role) : false;
+  const router = useRouter();
 
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -199,6 +201,12 @@ export function PatientProfileEditor({
       if (d.profile) {
         seed(d.profile);
         onSaved?.(d.profile);
+        // The record page's HEADER is rendered from a server layout that is preserved
+        // across tab navigation, so without this a renamed patient kept the old name
+        // in the <h1> for the rest of the session while this form showed the new one.
+        // Harmless where there is no server tree above (the quick view): refresh is a
+        // no-op there.
+        router.refresh();
       }
       setReason("");
       const n = d.changed?.length ?? 0;

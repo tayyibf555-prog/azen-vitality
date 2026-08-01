@@ -54,6 +54,22 @@ export interface CandidateTask {
   title: string;
   subtitle: string | null;
   patientName: string;
+  /**
+   * The Dentally patient id this task is about, or null when it cannot be known.
+   *
+   * POPULATED FROM THE TARGET'S OWN ID FIELD, NEVER FROM patientName. Recall, no-show
+   * and reactivation targets each carry a dentallyPatientId (and embed it in their
+   * composite key), so those three are exact. Coordinator, after-hours, speed-to-lead
+   * and smile-assessment entities are opaque uuids with no patient id at all, so they
+   * stay null.
+   *
+   * Matching a task to a patient BY NAME is not acceptable at any confidence on a
+   * clinical record: two patients share a name and the record would then show another
+   * person's work. A stated partial list is more useful and more honest than either a
+   * name-matched full list or an empty tab, so the patient record's Tasks tab lists
+   * the three it can key and says plainly which four it cannot.
+   */
+  patientId: string | null;
   siteId: string;
   priority: number; // 0-100, higher first
   dueHint: string | null;

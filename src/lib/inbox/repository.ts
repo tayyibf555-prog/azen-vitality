@@ -214,3 +214,156 @@ export async function getThread(siteIds: string[], contactRef: string): Promise<
   const threads = await listThreads(siteIds);
   return threads.find((t) => t.contactRef === contactRef) ?? null;
 }
+
+/**
+ * One patient's thread, filtered AT THE QUERY LEVEL rather than by loading every
+ * thread for the site and then finding one.
+ *
+ * getThread above does exactly that, which is acceptable behind a drawer opened
+ * occasionally and wasteful on a record page that a receptionist opens all day: it
+ * pulls up to 400 rows from each of six stores, groups them all, and throws away
+ * everything but one contact. Here each source is asked for this patient only.
+ *
+ * A null thread means nothing at all is held, which the Correspondence tab renders as
+ * "no messages have been sent to this patient FROM THIS PLATFORM" rather than as
+ * "this patient has never been contacted".
+ *
+ * IT REPORTS ITS OWN FAILURES, and that is not cosmetic. Every one of the seven
+ * sources is caught individually so one dead table cannot blank the tab. Without a
+ * signal that resilience becomes a lie on a clinical record: if two of the six touch
+ * tables error the tab showed a partial history as if it were the whole one, and if
+ * every source errored it returned null and the tab stated in writing that this
+ * patient has never been messaged. The counts below are what let the panel say which
+ * of the three it is.
+ */
+export interface PatientThreadRead {
+  thread: Thread | null;
+  /** How many of the sources threw. 0 in the normal case. */
+  failedSources: number;
+  /** How many were attempted, so the caller can tell "some" from "all". */
+  totalSources: number;
+}
+
+export async function getThreadForPatient(siteIds: string[], patientId: string): Promise<PatientThreadRead> {
+  const totalSources = 1 + TOUCH_SOURCES.length;
+  if (siteIds.length === 0 || !patientId) return { thread: null, failedSources: 0, totalSources };
+  let failedSources = 0;
+  const fail = () => {
+    failedSources += 1;
+    return [] as InboxMessage[];
+  };
+  const results = await Promise.all([
+    loadAgentMessagesForPatient(siteIds, patientId).catch((err) => {
+      console.warn("inbox: failed to load agent messages for one patient", err);
+      return fail();
+    }),
+    ...TOUCH_SOURCES.map((s) =>
+      loadTouchSourceForPatient(s, siteIds, patientId).catch((err) => {
+        console.warn(`inbox: failed to load touch source "${s.name}" for one patient`, err);
+        return fail();
+      }),
+    ),
+  ]);
+  const messages = results.flat();
+  if (messages.length === 0) return { thread: null, failedSources, totalSources };
+  const threads = groupThreads(messages);
+  // groupThreads keys on contactRef; a patient can appear as `patient:<id>` from every
+  // source, so there is normally exactly one thread here. Pick the patient's own.
+  const thread = threads.find((t) => t.contactRef === `patient:${patientId}`) ?? threads[0] ?? null;
+  return { thread, failedSources, totalSources };
+}
+
+async function loadAgentMessagesForPatient(siteIds: string[], patientId: string): Promise<InboxMessage[]> {
+  const db = serviceClient();
+  const { data: convs, error: cErr } = await db
+    .from("agent_conversation")
+    .select("id, site_id, dentally_patient_id, patient_name, channel")
+    .in("site_id", siteIds)
+    // The agent store keys a known patient as the raw id; `patient:<id>` is the
+    // canonical form the rest of the inbox uses. Accept both so a row written by
+    // either convention is found.
+    .in("dentally_patient_id", [patientId, `patient:${patientId}`])
+    .order("updated_at", { ascending: false })
+    .limit(PER_SOURCE_LIMIT);
+  if (cErr) throw cErr;
+  const conversations = (convs as AgentConvRow[]) ?? [];
+  if (conversations.length === 0) return [];
+
+  const byId = new Map<string, AgentConvRow>();
+  for (const c of conversations) byId.set(c.id, c);
+
+  const { data: msgs, error: mErr } = await db
+    .from("agent_message")
+    .select("id, conversation_id, role, body, created_at")
+    .in("conversation_id", Array.from(byId.keys()))
+    .order("created_at", { ascending: true })
+    .limit(PER_SOURCE_LIMIT);
+  if (mErr) throw mErr;
+
+  const out: InboxMessage[] = [];
+  for (const m of (msgs as AgentMsgRow[]) ?? []) {
+    const conv = byId.get(m.conversation_id);
+    if (!conv) continue;
+    if (m.role !== "patient" && m.role !== "agent") continue;
+    out.push({
+      id: `agent:${m.id}`,
+      contactRef: contactRefFromConv(conv.dentally_patient_id),
+      contactName: conv.patient_name,
+      channel: toInboxChannel(conv.channel),
+      direction: directionFromAgentRole(m.role),
+      body: m.body,
+      at: m.created_at,
+      source: "agent",
+    });
+  }
+  return out;
+}
+
+async function loadTouchSourceForPatient(
+  source: TouchSource,
+  siteIds: string[],
+  patientId: string,
+): Promise<InboxMessage[]> {
+  const db = serviceClient();
+  // Parents first: the patient id lives on the parent (target/opportunity/request),
+  // not on the touch, so the filter has to start there. That is what makes this a
+  // query-level filter rather than a scan-and-discard.
+  const { data: parents, error: pErr } = await db
+    .from(source.parentTable)
+    .select("id, dentally_patient_id, patient_name")
+    .in("site_id", siteIds)
+    .eq("dentally_patient_id", patientId);
+  if (pErr) throw pErr;
+  const parentRows = (parents as ParentRow[]) ?? [];
+  if (parentRows.length === 0) return [];
+  const byParent = new Map<string, ParentRow>();
+  for (const p of parentRows) byParent.set(p.id, p);
+
+  const { data: touches, error: tErr } = await db
+    .from(source.touchTable)
+    .select(`id, site_id, ${source.parentKey}, channel, direction, body, created_at`)
+    .in("site_id", siteIds)
+    .in(source.parentKey, Array.from(byParent.keys()))
+    .order("created_at", { ascending: false })
+    .limit(PER_SOURCE_LIMIT)
+    .overrideTypes<Array<Record<string, unknown>>>();
+  if (tErr) throw tErr;
+
+  const out: InboxMessage[] = [];
+  for (const raw of ((touches as Array<Record<string, unknown>> | null) ?? [])) {
+    const parent = byParent.get(String(raw[source.parentKey] ?? ""));
+    if (!parent) continue;
+    const direction: InboxDirection = raw.direction === "inbound" ? "inbound" : "outbound";
+    out.push({
+      id: `${source.name}:${String(raw.id)}`,
+      contactRef: `patient:${parent.dentally_patient_id}`,
+      contactName: parent.patient_name,
+      channel: toInboxChannel(String(raw.channel ?? "sms")),
+      direction,
+      body: String(raw.body ?? ""),
+      at: String(raw.created_at),
+      source: source.name,
+    });
+  }
+  return out;
+}

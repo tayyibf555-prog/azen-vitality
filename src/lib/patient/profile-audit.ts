@@ -111,6 +111,69 @@ export async function insertProfileAudit(input: {
   if (error) throw error;
 }
 
+/**
+ * ONE chronological trail for one patient: profile edits AND status changes, merged,
+ * newest first. This is what the record's Audit tab shows, because Dentally's Audit
+ * tab is one trail rather than several.
+ *
+ * It is ADDITIVE. listProfileAudit below stays exactly as it is and keeps feeding the
+ * profile editor's per-field history, and the status manager keeps its own filtered
+ * status history. Both of those render things this merged view deliberately does not
+ * (the editor's from/to/reason layout, the status manager's own filtering), and
+ * neither may be lost.
+ *
+ * A row with dentallyResult 'failed' is an ATTEMPTED change Dentally refused: nothing
+ * changed on the record, and that must stay legible rather than reading as a change
+ * that happened.
+ */
+export interface PatientAuditEntry {
+  id: string;
+  /** 'edit' for a field change, 'status' for a status override. */
+  kind: "edit" | "status";
+  /** The field key for an edit row, null for a status row. */
+  field: string | null;
+  /** Human label: the field's label, or "Status" for a status row. */
+  label: string;
+  from: string | null;
+  to: string;
+  reason: string | null;
+  actorEmail: string | null;
+  dentallyResult: DentallySyncResult | null;
+  createdAt: string;
+}
+
+export async function listPatientAudit(
+  siteId: string,
+  patientId: string,
+  limit = 200,
+): Promise<PatientAuditEntry[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("patient_admin_audit")
+    .select(COLS)
+    .eq("site_id", siteId)
+    .eq("dentally_patient_id", patientId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as AuditRow[]).map((r) => {
+    const isEdit = isProfileAction(r.action);
+    const field = isEdit ? r.action.slice(PROFILE_ACTION_PREFIX.length) : null;
+    return {
+      id: r.id,
+      kind: isEdit ? ("edit" as const) : ("status" as const),
+      field,
+      label: isEdit ? FIELD_LABELS[field as ProfileField] ?? (field as string) : "Status",
+      from: r.from_status,
+      to: r.to_status,
+      reason: r.reason,
+      actorEmail: r.actor_email,
+      dentallyResult: (r.dentally_result as DentallySyncResult | null) ?? null,
+      createdAt: r.created_at,
+    };
+  });
+}
+
 /** The most recent profile-edit entries for one patient, newest first. */
 export async function listProfileAudit(
   siteId: string,

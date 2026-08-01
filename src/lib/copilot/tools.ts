@@ -340,7 +340,14 @@ async function rawPatientSearch(siteId: string, query: string): Promise<PatientR
         siteId,
         active: r.active !== false,
         archivedReason: null,
+        // This projection exists ONLY to dedupe a create against existing records, so
+        // it deliberately reads the few fields the dedupe compares and leaves the rest
+        // null rather than parsing a payload nobody here looks at. Title and the two
+        // recall dates join that set.
+        title: null,
         recallDueAt: null,
+        dentistRecallAt: null,
+        hygienistRecallAt: null,
         lastVisitAt: null,
         dateOfBirth: typeof r.date_of_birth === "string" && r.date_of_birth ? r.date_of_birth : null,
         gender: null,
@@ -445,7 +452,19 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             lifetimeSpend: detail.lifetimeSpend,
             notes: detail.notes,
             treatmentPlans: detail.plans,
-            appointmentHistory: detail.appointments,
+            // getPatientDetail now opts INTO cancelled and did-not-attend rows and
+            // PAGES the read (it was a single unpaged 100-row call that excluded
+            // both). Two knock-ons, handled here rather than assumed away:
+            //   - the co-pilot can now see and reason about a patient's DNAs and
+            //     cancellations, which is the point of the change; each row already
+            //     carries `state`, so it can tell them from attended visits.
+            //   - a long-standing patient can now return many hundreds of rows, so
+            //     the history is bounded before it reaches the model and the true
+            //     count is stated rather than silently truncated.
+            appointmentHistoryCount: detail.appointments.length,
+            appointmentHistory: detail.appointments.slice(0, 40), // newest first
+            // So a failed Dentally read is never reported to the user as "none".
+            reads: detail.reads,
           });
         }
 

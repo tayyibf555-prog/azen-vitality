@@ -60,6 +60,23 @@ export function londonOverdueDays(dueIso: string, now: Date): number {
 }
 
 /**
+ * A London calendar-date label for an instant, e.g. "17 May 1967". Used wherever a
+ * date is a DATE rather than a moment: a date of birth, a recall date, an invoice
+ * date. Returns "" for an unparseable value, so a caller renders nothing rather
+ * than "Invalid Date".
+ */
+export function londonDateLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Europe/London",
+  });
+}
+
+/**
  * A London wall-clock label for an instant, e.g. "Sun 28 Jun, 09:00".
  * Guards an unparseable instant to "soon".
  */

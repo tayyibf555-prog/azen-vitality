@@ -9,6 +9,7 @@ function cand(p: Partial<CandidateTask> & { key: string }): CandidateTask {
     title: "t",
     subtitle: null,
     patientName: "Zoe",
+    patientId: null,
     siteId: "site-cc",
     priority: 50,
     dueHint: null,

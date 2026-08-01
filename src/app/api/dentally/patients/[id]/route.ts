@@ -1,14 +1,32 @@
-import { getPatientDetail, getPatientById } from "@/lib/dentally/read";
+import { getPatientRecord, getPatientRecordInScope } from "@/lib/patient/record";
 import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
 import { numberHealthFor, type NumberHealth } from "@/lib/messaging/number-health";
+import { getOverride } from "@/lib/patient-status/repository";
+import { getSite } from "@/lib/mock/clients";
+import type { PatientAdminStatus } from "@/lib/patient-status/types";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/dentally/patients/[id]?siteId=
-// Returns one patient's appointment history + treatment plans for the record drawer,
-// plus the number-health verdict (read-only, from phone_lookup) so a record opened from
-// search/filter - beyond the list's batched slice - still shows an accurate chip. The
-// number is resolved server-side from the patient id, so no phone ever rides the URL.
+//
+// The whole patient record for the QUICK VIEW: the patient, the detail read, the
+// derived figures and the read-health flags, plus the number-health verdict
+// (read-only, from phone_lookup) so a record opened from search or a filter, beyond
+// the list's batched slice, still shows an accurate chip. The number is resolved
+// server-side from the patient id, so no phone ever rides the URL.
+//
+// It reads through getPatientRecord, which is the SAME function the full record page
+// server-renders, behind the same single cache entry. That is the point: the two
+// surfaces must never disagree about a figure, so neither of them computes one.
+// Everything numeric on either surface comes off `derived`.
+//
+// IT ALSO RETURNS THE STATUS OVERRIDE AND THE SITE NAME, which it did not. The quick
+// overview is now the ONLY surface the diary, the dashboard debtors list, the task
+// queue and the command palette open, and without the override it showed a patient
+// the practice had marked do_not_contact as an ordinary record with a phone number
+// and no marker of any kind. The old drawer carried that red pill in its header. The
+// read's own success is reported separately (overrideUnavailable) so a database blip
+// cannot present as "no marker set".
 export async function GET(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -24,33 +42,54 @@ export async function GET(
   const denied = requireSiteAccess(auth, siteId);
   if (denied) return denied;
 
-  // requireSiteAccess only proves the CALLER may reach the site they named. It does
-  // NOT prove the requested PATIENT belongs to that site — and getPatientDetail's
-  // appointment/notes/invoice reads are keyed on patient id alone, so without this a
-  // caller holding site A could read a patient from site B by pairing site A with a
-  // foreign patient id (cross-site now, cross-tenant once a second practice exists).
-  // Resolve the patient and require their real site to match. Only when enforcement
-  // is on (auth non-null), mirroring requireSiteAccess. Fail closed: an unresolved or
-  // wrong-site patient returns 404 and never reveals the patient exists.
-  // (Calibration note: relies on the Dentally patient object carrying site_id, which
-  // the mock now mirrors; confirm against the live sandbox when the real key lands.)
-  // The number-health verdict, derived from the patient resolved for the site check
-  // above. Only when enforcement is on (auth non-null); when off, the drawer falls back
-  // to the batched list verdict. numberHealthFor short-circuits (no query) for a patient
-  // with no usable number, so the by-id reads below are the only ones for such records.
-  let numberHealth: NumberHealth | null = null;
-  if (auth) {
-    const patient = await getPatientById(id);
-    if (!patient || patient.siteId !== siteId) {
+  try {
+    // requireSiteAccess only proves the CALLER may reach the site they named. It does
+    // NOT prove the requested PATIENT belongs to that site, and the per-patient reads
+    // are keyed on patient id alone, so without this a caller holding site A could read
+    // a patient from site B by pairing site A with a foreign patient id (cross-site
+    // now, cross-tenant once a second practice exists).
+    //
+    // getPatientRecordInScope resolves the patient by id FIRST and checks their real
+    // site BEFORE running any of the appointment / notes / invoice reads, so a foreign
+    // patient's record is never even fetched, let alone returned. Only when enforcement
+    // is on (auth non-null), mirroring requireSiteAccess. Fail closed: an unresolved or
+    // wrong-site patient returns the SAME 404 and never reveals which it was.
+    // (Calibration note: relies on the Dentally patient object carrying site_id, which
+    // the mock mirrors; confirm against the live sandbox when the real key lands.)
+    const record = auth
+      ? await getPatientRecordInScope(id, [siteId])
+      : await getPatientRecord(id, siteId);
+    if (!record) {
       return Response.json({ ok: false, error: "not found" }, { status: 404 });
     }
-    numberHealth = await numberHealthFor(patient.phone);
-  }
 
-  try {
-    const detail = await getPatientDetail(id, siteId);
-    return Response.json({ ok: true, numberHealth, ...detail });
+    // Only when enforcement is on; when off, the quick view simply shows no chip.
+    // numberHealthFor short-circuits (no query) for a patient with no usable number.
+    let overrideStatus: PatientAdminStatus | null = null;
+    let overrideUnavailable = false;
+    const [numberHealth] = await Promise.all([
+      auth ? numberHealthFor(record.patient.phone) : Promise.resolve(null as NumberHealth | null),
+      getOverride(record.patient.siteId, record.patient.id)
+        .then((o) => {
+          overrideStatus = o?.status ?? null;
+        })
+        .catch(() => {
+          overrideUnavailable = true;
+        }),
+    ]);
+
+    return Response.json({
+      ok: true,
+      patient: record.patient,
+      detail: record.detail,
+      derived: record.derived,
+      reads: record.reads,
+      numberHealth,
+      overrideStatus,
+      overrideUnavailable,
+      siteName: getSite(record.patient.siteId)?.name ?? record.patient.siteId,
+    });
   } catch {
-    return Response.json({ ok: false, appointments: [], plans: [] }, { status: 500 });
+    return Response.json({ ok: false, error: "could not load record" }, { status: 500 });
   }
 }

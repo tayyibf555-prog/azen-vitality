@@ -157,12 +157,32 @@ export async function listSitePractitionersSafe(
 export interface PatientRecord {
   id: string;
   name: string;
+  /**
+   * Dentally's own title ("Mr", "Mrs", "Dr"), or null when the record carries none.
+   *
+   * It arrives on the SAME `GET /v1/patients/:id` payload every other field here
+   * comes from; toPatient simply never picked it. The patient record's header
+   * prints "Mr Alex Berry" exactly as Dentally does, and an absent title renders
+   * the name alone rather than a guessed one.
+   */
+  title: string | null;
   email: string | null;
   phone: string | null;
   siteId: string;
   active: boolean;
   archivedReason: string | null;
+  /**
+   * The soonest of the two recall dates below, unchanged from the day this field
+   * was added. Every existing caller (the patients list, the recall segment, the
+   * reactivation scoring) reads this and must keep reading exactly the same value,
+   * so the two split fields are ADDED alongside it rather than replacing it.
+   */
   recallDueAt: string | null;
+  /** Dentally's `dentist_recall_date`. Shown as its own line on the Recalls tab,
+   *  because Dentally shows the two separately and staff act on them separately. */
+  dentistRecallAt: string | null;
+  /** Dentally's `hygienist_recall_date`. See dentistRecallAt. */
+  hygienistRecallAt: string | null;
   lastVisitAt: string | null;
   dateOfBirth: string | null;
   /** 'male' | 'female' | null (normalised from Dentally's gender; null = not on file). */
@@ -252,15 +272,23 @@ function mapSite(rawSiteId: unknown): string {
 function toPatient(r: Record<string, unknown>): PatientRecord {
   const first = str(r.first_name) ?? "";
   const last = str(r.last_name) ?? "";
+  const dentistRecallAt = str(r.dentist_recall_date);
+  const hygienistRecallAt = str(r.hygienist_recall_date);
   return {
     id: String(r.id ?? ""),
     name: `${first} ${last}`.trim() || "Unknown",
+    title: str(r.title),
     email: str(r.email_address),
     phone: str(r.mobile_phone),
     siteId: mapSite(r.site_id),
     active: r.active !== false,
     archivedReason: str(r.archived_reason),
-    recallDueAt: str(r.dentist_recall_date) ?? str(r.hygienist_recall_date),
+    // UNCHANGED expression, deliberately: dentist first, hygienist as the fallback.
+    // Every existing caller depends on this exact value; the two split fields below
+    // are additive.
+    recallDueAt: dentistRecallAt ?? hygienistRecallAt,
+    dentistRecallAt,
+    hygienistRecallAt,
     lastVisitAt: str(r.last_visit_at),
     dateOfBirth: str(r.date_of_birth),
     gender: normaliseGender(r.gender),
@@ -308,7 +336,16 @@ async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: n
 const READ_CACHE_TTL_MS = 60_000;
 const readCache = new Map<string, { at: number; value: unknown }>();
 
-async function cachedRead<T>(key: string, fn: () => Promise<T>, ttlMs = READ_CACHE_TTL_MS): Promise<T> {
+/**
+ * Exported so ONE caller can wrap several reads in a SINGLE cache entry.
+ *
+ * lib/patient/record.ts uses this to put the by-id read and the detail read behind
+ * one key: the patient record has two surfaces (the page and the quick view) and
+ * they must never disagree about a figure, which they would if each read through a
+ * cache with its own TTL. Everything else in this file should keep using cachedRead
+ * per read, as it does below.
+ */
+export async function cachedRead<T>(key: string, fn: () => Promise<T>, ttlMs = READ_CACHE_TTL_MS): Promise<T> {
   // Unit tests exercise the real read directly (no cross-test cache pollution).
   if (process.env.VITEST) return fn();
   const now = Date.now();
@@ -741,6 +778,23 @@ export interface NoteRecord {
   createdAt: string;
 }
 
+/**
+ * Whether each of the four per-patient Dentally reads actually succeeded.
+ *
+ * Every one of them catches to an empty array so a single outage cannot blank the
+ * whole record. Without this flag that resilience becomes a LIE on a clinical
+ * screen: a failed notes read renders as "No clinical notes in Dentally", which a
+ * clinician reads as a fact about the patient rather than a fact about the network.
+ * "none" and "we could not read it" are different clinical statements and this is
+ * what lets the panels tell them apart.
+ */
+export interface ReadHealth {
+  appointments: "ok" | "failed";
+  plans: "ok" | "failed";
+  notes: "ok" | "failed";
+  invoices: "ok" | "failed";
+}
+
 export interface PatientDetail {
   appointments: AppointmentRecord[];
   plans: PlanRecord[];
@@ -748,6 +802,45 @@ export interface PatientDetail {
   lifetimeSpend: number;
   /** Balance still owed across this patient's unpaid invoices (0 if all settled). */
   outstanding: number;
+  /** Money the practice owes THIS patient, as a positive number (0 in the normal
+   *  case). An overpayment at reception is a real figure Dentally's own account
+   *  screen shows, and clamping it to zero printed "Balance £0.00" instead. */
+  credit: number;
+  /** Total invoiced across this patient's whole invoice history. Dentally's own
+   *  account card prints it beside the balance, so we hold it rather than making a
+   *  panel add up figures of its own. */
+  totalInvoiced: number;
+  /** The raw invoice rows behind the two figures above, mapped to the columns
+   *  Dentally's Account tab prints. See InvoiceRecord for what is and is not real. */
+  invoices: InvoiceRecord[];
+  reads: ReadHealth;
+}
+
+/**
+ * One invoice, in the shape Dentally's own Account tab lists them.
+ *
+ * PROVENANCE, because half of Dentally's columns have no source here:
+ *   - `reference`, `status`, `balance` and `total` are read from the invoice payload
+ *     the outstanding scan already parses, so they are as trustworthy as that scan.
+ *   - `date` is TENTATIVE. The live field name is unverified and is read defensively
+ *     as created_at ?? date ?? issued_at, exactly as listOutstanding does; the local
+ *     mock's invoices carry no date at all, so null is a normal result.
+ *   - Dentally also prints Summary, Practitioners and Location. NOTHING in this repo
+ *     reads them off an invoice, so they are deliberately absent here rather than
+ *     invented: the Account tab keeps those columns and renders a dash with one
+ *     footnote, which is the honest rendering of a column we cannot fill.
+ */
+export interface InvoiceRecord {
+  id: string;
+  /** Dentally's human invoice reference, falling back to the id when absent. */
+  reference: string;
+  status: string | null;
+  /** ISO-ish string as Dentally returned it, or null. Tentative: see above. */
+  date: string | null;
+  /** Still owed on this invoice (0 when settled). */
+  balance: number;
+  /** Gross total invoiced. */
+  total: number;
 }
 
 /** Full record for one patient: appointment history, treatment plans, notes, lifetime spend.
@@ -755,13 +848,42 @@ export interface PatientDetail {
 export function getPatientDetail(patientId: string, siteId: string): Promise<PatientDetail> {
   return cachedRead(`patientdetail:${siteId}:${patientId}`, () => _getPatientDetailUncached(patientId, siteId), 30_000);
 }
+/** The detail read with NO cache of its own, for a caller that is already inside a
+ *  cache entry of its own (lib/patient/record.ts). Prefer getPatientDetail. */
+export function getPatientDetailUncached(patientId: string, siteId: string): Promise<PatientDetail> {
+  return _getPatientDetailUncached(patientId, siteId);
+}
 async function _getPatientDetailUncached(patientId: string, siteId: string): Promise<PatientDetail> {
   const client = dentallyFromEnv();
 
-  const apptsP = client
-    .getPatientAppointments(patientId)
-    .then((res) => (res.appointments ?? []).map((a) => toAppointment(a as Record<string, unknown>, siteId)))
-    .catch(() => [] as AppointmentRecord[]);
+  // Each read reports whether it actually succeeded, so an outage is never rendered
+  // as "this patient has none of that". Flipped in the catch, read into `reads` below.
+  const health: ReadHealth = { appointments: "ok", plans: "ok", notes: "ok", invoices: "ok" };
+
+  // includeCancelled = true, and PAGED.
+  //
+  // Two defects fixed at once, both of which matter more here than anywhere else:
+  //   1. The client defaults cancelled=false, so a patient's OWN record hid every
+  //      cancellation and every did-not-attend. A clinical record that hides a
+  //      patient's DNAs is worse than no record: it is the single most operationally
+  //      and commercially material thing on the tab, and the front desk needs it
+  //      before they offer a prime slot.
+  //   2. This was the only per-patient read here that was a single unpaged 100-row
+  //      call, so a long-standing patient's history silently stopped at 100 rows with
+  //      no marker of any kind. pageAll loops until a short page.
+  // Bounded at 10 pages (1,000 appointments) because this is one patient, not a book.
+  const apptsP = pageAll(
+    (page) =>
+      client
+        .getPatientAppointments(patientId, page, PER_PAGE, true)
+        .then((res) => res.appointments ?? []),
+    10,
+  )
+    .then((rows) => rows.map((a) => toAppointment(a as Record<string, unknown>, siteId)))
+    .catch(() => {
+      health.appointments = "failed";
+      return [] as AppointmentRecord[];
+    });
 
   // Query THIS patient's plans directly (patient_id) instead of paging the whole
   // group's treatment_plans (up to 100 calls) to filter one patient out — that was
@@ -789,12 +911,22 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
           acceptedAt: str(r.start_date) ?? str(r.accepted_at) ?? str(r.created_at),
         })),
     )
-    .catch(() => [] as PlanRecord[]);
+    .catch(() => {
+      health.plans = "failed";
+      return [] as PlanRecord[];
+    });
 
-  const notesP = client
-    .getPatientNotes(patientId)
-    .then((res) =>
-      (res.patient_notes ?? []).map((n) => {
+  // PAGED, for the same reason the appointment read above is. This is the ONE stream
+  // on the record where a dropped row can be an allergy or a medication warning, and
+  // it was a single unpaged call: a patient of fifteen years with 200 clinical notes
+  // rendered the most recent page as if it were the complete history, with no count
+  // and no truncation marker.
+  const notesP = pageAll(
+    (page) => client.getPatientNotes(patientId, page, PER_PAGE).then((res) => res.patient_notes ?? []),
+    10,
+  )
+    .then((rows) =>
+      rows.map((n) => {
         const r = n as Record<string, unknown>;
         return {
           id: String(r.id ?? ""),
@@ -804,18 +936,53 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
         };
       }),
     )
-    .catch(() => [] as NoteRecord[]);
+    .catch(() => {
+      health.notes = "failed";
+      return [] as NoteRecord[];
+    });
 
-  const invoicesP = client
-    .getPatientInvoices(patientId)
-    .then((res) => (res.invoices ?? []).map((inv) => inv as Record<string, unknown>))
-    .catch(() => [] as Record<string, unknown>[]);
+  // PAGED. Every money figure on this record - Balance, Lifetime spend, Total
+  // invoiced, Total paid and the whole Account table - is a reduction over this
+  // array, and it was a single unpaged 100-row call. A truncated array does not fail
+  // any honesty guard: reads.invoices stays "ok" and a wrong balance is printed in
+  // red at the top of the record as fact.
+  const invoicesP = pageAll(
+    (page) => client.getPatientInvoices(patientId, page, PER_PAGE).then((res) => res.invoices ?? []),
+    10,
+  )
+    .then((rows) => rows.map((inv) => inv as Record<string, unknown>))
+    .catch(() => {
+      health.invoices = "failed";
+      return [] as Record<string, unknown>[];
+    });
 
   const [appointments, plans, notes, invoices] = await Promise.all([apptsP, plansP, notesP, invoicesP]);
   const lifetimeSpend = invoices.reduce((sum, r) => sum + invoicePaid(r), 0);
   const outstanding = invoices.reduce((sum, r) => sum + invoiceOutstanding(r), 0);
+  const credit = invoices.reduce((sum, r) => sum + invoiceCredit(r), 0);
+  const totalInvoiced = invoices.reduce((sum, r) => sum + num(r.amount ?? r.total ?? r.gross ?? r.value), 0);
+  const invoiceRows: InvoiceRecord[] = invoices.map((r) => ({
+    id: String(r.id ?? ""),
+    reference: str(r.reference) ?? str(r.number) ?? String(r.id ?? ""),
+    status: str(r.status) ?? str(r.state),
+    // Tentative field name; read exactly as listOutstanding reads it.
+    date: str(r.created_at) ?? str(r.date) ?? str(r.issued_at),
+    balance: invoiceOutstanding(r),
+    total: num(r.amount ?? r.total ?? r.gross ?? r.value),
+  }));
+  invoiceRows.sort((a, b) => ((a.date ?? "") < (b.date ?? "") ? 1 : -1)); // newest first
   appointments.sort((a, b) => (a.start < b.start ? 1 : -1)); // newest first
-  return { appointments, plans, notes, lifetimeSpend, outstanding };
+  return {
+    appointments,
+    plans,
+    notes,
+    lifetimeSpend,
+    outstanding,
+    credit,
+    totalInvoiced,
+    invoices: invoiceRows,
+    reads: health,
+  };
 }
 
 /** Outstanding balances across the given sites, one aggregated row per patient, from
@@ -854,12 +1021,38 @@ function invoiceOutstanding(r: Record<string, unknown>): number {
 
 /** The amount already PAID on one invoice. Live Dentally: gross minus the outstanding
  *  balance (or the full gross when the boolean `paid` is true); mock: the numeric `paid`.
- *  Used for lifetime spend, which otherwise summed booleans (1/0) as pounds on live. */
+ *  Used for lifetime spend, which otherwise summed booleans (1/0) as pounds on live.
+ *
+ *  IT HONOURS THE SAME NON-DEBT STATUSES invoiceOutstanding does, which it did not.
+ *  A written-off invoice normally carries amount_outstanding 0, so this returned the
+ *  FULL GROSS as money received: a £900 course written off after a dispute printed
+ *  "Total paid £900" and "Lifetime spend £900" for money the practice never saw,
+ *  while Balance correctly read £0 from the same row. Two figures on one card
+ *  disagreeing about whether an invoice is real, and the larger one is what a
+ *  treatment coordinator uses to judge what this patient will spend. */
 function invoicePaid(r: Record<string, unknown>): number {
+  const status = str(r.status) ?? str(r.state);
+  if (status && NON_DEBT_INVOICE_STATUSES.has(status)) return 0;
   if (typeof r.paid === "number") return num(r.paid); // mock/legacy shape
   const gross = num(r.amount ?? r.total);
   if (r.amount_outstanding != null) return Math.max(0, gross - num(r.amount_outstanding));
   return r.paid === true ? gross : 0;
+}
+
+/**
+ * Money the practice owes on one invoice, as a POSITIVE number, or 0.
+ *
+ * invoiceOutstanding clamps at zero, which is right for the debtors scan (a credit is
+ * not a debt and must never net one off) and wrong for a patient's own account
+ * screen, where the clamp turned an overpayment into "Balance £0.00" in navy. Held as
+ * its own figure so no existing sign test changes meaning.
+ */
+function invoiceCredit(r: Record<string, unknown>): number {
+  const status = str(r.status) ?? str(r.state);
+  if (status && NON_DEBT_INVOICE_STATUSES.has(status)) return 0;
+  const raw = r.amount_outstanding ?? r.outstanding;
+  if (raw == null) return 0;
+  return Math.max(0, -num(raw));
 }
 
 async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingRecord[]> {

@@ -3,6 +3,7 @@ import { ClientSidebar } from "@/components/client/client-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
 import { ClientSectionBar } from "@/components/client/section-tabs";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
+import { PatientQuickViewProvider } from "@/components/platform/patient-quick-view-provider";
 import { FeedbackWidget } from "@/components/platform/feedback-widget";
 import { UsageBeacon } from "@/components/platform/usage-beacon";
 import { guardPage } from "@/lib/auth/page-guard";
@@ -45,49 +46,56 @@ export default async function ClientLayout({
   // right areas are open. Nothing flashes and nothing has to correct itself.
   const navOpenGroups = parseOpenGroups(cookieStore.get(SIDEBAR_GROUPS_COOKIE)?.value);
   return (
-    // FULL BLEED. The working area runs edge to edge against the sidebar, with
-    // no gutter and no rounding.
-    //
-    // It used to be a floating white panel: a light brand-blue wash behind it and
-    // a 12px gutter top, right and bottom, with an 18px radius. That framing cost
-    // real estate on the screens that need it most for nothing but decoration,
-    // and the owner asked for it gone so the information fills the space.
-    //
-    // The wash survives on the html/body underneath, so an overscroll bounce and
-    // any area the panel does not cover still read as the product rather than as
-    // bare white. Fixed widgets (co-pilot, feedback) still escape the clip.
-    <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
-      <div className="flex min-h-screen lg:h-full lg:min-h-0">
-        <ClientSidebar
-          disabledSlugs={disabledSlugs}
-          initialOpenGroups={navOpenGroups}
-        />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:h-auto lg:min-h-0 lg:overflow-hidden">
-          <ClientTopbar selected={selectedSite} />
-          {/* The second level of the navigation: the modules inside whichever
-              area the rail has selected. Renders nothing for an area with only
-              one module, and nothing below lg, where the drawer carries both
-              levels itself. */}
-          <div className="hidden lg:block">
-            <ClientSectionBar disabledSlugs={disabledSlugs} />
-          </div>
-          <div className="min-h-0 flex-1 lg:overflow-y-auto">
-            {/* The two :has() variants are gated on a marker only the diary sets
-                (data-diary), so every other /c page is byte-identical. The diary
-                needs a DEFINITE height for its own two-axis scroller, and needs
-                to reach past the 1400px cap: on a 1920 reception monitor that cap
-                throws away 388px, which is four clinician columns. */}
-            <main className="lg:has-[[data-diary]]:h-full">
-              <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
-                {children}
-              </div>
-            </main>
+    // The quick-view provider wraps the WHOLE shell, not just {children}. It used to
+    // wrap only the page content inside <main>, which left <PlatformShortcuts /> (and
+    // therefore the Cmd-K command palette) OUTSIDE the context: usePatientQuickView
+    // returned null there, so a patient chosen in the palette silently navigated away
+    // from the diary you were looking at instead of opening the overview in place.
+    <PatientQuickViewProvider>
+      {/* FULL BLEED. The working area runs edge to edge against the sidebar, with
+          no gutter and no rounding.
+
+          It used to be a floating white panel: a light brand-blue wash behind it and
+          a 12px gutter top, right and bottom, with an 18px radius. That framing cost
+          real estate on the screens that need it most for nothing but decoration,
+          and the owner asked for it gone so the information fills the space.
+
+          The wash survives on the html/body underneath, so an overscroll bounce and
+          any area the panel does not cover still read as the product rather than as
+          bare white. Fixed widgets (co-pilot, feedback) still escape the clip. */}
+      <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
+        <div className="flex min-h-screen lg:h-full lg:min-h-0">
+          <ClientSidebar
+            disabledSlugs={disabledSlugs}
+            initialOpenGroups={navOpenGroups}
+          />
+          <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:h-auto lg:min-h-0 lg:overflow-hidden">
+            <ClientTopbar selected={selectedSite} />
+            {/* The second level of the navigation: the modules inside whichever
+                area the rail has selected. Renders nothing for an area with only
+                one module, and nothing below lg, where the drawer carries both
+                levels itself. */}
+            <div className="hidden lg:block">
+              <ClientSectionBar disabledSlugs={disabledSlugs} />
+            </div>
+            <div className="min-h-0 flex-1 lg:overflow-y-auto">
+              {/* The two :has() variants are gated on a marker only the diary sets
+                  (data-diary), so every other /c page is byte-identical. The diary
+                  needs a DEFINITE height for its own two-axis scroller, and needs
+                  to reach past the 1400px cap: on a 1920 reception monitor that cap
+                  throws away 388px, which is four clinician columns. */}
+              <main className="lg:has-[[data-diary]]:h-full">
+                <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
+                  {children}
+                </div>
+              </main>
+            </div>
           </div>
         </div>
+        <PlatformShortcuts />
+        <FeedbackWidget />
+        <UsageBeacon />
       </div>
-      <PlatformShortcuts />
-      <FeedbackWidget />
-      <UsageBeacon />
-    </div>
+    </PatientQuickViewProvider>
   );
 }

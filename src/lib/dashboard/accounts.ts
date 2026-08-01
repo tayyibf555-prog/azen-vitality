@@ -21,6 +21,16 @@ export interface RankedAccount {
   patientId: string;
   /** Null when the source row carried no name; the panel links by id and says so. */
   patientName: string | null;
+  /**
+   * The patient's site, from the same attribution map the site filter uses, or null
+   * when it is not known (the whole-group view, or a patient missing from the map).
+   *
+   * It is here so the debtors list can open the patient's quick overview IN PLACE.
+   * Every patient read is site-scoped by design (that is the IDOR fix, and it is not
+   * negotiable), so a row with no site id cannot open an overview and links straight
+   * to the record page instead, which resolves the site server-side.
+   */
+  siteId: string | null;
   owedPence: number;
 }
 
@@ -84,7 +94,14 @@ export function computeOutstandingAccounts(
     netBalancePence += owedPence;
     if (owedPence > 0) {
       totalOwedPence += owedPence;
-      inDebt.push({ patientId, patientName: nameByPatient.get(patientId) ?? null, owedPence });
+      inDebt.push({
+        patientId,
+        patientName: nameByPatient.get(patientId) ?? null,
+        // Null when the map was not supplied (whole-group view) or does not hold this
+        // patient. Never guessed, and never defaulted to the selected site.
+        siteId: input.siteByPatientId?.get(patientId) ?? null,
+        owedPence,
+      });
     }
   }
 

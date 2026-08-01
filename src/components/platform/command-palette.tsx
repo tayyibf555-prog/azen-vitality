@@ -7,6 +7,7 @@ import { Search, CornerDownLeft, Bot, User, Loader2 } from "lucide-react";
 import { CLIENT_NAV, navForRole } from "@/lib/nav";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { useModKey } from "@/components/platform/sidebar-shortcuts";
+import { usePatientQuickView } from "@/components/platform/patient-quick-view-provider";
 import { cn } from "@/lib/utils";
 
 interface Patient {
@@ -40,6 +41,7 @@ export function CommandPalette({
   const router = useRouter();
   const { user } = useAuth();
   const mod = useModKey();
+  const quickView = usePatientQuickView();
   const isOwner = basePath.startsWith("/owner");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -150,7 +152,20 @@ export function CommandPalette({
           hint: p.phone ?? undefined,
           icon: User,
           group: "Patients",
-          onSelect: () => go(`${basePath}/patients?patient=${encodeURIComponent(p.id)}`),
+          // The QUICK OVERVIEW, opened in place on whichever tree you are in. This
+          // used to navigate to the patients LIST with ?patient=, which left the
+          // page you were on. With no site id on the row (which should not happen,
+          // the endpoint returns the full patient record) fall back to the record
+          // page rather than guessing a site: every patient read is site-scoped.
+          onSelect: () => {
+            const href = `${basePath}/patients/${encodeURIComponent(p.id)}`;
+            if (quickView && p.siteId) {
+              onClose();
+              quickView.open({ patientId: p.id, siteId: p.siteId, href, patientName: p.name });
+              return;
+            }
+            go(href);
+          },
         });
         if (list.length > 40) break;
       }
@@ -158,7 +173,7 @@ export function CommandPalette({
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, patients, basePath, isOwner, user?.role, mod]);
+  }, [query, patients, basePath, isOwner, user?.role, mod, quickView]);
 
   if (!open) return null;
 

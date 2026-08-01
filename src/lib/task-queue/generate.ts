@@ -52,6 +52,9 @@ async function speedToLeadCandidates(ctx: TaskQueueContext): Promise<CandidateTa
     title: `Contact ${l.name}`,
     subtitle: l.treatmentInterest ? `${l.treatmentInterest} enquiry` : "New enquiry",
     patientName: l.name,
+    // A lead is not yet a Dentally patient, and lead.id is our own uuid. Null, never
+    // a name match.
+    patientId: null,
     siteId: l.siteId,
     priority: computePriority("contact_lead"),
     dueHint: l.firstResponseAt ? "awaiting reply" : "not yet contacted",
@@ -68,6 +71,9 @@ async function recallCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]>
     title: `${t.recallType === "hygienist" ? "Hygiene" : "Dentist"} recall: ${t.patientName}`,
     subtitle: overdueHint(t.overdueDays),
     patientName: t.patientName,
+    // From the target's OWN id field (which is also embedded in `t.id` as
+    // `${siteId}:${dentallyPatientId}:${recallType}`). Never from patientName.
+    patientId: t.dentallyPatientId,
     siteId: t.siteId,
     priority: computePriority("chase_recall", { overdueDays: t.overdueDays }),
     dueHint: overdueHint(t.overdueDays),
@@ -84,6 +90,9 @@ async function reactivationCandidates(ctx: TaskQueueContext): Promise<CandidateT
     title: `Reactivate ${t.patientName}`,
     subtitle: t.recoverableValue > 0 ? `£${t.recoverableValue} recoverable` : t.reason.replace(/_/g, " "),
     patientName: t.patientName,
+    // From the target's OWN id field (also embedded in `t.id` as
+    // `${siteId}:${dentallyPatientId}`). Never from patientName.
+    patientId: t.dentallyPatientId,
     siteId: t.siteId,
     priority: computePriority("reactivate", { recoverableValue: t.recoverableValue }),
     dueHint: null,
@@ -100,6 +109,9 @@ async function coordinatorCandidates(ctx: TaskQueueContext): Promise<CandidateTa
     title: `Follow up ${o.patientName}: ${o.treatment}`,
     subtitle: o.amountOutstanding > 0 ? `£${o.amountOutstanding} outstanding` : "in progress",
     patientName: o.patientName,
+    // treatment_opportunity is keyed by an opaque uuid and carries no Dentally patient
+    // id, so this task cannot be attributed to a patient. Null, never a name match.
+    patientId: null,
     siteId: o.siteId,
     priority: computePriority("follow_up_plan", { recoverableValue: o.amountOutstanding }),
     dueHint: null,
@@ -116,6 +128,9 @@ async function noshowCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]>
     title: `Confirm ${t.patientName}`,
     subtitle: `High no-show risk, ${apptHint(t.appointmentStartAt)}`,
     patientName: t.patientName,
+    // From the target's OWN id field (also embedded in `t.id` as
+    // `${siteId}:${dentallyPatientId}:${appointmentId}`). Never from patientName.
+    patientId: t.dentallyPatientId,
     siteId: t.siteId,
     priority: computePriority("confirm_appt", { riskScore: t.riskScore }),
     dueHint: apptHint(t.appointmentStartAt),
@@ -132,6 +147,9 @@ async function afterHoursCandidates(ctx: TaskQueueContext): Promise<CandidateTas
     title: `Call back ${c.patientName}`,
     subtitle: c.body ? c.body.slice(0, 70) : "Tried to reach the practice out of hours",
     patientName: c.patientName,
+    // An after-hours capture is an inbound contact, often from someone not yet on the
+    // book; the row carries no Dentally patient id. Null, never a name match.
+    patientId: null,
     siteId: c.siteId,
     priority: computePriority("after_hours_callback"),
     dueHint: "out of hours",
@@ -151,6 +169,9 @@ async function smileAssessmentCandidates(ctx: TaskQueueContext): Promise<Candida
       title: `Review ${r.firstName}'s assessment`,
       subtitle: r.treatmentInterest ? `High intent, ${r.treatmentInterest}` : "High intent",
       patientName: r.firstName,
+      // A smile-assessment response is an enquiry keyed by our own uuid, with a first
+      // name and no Dentally patient id. Null, never a name match.
+      patientId: null,
       siteId: r.siteId,
       priority: computePriority("action_assessment"),
       dueHint: "high intent",
