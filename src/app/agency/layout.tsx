@@ -13,9 +13,9 @@ export default async function AgencyLayout({ children }: { children: React.React
     <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
       <div className="flex min-h-screen lg:h-full lg:min-h-0">
         <AgencySidebar />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:my-3 lg:mr-3 lg:h-auto lg:min-h-0 lg:overflow-hidden lg:rounded-[18px]">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:h-auto lg:min-h-0 lg:overflow-hidden">
           <div className="min-h-0 flex-1 lg:overflow-y-auto">
-            <main className="mx-auto w-full max-w-[1400px] px-6 py-7 lg:px-8">{children}</main>
+            <main className="mx-auto w-full max-w-[1400px] px-4 py-3 sm:px-5 lg:px-6 lg:py-4">{children}</main>
           </div>
         </div>
       </div>

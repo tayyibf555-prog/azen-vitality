@@ -274,7 +274,10 @@ body[data-diary-dragging] {
   background: color-mix(in srgb, var(--card) 82%, transparent);
   -webkit-backdrop-filter: blur(10px) saturate(1.4);
   backdrop-filter: blur(10px) saturate(1.4);
-  border-bottom: 1px solid var(--line);
+  /* A DEFINITE rule, not a hairline. The working area is full bleed now, so this
+     is the only thing separating the session chrome from the page's own content;
+     against white on white, --line disappeared. */
+  border-bottom: 1px solid var(--line-strong);
 }
 @media (prefers-reduced-transparency: reduce) {
   .topbar-material {

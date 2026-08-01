@@ -47,13 +47,17 @@ export default async function ClientLayout({
   const navCollapsed = parseCollapsed(cookieStore.get(SIDEBAR_COLLAPSED_COOKIE)?.value);
   const navOpenGroups = parseOpenGroups(cookieStore.get(SIDEBAR_GROUPS_COOKIE)?.value);
   return (
-    // The approved frame (aesthetic-mock2, A - Light): a light brand-blue wash,
-    // the sidebar transparent directly on it, and ALL page content inside ONE
-    // white panel (18px radius, 12px gutter top/right/bottom) with its own
-    // internal scroll. Below lg there is no frame: full-bleed white, and the
-    // off-canvas fixed sidebar keeps its navy chrome untouched. The topbar sits
-    // INSIDE the panel above the scroller (sticky still covers the mobile body
-    // scroll). Fixed widgets (co-pilot, feedback) escape the panel clip.
+    // FULL BLEED. The working area runs edge to edge against the sidebar, with
+    // no gutter and no rounding.
+    //
+    // It used to be a floating white panel: a light brand-blue wash behind it and
+    // a 12px gutter top, right and bottom, with an 18px radius. That framing cost
+    // real estate on the screens that need it most for nothing but decoration,
+    // and the owner asked for it gone so the information fills the space.
+    //
+    // The wash survives on the html/body underneath, so an overscroll bounce and
+    // any area the panel does not cover still read as the product rather than as
+    // bare white. Fixed widgets (co-pilot, feedback) still escape the clip.
     <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
       <div className="flex min-h-screen lg:h-full lg:min-h-0">
         <ClientSidebar
@@ -61,7 +65,7 @@ export default async function ClientLayout({
           initialCollapsed={navCollapsed}
           initialOpenGroups={navOpenGroups}
         />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:my-3 lg:mr-3 lg:h-auto lg:min-h-0 lg:overflow-hidden lg:rounded-[18px]">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:h-auto lg:min-h-0 lg:overflow-hidden">
           <ClientTopbar selected={selectedSite} />
           <div className="min-h-0 flex-1 lg:overflow-y-auto">
             {/* The two :has() variants are gated on a marker only the diary sets
@@ -70,7 +74,7 @@ export default async function ClientLayout({
                 to reach past the 1400px cap: on a 1920 reception monitor that cap
                 throws away 388px, which is four clinician columns. */}
             <main className="lg:has-[[data-diary]]:h-full">
-              <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-6 lg:px-8 lg:py-7 lg:has-[[data-diary]]:h-full">
+              <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
                 {children}
               </div>
             </main>

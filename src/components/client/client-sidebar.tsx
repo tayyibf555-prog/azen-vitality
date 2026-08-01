@@ -181,7 +181,7 @@ export function ClientSidebar({
           "chrome-nav fixed left-0 top-0 z-50 flex h-screen w-[264px] max-w-[85vw] shrink-0 flex-col self-start border-r border-navy-line transition-transform duration-200 ease-out lg:border-r-0",
           // Inside the floating shell at lg the sidebar fills the shell height
           // (h-full) rather than the full viewport, so its foot never clips.
-          "lg:sticky lg:z-auto lg:h-full lg:max-w-none lg:translate-x-0",
+          "lg:sticky lg:z-30 lg:h-full lg:max-w-none lg:translate-x-0",
           // 232px expanded: the narrowest width at which the longest module name
           // ("Treatment Coordinator") still reads in full at this indent.
           collapsed ? "lg:w-14" : "lg:w-[232px]",

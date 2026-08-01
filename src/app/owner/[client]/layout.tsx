@@ -35,7 +35,7 @@ export default async function OwnerLayout({
     <div className="app-frame min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden">
       <div className="flex min-h-screen lg:h-full lg:min-h-0">
         <OwnerSidebar disabledSlugs={disabledSlugs} />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:my-3 lg:mr-3 lg:h-auto lg:min-h-0 lg:overflow-hidden lg:rounded-[18px]">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:h-auto lg:min-h-0 lg:overflow-hidden">
           <ClientTopbar selected={selectedSite} />
           <div className="min-h-0 flex-1 lg:overflow-y-auto">
             {/* The two :has() variants are gated on a marker only the diary sets
@@ -46,7 +46,7 @@ export default async function OwnerLayout({
                 scroller and its sticky clinician headers, and stays inside the
                 1400px cap this screen has to escape. */}
             <main className="lg:has-[[data-diary]]:h-full">
-              <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-5 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-6 lg:px-8 lg:py-7 lg:has-[[data-diary]]:h-full">
+              <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
                 {children}
               </div>
             </main>
