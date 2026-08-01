@@ -1,15 +1,14 @@
 import { cookies } from "next/headers";
 import { ClientSidebar } from "@/components/client/client-sidebar";
 import { ClientTopbar } from "@/components/client/client-topbar";
+import { ClientSectionBar } from "@/components/client/section-tabs";
 import { PlatformShortcuts } from "@/components/platform/platform-shortcuts";
 import { FeedbackWidget } from "@/components/platform/feedback-widget";
 import { UsageBeacon } from "@/components/platform/usage-beacon";
 import { guardPage } from "@/lib/auth/page-guard";
 import { getClient } from "@/lib/mock/clients";
 import {
-  SIDEBAR_COLLAPSED_COOKIE,
   SIDEBAR_GROUPS_COOKIE,
-  parseCollapsed,
   parseOpenGroups,
 } from "@/lib/sidebar-prefs";
 import { getViewSiteSelection } from "@/lib/site-view";
@@ -44,7 +43,6 @@ export default async function ClientLayout({
   // The sidebar's remembered layout is read HERE rather than from localStorage in
   // the component, so the very first paint is already the right width and the
   // right areas are open. Nothing flashes and nothing has to correct itself.
-  const navCollapsed = parseCollapsed(cookieStore.get(SIDEBAR_COLLAPSED_COOKIE)?.value);
   const navOpenGroups = parseOpenGroups(cookieStore.get(SIDEBAR_GROUPS_COOKIE)?.value);
   return (
     // FULL BLEED. The working area runs edge to edge against the sidebar, with
@@ -62,11 +60,17 @@ export default async function ClientLayout({
       <div className="flex min-h-screen lg:h-full lg:min-h-0">
         <ClientSidebar
           disabledSlugs={disabledSlugs}
-          initialCollapsed={navCollapsed}
           initialOpenGroups={navOpenGroups}
         />
         <div className="flex min-h-screen min-w-0 flex-1 flex-col bg-card lg:h-auto lg:min-h-0 lg:overflow-hidden">
           <ClientTopbar selected={selectedSite} />
+          {/* The second level of the navigation: the modules inside whichever
+              area the rail has selected. Renders nothing for an area with only
+              one module, and nothing below lg, where the drawer carries both
+              levels itself. */}
+          <div className="hidden lg:block">
+            <ClientSectionBar disabledSlugs={disabledSlugs} />
+          </div>
           <div className="min-h-0 flex-1 lg:overflow-y-auto">
             {/* The two :has() variants are gated on a marker only the diary sets
                 (data-diary), so every other /c page is byte-identical. The diary

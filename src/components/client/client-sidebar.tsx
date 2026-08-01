@@ -7,8 +7,6 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   ChevronDown,
   LogOut,
-  PanelLeftClose,
-  PanelLeftOpen,
   Search,
   Wand2,
 } from "lucide-react";
@@ -18,14 +16,12 @@ import { useAuth } from "@/lib/auth/mock-auth";
 import { useModKey } from "@/components/platform/sidebar-shortcuts";
 import { useMobileNav } from "@/components/platform/mobile-nav";
 import {
-  SIDEBAR_COLLAPSED_COOKIE,
   SIDEBAR_COOKIE_MAX_AGE,
   SIDEBAR_GROUPS_COOKIE,
   groupKeyForActive,
   isModuleActive,
   moduleHref,
   resolveOpenGroups,
-  serialiseCollapsed,
   serialiseOpenGroups,
   toggleGroup,
   withGroupOpened,
@@ -75,12 +71,9 @@ function RailTip({ children }: { children: React.ReactNode }) {
 
 export function ClientSidebar({
   disabledSlugs = [],
-  initialCollapsed = false,
   initialOpenGroups = null,
 }: {
   disabledSlugs?: string[];
-  /** Read from the cookie server-side, so the first paint is already correct. */
-  initialCollapsed?: boolean;
   /** Areas the user pinned open, or null when they have never chosen. */
   initialOpenGroups?: string[] | null;
 }) {
@@ -139,7 +132,13 @@ export function ClientSidebar({
     setOpenKeys((keys) => withGroupOpened(keys, routeKey));
   }
 
-  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  // ALWAYS the rail on desktop. The areas live in the rail and their modules in
+  // the section bar along the top, so there is no expanded column to toggle to.
+  // Kept as a named constant rather than deleted through every branch below,
+  // because the same flag still distinguishes desktop (rail) from the off-canvas
+  // drawer under lg, which DOES show the full labelled column: a phone has no
+  // room for a section bar, so the drawer has to carry both levels itself.
+  const collapsed = true;
 
   // Every change goes through the FUNCTIONAL updater, so two toggles landing in
   // one batch cannot each compute from the same stale array and lose one. The
@@ -149,16 +148,6 @@ export function ClientSidebar({
     writeCookie(SIDEBAR_GROUPS_COOKIE, serialiseOpenGroups(compute(openKeys)));
   };
   const onToggleGroup = (key: string) => setGroups((prev) => toggleGroup(prev, key));
-  const setCollapse = (next: boolean) => {
-    setCollapsed(next);
-    writeCookie(SIDEBAR_COLLAPSED_COOKIE, serialiseCollapsed(next));
-  };
-  // From the collapsed rail, an area icon hands the full column back with that
-  // area open, so no icon in the rail is a dead end.
-  const expandInto = (key: string) => {
-    setCollapse(false);
-    setGroups((prev) => withGroupOpened(prev, key));
-  };
 
   const openPalette = () => window.dispatchEvent(new CustomEvent("azen:open-palette"));
   const openCopilot = () => window.dispatchEvent(new CustomEvent("azen:open-copilot"));
@@ -184,7 +173,7 @@ export function ClientSidebar({
           "lg:sticky lg:z-30 lg:h-full lg:max-w-none lg:translate-x-0",
           // 232px expanded: the narrowest width at which the longest module name
           // ("Treatment Coordinator") still reads in full at this indent.
-          collapsed ? "lg:w-14" : "lg:w-[232px]",
+          "lg:w-14",
           navOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
@@ -212,20 +201,6 @@ export function ClientSidebar({
           >
             {client ? client.name : "Vitality Dental"}
           </p>
-          {/* The collapse control. Wide screens only: below lg the sidebar is an
-              off-canvas drawer where its width costs the page nothing. */}
-          <button
-            type="button"
-            onClick={() => setCollapse(true)}
-            aria-label="Collapse navigation"
-            aria-expanded={true}
-            className={cn(
-              "hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-on-navy-muted transition-colors hover:bg-white/10 hover:text-on-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 lg:flex",
-              collapsed && "lg:hidden",
-            )}
-          >
-            <PanelLeftClose size={16} />
-          </button>
         </div>
 
         {/* ------------------------------------------------------------------
@@ -234,16 +209,6 @@ export function ClientSidebar({
             ------------------------------------------------------------------ */}
         {collapsed ? (
           <div className="hidden min-h-0 flex-1 flex-col items-center gap-0.5 px-2 py-2 lg:flex">
-            <button
-              type="button"
-              onClick={() => setCollapse(false)}
-              aria-label="Expand navigation"
-              aria-expanded={false}
-              className={cn(RAIL_BUTTON, "text-on-navy-muted hover:bg-white/10 hover:text-on-navy")}
-            >
-              <PanelLeftOpen size={17} />
-              <RailTip>Expand navigation</RailTip>
-            </button>
             <button
               type="button"
               onClick={openPalette}
@@ -259,12 +224,15 @@ export function ClientSidebar({
                 const GIcon = g.icon;
                 const onRoute = g.key === routeKey;
                 return (
-                  <button
+                  <Link
                     key={g.key}
-                    type="button"
-                    onClick={() => expandInto(g.key)}
+                    // Straight to the area's FIRST module. The rail chooses an
+                    // area; the section bar along the top then carries everything
+                    // else in it. Nothing expands, so there is no second state of
+                    // this control to get wrong.
+                    href={moduleHref(base, g.items[0]?.slug ?? "")}
                     aria-label={`${g.label}${onRoute ? ", current area" : ""}`}
-                    aria-expanded={false}
+                    aria-current={onRoute ? "page" : undefined}
                     className={cn(
                       RAIL_BUTTON,
                       onRoute
@@ -274,7 +242,7 @@ export function ClientSidebar({
                   >
                     <GIcon size={17} />
                     <RailTip>{g.label}</RailTip>
-                  </button>
+                  </Link>
                 );
               })}
             </nav>
