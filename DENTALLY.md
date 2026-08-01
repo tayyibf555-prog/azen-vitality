@@ -60,8 +60,59 @@ Pinned notes render as coloured sticky cards across the top, each with an author
 
 So: keep the capability, redesign the presentation, and optimise it for a dentist reading at speed.
 
+### Charting (FDI) — THE API IS READ ONLY, and this is the decision to make first
+
+Checked against `developer.dentally.co` on 2026-08-01. Of the 83 documented endpoints, every charting resource is **GET only**:
+
+```
+GET /v1/treatments                GET /v1/treatments/{id}
+GET /v1/treatment_categories      GET /v1/treatment_categories/{id}
+GET /v1/treatment_plans           GET /v1/treatment_plans/{id}
+GET /v1/treatment_plan_items      GET /v1/treatment_plan_items/{id}
+GET /v1/treatment_appointments    GET /v1/treatment_appointments/{id}
+```
+
+There is no POST, PUT, PATCH or DELETE on any of them. Compare `/v1/appointments`, which documents POST, PATCH and DELETE. The `treatment_plan_item` object carries **Teeth** and **Surfaces**, so the chart itself is fully readable.
+
+**So we can mirror Dentally's chart, and we cannot write to it.** The board's annotation asks for charting that "needs to connect with dentally too", and half of that is not currently possible through the public API.
+
+This is a clinical-safety fork, not a technical inconvenience. If a dentist charts an extraction here and Dentally never learns of it, the next clinician reading Dentally sees the tooth present. Two sources of truth for clinical data is the worst outcome available, and it is worse than either extreme.
+
+The three ways out:
+1. **Read-only mirror.** Chart renders from Dentally; charting still happens in Dentally. Safe, immediately useful, no divergence. Does not satisfy "dentists chart here".
+2. **Chart here, ours only,** with the divergence stated loudly on screen. Fast to build, and the risk above is real from the first day two people use different systems.
+3. **Get a write path** before anyone charts: ask Dentally for a private or partner endpoint, or wait for the practice to move charting wholesale and stop using Dentally's chart.
+
+The build below is the same UI in all three cases. What changes is where a click WRITES.
+
 ### Charting (FDI)
-Full FDI tooth chart, upper and lower, both quadrants numbered outward from the midline. Each tooth is drawn as a crown diagram plus a surfaces grid, filled where work exists. A left panel holds a **PD / DD / Base** toggle, **Treatment List** and **Plan Templates** tabs, a category filter and a searchable treatment-code list (codes with names, each starrable). Bottom controls: Cloud Gallery, Images, **BPE**, History, Base Chart. Beneath: "Add a treatment plan and appointment" and "Use a treatment plan template".
+Full FDI tooth chart, upper and lower, both quadrants numbered outward from the midline (8..1 | 1..8, repeated top and bottom, with R and L marked at both ends).
+
+**Each tooth** is a crown diagram (cream) plus a **five-region surfaces grid**: four trapezoids around a centre square, which is the standard mesial / distal / buccal / lingual / occlusal layout. A charted surface is filled; the observed chart shows yellow across the occlusal of the six upper anteriors, and a grey centre square on one upper molar. The two surface rows sit on a faint banded background.
+
+**Left panel**, top to bottom:
+- A segmented control: **PD** (permanent dentition, selected), **DD** (deciduous), **Base** (base chart, disabled unless in base mode), a dropdown chevron for chart preferences, and a collapse control.
+- Tabs: **Treatment List** and **Plan Templates**.
+- A category filter, defaulting to "All".
+- A search box with a **sort** button beside it.
+- The treatment list: a **favourite star**, the code, and the name (0000 Bridge Abutment, 103 NuSmile Consultation, 121 NHS Urgent Filling, and so on). Alphabetical by default.
+- A vertical **quick-link index rail** down the right of the list: star, then 0 1 2 3 4 5 6 7 8 9, then letters, jumping to that group.
+
+**Bottom right of the chart**: Cloud Gallery, Images, **BPE** (carrying a red dot when a BPE is due), History, Base Chart, and a settings cog.
+
+**Bottom left**: a round blue **+** which creates a new treatment plan. Each open plan gets its own tab; completed plans live in History.
+
+**Beneath the chart**, two cards: "Add a treatment plan and appointment" with a **New treatment plan** button and the note that every plan must have at least one appointment; and "Use a treatment plan template" with **Select template**.
+
+**The charting interaction, from Dentally's own documentation:**
+- **Left click charts the first surface. RIGHT click adds further surfaces.** This is the single most important mechanic on the screen and is easy to get wrong.
+- **Hovering a tooth** shows that tooth's history in a tooltip.
+- **History** (lower right) opens the full clinical history: filterable, searchable, expandable, exportable. Every line carries a `TP: ****` button naming the treatment plan it belongs to, which opens that plan.
+- **Base Chart** switches into base-chart mode, where the same treatment list edits the patient's base dentition. Dentally's own recommended route for tooth status is the socket selection menu rather than this.
+- **BPE** shows the whole basic perio exam history and holds "Record New BPE / BEWE".
+- Chart preferences (via the chevron or the cog) include **locked chart**, **combined chart** and **hover chart**.
+- A practitioner's patient records open on **Chart** by default; everyone else opens on Details.
+- Treatment list sorting: search, category, favourites (or favourites-on-top), a sort-by preference, and the alphabet rail.
 > "this is a must for dentists as well as admin all this information seen right now needs to be replicated and needs to connect with dentally too"
 
 Note the second half: charting must **write back to Dentally**, not just display.
