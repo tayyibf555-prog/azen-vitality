@@ -51,44 +51,6 @@ function bandCell(index: number): string {
   );
 }
 
-function SiteToggle({
-  sites,
-  siteId,
-  onChange,
-}: {
-  sites: { id: string; name: string }[];
-  siteId: string | null;
-  onChange: (id: string | null) => void;
-}) {
-  const options: { id: string | null; name: string }[] = [{ id: null, name: "All sites" }, ...sites];
-  return (
-    <div
-      role="group"
-      aria-label="Site"
-      className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[2px]"
-    >
-      {options.map((option) => {
-        const active = option.id === siteId;
-        return (
-          <button
-            key={option.id ?? "all"}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange(option.id)}
-            className={cn(
-              "pressable rounded-md px-2.5 py-[3px] text-[11px] font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
-              active ? "bg-navy text-white" : "text-muted hover:text-navy",
-            )}
-          >
-            {option.name}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function PracticeDashboard({
   view,
   clientSlug,
@@ -101,6 +63,15 @@ export function PracticeDashboard({
 }) {
   const [period, setPeriod] = useState<DashboardPeriod>("today");
   const [siteId, setSiteId] = useState<string | null>(initialSiteId);
+  // The top bar changes the site by writing a cookie and calling router.refresh(),
+  // so the new choice arrives here as a CHANGED PROP. Deriving it during render is
+  // React's documented pattern for that; without it the dashboard would keep
+  // showing the site it first mounted with while the bar above said otherwise.
+  const [lastInitialSiteId, setLastInitialSiteId] = useState(initialSiteId);
+  if (lastInitialSiteId !== initialSiteId) {
+    setLastInitialSiteId(initialSiteId);
+    setSiteId(initialSiteId);
+  }
   const [listPractitionerId, setListPractitionerId] = useState<string | null>(null);
   const [udaPractitionerId, setUdaPractitionerId] = useState<string | null>(null);
   const [status, setStatus] = useState<StatusFilter>("remaining");
@@ -141,12 +112,15 @@ export function PracticeDashboard({
       {/* A line, not a hero. The section headings below carry the structure. */}
       <h1 className="text-[15px] font-semibold tracking-[-0.3px] text-navy">Dashboard</h1>
 
+      {/* NO site control on the strip any more. The top bar owns which practice
+          you are looking at, for the whole session and every page. This strip
+          used to carry a second selector, so the same choice appeared twice
+          within eighty pixels of itself and the two could disagree. */}
       <TakingsStripPanel
         cells={scope.strip.cells}
-        sources={scope.stripSources}
         selected={period}
         onSelect={setPeriod}
-        siteControl={<SiteToggle sites={view.sites} siteId={siteId} onChange={setSiteId} />}
+        siteControl={null}
         caveats={takings}
         onOpenCaveat={setOpenCaveat}
       />

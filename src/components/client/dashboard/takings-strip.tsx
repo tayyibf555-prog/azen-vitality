@@ -22,19 +22,12 @@ import { cn, num } from "@/lib/utils";
 // neither way says so and gives the reason. It never shows £0.00.
 // ---------------------------------------------------------------------------
 
-const SOURCE_LABEL: Record<TakingsSource, string> = {
-  live: "live",
-  rollup: "nightly",
-};
-
 function Cell({
   cell,
-  source,
   selected,
   onSelect,
 }: {
   cell: TakingsCell;
-  source: TakingsSource | undefined;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -89,11 +82,6 @@ function Cell({
             {num(cell.appointmentCount)} appointment{cell.appointmentCount === 1 ? "" : "s"}
           </span>
         )}
-        {source ? (
-          <span className="text-[10px] font-medium uppercase tracking-[0.07em] text-faint">
-            {SOURCE_LABEL[source]}
-          </span>
-        ) : null}
       </span>
     </button>
   );
@@ -101,7 +89,6 @@ function Cell({
 
 export function TakingsStripPanel({
   cells,
-  sources,
   selected,
   onSelect,
   siteControl,
@@ -109,7 +96,6 @@ export function TakingsStripPanel({
   onOpenCaveat,
 }: {
   cells: TakingsCell[];
-  sources: Partial<Record<DashboardPeriod, TakingsSource>>;
   selected: DashboardPeriod;
   onSelect: (period: DashboardPeriod) => void;
   /** The all-sites versus per-site toggle, rendered on the right of the strip. */
@@ -122,7 +108,7 @@ export function TakingsStripPanel({
     <section aria-label="Takings">
       <div className="flex flex-col gap-1.5 border-b border-line pb-1.5 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-1.5">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted">Takings</h2>
+          <h2 className="text-[12px] font-semibold text-muted">Takings</h2>
           <CaveatMark caveats={caveats} onOpen={onOpenCaveat} />
         </span>
         {siteControl}
@@ -139,7 +125,6 @@ export function TakingsStripPanel({
           <Cell
             key={cell.period}
             cell={cell}
-            source={sources[cell.period]}
             selected={cell.period === selected}
             onSelect={() => onSelect(cell.period)}
           />

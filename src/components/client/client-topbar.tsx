@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Check, ChevronDown, Menu, Search } from "lucide-react";
+import { Bell, Check, ChevronDown, Menu, Search } from "lucide-react";
 import { getClient, getSites } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { Button } from "@/components/ui/button";
@@ -24,17 +24,6 @@ function siteCode(label: string): string {
     .slice(0, 3)
     .join("")
     .toUpperCase();
-}
-
-// Prettify the current route into a breadcrumb leaf ("no-show-defence" -> "No-show
-// defence"). The client base path is "Home".
-function sectionLabel(pathname: string | null, base: string): string {
-  if (!pathname) return "Home";
-  const rest = pathname.startsWith(base) ? pathname.slice(base.length).replace(/^\/+/, "") : "";
-  const seg = rest.split("/")[0] ?? "";
-  if (!seg) return "Home";
-  const words = seg.replace(/-/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { selected?: string }) {
@@ -75,80 +64,143 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
   }
 
   return (
-    // Translucent material layer: content scrolls UNDER the pinned bar; the
-    // .topbar-material class carries the blur + the scroll-edge fade and its own
-    // reduced-transparency/no-blur fallbacks (globals.css).
-    <header className="topbar-material sticky top-0 z-10 flex h-14 items-center justify-between gap-3 px-4 lg:px-8">
-      {/* Left: mobile menu toggle + breadcrumb + site chip */}
-      <div className="flex min-w-0 items-center gap-2.5">
-        <button
-          type="button"
-          onClick={toggleMobileNav}
-          aria-label="Open menu"
-          className="pressable -ml-1 flex h-9 w-9 items-center justify-center rounded-lg text-navy transition-colors hover:bg-blue-soft lg:hidden"
-        >
-          <Menu size={18} />
-        </button>
+    // ------------------------------------------------------------------------
+    // ONE BAR, THREE ZONES, laid out as the reference does: menu on the left, a
+    // real patient search across the middle, and the account controls on the
+    // right. Nothing here repeats anything else on the screen.
+    //
+    // It replaced a bar the owner called "too overwhelming too complicated",
+    // and the complaint was structural rather than cosmetic. The old bar
+    // carried a breadcrumb ("Vitality Dental / Home c") that restated the
+    // sidebar's own highlighted item and the page's own title; a site chip that
+    // printed the site code twice ("N15 N15 Vitality Dental", because the code
+    // was prepended to a name that already began with it); and a 16px search
+    // icon where the reference has the single most-used control in the product.
+    // Meanwhile the dashboard underneath carried a SECOND site dropdown, so the
+    // same choice appeared twice within eighty pixels.
+    //
+    // The rule this now follows: the top bar owns what is true of the whole
+    // session (which practice, who you are, find a patient). The page owns what
+    // is true of the page. Neither states the other's business.
+    // ------------------------------------------------------------------------
+    <header className="topbar-material sticky top-0 z-10 flex h-14 items-center gap-3 px-4 lg:px-6">
+      <button
+        type="button"
+        onClick={toggleMobileNav}
+        aria-label="Open menu"
+        className="pressable -ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-navy transition-colors hover:bg-blue-soft lg:hidden"
+      >
+        <Menu size={18} />
+      </button>
 
-        {/* Breadcrumb: product context / current section, per the mock */}
-        <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-muted sm:flex">
-          <span className="truncate font-semibold text-navy">{client ? client.name : "Vitality Dental"}</span>
-          <span aria-hidden>/</span>
-          <span className="truncate">{sectionLabel(pathname, base)}</span>
-        </nav>
-
-        {/* Site switcher, styled as the mock's soft blue chip */}
-        <div className="relative" ref={switcherRef}>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          onBlur={() => setTimeout(() => setOpen(false), 120)}
-          aria-label="Switch site"
-          className="pressable ml-1 flex items-center gap-1.5 rounded-md bg-blue-soft px-2.5 py-[3px] text-[11.5px] font-semibold text-blue-royal transition-colors hover:bg-tint-blue"
-        >
-          <span>{siteCode(selectedLabel)}</span>
-          <span className="hidden max-w-[10rem] truncate md:inline">{selectedLabel}</span>
-          <ChevronDown size={12} className="opacity-70" />
-        </button>
-        {open ? (
-          <div className="absolute left-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-[10px] border border-line bg-card py-1 shadow-[0_10px_30px_rgba(11,32,73,0.12)]">
-            {sites.map((s) => (
-              <SiteOption
-                key={s.id}
-                label={s.name}
-                active={selected === s.id}
-                onSelect={() => choose(s.id)}
-              />
-            ))}
-            {sites.length ? <div className="my-1 border-t border-line" /> : null}
-            <SiteOption
-              label="All sites"
-              active={selected === ALL_SITES}
-              onSelect={() => choose(ALL_SITES)}
-            />
-          </div>
-        ) : null}
-        </div>
-      </div>
-
-      {/* Right: quiet icon actions, per the mock */}
-      <div className="flex items-center gap-1">
+      {/* PATIENT SEARCH, the middle zone. A field rather than an icon: this is
+          what reception reaches for all day, and the reference gives it the
+          centre of the bar. It opens the existing command palette, so there is
+          one search implementation and not two. */}
+      <div className="flex min-w-0 flex-1 justify-center">
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("azen:open-palette"))}
-          aria-label="Search"
-          className="pressable flex h-9 w-9 items-center justify-center rounded-lg text-faint transition-colors hover:bg-blue-soft hover:text-navy"
+          className="pressable group flex h-9 w-full max-w-[520px] items-center gap-2 rounded-[10px] border border-line bg-card-muted px-3 text-left transition-colors hover:border-line-strong hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
         >
-          <Search size={16} />
+          <Search size={15} className="shrink-0 text-faint transition-colors group-hover:text-muted" />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-normal text-faint">
+            Search patients
+          </span>
+          <kbd className="hidden shrink-0 rounded border border-line bg-card px-1.5 py-[1px] text-[10px] font-semibold text-faint sm:inline">
+            {modKeyLabel()}K
+          </kbd>
         </button>
+      </div>
+
+      {/* ACCOUNT ZONE: the practice, then who you are. The ONLY site control in
+          the product now; the dashboard's duplicate was removed. */}
+      <div className="flex shrink-0 items-center gap-1.5">
+        <div className="relative" ref={switcherRef}>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-label={`Practice: ${selectedLabel}. Change practice`}
+            className="pressable flex items-center gap-1.5 rounded-lg px-2.5 py-[6px] text-[13px] font-semibold text-navy transition-colors hover:bg-blue-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
+          >
+            {/* The code alone below md, the name alone above it. Never both: the
+                name already starts with the code. */}
+            <span className="max-w-[11rem] truncate md:hidden">{siteCode(selectedLabel)}</span>
+            <span className="hidden max-w-[13rem] truncate md:inline">{selectedLabel}</span>
+            <ChevronDown size={13} className="shrink-0 text-muted" />
+          </button>
+          {open ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-20 mt-1.5 w-60 overflow-hidden rounded-[10px] border border-line bg-card py-1 shadow-[0_12px_34px_rgba(11,32,73,0.14)]"
+            >
+              {sites.map((s) => (
+                <SiteOption
+                  key={s.id}
+                  label={s.name}
+                  active={selected === s.id}
+                  onSelect={() => choose(s.id)}
+                />
+              ))}
+              {sites.length ? <div className="my-1 border-t border-line" /> : null}
+              <SiteOption
+                label="All sites"
+                active={selected === ALL_SITES}
+                onSelect={() => choose(ALL_SITES)}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        <Link
+          href={`${base}/notifications`}
+          aria-label="Notifications"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-blue-soft hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
+        >
+          <Bell size={16} />
+        </Link>
+
+        {user ? (
+          <span className="hidden items-center gap-2 pl-1 lg:flex">
+            <span
+              aria-hidden
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-soft text-[10.5px] font-semibold text-blue-royal"
+            >
+              {initials(user.name)}
+            </span>
+            <span className="max-w-[9rem] truncate text-[13px] font-semibold text-navy">
+              {user.name}
+            </span>
+          </span>
+        ) : null}
+
         {user?.role === "agency_admin" ? (
           <Button asChild variant="ghost" size="sm">
-            <Link href="/agency">Back to agency</Link>
+            <Link href="/agency">Agency</Link>
           </Button>
         ) : null}
       </div>
     </header>
   );
+}
+
+/** Two initials for the account chip. */
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
+/** The platform's modifier key, so the search hint matches the real shortcut. */
+function modKeyLabel(): string {
+  if (typeof navigator === "undefined") return "⌘";
+  return /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl ";
 }
 
 function SiteOption({
