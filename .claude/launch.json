@@ -50,6 +50,15 @@
         "DENTALLY_BASE_URL=http://localhost:3002/api/mock-dentally npm run dev -- -p 3002"
       ],
       "port": 3002
+    },
+    {
+      "name": "azen-web-mockwrite-3002",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DENTALLY_BASE_URL=http://localhost:3002/api/mock-dentally DENTALLY_WRITE_ENABLED=true DENTALLY_WRITE_API_KEY=local-mock-only DENTALLY_WRITE_BASE_URL=http://localhost:3002/api/mock-dentally MESSAGING_DRY_RUN=true npm run dev -- -p 3002"
+      ],
+      "port": 3002
     }
   ]
 }

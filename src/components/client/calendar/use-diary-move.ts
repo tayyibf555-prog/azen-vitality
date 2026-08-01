@@ -5,7 +5,8 @@ import { londonInstantMs } from "@/lib/calendar/availability";
 import { validateMove, type MoveProposal } from "@/lib/calendar/move-validate";
 import type { ColumnWorkState, Span } from "@/lib/calendar/working-spans";
 import { effectiveMinutes, labelMinutes, londonMinutes } from "./diary-grid";
-import { shortPatientName, type DiaryAppointment, type Zoom } from "./diary-view";
+import { blockLeadLine, shortPatientName, type DiaryAppointment, type Zoom } from "./diary-view";
+import { paletteSlotFor } from "./treatment-type";
 import {
   clampToBounds,
   gestureFor,
@@ -148,6 +149,17 @@ export interface PreviewState {
   endMin: number;
   valid: boolean;
   message: string | null;
+  /**
+   * The identity of the block being moved, so the preview LOOKS LIKE IT.
+   *
+   * It used to be a plain white box with a time chip, which the owner reported as
+   * "the box being dragged just turns white": you could see where it would land
+   * but not what you were landing there. On a diary that is the wrong half of the
+   * information, because the mistake to avoid is dropping the WRONG patient.
+   */
+  paletteSlot: number;
+  /** Line one of the block, e.g. "09:30 I.Moreau". */
+  lead: string;
 }
 
 export interface LastMove {
@@ -197,6 +209,10 @@ interface DragState {
   bounds: Span;
   zoom: Zoom;
   columnTop: number;
+  /** The block element, so pointer capture can be taken LATE. See onMove. */
+  li: HTMLElement;
+  /** True once setPointerCapture succeeded, so it is released exactly once. */
+  captured: boolean;
 }
 
 interface KeyboardState {
@@ -402,14 +418,23 @@ export function useDiaryMove(
         bounds: ctx.bounds,
         zoom: ctx.zoom,
         columnTop: columnEl.getBoundingClientRect().top,
+        li,
+        captured: false,
       };
 
-      try {
-        li.setPointerCapture(event.pointerId);
-      } catch {
-        // Capture is a courtesy: window listeners below carry the gesture either
-        // way, so a browser that refuses it still gets a working drag.
-      }
+      // POINTER CAPTURE IS TAKEN LATE, in onMove, once the gesture has actually
+      // crossed the drag threshold. NOT here.
+      //
+      // Taking it on pointerdown broke opening a patient. With capture active the
+      // browser retargets pointerup to the CAPTURING element, so it fires `click`
+      // on this <li> rather than on the <button> inside it, and the button's
+      // onClick (which opens the appointment panel) never runs. Every block became
+      // draggable and unclickable: the only thing a click could do was start a
+      // move.
+      //
+      // Deferring costs nothing, by this file's own reasoning: the window
+      // listeners below carry the gesture whether or not capture is held, which is
+      // why the original take was wrapped in a try/catch and called a courtesy.
 
       const onMove = (e: PointerEvent) => {
         const drag = dragRef.current;
@@ -419,6 +444,16 @@ export function useDiaryMove(
             Math.abs(e.clientY - drag.startClientY) + Math.abs(e.clientX - drag.startClientX);
           if (moved < DRAG_THRESHOLD_PX) return;
           drag.started = true;
+          // NOW take capture, not on pointerdown: from this point the gesture is
+          // unambiguously a drag, so retargeting the click away from the block's
+          // button costs nothing (that click is swallowed anyway).
+          try {
+            drag.li.setPointerCapture(e.pointerId);
+            drag.captured = true;
+          } catch {
+            // A browser that refuses capture still gets a working drag from the
+            // window listeners; only the pointer-leaves-the-window case degrades.
+          }
           setDraggingId(drag.appt.id);
           document.body.setAttribute("data-diary-dragging", "true");
         }
@@ -456,6 +491,8 @@ export function useDiaryMove(
           endMin: p.endMin,
           valid: verdict.ok,
           message: verdict.message,
+          paletteSlot: paletteSlotFor(drag.appt.reason),
+          lead: blockLeadLine(drag.appt),
         });
       };
 
@@ -577,6 +614,8 @@ export function useDiaryMove(
         endMin: p.endMin,
         valid: verdict.ok,
         message: verdict.message,
+        paletteSlot: paletteSlotFor(state.appt.reason),
+        lead: blockLeadLine(state.appt),
       });
       say(
         verdict.ok

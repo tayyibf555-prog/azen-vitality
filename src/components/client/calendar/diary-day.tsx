@@ -25,6 +25,7 @@ import {
 import { AppointmentBlock } from "./appointment-block";
 import { DiaryEntryBlock } from "./diary-entry-block";
 import { truncateRefusal } from "./move-copy";
+import type { PreviewState } from "./use-diary-move";
 
 // ---------------------------------------------------------------------------
 // The grid: time down the page, one column across per clinician (or, in the
@@ -102,13 +103,10 @@ export interface GridDrag {
   enabled: boolean;
   draggingId: string | null;
   pending: Map<string, { status: "saving" | "saved" | "failed" | "held" | "unknown" }>;
-  preview: {
-    columnKey: string;
-    startMin: number;
-    endMin: number;
-    valid: boolean;
-    message: string | null;
-  } | null;
+  // The SHARED type, not a copy of its fields. A hand-copied duplicate here is
+  // how the ghost silently kept rendering a blank white box after the hook had
+  // already started sending it the block's colour and name.
+  preview: PreviewState | null;
   registerColumn: (key: string, el: HTMLElement | null) => void;
   onBlockPointerDown: (event: React.PointerEvent, appt: DiaryAppointment, columnKey: string) => void;
   swallowClick: () => boolean;
@@ -498,7 +496,12 @@ export function DiaryGrid({
                         bounds.startMin,
                         zoom,
                       ),
-                      background: "var(--card)",
+                      // The ghost wears the block's OWN treatment colour, not a
+                      // blank white box. Seeing where it will land is only half
+                      // the question; the mistake worth preventing is dropping
+                      // the wrong patient, and that is answered by the fill and
+                      // the name, not by the outline.
+                      background: `var(--type-${drag.preview.paletteSlot}-fill)`,
                       outline: drag.preview.valid
                         ? "2px solid var(--navy)"
                         : "2px dashed var(--danger)",
@@ -507,6 +510,14 @@ export function DiaryGrid({
                       outlineOffset: -2,
                     }}
                   >
+                    {/* Line one of the real block, so the ghost is identifiable
+                        at a glance. Pushed clear of the time chip above it. */}
+                    <span
+                      className="absolute inset-x-[3px] top-[19px] truncate text-[10px] font-semibold leading-[1.15]"
+                      style={{ color: `var(--type-${drag.preview.paletteSlot}-ink)` }}
+                    >
+                      {drag.preview.lead}
+                    </span>
                     {/* Red is transient here and ALWAYS paired with words: red
                         already means did-not-attend on this grid. The FULL
                         sentence goes to the live region. */}
