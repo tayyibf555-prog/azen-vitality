@@ -3,13 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Bell, Check, ChevronDown, Menu, Search } from "lucide-react";
+import { Check, ChevronDown, Menu, Search } from "lucide-react";
 import { getClient, getSites } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ALL_SITES, SITE_VIEW_COOKIE } from "@/lib/site-view-shared";
 import { toggleMobileNav } from "@/components/platform/mobile-nav";
+import { NotificationBell } from "./notification-bell";
 
 // A short round-dot code for a site chip: a leading site code like "N15" is kept
 // as-is; otherwise the initials of the first two words. "All sites" -> "ALL".
@@ -154,13 +155,9 @@ export function ClientTopbar({ selected: initialSelected = ALL_SITES }: { select
           ) : null}
         </div>
 
-        <Link
-          href={`${base}/notifications`}
-          aria-label="Notifications"
-          className="pressable flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-blue-soft hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
-        >
-          <Bell size={16} />
-        </Link>
+        {/* The ONLY place notifications appear now. They used to be here AND as
+            a tab in Home's section bar, which is the same thing twice. */}
+        <NotificationBell clientSlug={params.client} href={`${base}/notifications`} />
 
         {user ? (
           <span className="hidden items-center gap-2 pl-1 lg:flex">

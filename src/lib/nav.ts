@@ -415,7 +415,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "home",
     label: "Home",
     icon: Home,
-    slugs: ["", "notifications"],
+    slugs: [""],
   },
   // THE DIARY GETS ITS OWN RAIL BUTTON, as it does in the reference, rather than
   // sitting as a tab under Home. It is the most-used screen in the practice and
@@ -460,7 +460,13 @@ export const NAV_CATEGORIES: NavCategory[] = [
  * is embedded in (or linked from) the Home overview, but the routes stay alive
  * as deep-link targets and the command palette still finds them by name.
  */
-export const NAV_HIDDEN_SLUGS = new Set<string>(["daily-brief", "task-queue"]);
+// Routes that exist and stay reachable, but earn no nav entry.
+//
+// "notifications" joined them because it was showing TWICE: as a bell in the top
+// bar and as a tab in Home's section bar. The bell is the right home for it, and
+// it now opens a preview with a link through to this page, so the page is where
+// "view all" lands rather than a place you navigate to directly.
+export const NAV_HIDDEN_SLUGS = new Set<string>(["daily-brief", "task-queue", "notifications"]);
 
 /**
  * Slugs that are MANAGEMENT surfaces for a controllable system, and so must stay in
