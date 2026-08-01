@@ -78,7 +78,17 @@ describe("sidebar categories (rail + panel nav)", () => {
 
   it("resolves every category for the owner, in rail order", () => {
     const cats = categoriesForRole("client_owner");
-    expect(cats.map((c) => c.key)).toEqual(["home", "patients", "messages", "growth", "operations"]);
+    // Calendar is its own rail button, second, rather than a tab under Home: it
+    // is the most-used screen in the practice and the reference gives it a
+    // top-level icon of its own.
+    expect(cats.map((c) => c.key)).toEqual([
+      "home",
+      "calendar",
+      "patients",
+      "messages",
+      "growth",
+      "operations",
+    ]);
     // Items resolve to real nav items (with icons/labels), not undefined holes.
     for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
   });

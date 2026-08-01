@@ -415,7 +415,17 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "home",
     label: "Home",
     icon: Home,
-    slugs: ["", "calendar", "notifications"],
+    slugs: ["", "notifications"],
+  },
+  // THE DIARY GETS ITS OWN RAIL BUTTON, as it does in the reference, rather than
+  // sitting as a tab under Home. It is the most-used screen in the practice and
+  // reaching it should never cost a step. Being an area of one module it draws no
+  // section bar, so the diary keeps the full height it needs.
+  {
+    key: "calendar",
+    label: "Calendar",
+    icon: CalendarDays,
+    slugs: ["calendar"],
   },
   {
     key: "patients",
