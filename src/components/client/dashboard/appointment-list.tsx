@@ -160,7 +160,7 @@ function Filters({
   );
 }
 
-function Row({ row, showDay, clientSlug }: { row: AppointmentRow; showDay: boolean; clientSlug: string }) {
+function Row({ row, showDay, basePath }: { row: AppointmentRow; showDay: boolean; basePath: string }) {
   const pill = statePill(row);
   // The reason and whatever the receptionist typed share ONE line, so every row
   // is the same height and the list scans as a column of times. Neither is
@@ -205,7 +205,7 @@ function Row({ row, showDay, clientSlug }: { row: AppointmentRow; showDay: boole
           <PatientLink
             patientId={row.patientId}
             siteId={row.siteId}
-            basePath={`/c/${clientSlug}`}
+            basePath={basePath}
             patientName={row.patientName}
             className="block truncate text-[12.5px] font-semibold leading-[1.2] text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
           >
@@ -244,7 +244,7 @@ export function AppointmentListPanel({
   rows,
   period,
   window,
-  clientSlug,
+  basePath,
   practitioners,
   practitionerId,
   onPractitionerChange,
@@ -259,7 +259,8 @@ export function AppointmentListPanel({
   rows: AppointmentRow[];
   period: DashboardPeriod;
   window: { from: string; to: string };
-  clientSlug: string;
+  /** "/c/<client>" or "/owner/<client>": the tree this dashboard is rendered in. */
+  basePath: string;
   practitioners: PractitionerRef[];
   practitionerId: string | null;
   onPractitionerChange: (id: string | null) => void;
@@ -314,7 +315,7 @@ export function AppointmentListPanel({
       ) : (
         <ul className="divide-y divide-line">
           {visible.map((row) => (
-            <Row key={row.id} row={row} showDay={multiDay} clientSlug={clientSlug} />
+            <Row key={row.id} row={row} showDay={multiDay} basePath={basePath} />
           ))}
         </ul>
       )}

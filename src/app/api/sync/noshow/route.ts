@@ -611,6 +611,11 @@ export async function POST(request: Request) {
     const client = new DentallyClient({
       apiKey,
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+      // This sync only READS (countPatients / listPatients / listAppointments /
+      // getPatientAppointments). Arms the write latch so the key it carries —
+      // which is NOT read-only despite its name, see client.ts assertWritable —
+      // cannot issue a write from here even if a write call is added later.
+      readOnly: true,
     });
     const cfg = config();
     // Rotate which site goes first each run (by hour), so a budget squeeze can

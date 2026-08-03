@@ -265,6 +265,17 @@ Every report follows one shape: a **left filter panel**, a title, **Export**, an
 - **Income**: filters for location, date range, payment plan, practitioner, sundries included, zero-value items excluded. Table of invoiced items by treatment code with quantity and total. This is the per-treatment revenue breakdown.
 - **Patient Accounts**: filters for location, account state, whether to include inactive patients, sort field and direction. Columns: ID, patient, **Planned NHS**, **Planned Private**, balance.
 
+### Payment allocation IS on the API — live-verified 2026-08-03
+
+Recorded because this repo's own screens and comments said the opposite, and a wrong "the supplier cannot do this" is worse than "we have not built this": it closes the question. Read-only probes against the live account on 2026-08-03:
+
+- **`GET /v1/payments` carries the allocation link.** Every payment returns `explanations[]`, each entry holding `invoice_id`, `invoice_reference`, `amount`, `payment_id` and `user_id`, alongside `fully_explained` and `amount_unexplained`. 30 of 50 sampled payments had a non-empty array. So payment → invoice is readable on the endpoint we already read.
+- **`GET /v1/payments` filters to one patient.** `?patient_id=56451` returned `meta.total` 1, that patient's payment only.
+- **`GET /v1/treatment_plan_items` lists practice-wide**, 989,292 rows, carrying `invoice_id`, `completed`, `completed_at`, `practitioner_id`, `uda_band` and `nhs_treatment_cat`. Not per-patient-only.
+- **`GET /v1/treatment_plans` lists practice-wide**, 85,341 rows, carrying `completed` and `completed_at`.
+
+What remains true: **none of this is read by the platform yet**, and none of it is calibrated against live allocation data — including whether Dentally's `completed` is the "closed" the practice pays on (their own catalogue ships a *Completed but Not Closed* report, so the two differ). The four-way pay-the-dentists join is unbuilt work here, not a missing API.
+
 **Custom Reports** is a real query builder, not a fixed list: pick a base segment, then "Match all filters" over a checkbox tree of patient fields (patient id, active, title, first name, middle name, last name, preferred name, biological sex, date of birth and more), each field expanding to conditions such as is / is not / has any value / is unknown. Add Filter, Save. The result is a table with a column picker and a Messages action.
 
 That last point matters: **a saved report segment is the input to bulk messaging.**

@@ -24,6 +24,12 @@ import { SectionCard, StatCard, StatusPill, EmptyState, type Tone } from "@/comp
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { OnboardingStatus } from "@/lib/onboarding/types";
+import {
+  classifyRegisterResponse,
+  REGISTER_UNREACHABLE,
+  type RegisterApiResponse,
+  type RegisterOutcome,
+} from "@/lib/onboarding/register-result";
 
 // Internal staff worklist for new-patient onboarding submissions. Fetches the
 // auth-gated /api/onboarding/list (newest first), renders a scannable worklist, and
@@ -143,25 +149,9 @@ function fmtDob(iso: string): string {
   });
 }
 
-// Shape of a likely-existing Dentally record, as returned by /api/onboarding/register
-// when it finds a plausible duplicate (matches src/app/api/onboarding/register/route.ts).
-interface RegisterMatch {
-  id: string;
-  name: string;
-  dateOfBirth: string | null;
-  site: string;
-  matchedOn: string;
-}
-
-interface RegisterResponse {
-  ok: boolean;
-  created?: boolean;
-  duplicate?: boolean;
-  match?: RegisterMatch;
-  patientId?: string;
-  dryRun?: boolean;
-  error?: string;
-}
+// The register response's shape, and the reading of it, live in
+// @/lib/onboarding/register-result — a pure module with a test, because a branch
+// here previously turned a REAL Dentally create into "Recorded in test mode".
 
 export function SubmissionsWorklist({ clientSlug }: { clientSlug: string }) {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -549,12 +539,7 @@ function ConsentChip({ label, on }: { label: string; on: boolean }) {
 /* approved). Talks to POST /api/onboarding/register (submissionId, force?).   */
 /* ------------------------------------------------------------------------- */
 
-type RegisterPhase =
-  | { kind: "confirm" }
-  | { kind: "working" }
-  | { kind: "duplicate"; match: RegisterMatch }
-  | { kind: "success"; patientId: string; dryRun: boolean }
-  | { kind: "error"; message: string };
+type RegisterPhase = { kind: "confirm" } | { kind: "working" } | RegisterOutcome;
 
 function RegisterDialog({
   submission: s,
@@ -586,27 +571,15 @@ function RegisterDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ submissionId: s.id, ...(force ? { force: true } : {}) }),
       });
-      const json = (await res.json().catch(() => null)) as RegisterResponse | null;
-      if (!json) {
-        setPhase({ kind: "error", message: "Could not reach the server. Please try again." });
-        return;
-      }
-      if (!res.ok || json.ok === false) {
-        setPhase({ kind: "error", message: json.error ?? "Could not register this patient." });
-        return;
-      }
-      if (json.duplicate && json.match) {
-        setPhase({ kind: "duplicate", match: json.match });
-        return;
-      }
-      if (json.created && json.patientId) {
-        onRegistered(s.id, json.patientId);
-        setPhase({ kind: "success", patientId: json.patientId, dryRun: Boolean(json.dryRun) });
-        return;
-      }
-      setPhase({ kind: "error", message: "Unexpected response from the server." });
+      const json = (await res.json().catch(() => null)) as RegisterApiResponse | null;
+      // One pure function decides what happened, so "blocked" can never again be
+      // rendered as a success with a reassuring footnote.
+      const outcome = classifyRegisterResponse(res.status, json);
+      // The row is only marked registered when a patient was ACTUALLY created.
+      if (outcome.kind === "success") onRegistered(s.id, outcome.patientId);
+      setPhase(outcome);
     } catch {
-      setPhase({ kind: "error", message: "Could not reach the server. Please try again." });
+      setPhase({ kind: "error", message: REGISTER_UNREACHABLE });
     }
   }
 
@@ -717,17 +690,35 @@ function RegisterDialog({
                   <p className="mt-1 text-ink">
                     Dentally patient ID: <span className="font-mono">{phase.patientId}</span>
                   </p>
-                  {phase.dryRun ? (
-                    <p className="mt-1 text-muted">
-                      Recorded in test mode; it will write to the real practice system once the
-                      Dentally write key is enabled.
-                    </p>
-                  ) : null}
                 </div>
               </div>
               <div className="mt-4 flex justify-end">
                 <Button type="button" variant="primary" size="sm" onClick={onClose}>
                   Done
+                </Button>
+              </div>
+            </>
+          ) : phase.kind === "blocked" ? (
+            /* SWITCHED OFF, not failed. Amber and not red, because nothing went
+               wrong and a retry will not help: this environment simply cannot
+               register patients. The words say plainly that nothing was created —
+               the state this replaces said "Registered in Dentally / Recorded in
+               test mode" over a create that had, in fact, just run for real. */
+            <>
+              <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3.5 py-3 text-sm">
+                <ShieldAlert size={16} className="mt-0.5 shrink-0 text-status-amber" aria-hidden />
+                <div>
+                  <p className="font-semibold text-navy">Registering is switched off</p>
+                  <p className="mt-1 text-muted">{phase.message}</p>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-muted">
+                This submission is unchanged and stays on the worklist, so it can be registered
+                once it is switched on.
+              </p>
+              <div className="mt-4 flex justify-end">
+                <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+                  Close
                 </Button>
               </div>
             </>

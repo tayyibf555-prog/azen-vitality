@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { checkContinuity } from "@/lib/calendar/continuity";
 import {
@@ -6,6 +8,7 @@ import {
   moveSubjectLine,
   movedAnnouncement,
   notSavedAnnouncement,
+  notifyBlockerFor,
   notifyNotice,
   proposedAnnouncement,
   savingAnnouncement,
@@ -13,6 +16,7 @@ import {
   unknownOutcomeSentence,
   MOVE_BLOCKED_BY_READ,
   REFUSAL_CHIP_MAX,
+  RESCHEDULING_OFF_BOARD,
   WRITE_GATE_OFF_PANEL,
   WRITE_GATE_ON_PANEL,
 } from "./move-copy";
@@ -51,6 +55,10 @@ describe("notifyNotice", () => {
 
   it("names each blocker in its own words", () => {
     const cases: Array<[Parameters<typeof notifyNotice>[0]["blocker"], string]> = [
+      [
+        "writes_off",
+        "The patient will not be texted: moving appointments is not switched on in this environment.",
+      ],
       ["messaging_off", "The patient will not be texted: messaging is switched off."],
       ["no_phone", "The patient will not be texted: no practice phone number is configured."],
       ["no_mobile", "The patient will not be texted: there is no mobile number on their record."],
@@ -83,6 +91,58 @@ describe("notifyNotice", () => {
       const n = notifyNotice({ from: NINE_THIRTY, to: { ...NINE_THIRTY }, blocker: "none", dryRun });
       expect(n.willQueue).toBe(false);
     }
+  });
+});
+
+describe("notifyBlockerFor", () => {
+  it("blames the write gate before the phone number, because nothing is written either way", () => {
+    expect(notifyBlockerFor({ canCommit: false, practicePhone: "020 8888 1234" })).toBe("writes_off");
+    expect(notifyBlockerFor({ canCommit: false, practicePhone: null })).toBe("writes_off");
+  });
+
+  it("reports a missing practice number once a move could actually commit", () => {
+    expect(notifyBlockerFor({ canCommit: true, practicePhone: null })).toBe("no_phone");
+    expect(notifyBlockerFor({ canCommit: true, practicePhone: "   " })).toBe("no_phone");
+  });
+
+  it("blocks nothing when the move can commit and there is a number to call back", () => {
+    expect(notifyBlockerFor({ canCommit: true, practicePhone: "020 8888 1234" })).toBe("none");
+  });
+
+  it("cannot promise a text when the move cannot commit", () => {
+    // The whole point. The dialog is still reachable with the gate shut, from
+    // the reschedule suggestions, and it used to say "will be texted" there on a
+    // move the server then refused with a 503.
+    const n = notifyNotice({
+      from: NINE_THIRTY,
+      to: TWO_THIRTY,
+      blocker: notifyBlockerFor({ canCommit: false, practicePhone: "020 8888 1234" }),
+      dryRun: false,
+    });
+    expect(n.willQueue).toBe(false);
+    expect(n.text).not.toContain("will be texted about");
+  });
+
+  it("is fed the ENVIRONMENT flag by the board, not the combined drag gate", () => {
+    // "writes_off" says "moving appointments is not switched on in this
+    // environment". The board used to compute canCommit from
+    // diaryMoveGate().dragEnabled, which is `canMove && writeEnabled`, so a
+    // reader blocked by their ROLE was told an environment flag was the cause and
+    // pointed at an administrator who could not help them. The blocker enum has no
+    // role case because every route into the dialog is behind the role check, so
+    // the argument has to be the write gate alone.
+    //
+    // Read from source because the wiring lives in a React closure that this
+    // node-environment suite (src/**/*.test.ts, no .tsx) cannot render.
+    const board = readFileSync(
+      fileURLToPath(new URL("./calendar-board.tsx", import.meta.url)),
+      "utf8",
+    );
+    const call = /notifyBlockerFor\(\{([\s\S]*?)\}\)/.exec(board);
+    expect(call, "calendar-board no longer calls notifyBlockerFor").not.toBeNull();
+    const args = (call as RegExpExecArray)[1];
+    expect(args, "canCommit is still the combined drag gate").not.toContain("gate.dragEnabled");
+    expect(args, "canCommit is not the Dentally write gate").toMatch(/canCommit:\s*writeEnabled\b/);
   });
 });
 
@@ -236,8 +296,10 @@ describe("the continuing-treatment refusal, as the chip actually draws it", () =
 describe("house rules", () => {
   const strings = [
     MOVE_BLOCKED_BY_READ,
+    RESCHEDULING_OFF_BOARD,
     WRITE_GATE_OFF_PANEL,
     WRITE_GATE_ON_PANEL,
+    notifyNotice({ from: NINE_THIRTY, to: TWO_THIRTY, blocker: "writes_off", dryRun: false }).text,
     notifyNotice({ from: NINE_THIRTY, to: TWO_THIRTY, blocker: "none", dryRun: false }).text,
     notifyNotice({ from: NINE_THIRTY, to: TWO_THIRTY, blocker: "none", dryRun: true }).text,
     movedAnnouncement("N.Lamprell", "14:30", "Femi Osei"),

@@ -427,7 +427,13 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: true, skipped: "another drain run is in progress" });
   }
 
-  const client = new DentallyClient({ apiKey, baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co" });
+  // resolveRecipient only ever calls getPatient, so the drain arms the write latch
+  // (client.ts assertWritable): the outbox can never write to the patient book.
+  const client = new DentallyClient({
+    apiKey,
+    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    readOnly: true,
+  });
 
   try {
     // Twilio rejects a StatusCallback that is not publicly reachable, so only

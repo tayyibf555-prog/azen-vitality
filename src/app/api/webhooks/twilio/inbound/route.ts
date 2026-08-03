@@ -200,6 +200,11 @@ export async function POST(request: Request): Promise<Response> {
   const dentally = new DentallyClient({
     apiKey: process.env.DENTALLY_API_KEY ?? "",
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    // IDENTIFY ONLY. Both write paths on this route build their own client from
+    // dentallyAgentClient() (the no-show handler and the booking agent below), so
+    // this one never writes. Arming the latch keeps it that way: a future caller
+    // that reaches for the handy client already in scope throws instead.
+    readOnly: true,
   });
 
   // No-show defence: a structured YES/CANCEL reply to a confirmation, or a

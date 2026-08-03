@@ -13,8 +13,10 @@ interface Opts {
   userAgent?: string;
   /**
    * Refuse every non-GET on this client, throwing before the request is built.
-   * Set on the client that carries the READ key — see assertWritable below for
-   * why a comment was not enough.
+   * See assertWritable below for why a comment was not enough.
+   *
+   * DEFAULTS TO TRUE when omitted. A client that writes must say so, in writing,
+   * at the point it is built — see the constructor.
    */
   readOnly?: boolean;
 }
@@ -64,9 +66,26 @@ export interface AvailabilityArgs {
 export class DentallyClient {
   private fetchImpl: FetchImpl;
   private userAgent: string;
+  /**
+   * READ-ONLY BY DEFAULT. `readOnly: false` is the only way to get a client that
+   * can write, and it must be passed deliberately.
+   *
+   * The default used to be the other way round, so nine of the eleven clients in
+   * this app were built writable by omission — five of them holding the key named
+   * DENTALLY_PROD_READONLY_API_KEY, whose scopes are in fact umbrella
+   * create/update/delete over ~51,000 live patients (see assertWritable). Every
+   * one of the nine also defaults its base URL to https://api.dentally.co when
+   * DENTALLY_BASE_URL is unset, so "I forgot the flag" meant "silent write to the
+   * real practice book". Inverted, the same slip is a loud throw in dev instead.
+   *
+   * Resolved once here rather than read as `opts.readOnly` at each call, so the
+   * default cannot be forgotten at one of the write methods.
+   */
+  private readOnly: boolean;
   constructor(private opts: Opts) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.userAgent = opts.userAgent ?? "Azen-Vitality/0.1 (+https://azen.ai)";
+    this.readOnly = opts.readOnly ?? true;
   }
 
   /**
@@ -102,9 +121,12 @@ export class DentallyClient {
    * Rotating the key to genuinely :read scopes is still owed and is the real
    * fix. This latch is the belt: it makes the property the comment claimed
    * actually hold, on our side, today.
+   *
+   * Reads this.readOnly, which is `opts.readOnly ?? true` — so a client built
+   * without saying anything about writes cannot write.
    */
   private assertWritable(method: string, path: string): void {
-    if (this.opts.readOnly) {
+    if (this.readOnly) {
       throw new DentallyError(
         0,
         `refusing ${method} ${path}: this DentallyClient is read-only. ` +
@@ -183,6 +205,28 @@ export class DentallyClient {
    *     once already.
    * Whether live honours patient_id is itself unverified, so charting-read.ts keeps
    * a client-side patient filter as a safety net the same way the plans read does.
+   *
+   * MEASURED FILTER TABLE — read-only probes, 2026-08-03, against a base total of
+   * 989,336 rows. Recorded here because three of these look like they work and do
+   * not:
+   *
+   *   updated_since=YYYY-MM-DD   WORKS — and it is BARE, not filter[updated_since],
+   *                              which is silently ignored (989,336 → 54,953).
+   *   patient_id=                WORKS (bare).
+   *   treatment_plan_id=         WORKS (bare).
+   *   invoice_id=                IGNORED — returns all 989k. There is NO
+   *                              server-side way to find the plan items on an
+   *                              invoice; the payment-allocation report reads
+   *                              invoice_items instead (see getInvoice).
+   *   practitioner_id=           HTTP 500.
+   *   completed=true             IGNORED (and filter[completed] likewise).
+   *   sort_by / sort_direction   IGNORED, AND CORRUPTS ORDERING — sending either
+   *                              returned a 2024 row first. Default order is
+   *                              already updated_at desc. DO NOT SEND THEM.
+   *
+   * Population, sampled over 500 recent rows: invoice_id present on 25 (5.0%),
+   * `charged: true` mirroring it exactly 1:1; completed on 491 (98.2%), of which
+   * only 5.1% are invoiced; practitioner_id and price on 500/500.
    */
   listTreatmentPlanItems(a: ListTreatmentPlanItemsArgs) {
     return this.get<{ treatment_plan_items: unknown[] }>("/v1/treatment_plan_items", {
@@ -416,13 +460,55 @@ export class DentallyClient {
     });
   }
   /**
+   * ONE invoice, WITH ITS LINES. The only place Dentally records which clinician
+   * earned which money, and therefore the spine of the payment-allocation report.
+   *
+   * PROVENANCE — read-only GETs, 2026-08-03, 235 invoices fetched by walking 258
+   * payment-explanation legs on the live 51k-patient account:
+   *
+   *   - envelope key is `invoice` (singular); the lines are `invoice_items[]`.
+   *   - `invoice_items` EXISTS ONLY ON THIS DETAIL ROUTE. The index
+   *     (GET /v1/invoices, 33,662 rows) carries no lines at all, and
+   *     `include=invoice_items` on the index is IGNORED — so there is no way to
+   *     read attribution in bulk; it is one GET per invoice.
+   *   - the invoice HEADER carries no practitioner_id. Attribution exists only on
+   *     the lines.
+   *   - item keys: created_at, id, invoice_id, item_price, name, nhs_charge,
+   *     practitioner_id, quantity, sundry_id, total_price, treatment_plan_id,
+   *     treatment_plan_item_id, updated_at, user_id.
+   *   - every item carried practitioner_id on 256/256 sampled legs, and
+   *     Σ invoice_items.total_price == invoice.amount on 256/256.
+   *   - nhs_amount was NULL on 256/256 and item nhs_charge 0 on 728/728: the
+   *     NHS/private split is NOT readable this way and must not be claimed.
+   *   - 0/256 invoices carried a sundry line — an untested path.
+   *   - ~0.4% of these GETs returned a non-200 transiently (1 of 235); the retry
+   *     succeeded, so callers retry ONCE and then report the invoice unreadable
+   *     rather than dropping its money.
+   *   - rate limit observed: x-ratelimit-limit 3600/hour.
+   *
+   * Returns the raw envelope like every other read here; invoiceFromEnvelope in
+   * ./invoice-shape unwraps it and REFUSES a shape it does not recognise rather
+   * than degrading to an empty line list.
+   */
+  getInvoice(id: string) {
+    return this.get<Record<string, unknown>>(`/v1/invoices/${id}`);
+  }
+  /**
    * ONE patient's clinical notes, PAGED. Same defect as getPatientInvoices had, and
    * this is the ONE stream on the record where a dropped row can be an allergy or a
    * medication warning: a patient of fifteen years with 200 notes rendered the most
    * recent page as if it were the whole history.
+   *
+   * THE PATH IS `/v1/notes`, NOT `/v1/patient_notes`. The latter was invented here
+   * and 404s on real Dentally, so the Clinical notes tab failed on every live patient
+   * open while the mock served the invented path and kept dev green. `/v1/notes` is
+   * undocumented but real: a read-only GET on 2026-08-03 returned 200 and
+   * `{"notes":[],"meta":{...}}`. The envelope is returned RAW, exactly like every
+   * other read here; notesFromEnvelope in ./notes-shape unwraps it and refuses a
+   * shape it does not recognise instead of falling back to an empty page.
    */
   getPatientNotes(patientId: string, page = 1, perPage = 100) {
-    return this.get<{ patient_notes: unknown[] }>("/v1/patient_notes", {
+    return this.get<Record<string, unknown>>("/v1/notes", {
       patient_id: patientId, page, per_page: perPage,
     });
   }
@@ -444,6 +530,15 @@ export class DentallyClient {
    * Field notes: `amount` is a STRING ("27.9"), `dated_on` is a bare YYYY-MM-DD
    * with no time zone, and `deleted` is a boolean that must be excluded from
    * totals. The `status` vocabulary is not verified; do not branch on it.
+   *
+   * Two further facts, from a read-only probe on 2026-08-03, recorded because the
+   * repo previously claimed the opposite. `patient_id` IS honoured: ?patient_id=
+   * returned exactly that patient's payments (meta.total 1), so a per-patient
+   * payments read is possible. And every row carries `explanations[]` — each entry
+   * holding invoice_id, invoice_reference, amount, payment_id and user_id —
+   * alongside `fully_explained` and `amount_unexplained`, so the payment→invoice
+   * allocation link is on this endpoint (30 of 50 sampled rows had a non-empty
+   * array). Neither is read by any caller yet.
    */
   listPayments(a: { siteId?: string; page?: number; perPage?: number }) {
     return this.get<{ payments: unknown[] }>("/v1/payments", {

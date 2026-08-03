@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 import type { DashboardPeriod } from "@/lib/dashboard/period";
+import { shellBase } from "@/lib/nav-shell";
 import type { PracticeDashboardView } from "@/lib/dashboard/view";
 import { cn } from "@/lib/utils";
 import { AccountsPanelView } from "./accounts-panel";
@@ -61,6 +63,13 @@ export function PracticeDashboard({
   /** The site the top bar is already showing, so the two controls agree on open. */
   initialSiteId: string | null;
 }) {
+  // WHICH TREE THIS DASHBOARD IS BEING READ IN. The same component renders at
+  // /c/<client> and at /owner/<client>, and every patient link below hangs off
+  // this. It used to be hard-coded to "/c/<client>", so an owner opening a debtor
+  // or an appointment from their own dashboard was thrown out of the owner shell.
+  const pathname = usePathname();
+  const basePath = shellBase(pathname, clientSlug);
+
   const [period, setPeriod] = useState<DashboardPeriod>("today");
   const [siteId, setSiteId] = useState<string | null>(initialSiteId);
   // The top bar changes the site by writing a cookie and calling router.refresh(),
@@ -136,7 +145,7 @@ export function PracticeDashboard({
         <div className={bandCell(1)}>
           <AccountsPanelView
             panel={scope.accounts}
-            clientSlug={clientSlug}
+            basePath={basePath}
             caveats={accounts}
             onOpenCaveat={setOpenCaveat}
           />
@@ -175,7 +184,7 @@ export function PracticeDashboard({
         rows={view.appointments}
         period={period}
         window={panels.window}
-        clientSlug={clientSlug}
+        basePath={basePath}
         practitioners={view.practitioners}
         practitionerId={listPractitionerId}
         onPractitionerChange={setListPractitionerId}

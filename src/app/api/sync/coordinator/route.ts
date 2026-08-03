@@ -617,6 +617,10 @@ export async function POST(request: Request) {
     const client = new DentallyClient({
       apiKey,
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+      // This sync only READS (listTreatmentPlans / listPatients). Arms the write
+      // latch so the key it carries — which is NOT read-only despite its name,
+      // see client.ts assertWritable — cannot issue a write from here.
+      readOnly: true,
     });
     // One site's failure must not abort the rest: record the error and move on so a
     // partial failure is observable and self-heals next tick (no all-or-nothing 500).

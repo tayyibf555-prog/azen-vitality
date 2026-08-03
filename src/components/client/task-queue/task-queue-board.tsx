@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   Loader2,
   Check,
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState } from "@/components/primitives";
 import { cn } from "@/lib/utils";
 import { TASK_KIND_LABEL, type Task, type TaskKind } from "@/lib/task-queue/types";
+import { shellBase } from "@/lib/nav-shell";
 
 // The list API's shape. Kept local so this file owns its own contract.
 interface ListResponse {
@@ -47,6 +49,10 @@ export function TaskQueueBoard({
   /** Render as a plain hairline section instead of a boxed card (Home). */
   plain?: boolean;
 }) {
+  // "View all" must stay in the tree the reader is already in: this board is
+  // embedded on BOTH the /c home and the /owner home, and a hard-coded /c link
+  // ejected the owner from their own shell.
+  const basePath = shellBase(usePathname(), clientSlug);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -367,7 +373,7 @@ export function TaskQueueBoard({
             {truncated > 0 ? (
               <li className="px-1 py-3">
                 <a
-                  href={`/c/${clientSlug}/task-queue`}
+                  href={`${basePath}/task-queue`}
                   className="text-caption font-medium text-blue-royal hover:underline"
                 >
                   View all {visible.length} tasks →

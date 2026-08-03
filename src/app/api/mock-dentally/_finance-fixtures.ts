@@ -108,6 +108,18 @@ function weekday(dayKey: string): number {
 
 // --- Payments ---------------------------------------------------------------
 
+/** One allocation leg on a payment. Live keys, verified 2026-08-03. */
+export interface MockPaymentExplanation {
+  id: string;
+  amount: string;
+  comments: string | null;
+  invoice_id: string | null;
+  invoice_reference: string | null;
+  payment_id: string;
+  payment_reference: string;
+  user_id: string;
+}
+
 export interface MockPayment {
   id: string;
   amount: string;
@@ -122,6 +134,10 @@ export interface MockPayment {
   account_id: string;
   reference: string;
   transaction_number: string;
+  /** Which invoices this payment settled. See buildAllocations below. */
+  explanations: MockPaymentExplanation[];
+  fully_explained: boolean;
+  amount_unexplained: string;
 }
 
 /**
@@ -186,6 +202,11 @@ function paymentsForSiteDay(siteId: string, day: string): MockPayment[] {
       account_id: `acc-${siteId}-${i % 40}`,
       reference: `REF-${day.replace(/-/g, "")}-${i}`,
       transaction_number: String(hash32(`${siteId}${day}${i}`) % 1_000_000),
+      // Filled by buildAllocations, which runs on a SEPARATE seeded PRNG so it
+      // cannot shift a single amount above.
+      explanations: [],
+      fully_explained: false,
+      amount_unexplained: "0.0",
     });
   }
   return rows;
@@ -221,6 +242,9 @@ function buildPayments(today: string): MockPayment[] {
         account_id: "acc-site-cc-0",
         reference: `REF-${day.replace(/-/g, "")}-X`,
         transaction_number: "0",
+        explanations: [],
+        fully_explained: false,
+        amount_unexplained: "0.0",
       });
     }
   }
@@ -229,13 +253,349 @@ function buildPayments(today: string): MockPayment[] {
   return rows;
 }
 
-let paymentCache: { day: string; rows: MockPayment[] } | null = null;
+// --- Allocations: explanations[] and the invoices they settle ---------------
+//
+// The payment-allocation report walks payment → explanations[].invoice_id →
+// GET /v1/invoices/{id} → invoice_items[].practitioner_id. None of that existed
+// in this mock, so the report rendered nothing locally while the live account had
+// 2,052 payments a month to attribute.
+//
+// SHAPES AND PROPORTIONS ARE COPIED FROM LIVE, probed read-only 2026-08-03 over
+// the 60 days to that date:
+//
+//   - explanation keys: id, amount, comments, invoice_id, invoice_reference,
+//     payment_id, payment_reference, user_id;
+//   - 83.4% of payments fully explained, 13.4% carrying NO explanation at all,
+//     3.2% partially explained;
+//   - ~1.75% of money explained against an explanation with a NULL invoice_id;
+//   - invoice detail envelope key `invoice`, lines under `invoice_items`, money as
+//     STRINGS, nhs_amount NULL, Σ line total_price == invoice.amount;
+//   - 2.0% of legs settle an invoice covering more than one clinician.
+//
+// THE MOCK IS DELIBERATELY AS MESSY AS PRODUCTION. It generates unexplained
+// payments, part-paid shared invoices (which the report must refuse to split) and
+// invoices whose lines carry no clinician at all. A tidy mock is how a report that
+// only works on tidy data reaches a practice.
+//
+// EVERY ROLL BELOW USES ITS OWN PRNG, seeded on the payment id. The payment
+// amounts above must not move: they are what the takings strip totals, and a
+// shared random stream would have shifted every one of them.
+
+export interface MockInvoiceItem {
+  id: string;
+  invoice_id: string;
+  item_price: string;
+  total_price: string;
+  quantity: number;
+  name: string;
+  nhs_charge: number;
+  practitioner_id: string | null;
+  sundry_id: string | null;
+  treatment_plan_id: string;
+  treatment_plan_item_id: string;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MockAllocationInvoice {
+  id: string;
+  patient_id: string;
+  site_id: string;
+  amount: string;
+  amount_outstanding: string;
+  dated_on: string;
+  /** NULL on 256/256 live invoices: the NHS split is not readable this way. */
+  nhs_amount: null;
+  paid: boolean;
+  reference: string;
+  invoice_items: MockInvoiceItem[];
+}
+
+const TREATMENT_NAMES = [
+  "Examination",
+  "Scale and polish",
+  "Composite filling",
+  "Root canal treatment",
+  "Crown",
+  "Extraction",
+  "Hygienist appointment",
+  "Radiograph",
+] as const;
+
+/** The other clinician at the practice — used to make the payment-taker differ. */
+function otherPractitioner(id: string): string {
+  return PRACTITIONER_IDS.find((p) => p !== id) ?? id;
+}
+
+/** A Dentally-looking invoice reference, stable for an id. */
+function invoiceReference(id: string): string {
+  return `INV-${(hash32(id) % 900_000) + 100_000}`;
+}
+
+/** Split `pence` across `n` lines so the lines sum EXACTLY back to it. */
+function splitPence(pence: number, n: number, rand: () => number): number[] {
+  const weights = Array.from({ length: n }, () => 1 + Math.floor(rand() * 10));
+  const sum = weights.reduce((a, b) => a + b, 0);
+  const parts: number[] = [];
+  let allocated = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (i === n - 1) {
+      parts.push(pence - allocated);
+      break;
+    }
+    const part = Math.floor((pence * weights[i]) / sum);
+    allocated += part;
+    parts.push(part);
+  }
+  return parts;
+}
+
+function buildInvoice(args: {
+  id: string;
+  payment: MockPayment;
+  amountPence: number;
+  outstandingPence: number;
+  practitionerFor: (lineIndex: number) => string | null;
+  lineCount: number;
+  rand: () => number;
+}): MockAllocationInvoice {
+  const { id, payment, amountPence, outstandingPence, practitionerFor, lineCount, rand } = args;
+  const parts = splitPence(amountPence, lineCount, rand);
+  return {
+    id,
+    patient_id: payment.patient_id,
+    site_id: payment.site_id,
+    amount: penceToDentallyString(amountPence),
+    amount_outstanding: penceToDentallyString(outstandingPence),
+    dated_on: payment.dated_on,
+    nhs_amount: null,
+    paid: outstandingPence === 0,
+    reference: invoiceReference(id),
+    invoice_items: parts.map((part, i) => ({
+      id: `${id}-item-${i}`,
+      invoice_id: id,
+      item_price: penceToDentallyString(part),
+      total_price: penceToDentallyString(part),
+      quantity: 1,
+      name: pick(rand, TREATMENT_NAMES),
+      nhs_charge: 0,
+      practitioner_id: practitionerFor(i),
+      sundry_id: null,
+      treatment_plan_id: `tp-${id}`,
+      treatment_plan_item_id: `tpi-${id}-${i}`,
+      user_id: "user-mock",
+      created_at: `${payment.dated_on}T09:00:00.000Z`,
+      updated_at: `${payment.dated_on}T09:00:00.000Z`,
+    })),
+  };
+}
+
+function explanation(args: {
+  payment: MockPayment;
+  invoiceId: string | null;
+  invoiceReference: string | null;
+  pence: number;
+  index: number;
+}): MockPaymentExplanation {
+  const { payment, invoiceId, invoiceReference, pence, index } = args;
+  return {
+    id: `ex-${payment.id}-${index}`,
+    amount: penceToDentallyString(pence),
+    comments: null,
+    invoice_id: invoiceId,
+    invoice_reference: invoiceReference,
+    payment_id: payment.id,
+    payment_reference: payment.reference,
+    user_id: "user-mock",
+  };
+}
+
+/**
+ * Attach explanations to each payment and build the invoices they name. Mutates
+ * the payment rows in place (they were just built and are not shared yet).
+ */
+function buildAllocations(payments: MockPayment[]): Map<string, MockAllocationInvoice> {
+  const invoices = new Map<string, MockAllocationInvoice>();
+
+  for (const payment of payments) {
+    // A voided payment and the one deliberately malformed amount allocate nothing.
+    const pence = Math.round(Number(payment.amount) * 100);
+    if (payment.deleted || !Number.isFinite(pence) || payment.amount === "" || pence <= 0) {
+      payment.status = payment.deleted ? "void" : payment.status;
+      payment.fully_explained = false;
+      payment.amount_unexplained = payment.amount === "" ? "0.0" : penceToDentallyString(Math.max(0, pence || 0));
+      continue;
+    }
+
+    const rand = seeded(`alloc|${payment.id}`);
+    const roll = rand();
+    const invoiceId = `inv-alloc-${payment.id}`;
+
+    // 13.4% of live payments carry no explanation at all. This is the single
+    // biggest honest limit on the report, so the mock has to show it.
+    if (roll < 0.134) {
+      payment.status = "unexplained";
+      payment.fully_explained = false;
+      payment.amount_unexplained = penceToDentallyString(pence);
+      continue;
+    }
+
+    // ~1.75% of money is explained against no invoice at all.
+    if (roll < 0.152) {
+      payment.status = "paid";
+      payment.fully_explained = true;
+      payment.amount_unexplained = "0.0";
+      payment.explanations = [
+        explanation({ payment, invoiceId: null, invoiceReference: null, pence, index: 0 }),
+      ];
+      continue;
+    }
+
+    // 3.2% are partially explained: some of the money settles an invoice and the
+    // rest is allocated to nothing.
+    if (roll < 0.184) {
+      const legPence = Math.max(1, Math.round(pence * 0.6));
+      invoices.set(
+        invoiceId,
+        buildInvoice({
+          id: invoiceId,
+          payment,
+          amountPence: legPence,
+          outstandingPence: 0,
+          practitionerFor: () => payment.practitioner_id,
+          lineCount: 1 + Math.floor(rand() * 3),
+          rand,
+        }),
+      );
+      payment.status = "partially_explained";
+      payment.fully_explained = false;
+      payment.amount_unexplained = penceToDentallyString(pence - legPence);
+      payment.explanations = [
+        explanation({
+          payment,
+          invoiceId,
+          invoiceReference: invoiceReference(invoiceId),
+          pence: legPence,
+          index: 0,
+        }),
+      ];
+      continue;
+    }
+
+    // From here the payment is fully explained against exactly one invoice; what
+    // varies is what that invoice looks like.
+    payment.status = "paid";
+    payment.fully_explained = true;
+    payment.amount_unexplained = "0.0";
+    payment.explanations = [
+      explanation({
+        payment,
+        invoiceId,
+        invoiceReference: invoiceReference(invoiceId),
+        pence,
+        index: 0,
+      }),
+    ];
+
+    const shape = rand();
+    if (shape < 0.02) {
+      // A SHARED invoice, PART paid. The report must refuse to split this: which
+      // clinician the money paid for is simply not recorded anywhere.
+      invoices.set(
+        invoiceId,
+        buildInvoice({
+          id: invoiceId,
+          payment,
+          amountPence: pence * 3,
+          outstandingPence: pence * 2,
+          practitionerFor: (i) => PRACTITIONER_IDS[i % PRACTITIONER_IDS.length],
+          lineCount: 4,
+          rand,
+        }),
+      );
+    } else if (shape < 0.04) {
+      // A SHARED invoice settled in FULL: pro-rata by line value.
+      invoices.set(
+        invoiceId,
+        buildInvoice({
+          id: invoiceId,
+          payment,
+          amountPence: pence,
+          outstandingPence: 0,
+          practitionerFor: (i) => PRACTITIONER_IDS[i % PRACTITIONER_IDS.length],
+          lineCount: 3,
+          rand,
+        }),
+      );
+    } else if (shape < 0.055) {
+      // An invoice whose lines carry NO clinician. Never credited to whoever took
+      // the payment.
+      invoices.set(
+        invoiceId,
+        buildInvoice({
+          id: invoiceId,
+          payment,
+          amountPence: pence,
+          outstandingPence: 0,
+          practitionerFor: () => null,
+          lineCount: 2,
+          rand,
+        }),
+      );
+    } else {
+      // The ordinary case: one clinician, settled in full. On roughly 7% of these
+      // the clinician on the INVOICE LINE is not the person who took the payment —
+      // the measured live rate (17/242 legs), and Blerta's front-desk reality. The
+      // report must credit the treating clinician and surface the count.
+      const treating =
+        rand() < 0.07 ? otherPractitioner(payment.practitioner_id) : payment.practitioner_id;
+      invoices.set(
+        invoiceId,
+        buildInvoice({
+          id: invoiceId,
+          payment,
+          amountPence: pence,
+          outstandingPence: 0,
+          practitionerFor: () => treating,
+          lineCount: 1 + Math.floor(rand() * 4),
+          rand,
+        }),
+      );
+    }
+  }
+
+  return invoices;
+}
+
+let paymentCache: {
+  day: string;
+  rows: MockPayment[];
+  invoices: Map<string, MockAllocationInvoice>;
+} | null = null;
+
+function financeCache() {
+  const today = todayKey();
+  if (paymentCache?.day !== today) {
+    const rows = buildPayments(today);
+    paymentCache = { day: today, rows, invoices: buildAllocations(rows) };
+  }
+  return paymentCache;
+}
 
 /** Every mock payment, newest first. Rebuilt once per London day. */
 export function allPayments(): MockPayment[] {
-  const today = todayKey();
-  if (paymentCache?.day !== today) paymentCache = { day: today, rows: buildPayments(today) };
-  return paymentCache.rows;
+  return financeCache().rows;
+}
+
+/** The invoices the payments' explanations name, by id. */
+export function allAllocationInvoices(): Map<string, MockAllocationInvoice> {
+  return financeCache().invoices;
+}
+
+/** One invoice with its lines, or null — exactly what GET /v1/invoices/{id} serves. */
+export function findAllocationInvoice(id: string): MockAllocationInvoice | null {
+  return financeCache().invoices.get(id) ?? null;
 }
 
 // --- NHS claims -------------------------------------------------------------

@@ -1,44 +1,96 @@
 import { describe, it, expect } from "vitest";
 import {
-  computePaymentAllocation,
   wiredAllocationConditions,
   unverifiedConditions,
   isPayable,
   ALLOCATION_CONDITION_LABELS,
+  ALLOCATION_CONDITION_NOTES,
   type AllocationConditions,
 } from "./payment-allocation";
-import type { DashboardPayment } from "@/lib/dashboard/normalise";
-
-function pay(over: Partial<DashboardPayment> = {}): DashboardPayment {
-  return {
-    id: "p",
-    amountPence: 10_000,
-    day: "2026-08-10",
-    siteId: "site-cc",
-    practitionerId: "prac-1",
-    patientId: "pat-1",
-    deleted: false,
-    ...over,
-  };
-}
 
 describe("wiredAllocationConditions", () => {
-  it("cannot verify the four conditions Blerta pays dentists on", () => {
+  it("lifts invoiced and paid, keeps completed partial, and leaves closed unverified", () => {
     const c = wiredAllocationConditions();
-    // Completed / closed / invoiced have NO wired source — a payment carries no
-    // treatment or invoice link. Paid is only PARTIAL: a payment exists on the
-    // practitioner, but not tied to a completed, closed, invoiced treatment.
-    expect(c.completed).toBe("unverified");
+    // `invoiced` is earned: the payment → explanation.invoice_id → invoice →
+    // invoice_items[].practitioner_id chain is wired and resolved for 256/258
+    // legs live on 2026-08-03. `paid` is earned: payments are the source of truth.
+    expect(c.invoiced).toBe("verified");
+    expect(c.paid).toBe("verified");
+    // Completion is INFERRED from the invoice line, never read off the plan item.
+    expect(c.completed).toBe("partial");
+    // `closed` does not exist as a field on Dentally's API at all.
     expect(c.closed).toBe("unverified");
-    expect(c.invoiced).toBe("unverified");
-    expect(c.paid).toBe("partial");
+  });
+
+  it("still marks nothing payable, because `closed` cannot be read", () => {
+    expect(isPayable(wiredAllocationConditions())).toBe(false);
+  });
+});
+
+/**
+ * The notes are rendered verbatim on the Reports screen. They must state a
+ * MEASURED fact and must say correctly whose limit it is: an earlier version
+ * claimed Dentally could not supply the allocation link at all, which the
+ * 2026-08-03 probes disproved, and a wrong "the supplier cannot do this" is worse
+ * than a plain "we have not built this" because it closes the question. The
+ * reverse error is now the live risk: `closed` genuinely IS absent from the API,
+ * and softening that to "not yet calibrated" would hide the one thing that has to
+ * be asked of a human before anyone is paid from this screen.
+ */
+describe("the condition notes state a measured fact, and whose limit it is", () => {
+  it("says the allocation link is now READ, and names the measured chain rate", () => {
+    const s = ALLOCATION_CONDITION_NOTES.invoiced;
+    expect(s).toContain("explanations[]");
+    expect(s).toContain("/v1/invoices/{id}");
+    expect(s).toContain("99.2%");
+    expect(s).toContain("256/258");
+    expect(s).not.toContain("does not read it yet");
+  });
+
+  it("says plainly that Dentally exposes NO `closed` field, and that it blocks payment", () => {
+    const s = ALLOCATION_CONDITION_NOTES.closed;
+    expect(s).toContain("no `closed` field");
+    expect(s).toContain("Completed but Not Closed");
+    expect(s).toContain("probed 2026-08-03");
+    expect(s).toContain("no line is ever payable");
+    // The old, now-disproved framing said this was merely uncalibrated.
+    expect(s).not.toContain("not yet calibrated");
+  });
+
+  it("says completion is INFERRED from the invoice line, not read", () => {
+    const s = ALLOCATION_CONDITION_NOTES.completed;
+    expect(s).toContain("inferred");
+    expect(s).toContain("treatment_plan_item_id");
+    expect(s).toContain("256/256");
+  });
+
+  it("says money received is the source of truth for `paid`", () => {
+    const s = ALLOCATION_CONDITION_NOTES.paid;
+    expect(s).toContain("source of truth");
+    expect(s).toContain("refunds");
+  });
+
+  it("carries none of the disproved claims, in any note", () => {
+    for (const s of Object.values(ALLOCATION_CONDITION_NOTES)) {
+      expect(s).not.toContain("only exposes per patient");
+      expect(s).not.toContain("No wired source");
+      expect(s).not.toContain("No allocation link");
+      expect(s).not.toContain("allocation link exists");
+    }
+  });
+
+  it("never promises money owed, payable-in-full, or an NHS split", () => {
+    for (const s of Object.values(ALLOCATION_CONDITION_NOTES)) {
+      expect(s.toLowerCase()).not.toContain("amount owed");
+      expect(s.toLowerCase()).not.toContain("nhs");
+    }
   });
 });
 
 describe("unverifiedConditions", () => {
   it("lists exactly the conditions that are not fully verified", () => {
     const c = wiredAllocationConditions();
-    expect(unverifiedConditions(c).sort()).toEqual(["closed", "completed", "invoiced", "paid"].sort());
+    expect(unverifiedConditions(c).sort()).toEqual(["closed", "completed"].sort());
   });
   it("is empty only when all four are verified", () => {
     const all: AllocationConditions = {
@@ -77,92 +129,4 @@ describe("isPayable — every single condition is load-bearing", () => {
       expect(isPayable({ ...allVerified, [key]: "partial" })).toBe(false);
     });
   }
-});
-
-describe("computePaymentAllocation", () => {
-  it("NEVER confirms a payment is due: every line is flagged not payable with the wired data", () => {
-    const report = computePaymentAllocation({ payments: [pay(), pay({ id: "p2" })] });
-    expect(report.anyPayableConfirmed).toBe(false);
-    for (const line of report.lines) {
-      expect(line.payableConfirmed).toBe(false);
-      // The report says WHICH of the four it cannot confirm, per line.
-      expect(unverifiedConditions(line.conditions).length).toBeGreaterThan(0);
-    }
-  });
-
-  it("sums payments per practitioner, and the lines reconcile to the total", () => {
-    const report = computePaymentAllocation({
-      payments: [
-        pay({ id: "a", practitionerId: "prac-1", amountPence: 10_000 }),
-        pay({ id: "b", practitionerId: "prac-1", amountPence: 5_000 }),
-        pay({ id: "c", practitionerId: "prac-2", amountPence: 7_000 }),
-      ],
-    });
-    const p1 = report.lines.find((l) => l.practitionerId === "prac-1");
-    const p2 = report.lines.find((l) => l.practitionerId === "prac-2");
-    expect(p1!.paymentsReceivedPence).toBe(15_000);
-    expect(p1!.paymentCount).toBe(2);
-    expect(p2!.paymentsReceivedPence).toBe(7_000);
-    const lineSum = report.lines.reduce((n, l) => n + l.paymentsReceivedPence, 0);
-    expect(lineSum).toBe(report.totalPence);
-    expect(report.totalPence).toBe(22_000);
-    expect(report.totalCount).toBe(3);
-  });
-
-  it("excludes deleted payments and counts them apart", () => {
-    const report = computePaymentAllocation({
-      payments: [pay({ id: "live" }), pay({ id: "void", deleted: true })],
-    });
-    expect(report.totalPence).toBe(10_000);
-    expect(report.totalCount).toBe(1);
-    expect(report.deletedExcluded).toBe(1);
-  });
-
-  it("when site-scoped, excludes payments carrying no site and counts them apart", () => {
-    const report = computePaymentAllocation({
-      payments: [
-        pay({ id: "here", siteId: "site-cc" }),
-        pay({ id: "elsewhere", siteId: "site-rv" }),
-        pay({ id: "nowhere", siteId: null }),
-      ],
-      siteId: "site-cc",
-    });
-    expect(report.totalPence).toBe(10_000);
-    expect(report.totalCount).toBe(1);
-    expect(report.unattributedExcluded).toBe(1);
-  });
-
-  it("scopes by window on the payment day", () => {
-    const report = computePaymentAllocation({
-      payments: [pay({ id: "in", day: "2026-08-10" }), pay({ id: "out", day: "2026-07-01" })],
-      window: { from: "2026-08-01", to: "2026-08-31" },
-    });
-    expect(report.totalCount).toBe(1);
-  });
-
-  it("keeps refunds (negative amounts), which genuinely reduce what was received", () => {
-    const report = computePaymentAllocation({
-      payments: [pay({ id: "a", amountPence: 10_000 }), pay({ id: "r", amountPence: -2_000 })],
-    });
-    expect(report.totalPence).toBe(8_000);
-  });
-
-  it("groups payments with no practitioner under a null line rather than dropping them", () => {
-    const report = computePaymentAllocation({
-      payments: [pay({ id: "x", practitionerId: null, amountPence: 3_000 })],
-    });
-    const line = report.lines.find((l) => l.practitionerId === null);
-    expect(line).toBeDefined();
-    expect(line!.paymentsReceivedPence).toBe(3_000);
-  });
-
-  it("orders lines by amount received descending", () => {
-    const report = computePaymentAllocation({
-      payments: [
-        pay({ id: "a", practitionerId: "prac-1", amountPence: 1_000 }),
-        pay({ id: "b", practitionerId: "prac-2", amountPence: 9_000 }),
-      ],
-    });
-    expect(report.lines[0].practitionerId).toBe("prac-2");
-  });
 });

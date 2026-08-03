@@ -31,7 +31,7 @@ interface ClientStubs {
 const state = vi.hoisted<ClientStubs>(() => ({
   getPatientAppointments: () => Promise.resolve({ appointments: [] }),
   listTreatmentPlans: () => Promise.resolve({ treatment_plans: [] }),
-  getPatientNotes: () => Promise.resolve({ patient_notes: [] }),
+  getPatientNotes: () => Promise.resolve({ notes: [] }),
   getPatientInvoices: () => Promise.resolve({ invoices: [] }),
   getPatient: () => Promise.resolve({ patient: null }),
 }));
@@ -55,7 +55,7 @@ beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "k");
   state.getPatientAppointments = () => Promise.resolve({ appointments: [] });
   state.listTreatmentPlans = () => Promise.resolve({ treatment_plans: [] });
-  state.getPatientNotes = () => Promise.resolve({ patient_notes: [] });
+  state.getPatientNotes = () => Promise.resolve({ notes: [] });
   state.getPatientInvoices = () => Promise.resolve({ invoices: [] });
   state.getPatient = () => Promise.resolve({ patient: null });
 });
@@ -161,10 +161,63 @@ describe("getPatientDetail: paging", () => {
   it("pages the clinical-notes read, so an old patient's history is not cut at 100", async () => {
     const page1 = Array.from({ length: PER_PAGE }, (_, i) => ({ id: `n${i}`, body: "x" }));
     state.getPatientNotes = (_p, page) =>
-      Promise.resolve({ patient_notes: page === 1 ? page1 : page === 2 ? [{ id: "oldest", body: "latex allergy" }] : [] });
+      Promise.resolve({ notes: page === 1 ? page1 : page === 2 ? [{ id: "oldest", body: "latex allergy" }] : [] });
     const detail = await getPatientDetail("p1", "site-cc");
     expect(detail.notes).toHaveLength(PER_PAGE + 1);
     expect(detail.notes.at(-1)?.body).toBe("latex allergy");
+  });
+});
+
+// THE CLINICAL-NOTES ENDPOINT. This read pointed at /v1/patient_notes, which does not
+// exist on real Dentally: it 404'd on every live patient open, so the tab said "we
+// could not read Dentally's clinical notes just now" on every record, permanently, in
+// wording that describes a transient blip. The local mock served the invented path, so
+// the whole suite was green throughout. The real resource is /v1/notes, whose envelope
+// key was calibrated by a read-only GET on 2026-08-03; the ROW fields were not, because
+// that endpoint reports zero notes for this practice and no live row exists to read.
+// These tests pin what the record does with each of the four possible answers.
+describe("getPatientDetail: clinical notes off /v1/notes", () => {
+  it("maps a page of notes onto the record", async () => {
+    state.getPatientNotes = () =>
+      Promise.resolve({
+        notes: [{ id: 77, body: "Latex allergy", author: "Dr Shah", created_at: "2026-07-30T09:15:00Z" }],
+        meta: { total: 1, current_page: 1, total_pages: 1 },
+      });
+    const detail = await getPatientDetail("p1", "site-cc");
+    expect(detail.reads.notes).toBe("ok");
+    expect(detail.notes).toEqual([
+      { id: "77", body: "Latex allergy", author: "Dr Shah", createdAt: "2026-07-30T09:15:00Z" },
+    ]);
+  });
+
+  it("says 'none' only when Dentally actually said none", async () => {
+    // The live answer today: 200, zero rows. The record is entitled to state that.
+    state.getPatientNotes = () => Promise.resolve({ notes: [], meta: { total: 0 } });
+    const detail = await getPatientDetail("p1", "site-cc");
+    expect(detail.reads.notes).toBe("ok");
+    expect(detail.notes).toEqual([]);
+  });
+
+  it("marks the read FAILED on the old patient_notes envelope, never renders it as none", async () => {
+    // The exact regression that hid for weeks: `res.patient_notes ?? []` turned a 404
+    // page into zero notes with read health still "ok". Assert the STORED health, not
+    // just the empty array — the empty array is what both behaviours produce.
+    state.getPatientNotes = () => Promise.resolve({ patient_notes: [{ id: "n1", body: "Latex allergy" }] });
+    const detail = await getPatientDetail("p1", "site-cc");
+    expect(detail.reads.notes).toBe("failed");
+    expect(detail.notes).toEqual([]);
+    expect(detail.reads.appointments).toBe("ok");
+    expect(detail.reads.invoices).toBe("ok");
+  });
+
+  it("marks the read FAILED when rows arrive under field names we cannot read", async () => {
+    // Row names are the uncalibrated half. A note we cannot parse must not be rendered
+    // as a blank card, and must not be counted as "this patient has no notes".
+    state.getPatientNotes = () =>
+      Promise.resolve({ notes: [{ id: 1, note_text: "Latex allergy", entered_by: "Dr Shah" }] });
+    const detail = await getPatientDetail("p1", "site-cc");
+    expect(detail.reads.notes).toBe("failed");
+    expect(detail.notes).toEqual([]);
   });
 });
 

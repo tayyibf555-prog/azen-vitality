@@ -68,8 +68,11 @@ import {
   MOVE_BLOCKED_BY_APPOINTMENTS,
   MOVE_BLOCKED_BY_PENDING,
   MOVE_BLOCKED_BY_READ,
+  RESCHEDULING_OFF_BOARD,
+  notifyBlockerFor,
   type NotifyBlocker,
 } from "./move-copy";
+import { diaryMoveGate } from "@/lib/calendar/move-gate";
 import type { GridDrag } from "./diary-day";
 
 // ---------------------------------------------------------------------------
@@ -903,13 +906,22 @@ export function CalendarBoard({
         ? (visibleDayColumns[activeFocus.colIndex]?.key ?? null)
         : (spanColumns[activeFocus.colIndex]?.dayKey ?? null);
 
+  // WHETHER THIS BOARD MAY BE DRAGGED AT ALL, decided before any gesture starts
+  // and NOT from the role alone. With the Dentally write gate shut, which is how
+  // production runs today, gating on the role let the block lift under the
+  // pointer and the confirmation offer to text the patient, and the only refusal
+  // arrived from the server after the whole gesture had been answered. The rule
+  // is in @/lib/calendar/move-gate, with the read failures above still applied
+  // separately by the hook. The server re-runs its own gates regardless.
+  const gate = diaryMoveGate({ canMove, writeEnabled });
+
   const move = useDiaryMove(
     {
       siteId: site?.id ?? "",
       bounds,
       zoom,
       columns: moveColumns,
-      allowed: canMove,
+      allowed: gate.dragEnabled,
       blockedReason: moveBlockedReason,
       suspended: selected !== null || entryDraft !== null,
       focusedId: activeFocus?.id ?? null,
@@ -956,13 +968,28 @@ export function CalendarBoard({
     return list;
   }, [dayColumns, move.proposal]);
 
-  // What the dialog may honestly claim about the patient's text. The one thing it
-  // can know for certain BEFORE the write is whether the practice has a phone
-  // number at all; consent and suppression are checked at drain time, which is
-  // why the dialog says "will be texted" and the post-move line reports what
-  // actually happened.
-  const notifyBlocker: NotifyBlocker =
-    site?.publicPhone && site.publicPhone.trim() !== "" ? "none" : "no_phone";
+  // What the dialog may honestly claim about the patient's text. Two things it
+  // can know for certain BEFORE the write: whether a move could commit at all,
+  // and whether the practice has a phone number. Consent and suppression are
+  // checked at drain time, which is why the dialog says "will be texted" and the
+  // post-move line reports what actually happened.
+  //
+  // The write gate is in here because the dialog stays REACHABLE with it shut,
+  // through the reschedule suggestions in the appointment panel, and a text is
+  // queued only on a confirmed write.
+  //
+  // writeEnabled, NOT gate.dragEnabled. dragEnabled is `canMove && writeEnabled`,
+  // so a reader whose ROLE may not move anything was handed the "writes_off"
+  // blocker, whose sentence names the environment ("moving appointments is not
+  // switched on in this environment"). That is the wrong cause: the role is what
+  // stopped them, the panel already says so in its own words, and sending a
+  // receptionist to ask an administrator to enable a flag would waste both their
+  // time. The role never reaches this dialog anyway (every route into it is
+  // behind canMove), so this states the one cause that can actually apply here.
+  const notifyBlocker: NotifyBlocker = notifyBlockerFor({
+    canCommit: writeEnabled,
+    practicePhone: site?.publicPhone ?? null,
+  });
 
   // lastMove retires itself after UNDO_WINDOW_MS inside the hook, so this is
   // never an offer of a button that would no longer work.
@@ -1224,6 +1251,11 @@ export function CalendarBoard({
   // One line of standing context under the command bar, so nothing about WHAT is
   // drawn is left to be inferred from a pressed chip.
   const notes: string[] = [];
+  // FIRST, and quiet. What this diary can DO is more standing context than which
+  // practice is drawn, and a reader who learns it here never begins a drag that
+  // the server was always going to refuse. Not an Alert: nothing has failed and
+  // reloading would not change it.
+  if (gate.noticeShown) notes.push(RESCHEDULING_OFF_BOARD);
   if (isAllSites && sites.length > 1) notes.push("The diary shows one practice at a time.");
   if (view === "week") {
     notes.push(

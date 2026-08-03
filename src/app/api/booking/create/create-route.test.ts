@@ -134,6 +134,18 @@ describe("create — fail-closed gates", () => {
     h.isDentallyWriteEnabled.mockImplementation(() => false);
     const res = await POST(req(goodBody()));
     expect(res.status).toBe(503);
+    // ASSERT THE SENTENCE, not just the status. The booking calendar renders the
+    // server's `error` verbatim (see booking-calendar.tsx: "the server's error
+    // strings are written for patients; show them as-is"), so this string IS what
+    // a patient reads when writes are switched off for a demo. A status-only
+    // assertion would pass just as happily if it said "Internal error".
+    const j = (await res.json()) as { ok: boolean; error: string };
+    expect(j.ok).toBe(false);
+    expect(j.error).toBe(
+      "Online booking is unavailable right now. Please call the practice and we will find you a time.",
+    );
+    // Refused BEFORE Dentally is touched at all: no read, no write.
+    expect(h.getAvailability).not.toHaveBeenCalled();
     expect(h.createAppointment).not.toHaveBeenCalled();
   });
 

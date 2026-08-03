@@ -15,7 +15,22 @@
  * Tenancy: Agency -> Client -> Site
  * -------------------------------------------------------------------------- */
 
-export type Role = "agency_admin" | "client_owner" | "client_coordinator";
+/**
+ * The four login levels.
+ *
+ * `client_clinician` is the newest and the most restricted: a dentist or hygienist
+ * who needs their own diary, their patients, their holiday requests and their
+ * clocking, and nothing else. It is granted PURELY by allow-list — see
+ * CLINICIAN_SLUGS in `@/lib/nav`, which is consulted before any other rule.
+ * That matters because the nav's default is allow-by-default (an item with no
+ * `roles` array is open to every role), so a role added without an allow-list
+ * would silently inherit two thirds of the platform.
+ */
+export type Role =
+  | "agency_admin"
+  | "client_owner"
+  | "client_coordinator"
+  | "client_clinician";
 
 /**
  * OWNER-VERIFIED practice facts for public marketing surfaces (landing pages).

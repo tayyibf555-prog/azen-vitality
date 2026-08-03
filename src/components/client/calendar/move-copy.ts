@@ -22,10 +22,45 @@ import { willNotifyPatient } from "@/lib/calendar/notify";
 /** Why a text cannot be sent, in the order the dialog checks them. */
 export type NotifyBlocker =
   | "none"
+  | "writes_off"
   | "messaging_off"
   | "no_phone"
   | "no_mobile"
   | "opted_out";
+
+export interface NotifyBlockerArgs {
+  /**
+   * isDentallyWriteEnabled(): whether a confirmed move could reach Dentally at
+   * all. A move that cannot commit texts nobody, because the send happens only on
+   * a CONFIRMED write (move-service step 16).
+   *
+   * THE ENVIRONMENT FLAG, NOT diaryMoveGate().dragEnabled. dragEnabled folds the
+   * reader's ROLE in as well, so passing it made a role-blocked reader hear
+   * "writes_off", whose sentence blames the environment for something the role
+   * decided. Every route into this dialog is already behind the role check, so
+   * the environment is the only cause it can honestly report.
+   */
+  canCommit: boolean;
+  /**
+   * site.publicPhone. The only blocker the board can see before the write: a
+   * text with no number to call back is refused by draftMoveText, so a missing
+   * practice number is knowable here. Consent, suppression and the mobile number
+   * are checked at DRAIN time and cannot be.
+   */
+  practicePhone: string | null;
+}
+
+/**
+ * Which of those the dialog is in, decided BEFORE it can promise anything.
+ *
+ * The write gate comes first because it is the more fundamental of the two: with
+ * writes off nothing is sent whatever the practice number says, and announcing a
+ * missing phone number would send a receptionist to fix the wrong thing.
+ */
+export function notifyBlockerFor(args: NotifyBlockerArgs): NotifyBlocker {
+  if (!args.canCommit) return "writes_off";
+  return (args.practicePhone ?? "").trim() === "" ? "no_phone" : "none";
+}
 
 export interface NotifyNoticeArgs {
   /** From willNotifyPatient: the SAME instants comparison the server runs. */
@@ -66,6 +101,16 @@ export function notifyNotice(args: NotifyNoticeArgs): NotifyNotice {
   }
 
   switch (args.blocker) {
+    // FIRST, because the text is a consequence of a write that will not happen.
+    // The dialog is still reachable with the gate shut, from the reschedule
+    // suggestions in the appointment panel, and it used to promise a text there
+    // that the 503 then made impossible.
+    case "writes_off":
+      return {
+        willQueue: false,
+        text: "The patient will not be texted: moving appointments is not switched on in this environment.",
+        tone: "plain",
+      };
     case "messaging_off":
       return {
         willQueue: false,
@@ -251,6 +296,18 @@ export const MOVE_BLOCKED_BY_PENDING =
  */
 export const NOT_MOVABLE =
   "This appointment is cancelled or marked as did not attend, so it cannot be moved. Book a new appointment instead.";
+
+/**
+ * The BOARD's standing line when the Dentally write gate is shut.
+ *
+ * Said before any gesture, beside the key, in the same quiet register as the
+ * diary's other standing context. Not an alert: nothing has failed and nothing
+ * needs reloading, this is simply what this environment can do. The panel's own
+ * foot (WRITE_GATE_OFF_PANEL) says the longer version, with the action, at the
+ * moment a reader has an appointment open.
+ */
+export const RESCHEDULING_OFF_BOARD =
+  "Rescheduling is switched off in this environment, so appointments cannot be dragged or moved.";
 
 /** The panel's foot, when the Dentally write gate is shut. */
 export const WRITE_GATE_OFF_PANEL =

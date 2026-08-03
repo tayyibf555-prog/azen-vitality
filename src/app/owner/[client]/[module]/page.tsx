@@ -15,6 +15,8 @@ import { RoiView } from "@/components/client/roi/roi-view";
 import { ReportsView } from "@/components/client/reports/reports-view";
 import { ComplianceView } from "@/components/client/compliance/compliance-view";
 import { RotaView } from "@/components/client/rota/rota-view";
+import { AbsenceView } from "@/components/client/absence/absence-view";
+import { StaffCheckInView } from "@/components/client/staff-check-in/staff-check-in-view";
 import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
@@ -100,6 +102,18 @@ export default async function OwnerModulePage({
 
   if (module === "rota") {
     return <RotaView clientSlug={client} />;
+  }
+
+  // The two People modules. Both are status:"live" in CLIENT_NAV, so
+  // owner-module-coverage.test.ts requires an entry here: without one the owner view
+  // silently shows "this module is being built" while the client view shows the real
+  // thing, which is the exact drift that test exists to catch.
+  if (module === "absence") {
+    return <AbsenceView clientSlug={client} />;
+  }
+
+  if (module === "staff-check-in") {
+    return <StaffCheckInView clientSlug={client} />;
   }
 
   if (module === "reviews") {

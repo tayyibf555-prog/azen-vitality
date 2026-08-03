@@ -9,11 +9,12 @@ import { TASK_KIND_LABEL, type Task } from "@/lib/task-queue/types";
  * cover.
  *
  * A task reaches this tab ONLY when its module carries a real Dentally patient id on
- * the target: recall, no-show and reactivation. The other four (coordinator,
- * after-hours, speed-to-lead, smile assessment) are keyed by opaque uuids with no
- * patient id at all, and matching them by patientName on a clinical record is not
- * acceptable at any confidence: the first time two patients share a name, this record
- * would show another person's work.
+ * the target: recall, no-show and reactivation always do, and an after-hours callback
+ * does whenever the caller's number was recognised. The other three (coordinator,
+ * speed-to-lead, smile assessment) are keyed by opaque uuids with no patient id at
+ * all, and matching them by patientName on a clinical record is not acceptable at any
+ * confidence: the first time two patients share a name, this record would show
+ * another person's work.
  *
  * So the list is partial and says so. A stated partial list is more useful and more
  * honest than either a name-matched full list or an empty tab.

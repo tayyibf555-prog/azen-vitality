@@ -5,6 +5,7 @@ import { getSubmission, setStatus } from "@/lib/onboarding/repository";
 import { searchPatients, type PatientRecord } from "@/lib/dentally/read";
 import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { DentallyError } from "@/lib/dentally/client";
+import { REGISTER_WRITES_OFF } from "@/lib/onboarding/register-result";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { ageFromDob } from "@/lib/patient/demographics";
 
@@ -262,13 +263,30 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // ---- THE WRITE GATE. Enforced, not merely reported.
+  //
+  // This used to read `const writeEnabled = isDentallyWriteEnabled()` and then use it
+  // as a LABEL only: the create below ran unconditionally and the response carried
+  // `dryRun: !writeEnabled`. The header comment above claimed "a real create can never
+  // happen until the write key is set", but no line of code enforced it —
+  // dentallyAgentClient()'s disabled branch defaults its base URL to
+  // https://api.dentally.co, so with DENTALLY_BASE_URL unset a genuine patient was
+  // created in the live book of ~51,000 people while the API answered `dryRun: true`
+  // and the worklist showed "Recorded in test mode".
+  //
+  // Placed AFTER auth, validation and dedupe so the answer stays honest — a submission
+  // missing a surname is still told that, and a likely duplicate is still surfaced
+  // without a write — and BEFORE dentallyAgentClient(), which is the first line that
+  // could reach Dentally. Same shape as recall/[action], reactivation/[action],
+  // coordinator/[action] and noshow/[action].
+  if (!isDentallyWriteEnabled()) {
+    return Response.json({ ok: false, error: REGISTER_WRITES_OFF }, { status: 503 });
+  }
+
   // ---- CREATE. Single write via the gated client, mirroring the co-pilot and
-  // register_patient's field mapping exactly: dentallyAgentClient() targets the
-  // dedicated write instance ONLY when writes are enabled (otherwise the default
-  // mock/pilot client, so a real create can never happen until the write key is set),
-  // and the internal site id is mapped to Dentally's own UUID. Onboarding never captures
-  // gender, so (like register_patient) it is never sent.
-  const writeEnabled = isDentallyWriteEnabled();
+  // register_patient's field mapping exactly, with the internal site id mapped to
+  // Dentally's own UUID. Onboarding never captures gender, so (like register_patient)
+  // it is never sent.
   let newId: string;
   try {
     const dentally = dentallyAgentClient();
@@ -306,16 +324,17 @@ export async function POST(request: Request): Promise<Response> {
   // No dedicated onboarding audit log exists yet; console-log the action so the
   // creation is at least traceable in server logs (who, what, which submission).
   console.log(
-    `[onboarding/register] created Dentally patient ${newId} for submission ${submissionId} (client ${client.id}, site ${resolvedSiteId}, actor ${auth?.email ?? "unknown"}, dryRun ${!writeEnabled})`,
+    `[onboarding/register] created Dentally patient ${newId} for submission ${submissionId} (client ${client.id}, site ${resolvedSiteId}, actor ${auth?.email ?? "unknown"})`,
   );
 
+  // No `dryRun` field. Past the gate above it could only ever be false, and while it
+  // existed the UI read it as permission to call a create "recorded in test mode".
   return Response.json({
     ok: true,
     created: true,
     duplicate: false,
     patientId: newId,
     status: "registered",
-    dryRun: !writeEnabled,
     ...readback,
   });
 }

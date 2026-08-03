@@ -7,6 +7,7 @@ import {
   Briefcase,
   CalendarClock,
   CalendarDays,
+  CalendarOff,
   CalendarPlus,
   CalendarRange,
   ClipboardCheck,
@@ -58,6 +59,36 @@ export interface NavItem {
 
 /** Roles that may see the owner-only modules: the practice owner and agency admins. */
 export const OWNER_ROLES: Role[] = ["agency_admin", "client_owner"];
+
+/**
+ * THE CLINICIAN ALLOW-LIST. The complete set of module slugs a `client_clinician`
+ * may see in the nav or reach by direct URL. Nothing else. Ever.
+ *
+ * WHY A SEPARATE SET RATHER THAN `roles` ARRAYS ON THE ITEMS. This nav is
+ * allow-BY-DEFAULT: `roleCanSeeItem` returns true for any item with no `roles`
+ * array, and `canRoleAccessModule` returns true for a slug it does not recognise
+ * at all. Roughly two thirds of the modules carry no `roles` array, so a fourth
+ * role added the obvious way would instantly inherit Payments, Recall,
+ * Reactivation, Conversations, the agents and the rest — the opposite of what a
+ * clinician login is for.
+ *
+ * The fix could not be "add `roles` arrays to the open items", because that edits
+ * the shared allow-lists the existing three roles depend on and cannot be proven
+ * non-widening. This set is consulted as the FIRST LINE of both predicates
+ * instead, so the existing three roles never reach the new branch and their
+ * evaluation path is byte-identical to before. `nav.clinician.test.ts` pins that
+ * with a hard-coded snapshot of all three.
+ *
+ * Start minimal and widen only on written instruction: their own diary, their
+ * patients, their holiday requests, their clocking, and the overview they land on.
+ */
+export const CLINICIAN_SLUGS = new Set<string>([
+  "", // the Overview index — where /c/[client] lands them
+  "calendar",
+  "patients",
+  "absence",
+  "staff-check-in",
+]);
 
 export interface NavGroup {
   label: string;
@@ -308,11 +339,27 @@ export const CLIENT_NAV: NavGroup[] = [
         note: "Owners and managers set staffing rules; the rota is generated automatically from opening hours and staff availability, and each staff member is texted their shifts.",
       },
       {
+        slug: "absence",
+        label: "Holiday & absence",
+        icon: CalendarOff,
+        status: "live",
+        // The PRACTICE MANAGER is the person who approves holiday, and in this
+        // platform she is a client_coordinator, so gating this on OWNER_ROLES alone
+        // would lock out its primary user. Clinicians reach it too, but through the
+        // CLINICIAN_SLUGS allow-list rather than this array (they request, they do
+        // not decide — that split is enforced in the absence rules, not here).
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "Holiday, sickness, training and unpaid leave in one place: staff request time off, the manager approves or refuses, and approved absence is taken out of the generated rota so nobody is rostered on a day they are away. Overlapping requests for the same person are surfaced before a decision, and nobody can approve their own.",
+      },
+      {
         slug: "staff-check-in",
         label: "Staff check-in",
         icon: Fingerprint,
-        status: "placeholder",
-        roles: OWNER_ROLES,
+        status: "live",
+        // Same reasoning as Holiday & absence: attendance exceptions are the
+        // practice manager's job, so the coordinator role is added alongside the
+        // owners. Clinicians clock themselves in via the CLINICIAN_SLUGS allow-list.
+        roles: [...OWNER_ROLES, "client_coordinator"],
         note: "Staff clock in and out on their own phone by tapping an NFC tag mounted at the practice. The tag proves the place (a cryptographic NTAG 424 DNA tag emits a fresh signed code on every tap, so it cannot be photographed, copied or relayed) and their login proves the person. Attendance is compared against the rota and anything unusual (off-network, well before the shift, never clocked out) is raised to the practice manager as an exception rather than blocking anyone. Deliberately NOT biometric: face and fingerprint attendance is special category data, and the ICO has enforced against exactly that use. Self-employed associates are excluded by design, since clocking them like employees carries employment-status risk for the practice.",
       },
       {
@@ -370,6 +417,11 @@ export const CLIENT_MODULE_SLUGS = CLIENT_NAV.flatMap((g) => g.items.map((i) => 
 
 /** Whether a role may see/reach a single nav item. No `roles` = open to all. */
 function roleCanSeeItem(role: Role, item: NavItem): boolean {
+  // THE CLINICIAN BRANCH IS FIRST, AND RETURNS. Deny-by-default for the one role
+  // that must not inherit the allow-by-default line below. Because it returns
+  // before anything else runs, the other three roles evaluate exactly as they did
+  // before this branch existed.
+  if (role === "client_clinician") return CLINICIAN_SLUGS.has(item.slug);
   return !item.roles || item.roles.includes(role);
 }
 
@@ -451,7 +503,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "operations",
     label: "Operations",
     icon: Briefcase,
-    slugs: ["getting-started", "rota", "staff-check-in", "compliance", "reports", "co-pilot", "controls", "settings"],
+    slugs: ["getting-started", "rota", "absence", "staff-check-in", "compliance", "reports", "co-pilot", "controls", "settings"],
   },
 ];
 
@@ -531,6 +583,11 @@ export const EXTRA_OWNER_ONLY_SLUGS = new Set<string>(["practice-brain"]);
  * owner-only when listed in EXTRA_OWNER_ONLY_SLUGS, otherwise open.
  */
 export function canRoleAccessModule(role: Role, slug: string): boolean {
+  // THE CLINICIAN BRANCH IS FIRST, AND RETURNS — see CLINICIAN_SLUGS. It has to
+  // precede the `if (!item) return true` fall-through below, which would otherwise
+  // hand an unrecognised slug straight to the clinician. The other three roles
+  // never reach this line, so nothing about their access changed.
+  if (role === "client_clinician") return CLINICIAN_SLUGS.has(slug);
   if (EXTRA_OWNER_ONLY_SLUGS.has(slug)) return OWNER_ROLES.includes(role);
   const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === slug);
   if (!item) return true; // unknown slug: not owner-restricted here (the page itself 404s)

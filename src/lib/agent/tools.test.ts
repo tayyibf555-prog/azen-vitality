@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { AGENT_TOOLS, makeDispatch } from "./tools";
+import { AGENT_TOOLS, makeDispatch, writeDisabledResult, type AgentWriteTool } from "./tools";
 
 describe("AGENT_TOOLS", () => {
   it("exposes the full appointment tool set: find, book, reschedule, cancel, escalate", () => {
@@ -76,7 +76,7 @@ describe("makeDispatch", () => {
       }),
       createAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     const out = await dispatch("find_slots", { treatment: "Invisalign" });
     // The internal id is mapped to Dentally's own site UUID before the API call,
     // and availability is queried per practitioner with datetimes (live contract).
@@ -96,7 +96,7 @@ describe("makeDispatch", () => {
       ...openDiary(),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-1" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     const out = await dispatch("book", {
       slotStart: SLOT_START,
       finishTime: SLOT_FINISH,
@@ -120,14 +120,14 @@ describe("makeDispatch", () => {
 
   it("book maps the treatment onto a valid Dentally reason enum", async () => {
     const dentally = { ...openDiary(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "a" } }) };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "checkup" });
     expect(dentally.createAppointment.mock.calls[0][0]).toMatchObject({ reason: "Exam" }); // checkup -> Exam
   });
 
   it("book REFUSES to write a slot with no practitioner (never sends an invalid payload)", async () => {
     const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn() };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     const out = await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, treatment: "Invisalign" });
     expect(dentally.createAppointment).not.toHaveBeenCalled();
     expect(JSON.parse(out).error).toBeTruthy();
@@ -135,7 +135,7 @@ describe("makeDispatch", () => {
 
   it("book derives finish_time from the treatment length when the slot omits it", async () => {
     const dentally = { ...openDiary(), createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-3" } }) };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     await dispatch("book", { slotStart: SLOT_START, practitionerId: "42", treatment: "Invisalign" });
     const payload = dentally.createAppointment.mock.calls[0][0];
     expect(typeof payload.finish_time).toBe("string");
@@ -153,7 +153,7 @@ describe("makeDispatch", () => {
         ],
       }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     const out = await dispatch("find_appointments", {});
     expect(out).toContain("appt-up");
     expect(out).not.toContain("appt-past");
@@ -172,7 +172,7 @@ describe("makeDispatch", () => {
       updateAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-9", start_time: "2026-07-01T10:00:00Z" } }),
       cancelAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     const out = await dispatch("reschedule", { appointmentId: "appt-9", newSlotStart: "2026-07-01T10:00:00Z" });
     // finish_time is derived from the appointment's own duration (30 min here).
     expect(dentally.updateAppointment).toHaveBeenCalledWith("appt-9", {
@@ -189,7 +189,7 @@ describe("makeDispatch", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [{ id: "appt-9", state: "booked" }] }),
       cancelAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-9", state: "cancelled" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context });
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: true });
     const out = await dispatch("cancel", { appointmentId: "appt-9" });
     expect(dentally.cancelAppointment).toHaveBeenCalledWith("appt-9");
     expect(out).toContain("cancelled");
@@ -204,7 +204,7 @@ describe("makeDispatch", () => {
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-2" } }),
     };
     const leadContext = { ...context, patientId: "lead:+447403097379", phone: "+447403097379", isKnownPatient: false };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: leadContext });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: leadContext, writesEnabled: true });
 
     const reg = await dispatch("register_patient", { firstName: "John", lastName: "Smith", email: "john@example.com" });
     expect(dentally.createPatient).toHaveBeenCalledWith(
@@ -217,7 +217,7 @@ describe("makeDispatch", () => {
   });
 
   it("treatment_info returns non-clinical info from the catalogue", async () => {
-    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     const out = await dispatch("treatment_info", { treatment: "how much is invisalign" });
     expect(out).toContain("Invisalign");
     expect(out).toContain("2500"); // priceFrom
@@ -225,32 +225,171 @@ describe("makeDispatch", () => {
   });
 
   it("treatment_info returns found:false for a treatment we do not list", async () => {
-    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     const out = await dispatch("treatment_info", { treatment: "spaceship repair" });
     expect(out).toContain("false");
   });
 
   it("send_onboarding_form returns the practice's public onboarding link", async () => {
-    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     const out = JSON.parse(await dispatch("send_onboarding_form", {}));
     expect(out.url).toMatch(/\/onboard\/vitality$/); // site-cc -> client "vitality"
     expect(out.error).toBeUndefined();
   });
 
   it("send_onboarding_form honours a specific form slug when given one", async () => {
-    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     const out = JSON.parse(await dispatch("send_onboarding_form", { slug: "implants" }));
     expect(out.url).toMatch(/\/onboard\/vitality\/implants$/);
   });
 
   it("escalate_to_human acknowledges without external calls", async () => {
-    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     const out = await dispatch("escalate_to_human", { reason: "clinical question" });
     expect(out).toContain("escalated");
   });
 
   it("returns an error string for an unknown tool", async () => {
-    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context });
+    const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     expect(await dispatch("nope", {})).toContain("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE AGENT'S WRITE GATE.
+//
+// Every other Dentally write in this codebase checks isDentallyWriteEnabled()
+// before it writes. These four tools were the outlier: nothing stood between the
+// model and Dentally but whichever client the caller injected — and this is the
+// one write path a language model drives. Two entry points already build them
+// (the inbound webhook and the dev harness), so a route-level check would have
+// been forgotten by the third.
+//
+// Every case below asserts BOTH halves: that Dentally is not touched, and that
+// what comes back does not read as a success. A refusal a model reads as a
+// confirmation is worse than no gate at all — the patient is then told they have
+// an appointment that does not exist.
+// ---------------------------------------------------------------------------
+describe("makeDispatch with writes disabled", () => {
+  const context = {
+    patientId: "pat-010",
+    siteId: "site-cc",
+    patientName: "Harold",
+    treatment: "Invisalign",
+    fundingType: "private" as const,
+  };
+
+  /**
+   * A fully capable client. If a write happens, it is the gate that failed.
+   *
+   * The patient's existing appointment is deliberately at a DIFFERENT time from the
+   * slot `book` is asked for. With it at the same time, `book`'s idempotency check
+   * ("you already hold an appointment at this exact time") short-circuits before
+   * createAppointment — so the write assertion below would have passed with the gate
+   * removed, pinning nothing. It still carries the id reschedule/cancel act on,
+   * which they match by id, not by time.
+   */
+  const OWNED_START = new Date(Date.parse(SLOT_START) + 86_400_000).toISOString();
+  function writableClient() {
+    return {
+      ...openDiary(),
+      getPatientAppointments: vi.fn().mockResolvedValue({
+        appointments: [
+          {
+            id: "appt-own",
+            start_time: OWNED_START,
+            finish_time: new Date(Date.parse(OWNED_START) + 30 * 60_000).toISOString(),
+            practitioner_id: "42",
+            state: "active",
+          },
+        ],
+      }),
+      createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-1" } }),
+      updateAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-own" } }),
+      cancelAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-own", state: "cancelled" } }),
+      createPatient: vi.fn().mockResolvedValue({ patient: { id: "pat-new" } }),
+    };
+  }
+
+  const calls: Array<[string, string, Record<string, unknown>]> = [
+    ["book", "createAppointment", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "Checkup" }],
+    ["reschedule", "updateAppointment", { appointmentId: "appt-own", newSlotStart: SLOT_START, newFinishTime: SLOT_FINISH }],
+    ["cancel", "cancelAppointment", { appointmentId: "appt-own" }],
+    ["register_patient", "createPatient", { firstName: "John", lastName: "Smith" }],
+  ];
+
+  for (const [tool, method, input] of calls) {
+    it(`${tool} never reaches Dentally's ${method}`, async () => {
+      const dentally = writableClient();
+      const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: false });
+      await dispatch(tool, input);
+      expect(dentally[method as keyof typeof dentally]).not.toHaveBeenCalled();
+    });
+
+    it(`${tool} returns the refusal, and nothing a model can read as success`, async () => {
+      const dispatch = makeDispatch({ dentally: writableClient() as never, context, writesEnabled: false });
+      const out = await dispatch(tool, input);
+      expect(out).toBe(writeDisabledResult(tool as AgentWriteTool));
+      const parsed = JSON.parse(out) as Record<string, unknown>;
+      expect(parsed.error).toBeTruthy();
+      // No field a model might skim for confirmation is truthy — including the id
+      // fields, which are what a model quotes back to the patient.
+      for (const flag of ["booked", "rescheduled", "cancelled", "registered", "appointmentId", "patientId"]) {
+        expect(parsed[flag]).toBeFalsy();
+      }
+    });
+  }
+
+  it("still lets the READ tools work, so the agent can still answer the patient", async () => {
+    const dentally = writableClient();
+    const dispatch = makeDispatch({ dentally: dentally as never, context, writesEnabled: false });
+    const { slots } = JSON.parse(await dispatch("find_slots", { treatment: "Checkup" })) as { slots: unknown[] };
+    expect(slots.length).toBeGreaterThan(0);
+    expect(JSON.parse(await dispatch("find_appointments", {})) as { appointments: unknown[] }).toHaveProperty("appointments");
+    expect(await dispatch("treatment_info", { treatment: "Invisalign" })).toContain("Invisalign");
+    expect(await dispatch("escalate_to_human", { reason: "writes off" })).toContain("escalated");
+  });
+
+  // register_patient sets registeredPatientId, which a later `book` in the same
+  // turn books against. A refusal that still set it would have `book` write for a
+  // patient id that was never created.
+  it("a refused register_patient does not leave a phantom patient for a later book", async () => {
+    const dentally = writableClient();
+    const leadContext = { ...context, patientId: "lead:+447403097379", phone: "+447403097379", isKnownPatient: false };
+    const dispatch = makeDispatch({ dentally: dentally as never, context: leadContext, writesEnabled: false });
+    await dispatch("register_patient", { firstName: "John", lastName: "Smith" });
+    await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "Checkup" });
+    expect(dentally.createPatient).not.toHaveBeenCalled();
+    expect(dentally.createAppointment).not.toHaveBeenCalled();
+  });
+});
+
+describe("writeDisabledResult", () => {
+  const tools: AgentWriteTool[] = ["book", "reschedule", "cancel", "register_patient"];
+
+  it("carries the NEGATIVE of each tool's own success flag", () => {
+    expect(JSON.parse(writeDisabledResult("book"))).toMatchObject({ booked: false });
+    expect(JSON.parse(writeDisabledResult("reschedule"))).toMatchObject({ rescheduled: false });
+    expect(JSON.parse(writeDisabledResult("cancel"))).toMatchObject({ cancelled: false });
+    expect(JSON.parse(writeDisabledResult("register_patient"))).toMatchObject({ registered: false });
+  });
+
+  // The model speaks next. It must hand over rather than improvise a confirmation.
+  it("tells the model to escalate to a human", () => {
+    for (const t of tools) expect(writeDisabledResult(t)).toContain("escalate_to_human");
+  });
+
+  it("states that nothing happened, in words the model can repeat", () => {
+    for (const t of tools) {
+      expect(JSON.parse(writeDisabledResult(t)).error as string).toMatch(
+        /nothing has been (booked|created)|nothing has moved|still stands|still in the diary/i,
+      );
+    }
+  });
+
+  // Project rule: nothing the agent says may name a funding regime, and this text
+  // is written to be paraphrased straight into a patient message.
+  it("names no funding regime", () => {
+    for (const t of tools) expect(writeDisabledResult(t)).not.toMatch(/\b(NHS|private|band [123])\b/i);
   });
 });

@@ -37,7 +37,9 @@ function deps(availability: unknown[], overrides: Partial<AgentContext> = {}) {
     updateAppointment: vi.fn(),
     cancelAppointment: vi.fn(),
   };
-  return { context, dentally };
+  // These tests are about how a booking is SIZED, not about the write gate, so the
+  // gate is opened explicitly. tools.test.ts holds the closed-gate cases.
+  return { context, dentally, writesEnabled: true };
 }
 
 const MIN = 60_000;

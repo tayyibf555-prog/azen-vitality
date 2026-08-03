@@ -98,6 +98,21 @@ describe("the honesty copy", () => {
     expect(EMPTY_COPY.audit).toContain("through this platform");
   });
 
+  it("phrases the Dentally clinical-notes empty as a fact about the CONNECTION", () => {
+    // "No clinical notes in Dentally" is a claim about the patient's record in
+    // another system, made on the strength of one endpoint (/v1/notes) that we
+    // read read-only and have never been able to write to. On a clinical screen
+    // that overclaim is the whole risk: a clinician reads it as "nothing has been
+    // written about this patient" rather than "nothing reached us".
+    const s = EMPTY_COPY.dentallyNotes;
+    expect(s).toBe("No clinical notes have come through from Dentally for this patient.");
+    expect(s).toContain("come through from Dentally");
+    expect(s).not.toBe("No clinical notes in Dentally.");
+    // Still a DIFFERENT sentence from the failed one, which is the older rule
+    // this must not undo: an outage must never print the empty state.
+    expect(s).not.toBe(FAILED_COPY.dentallyNotes);
+  });
+
   it("explains, on the account tab, that the three money figures need not subtract", () => {
     const s = ACCOUNT_COPY.reconciliation;
     // Names all three headline figures, so the reader knows exactly which numbers the
@@ -113,6 +128,19 @@ describe("the honesty copy", () => {
 
   it("keeps the header's medical flag neutral in wording", () => {
     expect(CANNOT_READ_COPY.medicalHistoryFlag).toBe("Medical history not read");
+  });
+
+  // The Account tab used to tell the reader that Dentally's payments endpoint
+  // "cannot be filtered to one patient". A read-only probe on 2026-08-03 returned
+  // exactly one patient's payments from ?patient_id=, and each row carried the
+  // invoices it was allocated against. Blaming the supplier for our own unbuilt
+  // read closes a question that is in fact open, so the sentence is pinned here.
+  it("does not claim Dentally's payments cannot be filtered to one patient", () => {
+    const s = CANNOT_READ_COPY.payments;
+    expect(s).not.toContain("cannot be filtered");
+    expect(s).not.toContain("whole site's payment history");
+    expect(s).toContain("not shown here yet");
+    expect(s).toContain("Dentally does return this patient's payments");
   });
 
   it("uses British English and no em-dash anywhere in the copy", () => {

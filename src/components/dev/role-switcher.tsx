@@ -7,11 +7,13 @@ import type { Role } from "@/lib/types";
 import { MOCK_USERS, useAuth } from "@/lib/auth/mock-auth";
 import { cn } from "@/lib/utils";
 
-const ORDER: Role[] = ["agency_admin", "client_owner", "client_coordinator"];
+// Most access first, least last: the clinician is the most restricted view.
+const ORDER: Role[] = ["agency_admin", "client_owner", "client_coordinator", "client_clinician"];
 const LABEL: Record<Role, string> = {
   agency_admin: "Agency admin",
   client_owner: "Practice owner",
   client_coordinator: "Coordinator",
+  client_clinician: "Clinician",
 };
 
 function destinationFor(role: Role): string {

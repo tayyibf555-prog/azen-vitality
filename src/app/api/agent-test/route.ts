@@ -56,9 +56,23 @@ export async function POST(request: Request): Promise<Response> {
     treatment: conversation.treatment,
     fundingType: conversation.fundingType,
   };
+  // THE ONE CLIENT IN THIS APP THAT IS DELIBERATELY WRITABLE OUTSIDE write.ts.
+  //
+  // This harness drives the real booking agent, so makeDispatch's book / cancel /
+  // register_patient tools call createAppointment / cancelAppointment /
+  // createPatient on it. DentallyClient now defaults to readOnly, so the false is
+  // written out loud rather than inherited: this is the intent, not an omission.
+  //
+  // TWO THINGS KEEP IT SAFE, AND NEITHER IS THIS LINE. The route 404s whenever
+  // NODE_ENV === "production" (above), and makeDispatch refuses every write tool
+  // unless isDentallyWriteEnabled(). Note what this line does NOT do: baseUrl
+  // still falls back to https://api.dentally.co when DENTALLY_BASE_URL is unset,
+  // so a dev machine with a real key and no base URL is pointed at the live book.
+  // Set DENTALLY_BASE_URL to the local mock before using this harness.
   const dentally = new DentallyClient({
     apiKey: process.env.DENTALLY_API_KEY ?? "x",
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    readOnly: false,
   });
 
   const prior = await listMessages(conversation.id);

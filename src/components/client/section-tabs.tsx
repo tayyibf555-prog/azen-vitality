@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/mock-auth";
-import { categoriesForRole } from "@/lib/nav";
+import { shellAreas, shellBase } from "@/lib/nav-shell";
 import { groupKeyForActive, isModuleActive, moduleHref } from "@/lib/sidebar-prefs";
 
 // ---------------------------------------------------------------------------
@@ -24,11 +24,15 @@ import { groupKeyForActive, isModuleActive, moduleHref } from "@/lib/sidebar-pre
 // sharing it with thirty links. And the bar states where you are, which the old
 // column could only do with a highlight some way down a scrolled list.
 //
-// The items come from categoriesForRole, which already drops anything the role
-// may not see AND anything the owner has switched off, so a system that is off
-// simply is not in the bar, and switching it on puts it there with no further
-// wiring. That is the whole reason this reads from the same source the rail does
-// rather than keeping a list of its own.
+// The items come from shellAreas (@/lib/nav-shell), which already drops anything
+// the role may not see AND anything the owner has switched off, so a system that
+// is off simply is not in the bar, and switching it on puts it there with no
+// further wiring. That is the whole reason this reads from the same source the
+// rail does rather than keeping a list of its own.
+//
+// IT SERVES BOTH TREES. /owner used to render a sidebar of its own and no bar at
+// all; both trees now render this one, and shellAreas decides from the pathname
+// which entries the tree carries.
 //
 // AN AREA WITH ONE MODULE RENDERS NOTHING. A bar carrying a single tab that is
 // always selected is decoration, and it would cost 40px on every page in that
@@ -46,8 +50,8 @@ export interface SectionTabItem {
 /**
  * The bar for whichever area the current page belongs to.
  *
- * Resolved from the SAME categoriesForRole call the rail uses, so the two can
- * never disagree about what is in an area or what has been switched off. Reading
+ * Resolved from the SAME shellAreas call the rail uses, so the two can never
+ * disagree about what is in an area or what has been switched off. Reading
  * the role from useAuth matches the sidebar's existing behaviour; the real gate
  * is server side in guardPage and requireModuleAccess, and this only decides what
  * is drawn.
@@ -56,13 +60,17 @@ export function ClientSectionBar({ disabledSlugs = [] }: { disabledSlugs?: strin
   const params = useParams<{ client: string }>();
   const pathname = usePathname();
   const { user } = useAuth();
-  const isOwner = pathname?.startsWith("/owner") ?? false;
-  const base = `${isOwner ? "/owner" : "/c"}/${params.client}`;
+  // Both the tree and its areas come from the SAME pure rule the rail uses
+  // (@/lib/nav-shell), rather than an inline prefix test and a second
+  // categoriesForRole call. The owner shell carries an entry the staff shell does
+  // not (the Practice brain), and the rail only draws AREAS: if this bar computed
+  // its own list, that module would have no clickable entry on desktop at all.
+  const base = shellBase(pathname, params.client);
 
   const disabled = useMemo(() => new Set(disabledSlugs), [disabledSlugs]);
   const areas = useMemo(
-    () => categoriesForRole(user?.role ?? null, disabled),
-    [user?.role, disabled],
+    () => shellAreas({ pathname, role: user?.role ?? null, disabledSlugs: disabled }),
+    [pathname, user?.role, disabled],
   );
 
   const activeKey = groupKeyForActive(areas, (slug) => isModuleActive(pathname, base, slug));

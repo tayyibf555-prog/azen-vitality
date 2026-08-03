@@ -4,6 +4,9 @@ import type { AuthedUser } from "@/lib/auth/session";
 import { generateShifts, upcomingWeekStarts } from "@/lib/rota/generate";
 import { londonDayKey } from "@/lib/time/london";
 import { listStaff, getConfig, insertShifts } from "@/lib/rota/repository";
+import { listApprovedAbsence } from "@/lib/absence/repository";
+import { addDayKey } from "@/lib/absence/rules";
+import type { Absence } from "@/lib/absence/types";
 import type { OpeningHours } from "@/lib/types";
 import type { RotaSite } from "@/lib/rota/types";
 
@@ -67,7 +70,32 @@ export async function POST(request: Request): Promise<Response> {
   const now = new Date();
   const weekStartDates = upcomingWeekStarts(now, weeks);
 
-  const shifts = generateShifts({ staff, sites, config, weekStartDates, today: londonDayKey(now) });
+  // Approved absence over exactly the window we are generating, so nobody is
+  // rostered on a day they are away.
+  //
+  // Read defensively. Migration 0067 (staff_absence) is written but not yet applied,
+  // so on an un-migrated database this read fails. That must NOT take the rota down:
+  // absence removing people is an improvement to generation, not a precondition for
+  // it. On failure we generate exactly as we did before absence existed.
+  let absences: Absence[] = [];
+  if (weekStartDates.length > 0) {
+    const from = weekStartDates[0];
+    const to = addDayKey(weekStartDates[weekStartDates.length - 1], 6);
+    try {
+      absences = await listApprovedAbsence(client.id, from, to);
+    } catch {
+      absences = [];
+    }
+  }
+
+  const shifts = generateShifts({
+    staff,
+    sites,
+    config,
+    weekStartDates,
+    today: londonDayKey(now),
+    absences,
+  });
   const inserted = await insertShifts(shifts);
 
   return Response.json({ ok: true, weeks, generated: shifts.length, inserted, shifts });

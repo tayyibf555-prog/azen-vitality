@@ -12,7 +12,7 @@ import type { NoteRecord, ReadHealth } from "@/lib/dentally/read";
  * 1. PRACTICE NOTES are ours (patient_note). Typed or dictated, written here, and
  *    from stage 2 pinnable and colourable.
  * 2. CLINICAL NOTES (DENTALLY) are read-only and are never copied into our table.
- *    DentallyClient has no create or update method for /v1/patient_notes at all, so a
+ *    DentallyClient has no create or update method for /v1/notes at all, so a
  *    Dentally note can never be edited, coloured or pinned here.
  *
  * They must stay visibly different without reading a label, or staff will try to pin
@@ -21,10 +21,13 @@ import type { NoteRecord, ReadHealth } from "@/lib/dentally/read";
  * CONTROLS AT ALL. That difference is structural rather than a label, which is the
  * point: nobody has to read anything to know which notes they can act on.
  *
- * The empty and failed sentences are DIFFERENT sentences. "No clinical notes in
- * Dentally" is a claim about the patient; "we could not read them just now" is a claim
- * about the connection. Before the read-health flags existed, an outage rendered as
- * the first, which on a clinical record is a lie.
+ * The empty and failed sentences are DIFFERENT sentences, and NEITHER of them is a
+ * claim about the patient. "No clinical notes have come through from Dentally" is a
+ * claim about what this connection returned; "we could not read them just now" is a
+ * claim about the connection failing. Before the read-health flags existed an outage
+ * rendered as the empty state, which on a clinical record is a lie; and the empty
+ * state itself used to read "No clinical notes in Dentally", which asserts something
+ * about another system's record that one read-only endpoint cannot establish.
  */
 export function TabNotes({
   siteId,

@@ -19,9 +19,12 @@
 //   claim's lifecycle — and it must be LABELLED as exactly that on screen, never
 //   dressed up as clinical "completed vs pending". The renderer carries that
 //   caveat. The two-axis question ("band ones that are also under a band-one
-//   treatment CATEGORY") needs `nhs_treatment_cat`, which only lives on the
-//   per-patient, uncalibrated treatment_plan_items source — so it is not
-//   answerable practice-wide today, and the report says so rather than guessing.
+//   treatment CATEGORY") needs `nhs_treatment_cat`, which lives on
+//   treatment_plan_items. That endpoint IS listable practice-wide (989,292 rows,
+//   read-only probe 2026-08-03) and does carry nhs_treatment_cat — it is simply
+//   not read by this report, and the claim→plan-item join is not calibrated
+//   against live data. So the report says it is not wired yet, not that Dentally
+//   cannot answer it.
 //
 // UDA figures come from the CLAIM'S OWN expected_uda / awarded_uda (parsed from
 // the wire string to whole hundredths), never derived from the band. The band→UDA

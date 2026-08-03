@@ -46,6 +46,8 @@ treatment_plan        id · nickname · completed · completed_at · start_date 
                                 uda_band · nhs_treatment_cat · nomenclature · notes
 ```
 
+**Both resources also list practice-wide, live-verified 2026-08-03.** `GET /v1/treatment_plan_items` returns 989,292 rows and `GET /v1/treatment_plans` 85,341, with no patient scope required; plan items also carry `invoice_id`. This panel is deliberately per-patient, so nothing here changes — it is recorded because elsewhere the repo claimed these were per-patient only, and the reports work needs to know they are not.
+
 Confirmed mappings:
 - **`position` is the card number.** `position: 0` renders as "Appt. 1". Do not invent numbering.
 - **The `688300` chip is the treatment_plan id.** A live sample returned `688308`, same range.

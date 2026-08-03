@@ -38,8 +38,20 @@ describe("task -> patient attribution", () => {
     }
   });
 
-  it("keys exactly the three modules whose targets carry a patient id", () => {
+  it("keys exactly the four modules whose targets carry a patient id", () => {
     const keyed = ASSIGNMENTS.filter((v) => v !== "null");
-    expect(keyed).toHaveLength(3); // recall, reactivation, no-show
+    // recall, reactivation, no-show and after-hours. The first three always carry
+    // a dentallyPatientId; an after-hours capture carries one whenever the caller
+    // was identified by phone number, and null when they were not.
+    expect(keyed).toHaveLength(4);
+  });
+
+  it("surfaces the after-hours capture's own dentallyPatientId, so an identified caller's callback reaches their record", () => {
+    // The capture row HAS carried this id since the module shipped: both webhooks
+    // resolve the caller through identifyByPhone and store it, and the repository
+    // maps it back. The generator was dropping it on the floor, which unlinked
+    // every callback task for a patient we had already recognised.
+    const afterHours = /function afterHoursCandidates[\s\S]*?patientId:\s*([^,\n]+)/.exec(SRC);
+    expect(afterHours?.[1].trim()).toBe("c.dentallyPatientId");
   });
 });

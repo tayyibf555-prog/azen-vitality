@@ -126,6 +126,31 @@ describe("DentallyClient", () => {
     });
   });
 
+  // /v1/patient_notes DOES NOT EXIST on real Dentally. It was invented here, it 404s,
+  // and the Clinical notes tab therefore failed on every live patient record while the
+  // mock served the invented path and kept dev green. The real resource is /v1/notes:
+  // a read-only GET on 2026-08-03 answered 200 with {"notes":[],"meta":{...}}, where
+  // the old path answered 404. This pins the path so it cannot drift back.
+  describe("getPatientNotes path", () => {
+    it("calls /v1/notes, never the /v1/patient_notes path that 404s live", async () => {
+      const fetchMock = mockFetch({ notes: [] });
+      const c = new DentallyClient({ apiKey: "k", baseUrl: "https://x", fetchImpl: fetchMock });
+      await c.getPatientNotes("56194", 2, 50);
+      const url = new URL(String(fetchMock.mock.calls[0][0]));
+      expect(url.pathname).toBe("/v1/notes");
+      expect(url.pathname).not.toContain("patient_notes");
+      expect(url.searchParams.get("patient_id")).toBe("56194");
+      expect(url.searchParams.get("page")).toBe("2");
+      expect(url.searchParams.get("per_page")).toBe("50");
+    });
+
+    it("returns the envelope RAW, so the shape reader can refuse one it cannot read", async () => {
+      const fetchMock = mockFetch({ notes: [{ id: 1 }], meta: { total: 1 } });
+      const c = new DentallyClient({ apiKey: "k", baseUrl: "https://x", fetchImpl: fetchMock });
+      expect(await c.getPatientNotes("56194")).toEqual({ notes: [{ id: 1 }], meta: { total: 1 } });
+    });
+  });
+
   describe("getPatientAppointments cancelled flag", () => {
     it("omits cancelled by default (recall must not see cancelled future bookings)", async () => {
       const fetchMock = mockFetch({ appointments: [] });
@@ -184,13 +209,39 @@ describe("DentallyClient", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    // The mutation guard. Without readOnly the same call must reach fetch, or the
-    // tests above would pass against a client that simply never writes at all.
-    it("does NOT refuse when readOnly is unset", async () => {
+    // The mutation guard. With readOnly: false the same call must reach fetch, or
+    // the tests above would pass against a client that simply never writes at all.
+    //
+    // It used to construct with readOnly UNSET, which stopped being the opposite
+    // case the moment the default flipped to read-only. The assertion is unchanged;
+    // only the way a writable client is asked for is.
+    it("does NOT refuse when readOnly is false", async () => {
       const fetchMock = mockFetch({ appointment: { id: "a1" } });
-      const c = new DentallyClient({ apiKey: "k", baseUrl: "https://x", fetchImpl: fetchMock });
+      const c = new DentallyClient({ apiKey: "k", baseUrl: "https://x", fetchImpl: fetchMock, readOnly: false });
       await c.cancelAppointment("a1");
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // THE DEFAULT. Nine of the eleven clients in this app were built writable by
+    // omission, five of them holding the umbrella-scoped production key. Omitting
+    // the flag must now be the SAFE spelling, not the dangerous one — a caller has
+    // to ask for a writable client in writing.
+    describe("defaults to read-only when readOnly is omitted", () => {
+      for (const [name, call] of writes) {
+        it(`refuses ${name} without touching the network`, async () => {
+          const fetchMock = mockFetch({});
+          const c = new DentallyClient({ apiKey: "k", baseUrl: "https://x", fetchImpl: fetchMock });
+          await expect(call(c)).rejects.toThrow(/read-only/i);
+          expect(fetchMock).not.toHaveBeenCalled();
+        });
+      }
+
+      it("still allows reads", async () => {
+        const fetchMock = mockFetch({ sites: [] });
+        const c = new DentallyClient({ apiKey: "k", baseUrl: "https://x", fetchImpl: fetchMock });
+        await c.listSites();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

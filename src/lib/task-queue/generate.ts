@@ -5,6 +5,8 @@ import { listTargets as listReactivationTargets } from "@/lib/reactivation/repos
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { listTargets as listNoshowTargets } from "@/lib/noshow/repository";
 import { listCaptures } from "@/lib/after-hours/repository";
+import { afterHoursTaskCopy, captureTiming } from "@/lib/after-hours/call-outcome";
+import { getSiteById } from "@/lib/after-hours/hours";
 import { listResponses } from "@/lib/smile-assessment/repository";
 import { londonDateTimeLabel } from "@/lib/time/london";
 import { computePriority, applyOverlay } from "./logic";
@@ -132,21 +134,30 @@ async function noshowCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]>
 
 async function afterHoursCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
   const captures = await listCaptures({ siteIds: ctx.siteIds, statuses: ["new"] });
-  return captures.map((c) => ({
-    key: `after-hours:${c.id}:callback`,
-    module: "after-hours" as const,
-    kind: "after_hours_callback" as const,
-    title: `Call back ${c.patientName}`,
-    subtitle: c.body ? c.body.slice(0, 70) : "Tried to reach the practice out of hours",
-    patientName: c.patientName,
-    // An after-hours capture is an inbound contact, often from someone not yet on the
-    // book; the row carries no Dentally patient id. Null, never a name match.
-    patientId: null,
-    siteId: c.siteId,
-    priority: computePriority("after_hours_callback"),
-    dueHint: "out of hours",
-    href: `/c/${ctx.clientSlug}/after-hours`,
-  }));
+  return captures.map((c) => {
+    // Whether this call landed out of hours or as daytime overflow is DERIVED here
+    // rather than stored: capturedAt plus the site's opening hours already answer
+    // it, and a new column would leave every existing row unlabelled. Putting the
+    // out-of-hours wording on a 2pm overflow call misleads whoever picks it up.
+    const copy = afterHoursTaskCopy(captureTiming(c.capturedAt, getSiteById(c.siteId)));
+    return {
+      key: `after-hours:${c.id}:callback`,
+      module: "after-hours" as const,
+      kind: "after_hours_callback" as const,
+      title: `Call back ${c.patientName}`,
+      subtitle: c.body ? c.body.slice(0, 70) : copy.subtitle,
+      patientName: c.patientName,
+      // From the capture's OWN id field: the voice and inbound webhooks resolve the
+      // caller through identifyByPhone and store the Dentally id on the row, so an
+      // identified caller's callback belongs on their record. Null for an unknown
+      // number. Never a name match.
+      patientId: c.dentallyPatientId,
+      siteId: c.siteId,
+      priority: computePriority("after_hours_callback"),
+      dueHint: copy.dueHint,
+      href: `/c/${ctx.clientSlug}/after-hours`,
+    };
+  });
 }
 
 async function smileAssessmentCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {

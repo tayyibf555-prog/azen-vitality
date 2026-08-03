@@ -4,11 +4,19 @@
 
 import { describe, expect, it } from "vitest";
 
-import { MOCK_SITE_IDS, allNhsClaims, allPayments } from "@/app/api/mock-dentally/_finance-fixtures";
+import {
+  MOCK_SITE_IDS,
+  allAllocationInvoices,
+  allNhsClaims,
+  allPayments,
+} from "@/app/api/mock-dentally/_finance-fixtures";
 import { computeTakingsStrip } from "@/lib/dashboard/takings";
 import { computeUdaProgress, computeUdaTotals } from "@/lib/dashboard/uda";
 import { normaliseNhsClaims, normalisePayments } from "@/lib/dashboard/normalise";
 import { londonToday, periodWindow, shiftDayKey } from "@/lib/dashboard/period";
+import { invoiceFromEnvelope } from "@/lib/dentally/invoice-shape";
+import { normaliseAllocationPayments } from "@/lib/reports/payment-explanations";
+import { computeAllocationReport } from "@/lib/reports/allocation-report";
 
 const NOW = new Date();
 const TODAY = londonToday(NOW);
@@ -163,5 +171,92 @@ describe("the periods the mock has to satisfy", () => {
     // day after it when the window opens on a Sunday.
     expect(oldest >= window.from).toBe(true);
     expect(oldest <= (shiftDayKey(window.from, 1) ?? window.from)).toBe(true);
+  });
+});
+
+// ===========================================================================
+// The allocation fixtures: explanations[] and the invoices they name.
+//
+// A mock that only produced tidy, fully-explained, single-clinician payments
+// would let a report that only works on tidy data reach a practice. These prove
+// the messy cases are present AND that the real chain reconciles over them.
+// ===========================================================================
+
+describe("mock payment allocations", () => {
+  const payments = allPayments();
+  const invoices = allAllocationInvoices();
+
+  it("carries the live explanation keys, with money as strings", () => {
+    const legs = payments.flatMap((p) => p.explanations);
+    expect(legs.length).toBeGreaterThan(500);
+    for (const leg of legs.slice(0, 200)) {
+      expect(typeof leg.amount).toBe("string");
+      expect(leg).toHaveProperty("invoice_id");
+      expect(leg).toHaveProperty("invoice_reference");
+      expect(leg).toHaveProperty("payment_id");
+      expect(leg).toHaveProperty("comments");
+      expect(leg).toHaveProperty("user_id");
+    }
+  });
+
+  it("is as messy as production: unexplained, part-explained and unlinked payments all appear", () => {
+    const live = payments.filter((p) => !p.deleted && p.amount !== "");
+    expect(live.some((p) => p.explanations.length === 0 && !p.fully_explained)).toBe(true);
+    expect(live.some((p) => p.status === "partially_explained")).toBe(true);
+    expect(live.some((p) => p.explanations.some((e) => e.invoice_id === null))).toBe(true);
+    // Roughly the live proportion: 83.4% fully explained.
+    const explained = live.filter((p) => p.fully_explained).length / live.length;
+    expect(explained).toBeGreaterThan(0.75);
+    expect(explained).toBeGreaterThan(0.75);
+    expect(explained).toBeLessThan(0.92);
+  });
+
+  it("builds shared invoices and no-clinician invoices, the two cases that must not be attributed", () => {
+    const all = [...invoices.values()];
+    expect(all.length).toBeGreaterThan(500);
+    const distinctPractitioners = (inv: (typeof all)[number]) =>
+      new Set(inv.invoice_items.map((i) => i.practitioner_id).filter((p) => p !== null)).size;
+    expect(all.some((inv) => distinctPractitioners(inv) > 1)).toBe(true);
+    expect(all.some((inv) => distinctPractitioners(inv) === 0)).toBe(true);
+    // A part-paid shared invoice: more than one clinician AND still owing.
+    expect(all.some((inv) => distinctPractitioners(inv) > 1 && Number(inv.amount_outstanding) > 0)).toBe(true);
+  });
+
+  it("keeps the live invariant Σ line total_price == invoice.amount, and nhs_amount null", () => {
+    for (const inv of [...invoices.values()].slice(0, 400)) {
+      const lines = inv.invoice_items.reduce((a, i) => a + Math.round(Number(i.total_price) * 100), 0);
+      expect(lines).toBe(Math.round(Number(inv.amount) * 100));
+      expect(inv.nhs_amount).toBeNull();
+      for (const item of inv.invoice_items) expect(item.nhs_charge).toBe(0);
+    }
+  });
+
+  it("survives the REAL chain, and the money reconciles with nothing vanishing", () => {
+    const { rows } = normaliseAllocationPayments(payments);
+    const read = new Map<string, NonNullable<ReturnType<typeof invoiceFromEnvelope>>>();
+    for (const [id, inv] of invoices) {
+      const parsed = invoiceFromEnvelope({ invoice: inv });
+      expect(parsed).not.toBeNull();
+      read.set(id, parsed!);
+    }
+    const window = periodWindow("last30", NOW);
+    const report = computeAllocationReport({ payments: rows, invoices: read, window });
+
+    expect(report.balanced).toBe(true);
+    expect(report.totalReceivedPence).toBeGreaterThan(0);
+    expect(report.attributedPence).toBeGreaterThan(0);
+    // Every honesty bucket is exercised by this fixture, not just the happy path.
+    expect(report.unallocatedInDentallyPence).toBeGreaterThan(0);
+    expect(report.explainedNoInvoiceLinkPence).toBeGreaterThan(0);
+    expect(report.sharedInvoiceUndeterminedPence).toBeGreaterThan(0);
+    expect(report.noAttributableLinesPence).toBeGreaterThan(0);
+    expect(report.basisCounts.pro_rata_full_settlement).toBeGreaterThan(0);
+    expect(report.basisCounts.sole_practitioner).toBeGreaterThan(0);
+    // The front-desk reality: the person who took the money is sometimes not the
+    // clinician credited. Measured live at 17/242 legs, and it must be visible
+    // in the mock too or the count on screen is never exercised.
+    expect(report.paymentTakerDifferedCount).toBeGreaterThan(0);
+    // And nothing is ever payable: `closed` is unreadable on the real API.
+    expect(report.anyPayableConfirmed).toBe(false);
   });
 });

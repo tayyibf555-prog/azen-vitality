@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { generateShifts, upcomingWeekStarts, type GenerateInput } from "./generate";
 import type { OpeningHours } from "@/lib/types";
+import type { Absence } from "@/lib/absence/types";
 import type { RotaConfig, RotaSite, RotaStaff } from "./types";
 
 const ALL_DAYS: OpeningHours = {
@@ -238,5 +239,141 @@ describe("upcomingWeekStarts", () => {
     const now = new Date("2026-07-08T12:00:00Z");
     expect(upcomingWeekStarts(now, 0)).toEqual([]);
     expect(upcomingWeekStarts(now, -3)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The absence seam. `generateShifts` takes absences as pure input, so "holiday
+// takes you off the rota" is provable here rather than only against a live table.
+// ---------------------------------------------------------------------------
+
+function absence(over: Partial<Absence> & Pick<Absence, "id" | "staffId" | "startDate" | "endDate">): Absence {
+  return {
+    clientId: "vitality",
+    siteId: null,
+    kind: "holiday",
+    status: "approved",
+    note: null,
+    requestedBy: null,
+    decidedBy: null,
+    decidedAt: null,
+    decisionNote: null,
+    ...over,
+  };
+}
+
+describe("generateShifts absence seam", () => {
+  /** The dates the named person was rostered, in order. */
+  function datesFor(shifts: ReturnType<typeof generateShifts>, staffId: string): string[] {
+    return shifts.filter((s) => s.staffId === staffId).map((s) => s.shiftDate).sort();
+  }
+
+  const TWO_DENTISTS: RotaStaff[] = [
+    staff({ id: "d1", role: "dentist" }),
+    staff({ id: "d2", role: "dentist" }),
+  ];
+  const ONE_DENTIST_CONFIG: RotaConfig = {
+    rolesNeeded: { dentist: 1 },
+    notifyLeadDays: 7,
+    generateWeeksAhead: 1,
+  };
+
+  const base: GenerateInput = {
+    staff: TWO_DENTISTS,
+    sites: ONE_SITE,
+    config: ONE_DENTIST_CONFIG,
+    weekStartDates: WEEK,
+  };
+
+  it("behaves exactly as before when no absences are supplied", () => {
+    const without = generateShifts(base);
+    const withEmpty = generateShifts({ ...base, absences: [] });
+    expect(withEmpty).toEqual(without);
+    expect(without.length).toBeGreaterThan(0);
+  });
+
+  it("does not roster someone on a day their APPROVED absence covers", () => {
+    // Wed 8 to Fri 10 July off.
+    const shifts = generateShifts({
+      ...base,
+      absences: [absence({ id: "a1", staffId: "d1", startDate: "2026-07-08", endDate: "2026-07-10" })],
+    });
+    expect(datesFor(shifts, "d1")).not.toContain("2026-07-08");
+    expect(datesFor(shifts, "d1")).not.toContain("2026-07-09");
+    expect(datesFor(shifts, "d1")).not.toContain("2026-07-10");
+  });
+
+  it("covers the freed slot with the other dentist rather than leaving the day empty", () => {
+    const shifts = generateShifts({
+      ...base,
+      absences: [absence({ id: "a1", staffId: "d1", startDate: "2026-07-06", endDate: "2026-07-11" })],
+    });
+    // Every open day (Mon..Sat) is still covered, all of it by d2.
+    expect(datesFor(shifts, "d2")).toEqual([
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-11",
+    ]);
+    expect(datesFor(shifts, "d1")).toEqual([]);
+  });
+
+  it("leaves the slot unfilled when everyone eligible is away, rather than rostering an absent person", () => {
+    const away = ["d1", "d2"].map((id) =>
+      absence({ id: `a-${id}`, staffId: id, startDate: "2026-07-08", endDate: "2026-07-08" }),
+    );
+    const shifts = generateShifts({ ...base, absences: away });
+    expect(shifts.filter((s) => s.shiftDate === "2026-07-08")).toEqual([]);
+    // The surrounding days are untouched.
+    expect(shifts.some((s) => s.shiftDate === "2026-07-07")).toBe(true);
+    expect(shifts.some((s) => s.shiftDate === "2026-07-09")).toBe(true);
+  });
+
+  it("a PENDING request does not take anyone off the rota", () => {
+    const withPending = generateShifts({
+      ...base,
+      absences: [
+        absence({
+          id: "p1",
+          staffId: "d1",
+          startDate: "2026-07-06",
+          endDate: "2026-07-11",
+          status: "pending",
+        }),
+      ],
+    });
+    expect(withPending).toEqual(generateShifts(base));
+  });
+
+  it("a refused or cancelled absence does not take anyone off the rota", () => {
+    for (const status of ["refused", "cancelled"] as const) {
+      const shifts = generateShifts({
+        ...base,
+        absences: [
+          absence({ id: "x", staffId: "d1", startDate: "2026-07-06", endDate: "2026-07-11", status }),
+        ],
+      });
+      expect(shifts).toEqual(generateShifts(base));
+    }
+  });
+
+  it("only the absent person is affected", () => {
+    const shifts = generateShifts({
+      ...base,
+      absences: [absence({ id: "a1", staffId: "d1", startDate: "2026-07-06", endDate: "2026-07-11" })],
+    });
+    // d2 keeps working; an absence for d1 must not remove d2 from anything.
+    expect(datesFor(shifts, "d2").length).toBe(6);
+  });
+
+  it("is inclusive of both bounds: the first and last day of the absence are both skipped", () => {
+    const shifts = generateShifts({
+      ...base,
+      staff: [staff({ id: "d1", role: "dentist" })],
+      absences: [absence({ id: "a1", staffId: "d1", startDate: "2026-07-07", endDate: "2026-07-09" })],
+    });
+    expect(datesFor(shifts, "d1")).toEqual(["2026-07-06", "2026-07-10", "2026-07-11"]);
   });
 });

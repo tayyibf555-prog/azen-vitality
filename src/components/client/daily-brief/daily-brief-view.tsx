@@ -42,6 +42,10 @@ const ROLE_GREETING: Record<Role, string> = {
   agency_admin: "Here is the morning brief across the network.",
   client_owner: "Here is the morning brief across your sites.",
   client_coordinator: "Here is your morning brief. Start at the top.",
+  // Present for exhaustiveness. A clinician cannot currently reach this page at
+  // all (daily-brief is not in CLINICIAN_SLUGS), so this line is a safe default
+  // rather than a decision that the brief is part of their view.
+  client_clinician: "Here is your morning brief for today's list.",
 };
 
 function longDate(now: Date): string {

@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { DentallyClient } from "./client";
 import { normaliseAppointmentState } from "./appointment-state";
+import { notesFromEnvelope, toNoteRecords, type NoteRecord } from "./notes-shape";
 import { dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 import { normaliseGender, type Gender } from "@/lib/patient/demographics";
 import { readPlanId } from "@/lib/calendar/funding";
@@ -788,12 +789,9 @@ export interface PlanRecord {
   acceptedAt: string | null;
 }
 
-export interface NoteRecord {
-  id: string;
-  body: string;
-  author: string;
-  createdAt: string;
-}
+/** Defined with the /v1/notes shape rules it belongs to, and re-exported so every
+ *  existing `import type { NoteRecord } from "@/lib/dentally/read"` still works. */
+export type { NoteRecord };
 
 /**
  * Whether each of the four per-patient Dentally reads actually succeeded.
@@ -938,21 +936,19 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   // it was a single unpaged call: a patient of fifteen years with 200 clinical notes
   // rendered the most recent page as if it were the complete history, with no count
   // and no truncation marker.
+  //
+  // The path is /v1/notes. It used to be /v1/patient_notes, which does not exist on
+  // real Dentally, so this read 404'd on every live patient and the tab told every
+  // clinician "we could not read Dentally's clinical notes just now" — forever. Both
+  // the envelope reader and the row mapper live in ./notes-shape and THROW on a shape
+  // they do not recognise, which lands in the catch below as health.notes = "failed".
+  // That is deliberate: for this stream, "we could not read it" is the only honest
+  // thing to say about a response we did not understand.
   const notesP = pageAll(
-    (page) => client.getPatientNotes(patientId, page, PER_PAGE).then((res) => res.patient_notes ?? []),
+    (page) => client.getPatientNotes(patientId, page, PER_PAGE).then(notesFromEnvelope),
     10,
   )
-    .then((rows) =>
-      rows.map((n) => {
-        const r = n as Record<string, unknown>;
-        return {
-          id: String(r.id ?? ""),
-          body: str(r.body) ?? "",
-          author: str(r.author) ?? "Team",
-          createdAt: str(r.created_at) ?? "",
-        };
-      }),
-    )
+    .then(toNoteRecords)
     .catch(() => {
       health.notes = "failed";
       return [] as NoteRecord[];

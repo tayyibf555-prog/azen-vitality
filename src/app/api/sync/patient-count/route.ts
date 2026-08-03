@@ -66,6 +66,10 @@ export async function POST(request: Request) {
     const client = new DentallyClient({
       apiKey,
       baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+      // This sync only READS (listPatients). Arms the write latch so the key it
+      // carries — which is NOT read-only despite its name, see client.ts
+      // assertWritable — cannot issue a write from here.
+      readOnly: true,
     });
     const siteIds = SITES.filter((s) => s.clientId === "vitality").map((s) => s.id);
     // Sites in PARALLEL (3 concurrent pagers): wall-clock is the largest site, and

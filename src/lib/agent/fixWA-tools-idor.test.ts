@@ -29,7 +29,7 @@ function dentallyWithOwn(ownId: string) {
 describe("IDOR: reschedule enforces ownership server-side", () => {
   it("refuses a FOREIGN appointmentId and never calls updateAppointment", async () => {
     const dentally = dentallyWithOwn("appt-MINE");
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX, writesEnabled: true });
     const out = await dispatch("reschedule", {
       appointmentId: "appt-OTHER-PATIENT",
       newSlotStart: "2026-07-01T10:00:00Z",
@@ -43,7 +43,7 @@ describe("IDOR: reschedule enforces ownership server-side", () => {
 
   it("still allows the patient's OWN appointment", async () => {
     const dentally = dentallyWithOwn("appt-MINE");
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX, writesEnabled: true });
     const out = await dispatch("reschedule", {
       appointmentId: "appt-MINE",
       newSlotStart: "2026-07-01T10:00:00Z",
@@ -61,7 +61,7 @@ describe("IDOR: reschedule enforces ownership server-side", () => {
 describe("IDOR: cancel enforces ownership server-side", () => {
   it("refuses a FOREIGN appointmentId and never calls cancelAppointment", async () => {
     const dentally = dentallyWithOwn("appt-MINE");
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX, writesEnabled: true });
     const out = await dispatch("cancel", { appointmentId: "appt-OTHER" });
     expect(out).toContain("could not find that appointment");
     expect(dentally.getPatientAppointments).toHaveBeenCalledWith("pat-010");
@@ -70,7 +70,7 @@ describe("IDOR: cancel enforces ownership server-side", () => {
 
   it("still allows cancelling the patient's OWN appointment", async () => {
     const dentally = dentallyWithOwn("appt-MINE");
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CTX, writesEnabled: true });
     const out = await dispatch("cancel", { appointmentId: "appt-MINE" });
     expect(out).toContain("cancelled");
     expect(dentally.cancelAppointment).toHaveBeenCalledWith("appt-MINE");

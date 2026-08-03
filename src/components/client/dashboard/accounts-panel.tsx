@@ -25,12 +25,13 @@ import { PanelTitle, Unavailable } from "./parts";
 
 export function AccountsPanelView({
   panel,
-  clientSlug,
+  basePath,
   caveats,
   onOpenCaveat,
 }: {
   panel: Panel;
-  clientSlug: string;
+  /** "/c/<client>" or "/owner/<client>": the tree this dashboard is rendered in. */
+  basePath: string;
   caveats: Caveat[];
   onOpenCaveat: (id: string) => void;
 }) {
@@ -81,7 +82,7 @@ export function AccountsPanelView({
               <PatientLink
                 patientId={account.patientId}
                 siteId={account.siteId}
-                basePath={`/c/${clientSlug}`}
+                basePath={basePath}
                 patientName={account.patientName ?? undefined}
                 className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-blue-deep underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25"
               >

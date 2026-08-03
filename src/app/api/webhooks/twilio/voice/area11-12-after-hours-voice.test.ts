@@ -20,10 +20,13 @@ let openCapture = false;
 const hasOpenCaptureFrom = vi.fn(async (..._a: unknown[]) => openCapture);
 
 // The routes under test consult the kill switch on every send path (fail-closed
-// once messaging is live); these tests exercise behaviour with everything ON.
+// once messaging is live); these tests default to everything ON, and flip
+// `systemOn` where the switch itself is what is under test.
+let systemOn = true;
+const systemEnabledForSend = vi.fn(async (..._a: unknown[]) => systemOn);
 vi.mock("@/lib/systems/repository", () => ({
   isSystemEnabled: async () => true,
-  isSystemEnabledForSend: async () => true,
+  isSystemEnabledForSend: (...a: unknown[]) => systemEnabledForSend(...a),
   getDisabledSlugs: async () => new Set<string>(),
   getDisabledSlugsForSend: async () => new Set<string>(),
 }));
@@ -99,6 +102,7 @@ beforeEach(() => {
   outside = true;
   openCapture = false;
   suppressed = false;
+  systemOn = true;
   identity = null;
   openLead = null;
   claimWins = true;
@@ -106,16 +110,30 @@ beforeEach(() => {
 });
 
 describe("after-hours voice — capture without loss", () => {
-  it("logs a missed call even inside opening hours (overflow), no follow-up SMS", async () => {
+  it("logs a missed call inside opening hours (overflow) and texts a callback", async () => {
     outside = false;
     const res = await POST(callFrom("+447700900123"));
     const body = await res.text();
 
     expect(insertCapture).toHaveBeenCalledTimes(1);
-    expect(sendMessage).not.toHaveBeenCalled(); // no after-hours text inside hours
-    expect(body).toContain("please hold");
+    // An in-hours overflow call used to be told "please hold" and hung up on: no
+    // text, no lead, no SLA. It now gets exactly one callback text, on the SAME
+    // send path as the after-hours fallback.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // ...and NOT the speed-to-lead bridge: the practice is open and about to ring
+    // this person back, so an AI opener would talk across the callback.
+    expect(insertLead).not.toHaveBeenCalled();
+    expect(contactLead).not.toHaveBeenCalled();
+    expect(body).not.toContain("please hold"); // the TwiML hangs up immediately after
+    expect(body).toContain("just sent you a text");
     // The (channel: "call") capture carries no message body.
     expect((insertCapture.mock.calls[0][0] as { channel: string }).channel).toBe("call");
+    // The in-hours text promises a callback, not opening hours, and never says
+    // the practice is closed (it is not).
+    const smsBody = (sendMessage.mock.calls[0][0] as { body: string }).body;
+    expect(smsBody).toContain("call you back");
+    expect(smsBody).not.toContain("closed");
+    expect(checkAgentReply(smsBody).ok).toBe(true);
   });
 
   it("outside hours: routes a NEW number into speed-to-lead (lead + contact), marks it sent", async () => {
@@ -206,6 +224,83 @@ describe("after-hours voice — consent / suppression awareness", () => {
     const refs = isSuppressed.mock.calls.map((c) => c[2]);
     expect(refs).toContain("+447700900123");
     expect(refs).toContain("patient:42");
+  });
+});
+
+describe("after-hours voice — in-hours overflow callback", () => {
+  it("an identified caller in hours: capture carries the patient id, and EXACTLY one send", async () => {
+    outside = false;
+    identity = { patientId: "42", patientName: "Sarah L" };
+    const res = await POST(callFrom("+447700900123"));
+    await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1);
+    const capture = insertCapture.mock.calls[0][0] as {
+      dentallyPatientId: string | null;
+      patientName: string;
+    };
+    // The id the task queue needs to put this callback on the patient's record.
+    expect(capture.dentallyPatientId).toBe("42");
+    expect(capture.patientName).toBe("Sarah L");
+
+    // ONE send, on the shared path. A second call site here is how the
+    // double-text bug returns, so the count is the assertion.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(insertLead).not.toHaveBeenCalled();
+    expect(markFollowUpSent).toHaveBeenCalledTimes(1);
+    const sent = sendMessage.mock.calls[0][0] as { channel: string; to: string };
+    expect(sent.channel).toBe("sms");
+    expect(sent.to).toBe("+447700900123");
+  });
+
+  it("in hours + suppressed: still captured, and ZERO sends", async () => {
+    outside = false;
+    suppressed = true;
+    const res = await POST(callFrom("+447700900123"));
+    const body = await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1); // an opt-out refuses texts, not a callback
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(insertLead).not.toHaveBeenCalled();
+    expect(markFollowUpSent).not.toHaveBeenCalled();
+    // ...and the caller is not told a text is coming.
+    expect(body).not.toContain("sent you a text");
+  });
+
+  it("in hours + kill switch OFF: still captured, and ZERO sends", async () => {
+    outside = false;
+    systemOn = false;
+    const res = await POST(callFrom("+447700900123"));
+    const body = await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(body).not.toContain("sent you a text");
+  });
+
+  it("in hours, the send failing leaves the caller promised nothing", async () => {
+    outside = false;
+    sendMessage.mockRejectedValueOnce(new Error("provider down"));
+    const res = await POST(callFrom("+447700900123"));
+    const body = await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(markFollowUpSent).not.toHaveBeenCalled();
+    expect(body).not.toContain("sent you a text");
+  });
+
+  it("a withheld caller ID in hours is captured and flagged, never texted", async () => {
+    outside = false;
+    const res = await POST(callFrom("anonymous"));
+    const body = await res.text();
+
+    expect(insertCapture).toHaveBeenCalledTimes(1);
+    expect((insertCapture.mock.calls[0][0] as { patientName: string }).patientName).toBe(
+      "Caller ID withheld",
+    );
+    expect(sendMessage).not.toHaveBeenCalled(); // nowhere to send it
+    expect(body).not.toContain("sent you a text");
   });
 });
 

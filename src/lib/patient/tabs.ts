@@ -186,7 +186,11 @@ export const EMPTY_COPY = {
   appointments: "No appointments on record.",
   recalls: "No recall dates on this patient's record.",
   practiceNotes: "No practice notes yet. Add the first one above.",
-  dentallyNotes: "No clinical notes in Dentally.",
+  // Worded so it cannot be read as "this patient has no clinical notes". It is a
+  // statement about THIS CONNECTION, which reads the /v1/notes endpoint and
+  // nothing else: a note recorded somewhere in Dentally that this read does not
+  // cover would otherwise be denied, in writing, on a clinical record.
+  dentallyNotes: "No clinical notes have come through from Dentally for this patient.",
   plans: "No treatment plans on record.",
   invoices: "No invoices on record.",
   // Worded so it cannot be read as "this patient has never been contacted".
@@ -278,8 +282,9 @@ export const CANNOT_READ_COPY = {
   invoiceColumns:
     "Summary, practitioners and location are not returned by the invoice read we have, so those columns are blank.",
   payments:
-    "Payment and allocation history is not shown. Dentally's payments endpoint cannot be filtered to one patient, " +
-    "so listing it here would mean reading the whole site's payment history every time this record is opened.",
+    "Payment and allocation history is not shown here yet. Dentally does return this patient's payments, and each " +
+    "payment carries the invoices it was allocated against, so this is work still to do on this record rather than " +
+    "a limit of the connection.",
   dentallyCorrespondence:
     "Letters, and any SMS or email sent from Dentally itself, are not shown. Dentally does not expose its " +
     "correspondence through the connection we have.",
@@ -289,8 +294,9 @@ export const CANNOT_READ_COPY = {
     "logins, record views, appointment edits and note edits, is not shown: Dentally does not expose its audit " +
     "trail through the connection we have.",
   taskScope:
-    "Shows recall, no-show and reactivation tasks. Coordinator, after-hours, speed-to-lead and smile assessment " +
-    "tasks are not keyed to a patient, so they cannot be listed here.",
+    "Shows recall, no-show and reactivation tasks, plus after-hours callbacks where the caller's number was " +
+    "recognised. Coordinator, speed-to-lead and smile assessment tasks are not keyed to a patient, so they " +
+    "cannot be listed here.",
   medicalHistoryFlag: "Medical history not read",
   /** The chart's BPE marker. Deliberately the same SHAPE as the medical flag
    *  above and kept beside it: Dentally puts a RED dot on BPE when one is due,

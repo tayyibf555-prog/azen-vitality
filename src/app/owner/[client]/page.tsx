@@ -6,16 +6,36 @@ import {
   DataTable,
   type Column,
 } from "@/components/primitives";
+import { PracticeDashboard } from "@/components/client/dashboard/practice-dashboard";
+import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { OwnerViewSwitch } from "@/components/owner/owner-view-switch";
 import { SystemsCatalog } from "@/components/owner/systems-catalog";
+import { readPracticeDashboard } from "@/lib/dashboard/read";
 import { getClient, getSites, getSite } from "@/lib/mock";
-import { getViewScope } from "@/lib/site-view";
+import { getViewScope, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
 import { gbp } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+
+// ---------------------------------------------------------------------------
+// THE OWNER LANDS ON THE SAME DASHBOARD THE PRACTICE DOES, AND THEN ON MORE.
+//
+// This page used to open on the OLD OverviewDashboard while /c/[client] opened
+// on the new PracticeDashboard: the owner signing in saw a screen a whole
+// generation behind the one their practice manager saw, which is exactly the
+// comparison the practice makes against Dentally.
+//
+// So the dashboard comes FIRST and is read exactly as c/[client]/page.tsx reads
+// it - every site, with the top bar's current selection deciding only what the
+// strip opens on - and the owner-only material follows UNDERNEATH rather than
+// replacing any of it. Nothing an owner had is gone: the Systems catalogue, the
+// operations/systems switch, the treatment-recovery band and the funnel overview
+// are all still here, in the order an owner reads them (the day first, then the
+// business).
+// ---------------------------------------------------------------------------
 
 async function loadOpportunities(siteIds: string[]): Promise<TreatmentOpportunity[]> {
   try {
@@ -56,7 +76,7 @@ const SITE_RECOVERY_COLUMNS: Column<SiteRecovery>[] = [
   },
 ];
 
-export default async function OwnerManagementPage({
+export default async function OwnerHomePage({
   params,
 }: {
   params: Promise<{ client: string }>;
@@ -67,13 +87,23 @@ export default async function OwnerManagementPage({
   if (!client) {
     return (
       <PageHeader
-        title="Management"
+        title="Overview"
         description="This client could not be found."
       />
     );
   }
 
-  const scope = await getViewScope(client.id);
+  // The dashboard read and the owner band's scope are independent, so they run
+  // concurrently rather than one after the other on every entry into the owner
+  // shell. The dashboard reads EVERY site the client runs (the strip's all-sites
+  // toggle is the point); the owner band below is scoped to the top bar's
+  // selection, which is the behaviour it already had.
+  const [selection, view, scope] = await Promise.all([
+    getViewSiteSelection(client.id),
+    readPracticeDashboard({ clientId: client.id, now: new Date() }),
+    getViewScope(client.id),
+  ]);
+
   const siteIds = scope.siteIds;
   const sites = getSites(client.id).filter((s) => siteIds.includes(s.id));
   const opportunities = await loadOpportunities(siteIds);
@@ -96,10 +126,26 @@ export default async function OwnerManagementPage({
     })
     .sort((a, b) => b.recoverable - a.recoverable);
 
+  // No PageHeader above the dashboard, for the same reason /c has none: a hero
+  // title plus a subtitle repeating the panel headings costs about ninety pixels
+  // of the fold. The dashboard renders its own compact title line.
   return (
     <>
+      <PracticeDashboard
+        view={view}
+        clientSlug={clientSlug}
+        initialSiteId={selection === ALL_SITES ? null : selection}
+      />
+      <TaskQueueBoard
+        plain
+        clientSlug={clientSlug}
+        maxRows={8}
+        title="Next actions"
+        description="The highest-priority work across every module. Finish one and the next slides in."
+      />
+
+      {/* Everything below this line is the OWNER's, and nobody else's. */}
       <PageHeader
-        hero
         title="Management"
         description="Your owner command view. Switch between practice operations and the AI systems running them."
       />
@@ -108,53 +154,53 @@ export default async function OwnerManagementPage({
         systems={<SystemsCatalog />}
         operations={
           <>
-      <div className="flex flex-wrap gap-x-7 gap-y-4">
-        <StatCard
-          label="Recoverable value"
-          value={gbp(totalRecoverable)}
-          dot="bg-status-amber"
-          hint="Outstanding across open plans"
-        />
-        <StatCard
-          label="Open opportunities"
-          value={openCount}
-          dot="bg-status-blue"
-          hint="Plans not yet completed"
-        />
-        <StatCard
-          label="Recovered to date"
-          value={gbp(recoveredToDate)}
-          dot="bg-status-green"
-          hint="Completed plan value"
-        />
-      </div>
+            <div className="flex flex-wrap gap-x-7 gap-y-4">
+              <StatCard
+                label="Recoverable value"
+                value={gbp(totalRecoverable)}
+                dot="bg-status-amber"
+                hint="Outstanding across open plans"
+              />
+              <StatCard
+                label="Open opportunities"
+                value={openCount}
+                dot="bg-status-blue"
+                hint="Plans not yet completed"
+              />
+              <StatCard
+                label="Recovered to date"
+                value={gbp(recoveredToDate)}
+                dot="bg-status-green"
+                hint="Completed plan value"
+              />
+            </div>
 
-      <SectionCard
-        title="Treatment recovery"
-        description={
-          scope.isAllSites
-            ? "Accepted but incomplete treatment across all sites, live from the coordinator."
-            : `Accepted but incomplete treatment at ${scope.siteName}, live from the coordinator.`
-        }
-        bodyClassName="p-0"
-      >
-        {opportunities.length === 0 ? (
-          <p className="m-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
-            <Building2 size={15} className="shrink-0 text-muted" />
-            No opportunities synced yet. Run the Dentally sync to populate the per-site
-            breakdown. This view stays empty until real data lands.
-          </p>
-        ) : (
-          <DataTable
-            columns={SITE_RECOVERY_COLUMNS}
-            rows={siteRecovery}
-            getRowKey={(r) => r.siteId}
-            className="px-2 py-1"
-          />
-        )}
-      </SectionCard>
+            <SectionCard
+              title="Treatment recovery"
+              description={
+                scope.isAllSites
+                  ? "Accepted but incomplete treatment across all sites, live from the coordinator."
+                  : `Accepted but incomplete treatment at ${scope.siteName}, live from the coordinator.`
+              }
+              bodyClassName="p-0"
+            >
+              {opportunities.length === 0 ? (
+                <p className="m-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
+                  <Building2 size={15} className="shrink-0 text-muted" />
+                  No opportunities synced yet. Run the Dentally sync to populate the per-site
+                  breakdown. This view stays empty until real data lands.
+                </p>
+              ) : (
+                <DataTable
+                  columns={SITE_RECOVERY_COLUMNS}
+                  rows={siteRecovery}
+                  getRowKey={(r) => r.siteId}
+                  className="px-2 py-1"
+                />
+              )}
+            </SectionCard>
 
-      <OverviewDashboard hideHero siteIds={siteIds} />
+            <OverviewDashboard hideHero siteIds={siteIds} />
           </>
         }
       />

@@ -1,7 +1,14 @@
-"use client";
+import { StaffCheckInView } from "@/components/client/staff-check-in/staff-check-in-view";
+import { requireModuleAccess } from "@/lib/auth/page-guard";
 
-import { ModulePlaceholder } from "@/components/client/module-placeholder";
+export const dynamic = "force-dynamic";
 
-export default function Page() {
-  return <ModulePlaceholder slug="staff-check-in" />;
+export default async function StaffCheckInPage({
+  params,
+}: {
+  params: Promise<{ client: string }>;
+}) {
+  const { client: clientSlug } = await params;
+  await requireModuleAccess("staff-check-in");
+  return <StaffCheckInView clientSlug={clientSlug} />;
 }

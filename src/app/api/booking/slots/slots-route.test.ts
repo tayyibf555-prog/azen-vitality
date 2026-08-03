@@ -14,14 +14,24 @@ const h = vi.hoisted(() => ({
       { id: 8, active: true, site_id: siteId },
     ],
   })),
+  // Must stay untouched: this is a READ route, so the write client has no
+  // business on its path. See slots-read-client.test.ts for why.
+  dentallyAgentClient: vi.fn(() => {
+    throw new Error("the public availability read must not build the write client");
+  }),
 }));
 
-vi.mock("@/lib/dentally/write", async (orig) => {
+vi.mock("@/lib/dentally/read", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
-    dentallyAgentClient: () => ({ getAvailability: h.getAvailability, listPractitioners: h.listPractitioners }),
+    dentallyFromEnv: () => ({ getAvailability: h.getAvailability, listPractitioners: h.listPractitioners }),
   };
+});
+
+vi.mock("@/lib/dentally/write", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return { ...actual, dentallyAgentClient: h.dentallyAgentClient };
 });
 
 import { GET } from "./route";
@@ -105,10 +115,24 @@ describe("GET /api/booking/slots", () => {
 
   it("maps a Dentally failure to a friendly 502, never a crash", async () => {
     h.getAvailability.mockRejectedValue(new Error("boom"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await get({ client: "vitality", site: "site-cc", from: ymd(7), to: ymd(8) });
     expect(res.status).toBe(502);
     const j = (await res.json()) as { ok: boolean; error: string };
     expect(j.ok).toBe(false);
     expect(j.error).not.toContain("boom");
+    // The cause is logged SERVER SIDE (it used to be swallowed entirely, which is
+    // how a dead production calendar stayed invisible) and never sent to the patient.
+    expect(spy.mock.calls.flat().join(" ")).toContain("boom");
+    spy.mockRestore();
+  });
+
+  it("never builds the WRITE client: availability is a read", async () => {
+    // The mocked dentallyAgentClient throws if called, so a route that reached
+    // for it would 502 here instead of serving times. Belt to the credential
+    // assertions in slots-read-client.test.ts.
+    const res = await get({ client: "vitality", site: "site-cc", from: ymd(9), to: ymd(10) });
+    expect(res.status).toBe(200);
+    expect(h.dentallyAgentClient).not.toHaveBeenCalled();
   });
 });

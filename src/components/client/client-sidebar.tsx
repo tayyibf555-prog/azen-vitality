@@ -10,7 +10,7 @@ import {
   Search,
   Wand2,
 } from "lucide-react";
-import { categoriesForRole } from "@/lib/nav";
+import { shellAreas, shellBase } from "@/lib/nav-shell";
 import { getClient } from "@/lib/mock";
 import { useAuth } from "@/lib/auth/mock-auth";
 import { useModKey } from "@/components/platform/sidebar-shortcuts";
@@ -86,7 +86,11 @@ export function ClientSidebar({
 
   const clientSlug = params.client;
   const client = getClient(clientSlug);
-  const base = `/c/${clientSlug}`;
+  // THE SAME COMPONENT SERVES BOTH TREES. /owner used to have a sidebar of its
+  // own, which is how the two shells drifted a generation apart. The base path
+  // and the owner-only extras are decided by one pure rule (@/lib/nav-shell),
+  // which the section bar reads too, so the two levels cannot disagree.
+  const base = shellBase(pathname, clientSlug);
 
   // Systems the owner has switched OFF are hidden from the sidebar (resolved
   // server-side in the layout and passed down, so a coordinator without the
@@ -98,7 +102,7 @@ export function ClientSidebar({
   // from anywhere. Areas are filtered to what this role may reach; with no
   // verified role (dev / un-enforced) we show everything. The server-side guard
   // remains the real boundary.
-  const groups = categoriesForRole(user?.role ?? null, disabled);
+  const groups = shellAreas({ pathname, role: user?.role ?? null, disabledSlugs: disabled });
   const allKeys = groups.map((g) => g.key);
 
   // Optimistic active state: highlight the clicked item instantly instead of

@@ -93,13 +93,31 @@ describe("sidebar categories (rail + panel nav)", () => {
     for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
   });
 
-  it("shows the coordinator only 'Getting started' inside Operations (every other module in it is owner-only)", () => {
+  it("gives the coordinator exactly three Operations modules: Getting started, plus Holiday & absence and Staff check-in, deliberately added 2026-08-03", () => {
     const cats = categoriesForRole("client_coordinator");
     const keys = cats.map((c) => c.key);
     // The everyday categories survive.
     expect(keys).toEqual(expect.arrayContaining(["home", "patients", "messages", "growth"]));
     const operations = cats.find((c) => c.key === "operations");
-    expect(operations?.items.map((i) => i.slug)).toEqual(["getting-started"]);
+    // THIS EXPECTATION WIDENED ON PURPOSE — it is a decision, not drift.
+    //
+    // It used to be ["getting-started"] alone, because every other module in the
+    // Operations rail was owner-only. On 2026-08-03 the orchestrator granted the
+    // coordinator "absence" and "staff-check-in" as well, on the ground that the
+    // practice manager IS a client_coordinator in this platform and she is the
+    // person who approves holiday and reviews clocking exceptions: gating those two
+    // on OWNER_ROLES locked their primary user out of them. Both gained the role via
+    // an explicit `roles: [...OWNER_ROLES, "client_coordinator"]` array in CLIENT_NAV,
+    // so the widening is one readable line per module rather than a default.
+    //
+    // Nothing else moved: everything still absent from this list (rota, compliance,
+    // reports, co-pilot, controls, settings) remains owner-only, and the assertion is
+    // still an exact toEqual so the NEXT unannounced addition fails here.
+    expect(operations?.items.map((i) => i.slug)).toEqual([
+      "getting-started",
+      "absence",
+      "staff-check-in",
+    ]);
   });
 
   it("hides owner-only items inside surviving categories for a coordinator", () => {
@@ -159,11 +177,12 @@ describe("canRoleAccessModule", () => {
     expect(item?.roles).toBeUndefined();
   });
 
-  it("owner-sidebar Manage rail: hides Practice brain AND Co-pilot from a coordinator, keeps them for owner/agency", () => {
-    // The owner sidebar hard-codes a "Manage" rail (Management, Co-pilot, Practice
-    // brain) and filters it with canRoleAccessModule, so its owner-only entries
-    // never render for a coordinator (defence in depth on top of the /owner layout
-    // guard). These assert the exact predicate that rail uses.
+  it("owner shell nav: hides Practice brain AND Co-pilot from a coordinator, keeps them for owner/agency", () => {
+    // The owner shell's nav (@/lib/nav-shell) adds the owner-only Practice brain
+    // to the shared sidebar and filters it with canRoleAccessModule, so its
+    // owner-only entries never render for a coordinator (defence in depth on top
+    // of the /owner layout guard). These assert the exact predicate it uses.
+    // Co-pilot comes through CLIENT_NAV's own `roles` array on the same predicate.
     for (const slug of ["practice-brain", "co-pilot"]) {
       expect(canRoleAccessModule("client_coordinator", slug)).toBe(false);
       expect(canRoleAccessModule("client_owner", slug)).toBe(true);

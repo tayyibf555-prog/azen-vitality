@@ -81,20 +81,55 @@ export function buildManualBookingPayload(
 }
 
 /**
+ * Whether a base URL points at REAL Dentally (api.dentally.co, or any subdomain of
+ * dentally.co such as api.sandbox.dentally.co) rather than at our local mock.
+ *
+ * Pure and exported because it is the testable half of the belt below. An
+ * unparseable URL is treated as real: the safe answer to "I cannot tell where this
+ * points" is "assume the live patient book".
+ *
+ * Matches on the HOSTNAME, never on a substring of the whole URL, so
+ * http://localhost:3000/api/mock-dentally.co/... cannot masquerade as the mock and
+ * an attacker-shaped host like dentally.co.evil.test cannot masquerade as Dentally.
+ */
+export function targetsRealDentally(baseUrl: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl).hostname;
+  } catch {
+    return true;
+  }
+  return /(^|\.)dentally\.co$/i.test(hostname);
+}
+
+/**
  * The Dentally client the agent uses for find_slots + book/reschedule/cancel/register.
  * Enabled: targets the dedicated write instance (sandbox or real) via DENTALLY_WRITE_*.
  * Disabled (default): identical config to what the inbound route used before, so the
  * default behaviour is unchanged and no write can reach a real book.
+ *
+ * BOTH branches now state readOnly explicitly, because DentallyClient defaults to
+ * read-only: this file is where "writable" is decided, so it is where the word
+ * belongs. The DISABLED branch is the one that mattered. It used to return a fully
+ * writable client whose base URL falls back to https://api.dentally.co whenever
+ * DENTALLY_BASE_URL is unset — so "writes are disabled" built a client pointed at
+ * the live practice book and armed. Now the disabled branch is writable ONLY while
+ * it targets the local mock (which is a real write path: the agent books into
+ * /api/mock-dentally in dev, and that must keep working). The instant it would
+ * point at dentally.co, it is latched shut.
  */
 export function dentallyAgentClient(): DentallyClient {
   if (isDentallyWriteEnabled()) {
     return new DentallyClient({
       apiKey: process.env.DENTALLY_WRITE_API_KEY ?? "",
       baseUrl: process.env.DENTALLY_WRITE_BASE_URL ?? "https://api.dentally.co",
+      readOnly: false,
     });
   }
+  const baseUrl = process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co";
   return new DentallyClient({
     apiKey: process.env.DENTALLY_API_KEY ?? "",
-    baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    baseUrl,
+    readOnly: targetsRealDentally(baseUrl),
   });
 }

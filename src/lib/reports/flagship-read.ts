@@ -9,16 +9,17 @@ import {
   type DayCoverage,
   type DayWindow,
 } from "@/lib/dashboard/period";
-import { normalisePayments } from "@/lib/dashboard/normalise";
 import {
   computeNhsBandReport,
   normaliseReportNhsClaims,
   type NhsBandReport,
 } from "@/lib/reports/nhs-activity";
 import {
-  computePaymentAllocation,
-  type PaymentAllocationReport,
-} from "@/lib/reports/payment-allocation";
+  allocationWindowTooLong,
+  ALLOCATION_WINDOW_UNAVAILABLE,
+  type AllocationReport,
+} from "@/lib/reports/allocation-report";
+import { readAllocationPass } from "@/lib/reports/allocation-read";
 import { intersectCoverage, scanBackwards, REPORTS_PER_PAGE } from "@/lib/reports/scan";
 
 // ---------------------------------------------------------------------------
@@ -149,16 +150,27 @@ export async function readNhsBandReport(args: {
 
 export interface PaymentAllocationReadResult {
   window: DayWindow;
-  report: PaymentAllocationReport | null;
+  report: AllocationReport | null;
   practitioners: PractitionerRef[];
   coverage: DayCoverage | null;
   unavailableReason: string | null;
   droppedPayments: number;
-  /** True when the group covers more than one site (payment practitioner ids are
-   *  not site-scoped, so a single site keeps the figure cleaner). */
+  /** True when the group covers more than one site. */
   multiSite: boolean;
+  /** How the invoice fan-out went, for the run's own disclosure line. */
+  invoicesRequested: number;
+  invoicesRead: number;
+  invoicesUnreadable: number;
 }
 
+/**
+ * Report B. The payments scan is unchanged — the same backwards paging and the
+ * same all-or-nothing coverage discipline as Report A, with both SCAN_* reasons
+ * byte-identical. On top of it, the allocation pass reads each settled invoice and
+ * attributes the money by its LINES (see allocation-read.ts). The window is capped
+ * first, before a single request is made, because a longer one cannot be read
+ * inside one request and a truncated attribution is a wrong wage.
+ */
 export async function readPaymentAllocation(args: {
   siteIds: readonly string[];
   window: DayWindow;
@@ -168,6 +180,21 @@ export async function readPaymentAllocation(args: {
   const { siteIds, window, siteId } = args;
   const today = londonToday(args.now);
   const client = dentallyFromEnv();
+
+  if (allocationWindowTooLong(window)) {
+    return {
+      window,
+      report: null,
+      practitioners: [],
+      coverage: null,
+      unavailableReason: ALLOCATION_WINDOW_UNAVAILABLE,
+      droppedPayments: 0,
+      multiSite: siteIds.length > 1,
+      invoicesRequested: 0,
+      invoicesRead: 0,
+      invoicesUnreadable: 0,
+    };
+  }
 
   const [practitioners, scans] = await Promise.all([
     readPractitioners(siteIds),
@@ -186,12 +213,19 @@ export async function readPaymentAllocation(args: {
             window.from,
             today,
           );
-          const { rows, dropped } = normalisePayments(raw);
-          // The site we asked for is authoritative (live returns a Dentally uuid).
-          return { rows: rows.map((p) => ({ ...p, siteId: site })), coverage, dropped, ok: true };
+          // Rows stay RAW here: the allocation pass has its own normaliser, which
+          // reads explanations[] as well. The site we asked for is authoritative
+          // (live returns a Dentally uuid, not our internal key), so it is stamped
+          // on before normalising — exactly as this read has always done.
+          const rows = raw.map((row) =>
+            row !== null && typeof row === "object" && !Array.isArray(row)
+              ? { ...(row as Record<string, unknown>), site_id: site }
+              : row,
+          );
+          return { rows, coverage, ok: true };
         } catch (err) {
           console.error(`[reports] payment scan failed for site ${site}`, err);
-          return { rows: [], coverage: null as DayCoverage | null, dropped: 0, ok: false };
+          return { rows: [] as unknown[], coverage: null as DayCoverage | null, ok: false };
         }
       }),
     ),
@@ -206,6 +240,9 @@ export async function readPaymentAllocation(args: {
       unavailableReason: SCAN_FAILED,
       droppedPayments: 0,
       multiSite: siteIds.length > 1,
+      invoicesRequested: 0,
+      invoicesRead: 0,
+      invoicesUnreadable: 0,
     };
   }
 
@@ -222,20 +259,30 @@ export async function readPaymentAllocation(args: {
       unavailableReason: SCAN_UNAVAILABLE,
       droppedPayments: 0,
       multiSite: siteIds.length > 1,
+      invoicesRequested: 0,
+      invoicesRead: 0,
+      invoicesUnreadable: 0,
     };
   }
 
-  const payments = scans.flatMap((s) => s.rows);
-  // When one site is selected, scope to it (drops nothing, but records intent);
-  // for "all sites" the report totals the group.
-  const report = computePaymentAllocation({ payments, window, siteId });
+  // When one site is selected, scope to it; for "all sites" the report totals the
+  // group. The allocation pass reads each settled invoice and attributes by line.
+  const pass = await readAllocationPass({
+    rawPayments: scans.flatMap((s) => s.rows),
+    window,
+    siteId,
+  });
+
   return {
     window,
-    report,
+    report: pass.report,
     practitioners,
     coverage,
-    unavailableReason: null,
-    droppedPayments: scans.reduce((n, s) => n + s.dropped, 0),
+    unavailableReason: pass.unavailableReason,
+    droppedPayments: pass.droppedPayments,
     multiSite: siteIds.length > 1,
+    invoicesRequested: pass.invoicesRequested,
+    invoicesRead: pass.invoicesRead,
+    invoicesUnreadable: pass.invoicesUnreadable,
   };
 }

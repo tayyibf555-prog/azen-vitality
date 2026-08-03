@@ -1,4 +1,6 @@
 import type { OpeningHours, Weekday } from "@/lib/types";
+import { absenceBlocksShift, groupAbsencesByStaff } from "@/lib/absence/rules";
+import type { Absence } from "@/lib/absence/types";
 import type { RotaConfig, RotaShift, RotaStaff, RotaSite } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +38,17 @@ export interface GenerateInput {
    * days already elapsed this week. Today itself is kept (same-day generation works).
    */
   today?: string;
+  /**
+   * Absence for these staff over the generated window. Passed in as PURE INPUT, like
+   * everything else here: the generator never reads the database, so "does holiday
+   * take someone off the rota" stays a testable property of a pure function rather
+   * than something only observable against a live table.
+   *
+   * Only APPROVED absence removes anyone (the rule lives in `absenceBlocksShift`);
+   * an undecided request must not silently leave a day short-staffed. Omit the field
+   * entirely and generation behaves exactly as it did before absence existed.
+   */
+  absences?: Absence[];
 }
 
 /** Parse an "HH:MM-HH:MM" opening window; null/blank/malformed = closed that day. */
@@ -114,12 +127,19 @@ export function upcomingWeekStarts(now: Date, weeks: number): string[] {
  *   work is spread evenly rather than always landing on the first person.
  * - Nobody is booked twice on the same date (across all sites and roles), so a
  *   person available at two sites on Monday only gets one Monday shift.
+ * - Anyone on APPROVED absence that day is skipped, and the round-robin simply moves
+ *   on to the next eligible person, so the slot is covered by somebody else rather
+ *   than left empty.
  * - If not enough eligible staff exist for a role on a day, the remaining coverage
  *   slots are simply left unfilled (no crash, no placeholder rows).
  */
 export function generateShifts(input: GenerateInput): RotaShift[] {
   const { config, weekStartDates } = input;
   const sites = [...input.sites].sort((a, b) => a.id.localeCompare(b.id));
+
+  // Bucket absence per person once, so the per-slot check is a small array scan of
+  // one person's absences rather than a full scan of the practice's.
+  const absencesByStaff = groupAbsencesByStaff(input.absences ?? []);
 
   // Eligible pool per role: active + has the role. Sorted by id for determinism.
   const byRole = new Map<string, RotaStaff[]>();
@@ -169,6 +189,12 @@ export function generateShifts(input: GenerateInput): RotaShift[] {
             const person = pool[(cur + step) % pool.length];
             if (bookedToday.has(person.id)) continue;
             if (!isAvailable(person, weekday)) continue;
+            // Approved holiday, sickness, training or unpaid leave: they are not in
+            // that day, so they cannot be rostered. Checked here rather than by
+            // pre-filtering the pool because absence is per DAY, not per person.
+            if (absenceBlocksShift({ staffId: person.id, shiftDate }, absencesByStaff.get(person.id) ?? [])) {
+              continue;
+            }
 
             shifts.push({
               clientId: person.clientId,

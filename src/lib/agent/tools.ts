@@ -11,6 +11,7 @@ import {
   type BookingSlot,
 } from "@/lib/booking/slots";
 import { londonDayKey } from "@/lib/time/london";
+import { isDentallyWriteEnabled } from "@/lib/dentally/write";
 import type { AgentContext } from "./types";
 
 // Real Dentally requires the appointment `reason` to be one of a fixed set (calibrated
@@ -249,9 +250,70 @@ export interface ToolDeps {
     | "cancelAppointment"
   >;
   context: AgentContext;
+  /**
+   * Whether real Dentally writes are permitted. Defaults to the deployment gate;
+   * injectable so tests can exercise both paths without touching process.env.
+   * Same shape as handleNoshowInbound's own writesEnabled, deliberately.
+   */
+  writesEnabled?: boolean;
 }
 
+/**
+ * The four write tools, and the honest refusal each returns when writes are off.
+ *
+ * Pure and exported so the exact words are testable — they are read by a language
+ * model that then speaks to a patient, so what they say matters as much as that
+ * they refuse. Each carries the NEGATIVE of its own success flag (`booked: false`
+ * against `booked: true`) so a model skimming the field it was looking for cannot
+ * read a refusal as a confirmation, and each names escalate_to_human so the turn
+ * ends with a person rather than a promise.
+ *
+ * Never mention a funding regime here: this text can be paraphrased straight into a
+ * patient message (project rule).
+ */
+export type AgentWriteTool = "book" | "reschedule" | "cancel" | "register_patient";
+
+const WRITE_REFUSALS: Record<AgentWriteTool, Record<string, unknown>> = {
+  book: {
+    booked: false,
+    error:
+      "Booking is switched off in this system, so nothing has been booked. Do not tell the patient they have an appointment. Apologise, say a colleague will confirm a time with them shortly, and call escalate_to_human.",
+  },
+  reschedule: {
+    rescheduled: false,
+    error:
+      "Changing appointments is switched off in this system, so nothing has moved. The original appointment still stands. Tell the patient a colleague will confirm the change, and call escalate_to_human.",
+  },
+  cancel: {
+    cancelled: false,
+    error:
+      "Cancelling is switched off in this system, so the appointment is still in the diary. Do not tell the patient it is cancelled. Say a colleague will confirm it, and call escalate_to_human.",
+  },
+  register_patient: {
+    registered: false,
+    error:
+      "Adding new patients is switched off in this system, so nothing has been created. Take their name, tell them a colleague will finish setting them up, and call escalate_to_human.",
+  },
+};
+
+/** The refusal one write tool returns when writes are off, as the dispatch string. */
+export function writeDisabledResult(tool: AgentWriteTool): string {
+  return JSON.stringify(WRITE_REFUSALS[tool]);
+}
+
+/**
+ * THE AGENT'S OWN WRITE GATE.
+ *
+ * Every other Dentally write in this codebase checks isDentallyWriteEnabled() before
+ * it writes — booking/create, coordinator, no-show, reactivation, recall, the diary
+ * move service, patient status, patient profile and the co-pilot. These four tools
+ * were the outlier, with nothing between the model and Dentally but whichever client
+ * the caller happened to inject, and they are the one path a language model drives.
+ * Two entry points already build them (the inbound webhook and the dev harness), so
+ * the check belongs here rather than in either route.
+ */
 export function makeDispatch(deps: ToolDeps) {
+  const writesEnabled = deps.writesEnabled ?? isDentallyWriteEnabled();
   // When a new patient is onboarded mid-conversation, book under their new id.
   let registeredPatientId: string | null = null;
 
@@ -385,6 +447,9 @@ export function makeDispatch(deps: ToolDeps) {
         });
       }
       case "book": {
+        // Refuse FIRST: before the availability read, before the idempotency memo.
+        // None of that work can matter when no write may follow it.
+        if (!writesEnabled) return writeDisabledResult("book");
         const patientId = registeredPatientId ?? deps.context.patientId;
         if (patientId.startsWith("lead:")) {
           // Unknown caller not yet registered: force the register_patient step first.
@@ -502,6 +567,7 @@ export function makeDispatch(deps: ToolDeps) {
         return JSON.stringify({ appointments: upcoming });
       }
       case "reschedule": {
+        if (!writesEnabled) return writeDisabledResult("reschedule");
         const appointmentId = String(input.appointmentId);
         const owned = await findOwnedAppointment(appointmentId);
         if (!owned) {
@@ -541,6 +607,7 @@ export function makeDispatch(deps: ToolDeps) {
         });
       }
       case "cancel": {
+        if (!writesEnabled) return writeDisabledResult("cancel");
         const appointmentId = String(input.appointmentId);
         if (!(await ownsAppointment(appointmentId))) {
           return JSON.stringify({ error: "I could not find that appointment on your record." });
@@ -549,6 +616,9 @@ export function makeDispatch(deps: ToolDeps) {
         return JSON.stringify({ cancelled: true, appointmentId: appointment.id, state: appointment.state ?? "cancelled" });
       }
       case "register_patient": {
+        // Refused before registeredPatientId is set, so a later `book` in the same
+        // turn cannot proceed against an id that was never created.
+        if (!writesEnabled) return writeDisabledResult("register_patient");
         const { patient } = await deps.dentally.createPatient({
           first_name: input.firstName,
           last_name: input.lastName,

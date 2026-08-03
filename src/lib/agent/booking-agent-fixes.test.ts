@@ -86,7 +86,7 @@ describe("D1: book revalidates the slot against live availability", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const out = JSON.parse(
       await dispatch("book", { slotStart: START, finishTime: FINISH, practitionerId: "42", treatment: "Checkup" }),
     );
@@ -101,7 +101,7 @@ describe("D1: book revalidates the slot against live availability", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-live" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const out = JSON.parse(
       await dispatch("book", { slotStart: START, finishTime: FINISH, practitionerId: "42", treatment: "Checkup" }),
     );
@@ -121,7 +121,7 @@ describe("D1: book revalidates the slot against live availability", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-far" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const out = JSON.parse(
       await dispatch("book", { slotStart: farStart, finishTime: farFinish, practitionerId: "42", treatment: "Checkup" }),
     );
@@ -136,7 +136,7 @@ describe("D1: book revalidates the slot against live availability", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const out = JSON.parse(
       await dispatch("book", { slotStart: pastStart, finishTime: pastFinish, practitionerId: "42", treatment: "Checkup" }),
     );
@@ -151,7 +151,7 @@ describe("D1: book revalidates the slot against live availability", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     await expect(
       dispatch("book", { slotStart: START, finishTime: FINISH, practitionerId: "42", treatment: "Checkup" }),
     ).rejects.toThrow();
@@ -166,7 +166,7 @@ describe("D2: a retried booking is idempotent", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-1" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const args = { slotStart: START, finishTime: FINISH, practitionerId: "42", treatment: "Checkup" };
     const first = await dispatch("book", args);
     const second = await dispatch("book", args);
@@ -184,7 +184,7 @@ describe("D2: a retried booking is idempotent", () => {
       }),
       createAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const out = JSON.parse(
       await dispatch("book", { slotStart: START, finishTime: FINISH, practitionerId: "42", treatment: "Checkup" }),
     );
@@ -200,7 +200,7 @@ describe("D2: a retried booking is idempotent", () => {
       }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-new" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     const out = JSON.parse(
       await dispatch("book", { slotStart: START, finishTime: FINISH, practitionerId: "42", treatment: "Checkup" }),
     );
@@ -234,7 +234,7 @@ describe("D3: reschedule keeps the appointment with the right clinician", () => 
       createAppointment: vi.fn(),
       cancelAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     await dispatch("reschedule", {
       appointmentId: "appt-9",
       newSlotStart: "2030-01-07T10:00:00Z",
@@ -256,7 +256,7 @@ describe("D3: reschedule keeps the appointment with the right clinician", () => 
       createAppointment: vi.fn(),
       cancelAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: CONTEXT, writesEnabled: true });
     await dispatch("reschedule", { appointmentId: "appt-9", newSlotStart: "2030-01-07T10:00:00Z" });
     expect(dentally.updateAppointment).toHaveBeenCalledWith(
       "appt-9",

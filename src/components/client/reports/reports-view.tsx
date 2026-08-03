@@ -5,7 +5,7 @@ import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view
 import { buildSnapshot } from "@/lib/reports/snapshot";
 import { presetWindow } from "@/lib/reports/report-window";
 import { readNhsBandReport, readPaymentAllocation } from "@/lib/reports/flagship-read";
-import { FlagshipReports } from "./flagship-reports";
+import { FlagshipReports, PAY_DEFAULT_PRESET } from "./flagship-reports";
 import { ReportsWorkspace } from "./reports-workspace";
 import { UsageSection } from "./usage-section";
 
@@ -26,13 +26,21 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
   ]);
   const now = new Date();
   const defaultWindow = presetWindow("this_month", now);
+  // The allocation report costs ONE live invoice read per invoice settled in the
+  // period (Dentally publishes invoice lines on the per-invoice route only), which
+  // on live measured ~1,900 for 60 days. That is fine inside the report's own API
+  // route, which allows 300s — it is not fine inside a PAGE render on the 31st of
+  // a month. So the page opens on the cheapest honest window and every longer
+  // period is fetched through the route. PAY_DEFAULT_PRESET keeps the component's
+  // selected tab in step with what was actually read here.
+  const payWindow = presetWindow(PAY_DEFAULT_PRESET, now);
   const paySiteId = selection === ALL_SITES ? null : selection;
 
   const [week, month, nhs, pay] = await Promise.all([
     buildSnapshot("week", siteIds),
     buildSnapshot("month", siteIds),
     readNhsBandReport({ siteIds, window: defaultWindow, now }),
-    readPaymentAllocation({ siteIds, window: defaultWindow, siteId: paySiteId, now }),
+    readPaymentAllocation({ siteIds, window: payWindow, siteId: paySiteId, now }),
   ]);
 
   const hasActivity = month.enquiries > 0;
@@ -59,10 +67,10 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
 
       {/* The two flagship reports: the concrete proof this platform does what
           Dentally will not. NHS activity broken down by clinician AND band, and an
-          honest payment-allocation view that states what it cannot confirm. */}
+          honest payment-allocation view that states what it does not yet confirm. */}
       <SectionCard
         title="Practice reports"
-        description="The reports Dentally cannot give you: NHS activity split by clinician and band, and payment allocation with every unconfirmable condition named."
+        description="The reports Dentally will not give you in one place: NHS activity split by clinician and band, and payment allocation with every unconfirmed condition named."
       >
         <FlagshipReports clientSlug={clientSlug} nhs={nhs} pay={pay} />
       </SectionCard>

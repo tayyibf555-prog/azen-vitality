@@ -1,5 +1,6 @@
 import "server-only";
 import { canAccessClient, getSessionUser, type AuthedUser } from "./session";
+import { APPROVER_ROLES } from "@/lib/absence/rules";
 
 /**
  * Auth + the database lock activate together: enforcement turns on once
@@ -39,6 +40,27 @@ export function requireClientAccess(user: AuthedUser | null, clientId: string): 
  */
 export function requireOwnerRole(user: AuthedUser | null): Response | null {
   if (user && user.role !== "client_owner" && user.role !== "agency_admin") {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+  return null;
+}
+
+/**
+ * 403 Response if an enforced user is not an APPROVER-level role; else null.
+ *
+ * Additive, and deliberately NOT a change to `requireOwnerRole`: everything already
+ * gated on that keeps its exact behaviour. The difference is one role. Approving
+ * holiday is the practice manager's job, and in this platform the practice manager
+ * is a `client_coordinator`, so `requireOwnerRole` would lock the feature's primary
+ * user out of it. Widening the owner guard instead would silently hand her the
+ * AI-generation and USP modules too, which is a different decision entirely.
+ *
+ * The role list lives in `@/lib/absence/rules` (where it is under test) so the HTTP
+ * edge and the pure decision rules cannot drift apart. No-op when user is null,
+ * matching requireClientAccess and requireOwnerRole.
+ */
+export function requireApproverRole(user: AuthedUser | null): Response | null {
+  if (user && !APPROVER_ROLES.includes(user.role)) {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   return null;

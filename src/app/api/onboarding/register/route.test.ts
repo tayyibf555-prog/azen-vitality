@@ -41,6 +41,7 @@ vi.mock("@/lib/dentally/write", () => ({
 
 import { POST } from "./route";
 import { DentallyError } from "@/lib/dentally/client";
+import { REGISTER_WRITES_OFF } from "@/lib/onboarding/register-result";
 
 // The real internal->Dentally site UUID for site-cc (src/lib/mock/clients.ts). The
 // create payload must carry THIS, not our internal id, proving the site mapping runs.
@@ -280,22 +281,88 @@ describe("success", () => {
     expect(h.setStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a dry run when the Dentally write key is not enabled, but still flips status", async () => {
-    h.isDentallyWriteEnabled.mockReturnValue(false);
-    const res = await POST(req({ submissionId: "sub-1" }));
-    expect(res.status).toBe(200);
-    const j = (await res.json()) as { created: boolean; dryRun: boolean };
-    expect(j.created).toBe(true);
-    expect(j.dryRun).toBe(true);
-    expect(h.setStatus).toHaveBeenCalledWith("sub-1", "registered");
-  });
-
   it("falls back to the client's primary site when the submission named none", async () => {
     h.getSubmission.mockResolvedValue(submission({ siteId: null }));
     const res = await POST(req({ submissionId: "sub-1" }));
     expect(res.status).toBe(200);
     const payload = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
     expect(payload.site_id).toBe(SITE_CC_UUID); // site-cc is the client's first site
+  });
+});
+
+// THE WRITE GATE. This block replaces a test called "reports a dry run when the
+// Dentally write key is not enabled, but still flips status", which asserted that
+// with writes OFF the route still called createPatient and still flipped the
+// submission to "registered" — it pinned the defect in place. The route computed
+// isDentallyWriteEnabled() and used it only as a label (`dryRun: !writeEnabled`)
+// while the create ran unconditionally through dentallyAgentClient(), whose disabled
+// branch defaults its base URL to https://api.dentally.co. With DENTALLY_BASE_URL
+// unset that is a REAL patient in a book of ~51,000 people, created while the API
+// answered `dryRun: true` and the worklist said "Recorded in test mode".
+describe("the Dentally write gate (enforced, not merely reported)", () => {
+  it("503s and creates NOTHING when writes are switched off", async () => {
+    h.isDentallyWriteEnabled.mockReturnValue(false);
+    const res = await POST(req({ submissionId: "sub-1" }));
+    expect(res.status).toBe(503);
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  it("leaves the submission's status untouched, so it stays on the worklist", async () => {
+    h.isDentallyWriteEnabled.mockReturnValue(false);
+    await POST(req({ submissionId: "sub-1" }));
+    expect(h.setStatus).not.toHaveBeenCalled();
+  });
+
+  it("says so honestly, and never reports a dry run that created anything", async () => {
+    h.isDentallyWriteEnabled.mockReturnValue(false);
+    const res = await POST(req({ submissionId: "sub-1" }));
+    const j = (await res.json()) as Record<string, unknown>;
+    expect(j.ok).toBe(false);
+    expect(j.error).toBe(REGISTER_WRITES_OFF);
+    expect(j.created).toBeUndefined();
+    expect(j.patientId).toBeUndefined();
+    expect(j).not.toHaveProperty("dryRun");
+  });
+
+  // force:true is the "this really is a different person" escape hatch past dedupe.
+  // It must not also be an escape hatch past the write gate.
+  it("refuses force:true just the same", async () => {
+    h.isDentallyWriteEnabled.mockReturnValue(false);
+    const res = await POST(req({ submissionId: "sub-1", force: true }));
+    expect(res.status).toBe(503);
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  // The gate sits AFTER validation and dedupe deliberately, so the answer stays the
+  // most useful true thing: a submission missing a surname is still told that, and a
+  // likely duplicate is still surfaced, neither of which involves a write.
+  it("still reports a missing name rather than the gate", async () => {
+    h.isDentallyWriteEnabled.mockReturnValue(false);
+    h.getSubmission.mockResolvedValue(submission({ lastName: null }));
+    const res = await POST(req({ submissionId: "sub-1" }));
+    expect(res.status).toBe(400);
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  it("still surfaces a likely duplicate rather than the gate", async () => {
+    h.isDentallyWriteEnabled.mockReturnValue(false);
+    h.searchPatients.mockResolvedValue([
+      { id: "pat-existing", name: "Jane Doe", phone: "+447700900123", email: null, siteId: "site-cc", dateOfBirth: "1990-05-01", active: true },
+    ]);
+    const res = await POST(req({ submissionId: "sub-1" }));
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { duplicate: boolean };
+    expect(j.duplicate).toBe(true);
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  // The success path must NOT carry dryRun any more: past the gate it could only
+  // ever be false, and while it existed the UI read it as permission to call a real
+  // create "recorded in test mode".
+  it("carries no dryRun field on a real create", async () => {
+    const res = await POST(req({ submissionId: "sub-1" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).not.toHaveProperty("dryRun");
   });
 });
 

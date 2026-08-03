@@ -108,7 +108,7 @@ describe("tool safety: mutation scoping and the IDOR surface", () => {
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
       createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "a1" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX, writesEnabled: true });
     // Even if a crafted message coaxed the model to pass a patient_id, the tool
     // schema has no such field and dispatch injects context.patientId itself.
     await dispatch("book", { slotStart, finishTime: slotFinish, practitionerId: "42", treatment: "Invisalign", patient_id: "pat-999" });
@@ -124,7 +124,7 @@ describe("tool safety: mutation scoping and the IDOR surface", () => {
   it("book refuses for an unregistered lead (forces register_patient first)", async () => {
     const dentally = { getAvailability: vi.fn(), createAppointment: vi.fn() };
     const leadCtx = { ...KNOWN_CTX, patientId: "lead:+447400000000", isKnownPatient: false };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: leadCtx });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: leadCtx, writesEnabled: true });
     const out = await dispatch("book", { slotStart: "2026-06-22T09:00:00Z", treatment: "Checkup" });
     expect(out).toContain("Register this new patient");
     expect(dentally.createAppointment).not.toHaveBeenCalled();
@@ -141,7 +141,7 @@ describe("tool safety: mutation scoping and the IDOR surface", () => {
       updateAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-OTHER-PATIENT" } }),
       cancelAppointment: vi.fn(),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX, writesEnabled: true });
     const out = await dispatch("reschedule", { appointmentId: "appt-OTHER-PATIENT", newSlotStart: "2026-07-01T10:00:00Z" });
     expect(out).toContain("could not find that appointment");
     // Ownership WAS checked against the caller's own appointments...
@@ -157,7 +157,7 @@ describe("tool safety: mutation scoping and the IDOR surface", () => {
       updateAppointment: vi.fn(),
       cancelAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-OTHER", state: "cancelled" } }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX, writesEnabled: true });
     const out = await dispatch("cancel", { appointmentId: "appt-OTHER" });
     expect(out).toContain("could not find that appointment");
     expect(dentally.getPatientAppointments).toHaveBeenCalledWith("pat-010");
@@ -169,7 +169,7 @@ describe("tool safety: mutation scoping and the IDOR surface", () => {
       getAvailability: vi.fn(), createAppointment: vi.fn(), updateAppointment: vi.fn(), cancelAppointment: vi.fn(),
       getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
     };
-    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX });
+    const dispatch = makeDispatch({ dentally: dentally as never, context: KNOWN_CTX, writesEnabled: true });
     await dispatch("find_appointments", {});
     // The read path pins to the caller's own patient id.
     expect(dentally.getPatientAppointments).toHaveBeenCalledWith("pat-010");

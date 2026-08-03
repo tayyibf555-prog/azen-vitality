@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { Activity, Banknote, Info, AlertTriangle } from "lucide-react";
-import { SectionCard, StatusPill, type Tone } from "@/components/primitives";
+import { SectionCard } from "@/components/primitives";
 import { hundredthsToUda, formatPenceGbp } from "@/lib/dashboard/money";
 import {
   BAND_KEYS,
@@ -15,10 +15,14 @@ import {
   ALLOCATION_CONDITION_LABELS,
   ALLOCATION_CONDITION_NOTES,
   unverifiedConditions,
-  type AllocationConditions,
-  type PaymentAllocationReport,
-  type Verify,
 } from "@/lib/reports/payment-allocation";
+import type { AllocationReport } from "@/lib/reports/allocation-report";
+import {
+  AllocationDisclosures,
+  AllocationTable,
+  CalibrationBannerText,
+  RunCoverage,
+} from "@/components/client/reports/allocation-table";
 import type { ReportPreset } from "@/lib/reports/report-window";
 import type { NhsBandReadResult, PaymentAllocationReadResult, PractitionerRef } from "@/lib/reports/flagship-read";
 
@@ -226,7 +230,8 @@ function NhsActivityReport({
           the course of treatment closes, so genuinely open work is under-represented here. Treatment
           plans still open are not in this figure. UDA totals are each claim&rsquo;s own expected and
           awarded values, not derived from the band. Filtering by treatment CATEGORY as well as band is
-          not available from Dentally&rsquo;s API practice-wide.
+          not wired into this report yet: the category sits on treatment_plan_items, which this report
+          does not read, and joining it to a claim is not yet calibrated against live data.
         </Caveat>
 
         {error ? <Warning>{error}</Warning> : null}
@@ -396,28 +401,14 @@ const PAY_PRESETS: { key: ReportPreset; label: string }[] = [
   { key: "last_month", label: "Last month" },
 ];
 
-const VERIFY_TONE: Record<Verify, Tone> = {
-  verified: "success",
-  partial: "warning",
-  unverified: "danger",
-};
-const VERIFY_LABEL: Record<Verify, string> = {
-  verified: "verified",
-  partial: "partial",
-  unverified: "not verified",
-};
-
-function ConditionChips({ conditions }: { conditions: AllocationConditions }) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {(Object.keys(ALLOCATION_CONDITION_LABELS) as (keyof AllocationConditions)[]).map((k) => (
-        <StatusPill key={k} tone={VERIFY_TONE[conditions[k]]}>
-          {ALLOCATION_CONDITION_LABELS[k]}: {VERIFY_LABEL[conditions[k]]}
-        </StatusPill>
-      ))}
-    </div>
-  );
-}
+/**
+ * The period the PAGE renders with. Deliberately the shortest one: attribution
+ * costs a live invoice read per invoice settled in the period, and a page render
+ * has far less time than the report's own API route (300s). Every longer period
+ * is fetched through that route. reports-view.tsx reads the SAME constant, so the
+ * selected tab always matches the data the server actually read.
+ */
+export const PAY_DEFAULT_PRESET: ReportPreset = "last_7";
 
 function PaymentAllocationReportView({
   clientSlug,
@@ -426,7 +417,7 @@ function PaymentAllocationReportView({
   clientSlug: string;
   initial: PaymentAllocationReadResult;
 }) {
-  const [preset, setPreset] = useState<ReportPreset>("this_month");
+  const [preset, setPreset] = useState<ReportPreset>(PAY_DEFAULT_PRESET);
   const [data, setData] = useState<PaymentAllocationReadResult>(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -457,32 +448,27 @@ function PaymentAllocationReportView({
     void load(p);
   }
 
-  const report: PaymentAllocationReport | null = data.report;
+  const report: AllocationReport | null = data.report;
   const nameById = new Map<string, string>(data.practitioners.map((pr) => [pr.id, pr.name]));
-  const clinicianName = (id: string | null) => (id === null ? "Unattributed" : nameById.get(id) ?? id);
+  const clinicianName = (id: string) => nameById.get(id) ?? id;
 
   const missing = report ? unverifiedConditions(report.conditions) : [];
 
   return (
     <SectionCard
-      title="Payment allocation, by practitioner"
-      description="The report you pay dentists from asks four things at once — completed, closed, invoiced, paid. This shows what the data can and, honestly, cannot confirm."
+      title="Payment allocation, by clinician"
+      description="Money the practice received, attributed to the clinician on the invoice line that money settled. The report you pay dentists from asks four things at once — completed, closed, invoiced, paid — and this states, per line, which of them it stands behind."
       actions={<PeriodBar presets={PAY_PRESETS} value={preset} onChange={choose} disabled={loading} />}
     >
       <div className="space-y-4">
+        {/* Always on, never dismissible. Wording lives in allocation-calibration.ts. */}
         <Warning>
-          <span className="font-semibold">This is not the pay-the-dentists figure, and must not be used as one.</span>{" "}
-          Paying a dentist needs four facts joined — the treatment completed, the course closed, an
-          invoice generated, and the patient paid. Dentally holds that join in its Payment Allocations
-          report; it is not exposed on the API this platform reads. What is shown below is{" "}
-          <span className="font-semibold">payments received, grouped by the practitioner recorded on
-          each payment</span> — which gates on none of those four conditions. Every line states which
-          conditions cannot be confirmed.
+          <CalibrationBannerText />
         </Warning>
 
         {report && missing.length > 0 ? (
           <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5 text-[12px] text-muted">
-            <p className="font-semibold text-navy">What cannot be confirmed from the wired data:</p>
+            <p className="font-semibold text-navy">What this report still cannot confirm:</p>
             <ul className="mt-1.5 space-y-1">
               {missing.map((k) => (
                 <li key={k} className="flex gap-2">
@@ -506,7 +492,7 @@ function PaymentAllocationReportView({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
                 <p className="text-[20px] font-bold tabular-nums tracking-[-0.3px] text-navy">
-                  {formatPenceGbp(report.totalPence)}
+                  {formatPenceGbp(report.totalReceivedPence)}
                 </p>
                 <p className="text-[12px] text-muted">
                   received across {report.totalCount} payment{report.totalCount === 1 ? "" : "s"},{" "}
@@ -516,61 +502,28 @@ function PaymentAllocationReportView({
               <p className="text-[11.5px] text-faint">{loading ? "Loading…" : null}</p>
             </div>
 
+            {/* This run's own coverage, not the calibration figure. */}
+            <RunCoverage report={report} windowText={windowText(data.window)} />
+
             {data.multiSite ? (
               <p className="text-[11.5px] text-faint">
-                Showing all sites in view. A payment&rsquo;s practitioner is the one on the payment
-                record, which need not be the clinician who did the work.
+                Showing all sites in view.
               </p>
             ) : null}
 
-            {report.lines.length === 0 ? (
+            {report.totalCount === 0 ? (
               <Unavailable reason="No payments received in this period." />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[13px]">
-                  <thead>
-                    <tr className="border-b border-line text-left">
-                      <th className="px-3 py-2 text-[11px] font-medium uppercase tracking-[0.04em] text-faint">Clinician (on payment)</th>
-                      <th className="px-3 py-2 text-right text-[11px] font-medium uppercase tracking-[0.04em] text-faint">Received</th>
-                      <th className="px-3 py-2 text-right text-[11px] font-medium uppercase tracking-[0.04em] text-faint">Payments</th>
-                      <th className="px-3 py-2 text-[11px] font-medium uppercase tracking-[0.04em] text-faint">Allocation conditions</th>
-                      <th className="px-3 py-2 text-right text-[11px] font-medium uppercase tracking-[0.04em] text-faint">Payable?</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.lines.map((line) => (
-                      <tr key={line.practitionerId ?? "none"} className="border-b border-line last:border-0 align-top">
-                        <td className="px-3 py-3 text-left font-medium text-navy">{clinicianName(line.practitionerId)}</td>
-                        <td className="px-3 py-3 text-right tabular-nums font-semibold text-ink">{formatPenceGbp(line.paymentsReceivedPence)}</td>
-                        <td className="px-3 py-3 text-right tabular-nums text-muted">{line.paymentCount}</td>
-                        <td className="px-3 py-3"><ConditionChips conditions={line.conditions} /></td>
-                        <td className="px-3 py-3 text-right">
-                          <StatusPill tone={line.payableConfirmed ? "success" : "danger"}>
-                            {line.payableConfirmed ? "Confirmed" : "Cannot confirm"}
-                          </StatusPill>
-                        </td>
-                      </tr>
-                    ))}
-                    <tr className="border-t-2 border-line-strong bg-card-muted/40 font-semibold">
-                      <td className="px-3 py-2 text-left text-navy">Total received</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-navy">{formatPenceGbp(report.totalPence)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-muted">{report.totalCount}</td>
-                      <td className="px-3 py-2" />
-                      <td className="px-3 py-2" />
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <AllocationTable report={report} clinicianName={clinicianName} />
             )}
 
-            {report.deletedExcluded > 0 || report.unattributedExcluded > 0 ? (
-              <p className="text-[11.5px] text-faint">
-                {report.deletedExcluded > 0 ? `${report.deletedExcluded} voided payment(s) excluded. ` : ""}
-                {report.unattributedExcluded > 0
-                  ? `${report.unattributedExcluded} payment(s) with no site excluded from this site's total.`
-                  : ""}
-              </p>
-            ) : null}
+            <AllocationDisclosures
+              report={report}
+              droppedPayments={data.droppedPayments}
+              invoicesRead={data.invoicesRead}
+              invoicesRequested={data.invoicesRequested}
+              invoicesUnreadable={data.invoicesUnreadable}
+            />
           </>
         ) : (
           <Unavailable reason="Report unavailable." />

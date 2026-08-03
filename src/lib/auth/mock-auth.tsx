@@ -40,6 +40,16 @@ export const MOCK_USERS: Record<Role, SessionUser> = {
     role: "client_coordinator",
     clientId: "vitality",
   },
+  // Dev-preview stand-in only. There is deliberately no clinician row in app_user
+  // (migration 0069 widens the CHECK constraint but seeds nobody), so this exists
+  // purely so the RoleSwitcher can preview the restricted view.
+  client_clinician: {
+    id: "u-vitality-clinician",
+    name: "Dr Sara Malik",
+    email: "sara@vitalitydental.co.uk",
+    role: "client_clinician",
+    clientId: "vitality",
+  },
 };
 
 interface AuthContextValue {
