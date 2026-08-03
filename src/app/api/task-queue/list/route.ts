@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { generateTasks } from "@/lib/task-queue/generate";
 import type { TaskKind } from "@/lib/task-queue/types";
@@ -22,6 +22,9 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // The task queue is the coordinators' work list and is outside CLINICIAN_SLUGS.
+  const moduleDenied = requireModuleApiAccess(auth, "task-queue");
+  if (moduleDenied) return moduleDenied;
 
   const tasks = await generateTasks({
     clientId: client.id,

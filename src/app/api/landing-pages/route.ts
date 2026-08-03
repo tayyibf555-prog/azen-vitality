@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getClient, getSites } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess, requireOwnerRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { TREATMENTS, findTreatment, type Treatment } from "@/lib/treatments/catalog";
 import type { CtaTarget } from "@/lib/landing/content";
@@ -51,6 +51,10 @@ export async function GET(request: Request): Promise<Response> {
   if (!client) return bad("Unknown client", 404);
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // The READ is owner + coordinator (see the nav item's roles); only the POST below
+  // is owner-only. Neither is a clinician's, so the module check carries the GET.
+  const moduleDenied = requireModuleApiAccess(auth, "landing-pages");
+  if (moduleDenied) return moduleDenied;
 
   const pages = await listPages(client.id);
   const origin = new URL(request.url).origin;

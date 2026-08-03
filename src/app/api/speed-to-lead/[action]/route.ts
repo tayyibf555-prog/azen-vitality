@@ -1,4 +1,4 @@
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getLead, setLeadStage, claimLeadFromStage } from "@/lib/speed-to-lead/repository";
 import { contactLead } from "@/lib/speed-to-lead/contact";
@@ -25,6 +25,11 @@ export async function POST(
   const result = await requireUser();
   if (result instanceof Response) return result;
   const auth: AuthedUser | null = result;
+
+  // Leads are acquisition work, outside CLINICIAN_SLUGS. The lead's site check below
+  // is tenancy only — a clinician holds every site of their own practice.
+  const moduleDenied = requireModuleApiAccess(auth, "speed-to-lead");
+  if (moduleDenied) return moduleDenied;
 
   let body: Record<string, unknown>;
   try {

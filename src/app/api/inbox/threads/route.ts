@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { listThreads } from "@/lib/inbox/repository";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +18,10 @@ export async function GET(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Conversations is outside CLINICIAN_SLUGS: site scope alone does not exclude a
+  // clinician, whose siteIds are the whole practice.
+  const moduleDenied = requireModuleApiAccess(auth, "conversations");
+  if (moduleDenied) return moduleDenied;
 
   // Site scope is derived from the verified user when enforced, never trusted
   // from input; falls back to the client's sites in unenforced (local) mode.

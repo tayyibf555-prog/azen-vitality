@@ -1,4 +1,4 @@
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { getChecklistState, setChecklistItem } from "@/lib/getting-started/repository";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,10 @@ export async function GET(request: Request) {
 
   const forbidden = requireClientAccess(user, client);
   if (forbidden) return forbidden;
+  // "Open to every role" means the three roles the nav item is open to. The
+  // go-live checklist is practice-management work and sits outside CLINICIAN_SLUGS.
+  const moduleDenied = requireModuleApiAccess(user, "getting-started");
+  if (moduleDenied) return moduleDenied;
 
   const state = await getChecklistState(client);
   return Response.json({ ok: true, state });
@@ -40,6 +44,8 @@ export async function POST(request: Request) {
 
   const forbidden = requireClientAccess(user, client);
   if (forbidden) return forbidden;
+  const moduleDenied = requireModuleApiAccess(user, "getting-started");
+  if (moduleDenied) return moduleDenied;
 
   try {
     await setChecklistItem(client, key, checked, user?.email ?? null);

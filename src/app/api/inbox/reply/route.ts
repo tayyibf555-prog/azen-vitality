@@ -1,5 +1,5 @@
 import { getClient, getSites } from "@/lib/mock";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { getPatientById } from "@/lib/dentally/read";
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
@@ -49,6 +49,11 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Conversations is outside CLINICIAN_SLUGS. Without this a clinician session —
+  // which clears requireUser and requireClientAccess like anyone else — could text
+  // any patient in the practice from a module they cannot even see in the nav.
+  const moduleDenied = requireModuleApiAccess(auth, "conversations");
+  if (moduleDenied) return moduleDenied;
   if (!contactRef || !body) {
     return Response.json({ ok: false, error: "contactRef and body are required" }, { status: 400 });
   }

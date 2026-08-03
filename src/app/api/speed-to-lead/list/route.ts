@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listLeads } from "@/lib/speed-to-lead/repository";
 import { toDashboardLead, firstResponseSeconds } from "@/lib/speed-to-lead/types";
@@ -21,6 +21,9 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Leads (enquiries, source, qualification) are acquisition data, outside CLINICIAN_SLUGS.
+  const moduleDenied = requireModuleApiAccess(auth, "speed-to-lead");
+  if (moduleDenied) return moduleDenied;
 
   const siteIds = await getViewSiteIds(client.id);
   const rows = await listLeads({ siteIds });

@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { presetWindow, customWindow, REPORT_PRESETS, type ReportPreset } from "@/lib/reports/report-window";
 import { readNhsBandReport } from "@/lib/reports/flagship-read";
 
@@ -25,6 +25,12 @@ export async function GET(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Reports is owner-only (see the page's requireModuleAccess("reports") + the
+  // nav OWNER_ROLES). The page guard never runs on this data route, so repeat the
+  // owner gate here or a coordinator/clinician pulls the per-clinician NHS band
+  // breakdown the screen denies them. Matches reports/generate and payment-allocation.
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const presetRaw = url.searchParams.get("preset");
   const from = url.searchParams.get("from");

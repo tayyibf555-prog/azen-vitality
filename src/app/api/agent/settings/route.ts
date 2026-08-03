@@ -1,5 +1,5 @@
 import { setAgentEnabled } from "@/lib/agent/repository";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,9 @@ export async function POST(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
   const denied = requireSiteAccess(auth, siteId);
   if (denied) return denied;
+  // Switching the patient-facing booking agent on or off is not a clinician's call.
+  const moduleDenied = requireModuleApiAccess(auth, "booking-agent");
+  if (moduleDenied) return moduleDenied;
   await setAgentEnabled(siteId, enabled);
   return Response.json({ ok: true, siteId, enabled });
 }

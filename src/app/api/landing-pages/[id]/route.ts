@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess, requireOwnerRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getPageById, setPageStatus, promoteWinner } from "@/lib/landing/repository";
 import { mintPreviewToken } from "@/lib/landing/preview-token";
@@ -44,6 +44,10 @@ export async function GET(
   if (!client) return bad("Unknown client", 404);
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Same split as the collection route: GET is owner + coordinator, PATCH is
+  // owner-only. The clinician gets neither.
+  const moduleDenied = requireModuleApiAccess(auth, "landing-pages");
+  if (moduleDenied) return moduleDenied;
 
   const found = await getPageById(id, client.id);
   if (!found) return bad("Landing page not found", 404);

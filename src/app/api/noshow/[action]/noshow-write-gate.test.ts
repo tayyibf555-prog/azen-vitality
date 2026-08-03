@@ -58,6 +58,11 @@ vi.mock("@/lib/noshow/fill", () => ({
 vi.mock("@/lib/auth/guard", () => ({
   requireUser: async () => null, // enforcement off in this environment
   requireSiteAccess: () => null,
+  // The route's module lock. Stubbed open here because these cases are about the
+  // route's own behaviour, not the clinician deny-list — that lives in
+  // src/lib/auth/module-api-guard.test.ts, and its presence on every route is
+  // proven by src/app/api/client-api-module-guard-coverage.test.ts.
+  requireModuleApiAccess: () => null,
 }));
 vi.mock("@/lib/mock/clients", () => ({
   getSite: () => ({ id: "site-1", clientId: "vitality" }),

@@ -21,7 +21,7 @@ import {
 } from "@/lib/recall/repository";
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -390,6 +390,10 @@ export async function POST(
 
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+  // Recall concierge is outside CLINICIAN_SLUGS. Clinicians SET recall dates in
+  // Dentally; driving the outbound recall campaign off them is a different job.
+  const moduleDenied = requireModuleApiAccess(auth, "recall");
+  if (moduleDenied) return moduleDenied;
   if (auth && typeof body.targetId === "string") {
     const siteId = body.targetId.split(":")[0];
     const denied = requireSiteAccess(auth, siteId);

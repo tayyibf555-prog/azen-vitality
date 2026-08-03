@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listAppointments } from "@/lib/dentally/read";
 import { listByAppointments } from "@/lib/reviews/repository";
@@ -37,6 +37,9 @@ export async function GET(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "Unknown client" }, { status: 404 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Reviews is outside CLINICIAN_SLUGS (this feeds the attend action that sends).
+  const moduleDenied = requireModuleApiAccess(auth, "reviews");
+  if (moduleDenied) return moduleDenied;
 
   // Limit to the sites this user may act on (when enforced); otherwise all client sites.
   const allSiteIds = await getViewSiteIds(client.id);

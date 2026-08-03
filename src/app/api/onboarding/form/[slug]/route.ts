@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getFormBySlug, updateForm, type UpdateFormPatch } from "@/lib/onboarding/form-repository";
 import { normaliseFormConfig, type OnboardingFormStatus } from "@/lib/onboarding/form";
@@ -39,6 +39,11 @@ export async function GET(
   if (!client) return bad("Unknown client", 404);
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   const form = await getFormBySlug(client.id, slug);
   if (!form) return bad("Form not found", 404);
@@ -68,6 +73,11 @@ export async function PATCH(
   if (!client) return bad("Unknown client", 404);
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   const form = await getFormBySlug(client.id, slug);
   if (!form) return bad("Form not found", 404);

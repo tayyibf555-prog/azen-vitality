@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { patchOverlay, type OverlayPatch } from "@/lib/task-queue/repository";
 
@@ -42,6 +42,10 @@ export async function POST(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // The task queue is the coordinators' work list (chase this lead, call this patient)
+  // and is outside CLINICIAN_SLUGS.
+  const moduleDenied = requireModuleApiAccess(auth, "task-queue");
+  if (moduleDenied) return moduleDenied;
 
   const taskKey = str(body.taskKey, 200);
   if (!taskKey) return bad("taskKey is required");

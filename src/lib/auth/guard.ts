@@ -1,6 +1,7 @@
 import "server-only";
 import { canAccessClient, getSessionUser, type AuthedUser } from "./session";
 import { APPROVER_ROLES } from "@/lib/absence/rules";
+import { canRoleAccessModule } from "@/lib/nav";
 
 /**
  * Auth + the database lock activate together: enforcement turns on once
@@ -61,6 +62,36 @@ export function requireOwnerRole(user: AuthedUser | null): Response | null {
  */
 export function requireApproverRole(user: AuthedUser | null): Response | null {
   if (user && !APPROVER_ROLES.includes(user.role)) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+  return null;
+}
+
+/**
+ * THE API-LAYER COUNTERPART TO `requireModuleAccess` (page-guard.ts).
+ *
+ * The page guard was the ONLY thing consulting CLINICIAN_SLUGS. Nothing on the API
+ * side did, and the three guards that exist there do not stand in for it:
+ * `requireUser` proves only that somebody is signed in, `requireClientAccess`
+ * admits every role attached to the client, and `requireSiteAccess` admits every
+ * site on the user's own `siteIds` (which, for a clinician, is all of them). So a
+ * clinician session hidden out of Conversations, Recall, Reactivation and the rest
+ * at the page layer could still call those modules' routes directly — reading the
+ * inbox, or texting any patient in the practice via POST /api/inbox/reply.
+ *
+ * `canRoleAccessModule` is allow-BY-DEFAULT for the original three roles (it returns
+ * true for a slug carrying no `roles` array, and true for a slug it does not
+ * recognise), and deny-by-default ONLY for `client_clinician`, whose branch runs
+ * first and returns. That asymmetry is the whole point: this guard is a no-op for
+ * agency_admin / client_owner / client_coordinator — it cannot take away anything
+ * they have today — and is a real deny-list for the clinician. `module-api-guard.test.ts`
+ * pins both halves of that claim.
+ *
+ * Null user = enforcement off, so it passes through exactly like requireClientAccess,
+ * requireOwnerRole and requireApproverRole do, and the un-enforced pilot is unchanged.
+ */
+export function requireModuleApiAccess(user: AuthedUser | null, slug: string): Response | null {
+  if (user && !canRoleAccessModule(user.role, slug)) {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   return null;

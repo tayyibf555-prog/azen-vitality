@@ -5,7 +5,7 @@ import { getViewScope } from "@/lib/site-view";
 import { runAgentTurn } from "@/lib/agent/run";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "@/lib/copilot/tools";
 import { buildCopilotSystemPrompt } from "@/lib/copilot/prompt";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { recordUsage } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +53,11 @@ export async function POST(request: Request): Promise<Response> {
   if (auth && auth.role !== "client_owner" && auth.role !== "agency_admin") {
     return Response.json({ ok: false, error: "The co-pilot is available to the practice owner." }, { status: 403 });
   }
+  // Redundant against the owner check immediately above, and deliberately so: this
+  // is the line the API-guard coverage test reads, so the module lock is uniform
+  // across every non-clinician module rather than expressed a different way here.
+  const moduleDenied = requireModuleApiAccess(auth, "co-pilot");
+  if (moduleDenied) return moduleDenied;
 
   // Honour the top-bar site switcher: this route is called from the browser WITH
   // the user's cookie, so the co-pilot's tools query only the selected site (the

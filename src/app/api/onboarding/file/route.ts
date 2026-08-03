@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { signFileUrl } from "@/lib/onboarding/repository";
 
@@ -27,6 +27,11 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   // Tenancy + traversal guard: the path must be exactly under this client's prefix.
   const prefix = `onboarding/${client.slug}/`;

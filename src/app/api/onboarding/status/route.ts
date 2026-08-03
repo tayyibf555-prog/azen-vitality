@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getSubmission, setStatus } from "@/lib/onboarding/repository";
 import type { OnboardingStatus } from "@/lib/onboarding/types";
@@ -36,6 +36,11 @@ export async function POST(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   if (!id) return Response.json({ ok: false, error: "Missing submission id" }, { status: 400 });
   if (!status || !ALLOWED.includes(status)) {

@@ -1,5 +1,5 @@
 import { getClient, getSites } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listAppointments, getPatientById } from "@/lib/dentally/read";
 import { isSuppressed } from "@/lib/messaging/suppression";
@@ -52,6 +52,10 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "Unknown client" }, { status: 404 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Reviews is outside CLINICIAN_SLUGS: marking attendance here triggers an outbound
+  // Google review request to the patient, which is a front-desk act, not a clinical one.
+  const moduleDenied = requireModuleApiAccess(auth, "reviews");
+  if (moduleDenied) return moduleDenied;
 
   // Not attended: there is nothing to schedule. Surface any existing request so the
   // caller sees the unchanged state (a prior attend is not undone here).

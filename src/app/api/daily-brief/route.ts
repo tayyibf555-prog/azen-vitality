@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { generateBrief } from "@/lib/daily-brief/generate";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import type { BriefContext } from "@/lib/daily-brief/types";
@@ -23,6 +23,10 @@ export async function GET(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // The morning brief is a whole-practice management digest (who to chase, no-show
+  // risk, revenue arriving); it is outside CLINICIAN_SLUGS.
+  const moduleDenied = requireModuleApiAccess(auth, "daily-brief");
+  if (moduleDenied) return moduleDenied;
 
   if (!(await isSystemEnabled(client.id, "daily-brief"))) {
     return Response.json({ ok: true, skipped: "system off" });

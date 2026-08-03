@@ -48,6 +48,11 @@ vi.mock("@/lib/dentally/client", () => ({ DentallyClient: class {}, DentallyErro
 vi.mock("@/lib/auth/guard", () => ({
   requireUser: vi.fn(async () => ({ id: "u-1", role: "owner", siteIds: ["site-cc"] })),
   requireSiteAccess: vi.fn(() => null),
+  // The route's module lock. Stubbed open here because these cases are about the
+  // route's own behaviour, not the clinician deny-list — that lives in
+  // src/lib/auth/module-api-guard.test.ts, and its presence on every route is
+  // proven by src/app/api/client-api-module-guard-coverage.test.ts.
+  requireModuleApiAccess: () => null,
 }));
 
 import { POST } from "@/app/api/recall/[action]/route";

@@ -1,5 +1,5 @@
 import { getClient, getSites } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import {
   insertCampaign,
@@ -60,6 +60,11 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Smile Assessment is outside CLINICIAN_SLUGS: these are marketing campaigns and the
+  // enquiry scores behind them. (The patient-facing next/submit/token routes are
+  // separate and deliberately unauthenticated.)
+  const moduleDenied = requireModuleApiAccess(auth, "smile-assessment");
+  if (moduleDenied) return moduleDenied;
 
   const campaigns = await listCampaigns(client.id);
   const counts = await countResponsesByCampaign(campaigns.map((c) => c.id));
@@ -90,6 +95,11 @@ export async function POST(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Smile Assessment is outside CLINICIAN_SLUGS: these are marketing campaigns and the
+  // enquiry scores behind them. (The patient-facing next/submit/token routes are
+  // separate and deliberately unauthenticated.)
+  const moduleDenied = requireModuleApiAccess(auth, "smile-assessment");
+  if (moduleDenied) return moduleDenied;
 
   const name = str(body.name, 80);
   if (!name) return bad("name is required");

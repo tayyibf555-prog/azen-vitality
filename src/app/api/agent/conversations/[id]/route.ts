@@ -1,5 +1,5 @@
 import { getConversation, listMessages } from "@/lib/agent/repository";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,10 @@ export async function GET(
   const { id } = await ctx.params;
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+  // Patient conversations are outside CLINICIAN_SLUGS; the site check below is not a
+  // substitute, since a clinician holds every site of their own practice.
+  const moduleDenied = requireModuleApiAccess(auth, "conversations");
+  if (moduleDenied) return moduleDenied;
   // Scope the read to the caller's sites so conversation ids can't be probed
   // across tenants. A missing or out-of-scope id looks the same (404).
   if (auth) {

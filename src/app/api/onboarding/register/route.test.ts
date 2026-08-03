@@ -26,6 +26,11 @@ const h = vi.hoisted(() => ({
 vi.mock("@/lib/auth/guard", () => ({
   requireUser: h.requireUser,
   requireClientAccess: h.requireClientAccess,
+  // The route's module lock. Stubbed open here because these cases are about the
+  // route's own behaviour, not the clinician deny-list — that lives in
+  // src/lib/auth/module-api-guard.test.ts, and its presence on every route is
+  // proven by src/app/api/client-api-module-guard-coverage.test.ts.
+  requireModuleApiAccess: () => null,
 }));
 vi.mock("@/lib/onboarding/repository", () => ({
   getSubmission: h.getSubmission,

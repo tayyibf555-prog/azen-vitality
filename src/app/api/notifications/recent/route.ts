@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireClientAccess, requireUser } from "@/lib/auth/guard";
+import { requireClientAccess, requireModuleApiAccess, requireUser } from "@/lib/auth/guard";
 import { getClient } from "@/lib/mock/clients";
 import { buildNotifications } from "@/lib/notifications/build";
 import { getViewSiteIds } from "@/lib/site-view";
@@ -34,6 +34,10 @@ export async function GET(request: Request) {
 
   const denied = requireClientAccess(user, client.id);
   if (denied) return denied;
+  // The bell aggregates compliance, no-show risk, onboarding submissions and new
+  // enquiries — four modules a clinician may not have. Outside CLINICIAN_SLUGS.
+  const moduleDenied = requireModuleApiAccess(user, "notifications");
+  if (moduleDenied) return moduleDenied;
 
   const siteIds = await getViewSiteIds(client.id);
 

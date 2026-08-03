@@ -16,6 +16,11 @@ vi.mock("@/lib/auth/guard", () => ({
   requireUser: async () => store.user,
   requireClientAccess: (u: User, cid: string) =>
     u && u.role !== "agency_admin" && u.clientId !== cid ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+  // The route's module lock. Stubbed open here because these cases are about the
+  // route's own behaviour, not the clinician deny-list — that lives in
+  // src/lib/auth/module-api-guard.test.ts, and its presence on every route is
+  // proven by src/app/api/client-api-module-guard-coverage.test.ts.
+  requireModuleApiAccess: () => null,
 }));
 
 vi.mock("@/lib/getting-started/repository", () => ({

@@ -19,7 +19,7 @@ import {
 import type { ReactivationTarget, TouchChannel } from "@/lib/reactivation/types";
 import { withinLapseWindow } from "@/lib/reactivation/normalise";
 import { getMaxLapseMonths } from "@/lib/reactivation/settings";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -365,6 +365,10 @@ export async function POST(
 
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+  // Reactivation is outside CLINICIAN_SLUGS. Note the site check below only runs when
+  // a targetId is present, so it was never a role gate for the actions without one.
+  const moduleDenied = requireModuleApiAccess(auth, "reactivation");
+  if (moduleDenied) return moduleDenied;
   if (auth && typeof body.targetId === "string") {
     const siteId = body.targetId.split(":")[0];
     const denied = requireSiteAccess(auth, siteId);

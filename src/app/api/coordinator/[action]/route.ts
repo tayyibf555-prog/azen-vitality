@@ -14,7 +14,7 @@ import type {
   TouchChannel,
   TreatmentOpportunity,
 } from "@/lib/coordinator/types";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -273,6 +273,11 @@ export async function POST(
 
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+
+  // Treatment Coordinator is outside CLINICIAN_SLUGS. The per-site check below is a
+  // tenancy control, not a role one: a clinician's siteIds cover their own practice.
+  const moduleDenied = requireModuleApiAccess(auth, "treatment-coordinator");
+  if (moduleDenied) return moduleDenied;
 
   // Per-site authz: every coordinator action carries an opportunityId. Resolve
   // its site and gate, mirroring recall/reactivation, so a user can't drive

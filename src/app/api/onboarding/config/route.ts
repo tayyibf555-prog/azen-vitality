@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getConfig, saveConfig } from "@/lib/onboarding/config-repository";
 import { ONBOARDING_LIBRARY, ONBOARDING_LIBRARY_BY_KEY } from "@/lib/onboarding/library";
@@ -195,6 +195,11 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   const config = await getConfig(client.id);
   return Response.json({ ok: true, config, library: ONBOARDING_LIBRARY });
@@ -219,6 +224,11 @@ export async function PUT(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   const parsed = parseConfig(body.config);
   if (!parsed.ok) return bad(parsed.error);

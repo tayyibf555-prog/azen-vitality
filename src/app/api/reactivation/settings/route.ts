@@ -1,4 +1,4 @@
-import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess, requireOwnerRole } from "@/lib/auth/guard";
 import {
   getDailyContactLimit,
   setDailyContactLimit,
@@ -20,6 +20,11 @@ export async function GET(request: Request): Promise<Response> {
 
   const forbidden = requireClientAccess(user, client);
   if (forbidden) return forbidden;
+  // "Any signed-in user of the client" predates the clinician role: the GET has no
+  // owner gate, so this is the only thing keeping the daily contact budget out of a
+  // module the clinician has no business in. (The POST is separately owner-only.)
+  const moduleDenied = requireModuleApiAccess(user, "reactivation");
+  if (moduleDenied) return moduleDenied;
 
   const [limit, usedToday] = await Promise.all([
     getDailyContactLimit(client),

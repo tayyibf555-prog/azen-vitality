@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { presetWindow, customWindow, REPORT_PRESETS, type ReportPreset } from "@/lib/reports/report-window";
 import { readPaymentAllocation } from "@/lib/reports/flagship-read";
 
@@ -40,6 +40,13 @@ export async function GET(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Reports is an owner-only module (nav.ts gives it OWNER_ROLES, the page calls
+  // requireModuleAccess("reports")). The page guard does not reach here, so the
+  // owner gate must be repeated on the data route or a coordinator/clinician can
+  // pull per-clinician money attribution the screen refuses them. Matches the
+  // sibling reports/generate route.
+  const roleDenied = requireOwnerRole(auth);
+  if (roleDenied) return roleDenied;
 
   const presetRaw = url.searchParams.get("preset");
   const from = url.searchParams.get("from");

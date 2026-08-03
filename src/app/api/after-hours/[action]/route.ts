@@ -1,6 +1,6 @@
 import { getCapture, setCaptureStatus } from "@/lib/after-hours/repository";
 import type { CaptureStatus } from "@/lib/after-hours/types";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -47,6 +47,11 @@ export async function POST(
   const result = await requireUser();
   if (result instanceof Response) return result;
   const auth: AuthedUser | null = result;
+
+  // After-hours capture is outside CLINICIAN_SLUGS, and the site check below cannot
+  // stand in for that: a clinician holds every site of their own practice.
+  const moduleDenied = requireModuleApiAccess(auth, "after-hours");
+  if (moduleDenied) return moduleDenied;
 
   const capture = await getCapture(captureId);
   if (!capture) return Response.json({ error: "Capture not found" }, { status: 404 });

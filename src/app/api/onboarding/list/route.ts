@@ -1,6 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listSubmissions } from "@/lib/onboarding/repository";
 import type { OnboardingStatus, OnboardingSubmission } from "@/lib/onboarding/types";
@@ -25,6 +25,11 @@ export async function GET(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Onboarding is outside CLINICIAN_SLUGS: reviewing and registering new-patient
+  // submissions (contact details, medical intake, uploaded documents, consent) is
+  // reception work, and requireClientAccess admits every role attached to the client.
+  const moduleDenied = requireModuleApiAccess(auth, "onboarding");
+  if (moduleDenied) return moduleDenied;
 
   // Scope the worklist to the dashboard's selected site (browser-called route,
   // cookie present). "All sites" passes every site; submissions with no site chosen

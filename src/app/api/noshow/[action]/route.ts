@@ -13,7 +13,7 @@ import {
 } from "@/lib/noshow/repository";
 import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
 import type { FreedSlot } from "@/lib/noshow/types";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -244,6 +244,11 @@ export async function POST(
   const result = await requireUser();
   if (result instanceof Response) return result;
   const auth: AuthedUser | null = result;
+
+  // No-show defence is outside CLINICIAN_SLUGS. Checked once here rather than in each
+  // handler, because every branch below reaches patient contact or the waitlist.
+  const moduleDenied = requireModuleApiAccess(auth, "no-show-defence");
+  if (moduleDenied) return moduleDenied;
 
   switch (action) {
     case "confirm":

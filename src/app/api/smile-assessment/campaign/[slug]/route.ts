@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import {
   getActiveCampaignBySlug,
@@ -60,6 +60,11 @@ export async function PATCH(
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // Smile Assessment is outside CLINICIAN_SLUGS: these are marketing campaigns and the
+  // enquiry scores behind them. (The patient-facing next/submit/token routes are
+  // separate and deliberately unauthenticated.)
+  const moduleDenied = requireModuleApiAccess(auth, "smile-assessment");
+  if (moduleDenied) return moduleDenied;
 
   const status = body.status;
   if (status !== "active" && status !== "paused") return bad("status must be active or paused");
