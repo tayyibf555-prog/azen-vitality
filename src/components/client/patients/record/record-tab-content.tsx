@@ -7,8 +7,7 @@ import { numberHealthFor, type NumberHealth } from "@/lib/messaging/number-healt
 import { getThreadForPatient } from "@/lib/inbox/repository";
 import { listPatientAudit, type PatientAuditEntry } from "@/lib/patient/profile-audit";
 import { listTargets as listRecallTargets, listTouches as listRecallTouches } from "@/lib/recall/repository";
-import { generateTasks } from "@/lib/task-queue/generate";
-import type { Task } from "@/lib/task-queue/types";
+import { generateTasksWithHealth } from "@/lib/task-queue/generate";
 import type { PatientTabSlug } from "@/lib/patient/tabs";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
 import type { ReactivationTouch } from "@/lib/reactivation/types";
@@ -205,21 +204,21 @@ export async function RecordTabContent({
   }
 
   if (slug === "tasks") {
-    // The generator is resilient per module already; this catch covers a total
-    // failure so one dead module never blanks the record. It reports, because
-    // "no open tasks for this patient" is a claim and an outage is not.
-    const generated = await generateTasks({
+    // WHY the -WithHealth variant. The generator catches EACH module read internally,
+    // so the plain generateTasks can never throw, so a `.then(reject)` guard here was
+    // unreachable and every read failure - a total Supabase outage included - fell
+    // through to "No open tasks for this patient", a claim about the patient printed on
+    // an outage. generateTasksWithHealth reports how many sources threw, so a full OR a
+    // partial failure now surfaces as a failed-read notice rather than a false "none".
+    const generated = await generateTasksWithHealth({
       clientId: client.id,
       clientSlug,
       siteIds: [siteId],
       nowIso,
-    }).then(
-      (tasks) => ({ ok: true, tasks }),
-      () => ({ ok: false, tasks: [] as Task[] }),
-    );
+    }).catch(() => ({ tasks: [], failedSources: 1, totalSources: 1 }));
     // patientId is populated ONLY from a target's own id field, never from a name.
     const mine = generated.tasks.filter((t) => t.patientId === patient.id && t.status === "open");
-    return <TabTasks tasks={mine} failed={!generated.ok} />;
+    return <TabTasks tasks={mine} failed={generated.failedSources > 0} />;
   }
 
   // audit

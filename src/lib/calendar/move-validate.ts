@@ -11,6 +11,7 @@
 // sentence. Nothing is ever "permitted with a warning".
 // ===========================================================================
 
+import { checkContinuity } from "./continuity";
 import type { ColumnWorkState, Span } from "./working-spans";
 import { firstOverlap, spanContainedIn } from "./working-spans";
 
@@ -29,6 +30,19 @@ export interface MoveContext {
   bounds: Span;
   /** Excluded from occupancy, so a five minute nudge onto itself is legal. */
   movingAppointmentId: string;
+  /**
+   * The three inputs to the CONTINUING-TREATMENT rule. Required, with no
+   * defaults, so a caller cannot forget them and quietly get the pre-rule
+   * behaviour: an omitted reason would read as "nothing recorded", which the
+   * rule refuses, and an omitted source practitioner would read as Unassigned,
+   * which it allows. One of those two failures is silent and wrong, and a
+   * required field is the only thing that stops it.
+   */
+  movingReason: string | null;
+  /** Who has the appointment NOW. null is Unassigned. */
+  sourcePractitionerId: string | null;
+  /** Named in the refusal. */
+  sourcePractitionerName: string | null;
 }
 
 export interface MoveProposal {
@@ -41,6 +55,8 @@ export interface MoveProposal {
 
 export type MoveRefusalCode =
   | "unassigned"
+  | "continuing_treatment"
+  | "continuity_unclear"
   | "hours_unknown"
   | "site_unconfirmed"
   | "outside_day"
@@ -58,22 +74,29 @@ function hhmm(minutes: number): string {
 }
 
 /**
- * Six checks, in a fixed order. The order is part of the contract: when several
- * apply, the reader is told the most fundamental reason first.
+ * Seven checks, in a fixed order. The order is part of the contract: when
+ * several apply, the reader is told the most fundamental reason first.
  *
  *  1 unassigned     Unassigned is not a person and has no availability, so it is
  *                   settled before anything that would consult availability.
- *  2 hours_unknown  A read that failed REFUSES the move. It does not warn. The
+ *  2 continuity     THE CLINICAL RULE, and it is second because it needs no read
+ *                   at all: whether a course of treatment may change hands is a
+ *                   property of the appointment and the two clinicians, not of
+ *                   anybody's diary. Told before "we could not read their hours"
+ *                   because "this has to stay with Dana Hale" is the more useful
+ *                   of the two sentences and stays true whatever the read did.
+ *                   A move that keeps the SAME clinician never reaches it.
+ *  3 hours_unknown  A read that failed REFUSES the move. It does not warn. The
  *                   whole point of building availability first was so a drop
  *                   could be checked, and a feature that silently stops checking
  *                   is worse than one that stops working.
- *  3 outside_day    Outside the drawn extent.
- *  4 outside_hours  The GREY check. The whole span must lie inside the union of
+ *  4 outside_day    Outside the drawn extent.
+ *  5 outside_hours  The GREY check. The whole span must lie inside the union of
  *                   the clinician's availability windows and their own bookings.
- *  5 occupied       The day's own appointments are subtracted EXPLICITLY rather
+ *  6 occupied       The day's own appointments are subtracted EXPLICITLY rather
  *                   than trusting the window to have excluded them, because
  *                   whether Dentally's windows exclude booked time is unproven.
- *  6 on_break       A break occupies; a note does not.
+ *  7 on_break       A break occupies; a note does not.
  */
 export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation {
   const name = ctx.targetPractitionerName.trim() === "" ? "this clinician" : ctx.targetPractitionerName;
@@ -84,6 +107,17 @@ export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation 
       code: "unassigned",
       message: "An appointment cannot be moved to Unassigned. Choose a clinician.",
     };
+  }
+
+  // The same dentist has to continue a course of treatment. See continuity.ts.
+  const continuity = checkContinuity({
+    reason: ctx.movingReason,
+    fromPractitionerId: ctx.sourcePractitionerId,
+    fromPractitionerName: ctx.sourcePractitionerName,
+    toPractitionerId: ctx.targetPractitionerId,
+  });
+  if (!continuity.ok) {
+    return { ok: false, code: continuity.code, message: continuity.message };
   }
 
   if (ctx.workState === "unknown") {

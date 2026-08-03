@@ -1,9 +1,9 @@
 import { StatusPill } from "@/components/primitives";
 import { NotLoaded, PanelEmpty, PanelFailed, PanelNote, PanelSection } from "./panel";
-import { CANNOT_READ_COPY, EMPTY_COPY, FAILED_COPY, NOT_HELD_COPY } from "@/lib/patient/tabs";
+import { ACCOUNT_COPY, CANNOT_READ_COPY, EMPTY_COPY, FAILED_COPY, NOT_HELD_COPY } from "@/lib/patient/tabs";
 import { londonDateLabel } from "@/lib/time/london";
 import { gbp } from "@/lib/utils";
-import { balanceLabel } from "@/lib/patient/record-derive";
+import { accountFiguresReconcile, balanceLabel } from "@/lib/patient/record-derive";
 import type { PatientDetail, ReadHealth } from "@/lib/dentally/read";
 import type { PatientDerived } from "@/lib/patient/record-derive";
 
@@ -40,6 +40,10 @@ export function TabAccount({
   const failed = reads.invoices === "failed";
   const paid = derived.lifetimeSpend;
   const balance = balanceLabel(derived.outstanding, derived.credit, gbp);
+  // Only when the three figures do NOT subtract cleanly (a written-off, cancelled or
+  // credited invoice sits in Total invoiced but not in Total paid or Balance). Shown
+  // only then, so a clean patient never carries a caveat that would become furniture.
+  const reconciles = accountFiguresReconcile(derived);
 
   return (
     <div className="space-y-5">
@@ -72,6 +76,7 @@ export function TabAccount({
             </div>
           </dl>
         )}
+        {!failed && !reconciles ? <PanelNote>{ACCOUNT_COPY.reconciliation}</PanelNote> : null}
         <PanelNote>{NOT_HELD_COPY.badDebtor}</PanelNote>
       </PanelSection>
 

@@ -92,3 +92,26 @@ export function londonDateTimeLabel(iso: string): string {
     timeZone: "Europe/London",
   });
 }
+
+/**
+ * The same wall-clock label WITH the year, e.g. "Sun 28 Jun 2024, 09:00".
+ *
+ * The bare label is right for near-term rows (a confirmation, a recent message) where
+ * the year is obvious. It is WRONG for a full appointment history that spans years: a
+ * patient with a decade on file has rows a reader cannot date without the year, and
+ * "Thu 17 Sept" for a 2019 visit reads as this year. Kept as its own function so the
+ * near-term surfaces are not made noisier to fix the historical one.
+ */
+export function londonDateTimeLabelWithYear(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "soon";
+  return d.toLocaleString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+  });
+}

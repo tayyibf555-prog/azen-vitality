@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { checkContinuity } from "@/lib/calendar/continuity";
 import {
   cancelledAnnouncement,
   moveModeAnnouncement,
@@ -170,6 +171,65 @@ describe("truncateRefusal", () => {
     const cut = truncateRefusal(long);
     expect(cut.length).toBeLessThanOrEqual(REFUSAL_CHIP_MAX);
     expect(cut.endsWith("…")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CHIP IS THE ONLY REFUSAL A SIGHTED READER SEES.
+//
+// A drop that is refused never opens the confirmation dialog: the block goes
+// back, the full sentence goes to an sr-only live region, and the ONLY thing
+// drawn on the screen is the drag preview's chip — cut to REFUSAL_CHIP_MAX. So
+// whatever the chip cannot carry is, for anybody looking at the diary, not said.
+//
+// The practice manager's requirement is specifically that the refusal name the
+// clinician the course has to stay with. This measures the refusal AS DRAWN,
+// through the real truncation, because the earlier wording passed every prose
+// assertion in continuity.test.ts and still rendered
+// "This is continuing treatment (Continuin…" on the grid.
+// ---------------------------------------------------------------------------
+describe("the continuing-treatment refusal, as the chip actually draws it", () => {
+  const refusal = (reason: string | null, name: string | null = "Dana Hale"): string => {
+    const res = checkContinuity({
+      reason,
+      fromPractitionerId: "prac-1",
+      fromPractitionerName: name,
+      toPractitionerId: "prac-2",
+    });
+    if (res.ok) throw new Error("expected a refusal");
+    return res.message;
+  };
+
+  it("names the clinician inside the chip for a named continuing course", () => {
+    const cut = truncateRefusal(refusal("Root canal review"));
+    expect(cut.length).toBeLessThanOrEqual(REFUSAL_CHIP_MAX);
+    expect(cut).toContain("Dana Hale");
+  });
+
+  it("names the clinician inside the chip for a course typed as continuing treatment", () => {
+    expect(truncateRefusal(refusal("Continuing Treatment"))).toContain("Dana Hale");
+  });
+
+  it("names the clinician inside the chip when the treatment is merely unclear", () => {
+    expect(truncateRefusal(refusal("Review"))).toContain("Dana Hale");
+    expect(truncateRefusal(refusal("Emergency"))).toContain("Dana Hale");
+  });
+
+  it("names the clinician inside the chip when nothing at all is recorded", () => {
+    expect(truncateRefusal(refusal(null))).toContain("Dana Hale");
+  });
+
+  it("survives a long clinician name by still leading with it", () => {
+    const cut = truncateRefusal(refusal("Root canal review", "Priya Raman-Whitmore"));
+    expect(cut).toContain("Priya Raman-Whitmore");
+  });
+
+  it("still says something usable when there is no name to give", () => {
+    expect(truncateRefusal(refusal("Root canal review", "  "))).toContain("the same clinician");
+  });
+
+  it("does not say the treatment twice when the treatment IS continuing treatment", () => {
+    expect(refusal("Continuing Treatment")).not.toContain("(Continuing Treatment)");
   });
 });
 

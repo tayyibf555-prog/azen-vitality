@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  ACCOUNT_COPY,
   CANNOT_READ_COPY,
   CHART_COPY,
   EMPTY_COPY,
@@ -97,6 +98,19 @@ describe("the honesty copy", () => {
     expect(EMPTY_COPY.audit).toContain("through this platform");
   });
 
+  it("explains, on the account tab, that the three money figures need not subtract", () => {
+    const s = ACCOUNT_COPY.reconciliation;
+    // Names all three headline figures, so the reader knows exactly which numbers the
+    // caveat is about.
+    expect(s).toContain("Total invoiced");
+    expect(s).toContain("Total paid");
+    expect(s).toContain("Balance");
+    // States the numbers are each correct and Dentally-sourced, not that one is wrong.
+    expect(s).toContain("read from Dentally");
+    // Never claims the patient owes or has paid nothing.
+    expect(s.toLowerCase()).not.toContain("none");
+  });
+
   it("keeps the header's medical flag neutral in wording", () => {
     expect(CANNOT_READ_COPY.medicalHistoryFlag).toBe("Medical history not read");
   });
@@ -110,6 +124,8 @@ describe("the honesty copy", () => {
       // Added in the same edit as CHART_COPY itself, or the new sentences go
       // entirely unswept.
       ...Object.values(CHART_COPY),
+      // The Account tab's reconciliation sentence, swept for the same house rules.
+      ...Object.values(ACCOUNT_COPY),
     ];
     for (const s of all) {
       expect(s).not.toContain("—");

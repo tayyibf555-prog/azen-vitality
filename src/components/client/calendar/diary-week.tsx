@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import type { DiaryEntryRecord } from "@/lib/calendar/entries";
 import type { ColumnWorkState, Span } from "@/lib/calendar/working-spans";
+import { capacityLine, capacitySentence, columnCapacity } from "@/lib/calendar/capacity";
 import { layoutColumn } from "./diary-grid";
 import { dow, dnum, mondayOf, shiftDay } from "./calendar-logic";
 import {
@@ -112,10 +113,36 @@ export function DiaryDays({
           unavailable ||
           (d.workState === "unknown" && !hoursPending) ||
           d.workState === "unconfirmed";
+
+        // The same free-time figure the day view prints, asking the week's own
+        // question: which day this week has room. Identical rules — only a
+        // column that can honestly claim to be working gets one, and cancelled
+        // and did-not-attend do not consume time. See capacity.ts.
+        const breaks = d.entries
+          .filter((e) => e.kind === "break")
+          .map((e) => ({ startMin: e.startMin, endMin: e.endMin }));
+        const capacity =
+          unavailable || d.workState !== "working"
+            ? null
+            : columnCapacity({
+                working: d.workingSpans,
+                occupied: placed
+                  .filter(
+                    (p) => p.item.state !== "cancelled" && p.item.state !== "did_not_attend",
+                  )
+                  .map((p) => ({ startMin: p.startMin, endMin: p.endMin })),
+                breaks,
+                bounds: { startMin: bounds.startMin, endMin: bounds.endMin },
+              });
+        const capLine = capacityLine(capacity);
+        const capSentence = capacitySentence(clinicianName ?? "This clinician", capacity);
+
         return {
           key: d.dayKey,
           headerId: `diary-daycol-${d.dayKey}`,
-          headerLabel: `${dow(d.dayKey)} ${dnum(d.dayKey)}, ${clinicianName ?? "no clinician"}, ${summary}`,
+          headerLabel: `${dow(d.dayKey)} ${dnum(d.dayKey)}, ${clinicianName ?? "no clinician"}, ${summary}${
+            capSentence ? `. ${capSentence}` : ""
+          }`,
           header: (
             <>
               <span className="flex items-baseline gap-1.5">
@@ -157,11 +184,20 @@ export function DiaryDays({
                   {summary}
                 </span>
               </span>
+              {capLine ? (
+                <span className="block truncate text-[9.5px] font-semibold leading-[1.2] tabular-nums text-blue-royal">
+                  {capLine}
+                </span>
+              ) : null}
             </>
           ),
           onHeaderClick: d.inWindow ? () => onPickDay(d.dayKey) : undefined,
           headerDisabled: !d.inWindow,
-          headerTitle: d.inWindow ? "Open this day" : "Not loaded",
+          headerTitle: capSentence
+            ? `${capSentence} ${d.inWindow ? "Click to open this day." : "Not loaded."}`
+            : d.inWindow
+              ? "Open this day"
+              : "Not loaded",
           marked: d.dayKey === selectedDay,
           placed,
           // Cut to real sessions and around breaks, and not drawn at all unless

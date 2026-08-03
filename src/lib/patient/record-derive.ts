@@ -185,3 +185,28 @@ export function balanceLabel(
   if (credit > 0) return { text: `${format(credit)} in credit`, tone: "credit" };
   return { text: format(0), tone: "settled" };
 }
+
+/**
+ * Whether the Account tab's three headline figures subtract cleanly, i.e. whether
+ * Balance = Total invoiced - Total paid holds for this patient.
+ *
+ * They fail to when an invoice that is NOT live debt (written off, cancelled, credited,
+ * void or draft) is counted in Total invoiced but excluded from Total paid and Balance,
+ * or when the patient is in credit (Balance is then a credit, not a subtraction of the
+ * other two). Both are honest states of correct figures; the point of the check is to
+ * decide when the reconciliation note must be shown, so a clean patient never carries a
+ * caveat it does not need.
+ *
+ * PURE, and a penny of tolerance for floating pounds. `credit` is added back because a
+ * credit invoice contributes to none of invoiced/paid/outstanding here but shows as the
+ * Balance, so its presence means the subtraction no longer models what is on screen.
+ */
+export function accountFiguresReconcile(d: {
+  totalInvoiced: number;
+  lifetimeSpend: number;
+  outstanding: number;
+  credit: number;
+}): boolean {
+  if (d.credit > 0) return false;
+  return Math.abs(d.totalInvoiced - d.lifetimeSpend - d.outstanding) < 0.005;
+}

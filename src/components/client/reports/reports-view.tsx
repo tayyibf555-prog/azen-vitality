@@ -1,8 +1,11 @@
 import { FileText } from "lucide-react";
-import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
+import { PageHeader, StatCard, EmptyState, SectionCard } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
-import { getViewSiteIds } from "@/lib/site-view";
+import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
 import { buildSnapshot } from "@/lib/reports/snapshot";
+import { presetWindow } from "@/lib/reports/report-window";
+import { readNhsBandReport, readPaymentAllocation } from "@/lib/reports/flagship-read";
+import { FlagshipReports } from "./flagship-reports";
 import { ReportsWorkspace } from "./reports-workspace";
 import { UsageSection } from "./usage-section";
 
@@ -17,10 +20,19 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
     return <PageHeader title="Reports" description="This client could not be found." />;
   }
 
-  const siteIds = await getViewSiteIds(client.id);
-  const [week, month] = await Promise.all([
+  const [siteIds, selection] = await Promise.all([
+    getViewSiteIds(client.id),
+    getViewSiteSelection(client.id),
+  ]);
+  const now = new Date();
+  const defaultWindow = presetWindow("this_month", now);
+  const paySiteId = selection === ALL_SITES ? null : selection;
+
+  const [week, month, nhs, pay] = await Promise.all([
     buildSnapshot("week", siteIds),
     buildSnapshot("month", siteIds),
+    readNhsBandReport({ siteIds, window: defaultWindow, now }),
+    readPaymentAllocation({ siteIds, window: defaultWindow, siteId: paySiteId, now }),
   ]);
 
   const hasActivity = month.enquiries > 0;
@@ -29,7 +41,7 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="Reports"
-        description="AI weekly and monthly business reviews written from your live enquiry and booking activity, with concrete recommendations."
+        description="Flagship NHS activity and payment-allocation reports, plus AI weekly and monthly business reviews written from your live enquiry and booking activity."
         stats={
           hasActivity ? (
             <>
@@ -44,6 +56,16 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
           ) : undefined
         }
       />
+
+      {/* The two flagship reports: the concrete proof this platform does what
+          Dentally will not. NHS activity broken down by clinician AND band, and an
+          honest payment-allocation view that states what it cannot confirm. */}
+      <SectionCard
+        title="Practice reports"
+        description="The reports Dentally cannot give you: NHS activity split by clinician and band, and payment allocation with every unconfirmable condition named."
+      >
+        <FlagshipReports clientSlug={clientSlug} nhs={nhs} pay={pay} />
+      </SectionCard>
 
       {hasActivity ? (
         <ReportsWorkspace clientSlug={clientSlug} snapshots={{ week, month }} />

@@ -23,14 +23,6 @@ export interface TaskQueueContext {
   nowIso: string;
 }
 
-async function safe<T>(fn: () => Promise<T[]>): Promise<T[]> {
-  try {
-    return await fn();
-  } catch {
-    return [];
-  }
-}
-
 function overdueHint(days: number): string {
   if (days > 0) return `${days} day${days === 1 ? "" : "s"} overdue`;
   if (days < 0) return `due in ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"}`;
@@ -181,23 +173,67 @@ async function smileAssessmentCandidates(ctx: TaskQueueContext): Promise<Candida
 
 // --- Aggregate --------------------------------------------------------------
 
-export async function generateTasks(ctx: TaskQueueContext): Promise<Task[]> {
-  const groups = await Promise.all([
-    safe(() => speedToLeadCandidates(ctx)),
-    safe(() => recallCandidates(ctx)),
-    safe(() => reactivationCandidates(ctx)),
-    safe(() => coordinatorCandidates(ctx)),
-    safe(() => noshowCandidates(ctx)),
-    safe(() => afterHoursCandidates(ctx)),
-    safe(() => smileAssessmentCandidates(ctx)),
-  ]);
+/**
+ * The generated queue AND how much of it could be read.
+ *
+ * `failedSources` and `totalSources` are what let the patient record's Tasks tab tell
+ * "this patient has no open work" (a claim about the patient) apart from "we could not
+ * read some of the work" (a claim about the network). Every module read is caught HERE,
+ * so a caller that wants that distinction cannot rely on the aggregate throwing.
+ */
+export interface TaskQueueResult {
+  tasks: Task[];
+  /** How many of the sources (seven modules plus the overlay) threw. */
+  failedSources: number;
+  totalSources: number;
+}
+
+// The seven module builders, caught INDIVIDUALLY so one dead module never blanks the
+// queue and, critically, so the failure is COUNTED rather than swallowed. The old
+// `safe()` helper returned [] on a throw with no trace, which is why a total Supabase
+// outage rendered as "No open tasks for this patient" on the record instead of a
+// failed-read notice.
+const CANDIDATE_BUILDERS: readonly ((ctx: TaskQueueContext) => Promise<CandidateTask[]>)[] = [
+  speedToLeadCandidates,
+  recallCandidates,
+  reactivationCandidates,
+  coordinatorCandidates,
+  noshowCandidates,
+  afterHoursCandidates,
+  smileAssessmentCandidates,
+];
+
+export async function generateTasksWithHealth(ctx: TaskQueueContext): Promise<TaskQueueResult> {
+  let failedSources = 0;
+  const groups = await Promise.all(
+    CANDIDATE_BUILDERS.map(async (build) => {
+      try {
+        return await build(ctx);
+      } catch {
+        failedSources += 1;
+        return [] as CandidateTask[];
+      }
+    }),
+  );
   const candidates = groups.flat();
 
   let overlays: Map<string, TaskOverlayState>;
   try {
     overlays = await getOverlayMap(ctx.clientId);
   } catch {
+    failedSources += 1;
     overlays = new Map();
   }
-  return applyOverlay(candidates, overlays, ctx.nowIso);
+  return {
+    tasks: applyOverlay(candidates, overlays, ctx.nowIso),
+    failedSources,
+    totalSources: CANDIDATE_BUILDERS.length + 1,
+  };
+}
+
+/** The queue alone, for callers that do not surface read health (the queue page and
+ *  the dashboard count). Behaviour is unchanged: each source is still caught and a
+ *  failure still yields an empty group rather than throwing. */
+export async function generateTasks(ctx: TaskQueueContext): Promise<Task[]> {
+  return (await generateTasksWithHealth(ctx)).tasks;
 }

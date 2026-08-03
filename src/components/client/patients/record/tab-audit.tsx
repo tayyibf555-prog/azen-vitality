@@ -1,5 +1,5 @@
 import { StatusPill } from "@/components/primitives";
-import { PanelEmpty, PanelFailed, PanelNote, PanelSection } from "./panel";
+import { PanelEmpty, PanelFailed, PanelScope, PanelSection } from "./panel";
 import { CANNOT_READ_COPY, EMPTY_COPY, FAILED_COPY } from "@/lib/patient/tabs";
 import { londonDateTimeLabel } from "@/lib/time/london";
 import type { PatientAuditEntry } from "@/lib/patient/profile-audit";
@@ -18,6 +18,10 @@ import type { PatientAuditEntry } from "@/lib/patient/profile-audit";
 export function TabAudit({ entries, failed = false }: { entries: PatientAuditEntry[]; failed?: boolean }) {
   return (
     <div className="space-y-5">
+      {/* The scope statement Blerta's trust depends on, read BEFORE the trail and in
+          readable ink, not as the faintest line under it: our audit records only what
+          is done HERE, and Dentally keeps its own separate trail of what is done there. */}
+      <PanelScope title="What this audit covers">{CANNOT_READ_COPY.dentallyAudit}</PanelScope>
       <PanelSection title="Changes made through this platform">
         {/* "No changes have been made" is a positive claim about the record, so a
             failed read must never be allowed to make it. */}
@@ -49,7 +53,6 @@ export function TabAudit({ entries, failed = false }: { entries: PatientAuditEnt
             ))}
           </ol>
         )}
-        <PanelNote>{CANNOT_READ_COPY.dentallyAudit}</PanelNote>
       </PanelSection>
     </div>
   );

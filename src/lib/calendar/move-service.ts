@@ -619,6 +619,20 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
     breakSpans,
     bounds,
     movingAppointmentId: appointmentId,
+    // THE CONTINUING-TREATMENT RULE, re-run server side against the row the
+    // server re-read for itself. `current` is that row, so the reason and the
+    // holding clinician are Dentally's, never the client's claim: a caller who
+    // stripped `reason` from their request could otherwise turn a root canal
+    // into an untyped appointment and hand it to another dentist.
+    //
+    // The name is taken from the site's own practitioner list where it is there,
+    // and falls back to the row's own string for a clinician who has since left
+    // that list — an appointment can outlive a practitioner record, and a
+    // refusal that cannot name anybody is a refusal nobody can act on.
+    movingReason: current.reason,
+    sourcePractitionerId: current.practitionerId,
+    sourcePractitionerName:
+      practitionersRead.practitioners.find((p) => p.id === current.practitionerId)?.name ?? null,
   });
   if (!check.ok) return refuse(409, check.message, from);
 

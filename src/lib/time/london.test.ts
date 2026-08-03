@@ -6,6 +6,7 @@ import {
   isLondonTomorrow,
   londonOverdueDays,
   londonDateTimeLabel,
+  londonDateTimeLabelWithYear,
 } from "./london";
 
 describe("londonDayKey", () => {
@@ -91,5 +92,22 @@ describe("londonDateTimeLabel", () => {
 
   it("guards an unparseable instant to 'soon'", () => {
     expect(londonDateTimeLabel("not-a-date")).toBe("soon");
+  });
+
+  it("omits the year, which the with-year variant carries", () => {
+    expect(londonDateTimeLabel("2019-09-17T11:00:00Z")).not.toContain("2019");
+  });
+});
+
+describe("londonDateTimeLabelWithYear", () => {
+  it("includes the year, so a historical appointment cannot read as this year", () => {
+    const label = londonDateTimeLabelWithYear("2019-09-17T11:00:00Z");
+    expect(label).toContain("2019");
+    // Still the London wall-clock time (BST in September, UTC+1).
+    expect(label).toContain("12:00");
+  });
+
+  it("guards an unparseable instant to 'soon'", () => {
+    expect(londonDateTimeLabelWithYear("not-a-date")).toBe("soon");
   });
 });

@@ -55,6 +55,7 @@ import {
   type Zoom,
 } from "./diary-view";
 import { DiaryDay, type DayColumnInput } from "./diary-day";
+import { DiaryKey } from "./diary-key";
 import { DiaryDays, weekDayKeys as weekKeysOf, type DayColumnDayInput } from "./diary-week";
 import { AppointmentPanel } from "./appointment-panel";
 import { blockDomId } from "./appointment-block";
@@ -1349,9 +1350,20 @@ export function CalendarBoard({
         </div>
       </div>
 
-      {notes.length > 0 ? (
-        <p className={cn("shrink-0 text-[10px] font-medium text-muted", bleed)}>{notes.join(" ")}</p>
-      ) : null}
+      {/* The standing context, and the KEY beside it. One row, so the decoder
+          for the whole screen costs a single line of chrome while it is shut.
+          The key is what makes the state letters learnable: P, C, the clock, S
+          and the tick are Dentally's own notation and the practice reads them
+          fluently, but a new receptionist could previously only find out what an
+          "S" meant by hovering a block. */}
+      <div className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1", bleed)}>
+        {notes.length > 0 ? (
+          <p className="min-w-0 flex-1 text-[10px] font-medium text-muted">{notes.join(" ")}</p>
+        ) : (
+          <span className="flex-1" />
+        )}
+        <DiaryKey />
+      </div>
 
       {/* The seven-day strip: the practice manager's week shape, in BOTH views.
           Days outside the loaded window are shown but disabled, never hidden: an

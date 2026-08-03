@@ -72,8 +72,11 @@ export function RecordSummary({
       <Figure label="Visits" value={apptsFailed ? "Unavailable" : num(derived.completedVisits)} />
       <Figure label="No-shows" value={apptsFailed ? "Unavailable" : num(derived.didNotAttendCount)} />
       <Figure label="Lifetime spend" value={invoicesFailed ? "Unavailable" : gbp(derived.lifetimeSpend)} />
+      {/* "Balance", not "Outstanding": the header and the Account card both call this
+          same figure Balance, and a patient in credit is not "outstanding" anything.
+          One word for one number across the record. */}
       <Figure
-        label="Outstanding"
+        label="Balance"
         value={invoicesFailed ? "Unavailable" : balance.text}
         tone={!invoicesFailed && balance.tone === "owed" ? "debt" : undefined}
       />

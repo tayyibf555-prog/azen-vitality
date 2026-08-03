@@ -5,7 +5,7 @@ import { StatusPill, type Tone } from "@/components/primitives";
 import { PanelEmpty, PanelFailed, PanelNote } from "./panel";
 import { EMPTY_COPY, FAILED_COPY } from "@/lib/patient/tabs";
 import { appointmentStateLabel, isLiveBookingState } from "@/lib/dentally/appointment-state";
-import { londonDateTimeLabel } from "@/lib/time/london";
+import { londonDateTimeLabelWithYear } from "@/lib/time/london";
 import { cn } from "@/lib/utils";
 import type { AppointmentRecord, ReadHealth } from "@/lib/dentally/read";
 
@@ -122,7 +122,7 @@ export function TabAppointments({
               {rows.map((a) => (
                 <tr key={a.id} className="border-b border-line last:border-0">
                   <td className="whitespace-nowrap px-2 py-2 tabular-nums text-navy">
-                    {londonDateTimeLabel(a.start)}
+                    {londonDateTimeLabelWithYear(a.start)}
                   </td>
                   <td className="px-2 py-2 tabular-nums text-muted">{a.durationMin}</td>
                   <td className="px-2 py-2 text-ink">{a.reason ?? "Appointment"}</td>

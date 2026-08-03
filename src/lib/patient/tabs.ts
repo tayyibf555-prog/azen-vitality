@@ -253,6 +253,26 @@ export const NOT_HELD_COPY = {
   badDebtor: "Dentally's 'Set bad debtor' marker has no equivalent here yet.",
 } as const;
 
+/**
+ * The Account tab's own sentences, kept here so the record's money copy is reviewed and
+ * swept in one place rather than living inside the component.
+ *
+ * WHY reconciliation needs saying. Total invoiced sums the gross of EVERY invoice,
+ * including ones written off, cancelled or credited. Total paid and Balance count only
+ * live debt, so a written-off course is in Total invoiced but in neither of the other
+ * two, and the three figures no longer subtract (Balance = Invoiced - Paid stops
+ * holding). Each figure is individually correct and Dentally-sourced; the gap is real
+ * and must be explained, not hidden. The sentence is shown ONLY when the figures
+ * actually fail to reconcile (see accountFiguresReconcile), never as always-on
+ * furniture on a clean patient, which is the caveat-nobody-reads failure mode.
+ */
+export const ACCOUNT_COPY = {
+  reconciliation:
+    "Total invoiced counts every invoice raised, including any written off, cancelled or credited. Total paid " +
+    "and Balance count only live debt, so for this patient these three figures do not subtract cleanly. Each " +
+    "figure is correct on its own and is read from Dentally.",
+} as const;
+
 /** Category B, inline: things a panel that DOES render must still say it cannot reach. */
 export const CANNOT_READ_COPY = {
   invoiceColumns:

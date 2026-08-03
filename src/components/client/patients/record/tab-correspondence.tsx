@@ -1,5 +1,5 @@
 import { StatusPill, type Tone } from "@/components/primitives";
-import { PanelEmpty, PanelFailed, PanelNote, PanelSection } from "./panel";
+import { PanelEmpty, PanelFailed, PanelNote, PanelScope, PanelSection } from "./panel";
 import { CANNOT_READ_COPY, EMPTY_COPY, FAILED_COPY } from "@/lib/patient/tabs";
 import { londonDateTimeLabel } from "@/lib/time/london";
 import type { Thread } from "@/lib/inbox/types";
@@ -46,6 +46,11 @@ export function TabCorrespondence({
 
   return (
     <div className="space-y-5">
+      {/* Her question was "does this link to the correspondence page on Dentally?" The
+          honest answer is no, and it is stated up front in readable ink rather than as a
+          footnote, because a reader who assumes it does would wrongly conclude a patient
+          had not been contacted when Dentally alone holds the letter or SMS. */}
+      <PanelScope title="What this shows">{CANNOT_READ_COPY.dentallyCorrespondence}</PanelScope>
       <PanelSection title="Messages sent from this platform">
         {someFailed ? <PanelFailed>{FAILED_COPY.partialCorrespondence}</PanelFailed> : null}
         {allFailed ? (
@@ -76,7 +81,6 @@ export function TabCorrespondence({
             ))}
           </ol>
         )}
-        <PanelNote>{CANNOT_READ_COPY.dentallyCorrespondence}</PanelNote>
         {messages.length > 0 ? (
           <PanelNote>Bounded at the 400 most recent rows per source.</PanelNote>
         ) : null}

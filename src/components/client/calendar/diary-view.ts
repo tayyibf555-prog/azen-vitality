@@ -48,8 +48,16 @@ export const GUTTER_PX = 52;
 export const GUTTER_PX_SM = 44;
 /** A clinician column never draws narrower than this before the grid scrolls sideways. */
 export const COL_MIN_PX = 112;
-/** The sticky column-header row. */
-export const HEADER_PX = 44;
+/**
+ * The sticky column-header row.
+ *
+ * 56, not 44, because the day header now carries THREE lines: the clinician, the
+ * booked count, and the free-time figure. Two lines at 44px left no room for the
+ * third, and the free figure is the one a practice manager scans across the row
+ * when somebody calls in sick — it cannot be the line that gets clipped. Twelve
+ * pixels of chrome buys the answer to "who has room this afternoon".
+ */
+export const HEADER_PX = 56;
 
 /** Cookie holding the remembered row height, read server-side so the first paint is right. */
 export const DIARY_ZOOM_COOKIE = "az_diary_zoom";

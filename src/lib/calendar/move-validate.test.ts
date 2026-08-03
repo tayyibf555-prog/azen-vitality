@@ -13,8 +13,24 @@ function ctx(over: Partial<MoveContext> = {}): MoveContext {
     breakSpans: [],
     bounds: BOUNDS,
     movingAppointmentId: "appt-1",
+    // The DEFAULT is a time-only move: the appointment is already with the
+    // target clinician, so the continuing-treatment rule is not in play and
+    // every check below reads as it did before that rule existed. The rule's own
+    // behaviour is exercised by its own describe block, which changes the source.
+    movingReason: "Checkup",
+    sourcePractitionerId: "prac-2",
+    sourcePractitionerName: "Femi Osei",
     ...over,
   };
+}
+
+/** The same context with the appointment currently held by SOMEONE ELSE. */
+function fromOther(over: Partial<MoveContext> = {}): MoveContext {
+  return ctx({
+    sourcePractitionerId: "prac-1",
+    sourcePractitionerName: "Dana Hale",
+    ...over,
+  });
 }
 
 function move(over: Partial<MoveProposal> = {}): MoveProposal {
@@ -27,6 +43,66 @@ function move(over: Partial<MoveProposal> = {}): MoveProposal {
     ...over,
   };
 }
+
+describe("validateMove: the continuing-treatment refusal", () => {
+  it("refuses a continuing course handed to another clinician, naming the one it stays with", () => {
+    const res = validateMove(move(), fromOther({ movingReason: "Root canal review" }));
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("expected a refusal");
+    expect(res.code).toBe("continuing_treatment");
+    expect(res.message).toContain("Dana Hale");
+  });
+
+  it("refuses an ambiguous reason across clinicians rather than allowing it", () => {
+    const res = validateMove(move(), fromOther({ movingReason: "Review" }));
+    expect(res.ok === false && res.code).toBe("continuity_unclear");
+  });
+
+  it("refuses a reason it has never seen, and one that is missing entirely", () => {
+    // The fail-safe direction, asserted at the VALIDATOR and not only inside
+    // continuity.ts: a treatment string the practice invents tomorrow must not
+    // become freely draggable by default.
+    expect(validateMove(move(), fromOther({ movingReason: "Zzz unheard of thing" })).ok).toBe(false);
+    expect(validateMove(move(), fromOther({ movingReason: null })).ok).toBe(false);
+  });
+
+  it("allows a checkup across clinicians", () => {
+    expect(validateMove(move(), fromOther({ movingReason: "Checkup" }))).toEqual({ ok: true });
+  });
+
+  it("allows a continuing course to move in TIME within its own clinician's column", () => {
+    // Same clinician, a different hour: the rule is about who, never about when.
+    const res = validateMove(
+      move({ startMin: 600, endMin: 630 }),
+      ctx({ movingReason: "Root canal review" }),
+    );
+    expect(res).toEqual({ ok: true });
+  });
+
+  it("allows an Unassigned appointment to be given to a clinician", () => {
+    const res = validateMove(
+      move(),
+      fromOther({ movingReason: "Root canal review", sourcePractitionerId: null }),
+    );
+    expect(res).toEqual({ ok: true });
+  });
+
+  it("is checked BEFORE hours_unknown, because it needs no read to be true", () => {
+    const res = validateMove(
+      move(),
+      fromOther({ movingReason: "Root canal review", workState: "unknown" }),
+    );
+    expect(res.ok === false && res.code).toBe("continuing_treatment");
+  });
+
+  it("is checked AFTER unassigned, so the target being nobody is still the first thing said", () => {
+    const res = validateMove(
+      move({ practitionerId: null }),
+      fromOther({ movingReason: "Root canal review", targetPractitionerId: null }),
+    );
+    expect(res.ok === false && res.code).toBe("unassigned");
+  });
+});
 
 describe("validateMove: the six refusals", () => {
   it("1. unassigned", () => {
@@ -212,6 +288,11 @@ describe("the cross-site refusal", () => {
         breakSpans: [],
         bounds: { startMin: 480, endMin: 1200 },
         movingAppointmentId: "a1",
+        // A time-only move: the continuing-treatment rule is not what is under
+        // test here and must not be what answers.
+        movingReason: "Checkup",
+        sourcePractitionerId: "p",
+        sourcePractitionerName: "Femi Osei",
       },
     );
     expect(result.ok).toBe(false);
@@ -234,6 +315,11 @@ describe("the cross-site refusal", () => {
         breakSpans: [],
         bounds: { startMin: 480, endMin: 1200 },
         movingAppointmentId: "a1",
+        // A time-only move: the continuing-treatment rule is not what is under
+        // test here and must not be what answers.
+        movingReason: "Checkup",
+        sourcePractitionerId: "p",
+        sourcePractitionerName: "Femi Osei",
       },
     );
     expect(unassigned.ok).toBe(false);

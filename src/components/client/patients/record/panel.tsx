@@ -41,6 +41,26 @@ export function PanelNote({ children, className }: { children: React.ReactNode; 
   return <p className={cn("max-w-prose text-[11px] leading-[1.45] text-faint", className)}>{children}</p>;
 }
 
+/**
+ * A prominent SCOPE statement: what a tab does and does not cover, read before the
+ * content rather than as a footnote under it.
+ *
+ * DISTINCT FROM PanelNote on purpose. A scope sentence the reader's trust depends on -
+ * "this audit only covers actions taken here, Dentally keeps its own" - must not be the
+ * faintest text on the screen, or a manager scanning fast will assume the tab caught
+ * something it never could. This is readable body ink in a bordered band, at the TOP.
+ * It is NOT amber: amber is reserved for a failed read, and a true statement of scope is
+ * not a warning.
+ */
+export function PanelScope({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="max-w-prose rounded-lg border border-line-strong bg-card-muted/60 px-3.5 py-3">
+      <p className="text-[12px] font-semibold tracking-[-0.1px] text-navy">{title}</p>
+      <p className="mt-1 text-[12.5px] leading-[1.5] text-ink">{children}</p>
+    </div>
+  );
+}
+
 /** A real read that returned nothing. Category A: "this patient has none." */
 export function PanelEmpty({ children }: { children: React.ReactNode }) {
   return (

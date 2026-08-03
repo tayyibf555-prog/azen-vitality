@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import { occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
 import { offSpans, type ColumnWorkState, type Span } from "@/lib/calendar/working-spans";
+import { capacityLine, capacitySentence, columnCapacity } from "@/lib/calendar/capacity";
 import { labelMinutes, layoutColumn, type Placed } from "./diary-grid";
 import {
   blockEdges,
@@ -664,10 +665,41 @@ export function DiaryDay({
           (col.workState === "unknown" && !hoursPending) ||
           col.workState === "unconfirmed";
         const soloed = soloKey === col.key;
+
+        // WHITE SPACE, AS A NUMBER. Computed from exactly the spans drawn above
+        // it: the same white sessions, the same occupying blocks, the same
+        // breaks. Only a column that can honestly claim to be working gets one,
+        // so a hatched or grey column prints no figure rather than a confident
+        // zero. See capacity.ts.
+        const capacity =
+          countsUnavailable || col.workState !== "working"
+            ? null
+            : columnCapacity({
+                working: col.workingSpans,
+                // cancelled and did-not-attend do NOT consume the clinician's
+                // time, exactly as the drop validator has it: a cancelled slot is
+                // free, and the grid already draws it white and dashed.
+                occupied: placed
+                  .filter(
+                    (p) =>
+                      p.item.state !== "cancelled" && p.item.state !== "did_not_attend",
+                  )
+                  .map((p) => ({ startMin: p.startMin, endMin: p.endMin })),
+                breaks: occupyingEntries(col.entries, col.id).map((e) => ({
+                  startMin: e.startMin,
+                  endMin: e.endMin,
+                })),
+                // Spread rather than passed by reference, so this memo's
+                // dependency list stays the two primitives it already tracks.
+                bounds: { startMin: bounds.startMin, endMin: bounds.endMin },
+              });
+        const capLine = capacityLine(capacity);
+        const capSentence = capacitySentence(col.name, capacity);
+
         return {
           key: col.key,
           headerId: `diary-col-${col.key}`,
-          headerLabel: `${col.name}, ${summary}`,
+          headerLabel: `${col.name}, ${summary}${capSentence ? `. ${capSentence}` : ""}`,
           header: (
             <>
               <span className="flex min-w-0 items-center gap-1.5">
@@ -696,11 +728,33 @@ export function DiaryDay({
               >
                 {summary}
               </span>
+              {/* Line three: how much of this clinician's day is still free, and
+                  the longest single run of it. Drawn ONLY when the column can
+                  honestly claim to be working, so a hatched or off column is
+                  silent rather than confidently empty.
+
+                  It is a third line and not an appended clause because the free
+                  figure is scanned DOWN the header row — "who has room this
+                  afternoon" is answered by reading one column of numbers, which
+                  is the sick-clinician question. tabular-nums keeps that column
+                  aligned. */}
+              {capLine ? (
+                <span className="block truncate text-[9.5px] font-semibold leading-[1.2] tabular-nums text-blue-royal">
+                  {capLine}
+                </span>
+              ) : null}
             </>
           ),
           onHeaderClick: () => onSolo(col.key),
           headerPressed: soloed,
-          headerTitle: soloed ? "Show every clinician" : `Show only ${col.name}`,
+          // The capacity sentence goes in the hover title UNTRUNCATED, because
+          // the line above it is cut to the column width and the full figures
+          // must be readable somewhere without opening anything.
+          headerTitle: capSentence
+            ? `${capSentence} ${soloed ? "Click to show every clinician." : `Click to show only ${col.name}.`}`
+            : soloed
+              ? "Show every clinician"
+              : `Show only ${col.name}`,
           marked: soloed,
           placed,
           // The gap label is a claim about BOOKABLE time, so it is cut to the

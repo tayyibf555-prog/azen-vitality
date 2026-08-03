@@ -327,15 +327,42 @@ export function useDiaryMove(
     return ctxRef.current.columns.find((c) => c.key === key) ?? null;
   }, []);
 
-  /** The six checks, run against the column the gesture has landed on. */
+  /**
+   * The seven checks, run against the column the gesture has landed on.
+   *
+   * It takes the whole APPOINTMENT and not just its id, because the
+   * continuing-treatment rule needs its reason and the clinician it is currently
+   * with, and passing three loose values from four call sites is how the rule
+   * ends up applied at three of them.
+   *
+   * The source clinician's NAME is resolved from the column set first, because
+   * that comes from the site's own practitioner list; the row's own
+   * `practitioner` string is only the fallback for a clinician who has since
+   * left the list.
+   *
+   * The column set is a PARAMETER and is deliberately not read from ctxRef here.
+   * One of the five callers (`proposalRefusal`) runs during render, and reading
+   * a ref there is a React violation the lint rule catches: the memo would not
+   * re-run when the columns changed, so a refusal could be computed against a
+   * column set the reader is no longer looking at. Handlers pass
+   * `ctxRef.current.columns`; the render-time caller passes its own prop.
+   */
   const check = useCallback(
-    (p: MoveProposal, column: MoveColumn | null, bounds: Span, movingId: string) => {
+    (
+      p: MoveProposal,
+      column: MoveColumn | null,
+      bounds: Span,
+      appt: DiaryAppointment,
+      columns: readonly MoveColumn[],
+    ) => {
       if (!column) {
         return {
           ok: false as const,
           message: "That is not a column an appointment can be moved to.",
         };
       }
+      const sourceName =
+        columns.find((c) => c.practitionerId === appt.practitionerId)?.name ?? appt.practitioner;
       const result = validateMove(
         { ...p, practitionerId: column.practitionerId, dayKey: column.dayKey },
         {
@@ -346,7 +373,10 @@ export function useDiaryMove(
           occupiedSpans: column.occupied,
           breakSpans: column.breaks,
           bounds,
-          movingAppointmentId: movingId,
+          movingAppointmentId: appt.id,
+          movingReason: appt.reason,
+          sourcePractitionerId: appt.practitionerId,
+          sourcePractitionerName: sourceName,
         },
       );
       return result.ok ? { ok: true as const, message: null } : { ok: false as const, message: result.message };
@@ -484,7 +514,7 @@ export function useDiaryMove(
               )
             : proposeResize(drag.origin, rawDelta, drag.bounds);
 
-        const verdict = check(p, targetColumn, drag.bounds, drag.appt.id);
+        const verdict = check(p, targetColumn, drag.bounds, drag.appt, ctxRef.current.columns);
         setPreview({
           columnKey: targetKey,
           startMin: p.startMin,
@@ -539,7 +569,7 @@ export function useDiaryMove(
 
         if (isNoopProposal(p, drag.origin)) return;
 
-        const verdict = check(p, targetColumn, drag.bounds, drag.appt.id);
+        const verdict = check(p, targetColumn, drag.bounds, drag.appt, ctxRef.current.columns);
         if (!verdict.ok) {
           // AN INVALID DROP NEVER REACHES THE CONFIRMATION DIALOG. The block goes
           // back and the reason is said in full.
@@ -607,7 +637,7 @@ export function useDiaryMove(
               ctxRef.current.bounds,
             )
           : proposeResize(state.origin, state.deltaMin, ctxRef.current.bounds);
-      const verdict = check(p, column, ctxRef.current.bounds, state.appt.id);
+      const verdict = check(p, column, ctxRef.current.bounds, state.appt, ctxRef.current.columns);
       setPreview({
         columnKey: column?.key ?? "",
         startMin: p.startMin,
@@ -697,7 +727,7 @@ export function useDiaryMove(
                   ctx.bounds,
                 )
               : proposeResize(state.origin, state.deltaMin, ctx.bounds);
-          const verdict = check(p, column, ctx.bounds, state.appt.id);
+          const verdict = check(p, column, ctx.bounds, state.appt, ctx.columns);
           if (!verdict.ok) {
             say(verdict.message ?? "That move is not possible.");
             return true;
@@ -1154,7 +1184,7 @@ export function useDiaryMove(
       },
       context.bounds,
     );
-    const verdict = check(p, column, context.bounds, proposal.appointment.id);
+    const verdict = check(p, column, context.bounds, proposal.appointment, context.columns);
     return verdict.ok ? null : verdict.message;
   }, [proposal, context.columns, context.bounds, check]);
 

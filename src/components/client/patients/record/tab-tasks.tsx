@@ -23,12 +23,11 @@ export function TabTasks({ tasks, failed = false }: { tasks: Task[]; failed?: bo
     <div className="space-y-5">
       <PanelSection title="Open tasks for this patient">
         {/* An outage must not print "no open tasks", which is a claim about the work
-            rather than about the network. */}
-        {failed ? (
-          <PanelFailed>{FAILED_COPY.tasks}</PanelFailed>
-        ) : tasks.length === 0 ? (
-          <PanelEmpty>{EMPTY_COPY.tasks}</PanelEmpty>
-        ) : (
+            rather than about the network. When a read failed, the notice is shown; any
+            tasks that DID load are still listed below it as a partial list, and the
+            "none" sentence is never reached while a source is down. */}
+        {failed ? <PanelFailed>{FAILED_COPY.tasks}</PanelFailed> : null}
+        {tasks.length > 0 ? (
           <ul className="divide-y divide-line">
             {tasks.map((t) => (
               <li key={t.key} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2">
@@ -48,6 +47,8 @@ export function TabTasks({ tasks, failed = false }: { tasks: Task[]; failed?: bo
               </li>
             ))}
           </ul>
+        ) : failed ? null : (
+          <PanelEmpty>{EMPTY_COPY.tasks}</PanelEmpty>
         )}
         <PanelNote>{CANNOT_READ_COPY.taskScope}</PanelNote>
         <PanelNote>{CANNOT_READ_COPY.dentallyTasks}</PanelNote>

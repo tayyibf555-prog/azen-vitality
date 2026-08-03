@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ageLabel, ageYears, balanceLabel, derivePatient } from "./record-derive";
+import { accountFiguresReconcile, ageLabel, ageYears, balanceLabel, derivePatient } from "./record-derive";
 import type { AppointmentRecord, PatientDetail, PatientRecord } from "@/lib/dentally/read";
 
 const NOW = new Date("2026-07-31T12:00:00.000Z");
@@ -298,6 +298,40 @@ describe("derivePatient: real Dentally states", () => {
       NOW,
     );
     expect(d.nextAppointment).toBeNull();
+  });
+});
+
+describe("accountFiguresReconcile", () => {
+  it("reconciles a clean patient: Balance = Total invoiced - Total paid", () => {
+    // pat-001's real figures: 9,995 invoiced, 8,420 paid, 1,575 outstanding.
+    expect(
+      accountFiguresReconcile({ totalInvoiced: 9995, lifetimeSpend: 8420, outstanding: 1575, credit: 0 }),
+    ).toBe(true);
+  });
+
+  it("reconciles when everything is settled", () => {
+    expect(
+      accountFiguresReconcile({ totalInvoiced: 1000, lifetimeSpend: 1000, outstanding: 0, credit: 0 }),
+    ).toBe(true);
+  });
+
+  it("does NOT reconcile when a written-off invoice inflates Total invoiced only", () => {
+    // A £900 course written off: in Total invoiced, but excluded from Paid and Balance.
+    expect(
+      accountFiguresReconcile({ totalInvoiced: 9995 + 900, lifetimeSpend: 8420, outstanding: 1575, credit: 0 }),
+    ).toBe(false);
+  });
+
+  it("does NOT reconcile when the patient is in credit, where Balance is not a subtraction", () => {
+    expect(
+      accountFiguresReconcile({ totalInvoiced: 1000, lifetimeSpend: 1000, outstanding: 0, credit: 120 }),
+    ).toBe(false);
+  });
+
+  it("tolerates a penny of floating-point drift", () => {
+    expect(
+      accountFiguresReconcile({ totalInvoiced: 100.01, lifetimeSpend: 50.0, outstanding: 50.0099, credit: 0 }),
+    ).toBe(true);
   });
 });
 
