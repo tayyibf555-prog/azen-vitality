@@ -353,3 +353,96 @@ describe("countPatients (exact site totals from meta.total)", () => {
     expect(await countPatients(["count-d", "count-err"])).toBe(1_200);
   });
 });
+
+// ===========================================================================
+// THE DNA MARKER MUST BE ABLE TO EXIST.
+//
+// Dentally draws a small figure on a did-not-attend and the diary reproduces it
+// (hatched fill, "DNA" corner letter); a cancellation is drawn as the one
+// spineless, dashed, white block on the grid. Neither mark can EVER appear if
+// the rows never reach the feed, and both Dentally and the mock exclude
+// Cancelled / Did-not-attend from an appointment list unless `cancelled=true` is
+// asked for.
+//
+// client.listAppointments already sends it (pinned by client.test.ts) and the
+// per-patient record already opts in (read.ts, getPatientDetail). What was NOT
+// pinned anywhere is the seam BETWEEN them: that read.ts, which shapes every row
+// the diary draws, hands those two states through untouched rather than
+// normalising, defaulting or filtering them away.
+//
+// The three properties below are one chain, and every one of them has to hold or
+// the practice manager is lied to:
+//   1. a cancelled and a did-not-attend row REACH the feed,
+//   2. neither is counted as BOOKED (a cancellation is not attendance),
+//   3. a cancelled slot is FREE capacity (its time is recoverable).
+// ===========================================================================
+
+import { dayCounts } from "@/components/client/calendar/diary-view";
+import { columnCapacity } from "@/lib/calendar/capacity";
+
+/** The rule every diary consumer applies: cancelled and DNA consume no time. */
+function occupies(state: string): boolean {
+  return state !== "cancelled" && state !== "did_not_attend";
+}
+
+describe("cancelled and did-not-attend reach the diary feed", () => {
+  // Real Dentally's own Title Case wire values, not our canonical ones, so this
+  // exercises the normalisation seam as well as the pass-through.
+  const wireRows = [
+    { id: "a1", patient_id: "p1", site_id: "site-dna", start_time: "2026-07-28T09:00:00+01:00", duration: 30, state: "Completed", practitioner_id: 7 },
+    { id: "a2", patient_id: "p2", site_id: "site-dna", start_time: "2026-07-28T10:00:00+01:00", duration: 60, state: "Cancelled", practitioner_id: 7 },
+    { id: "a3", patient_id: "p3", site_id: "site-dna", start_time: "2026-07-28T11:00:00+01:00", duration: 30, state: "Did not attend", practitioner_id: 7 },
+  ];
+
+  it("hands both states through, canonicalised, rather than dropping them", async () => {
+    state.listAppointments = (async () => ({ appointments: wireRows })) as never;
+    const out = await listAppointmentsSafe(["site-dna"]);
+    expect(out.appointments.map((a) => a.state)).toEqual([
+      "completed",
+      "cancelled",
+      "did_not_attend",
+    ]);
+    // The whole point: without these two rows the hatch and the dashed block are
+    // unreachable code, however correctly they are drawn.
+    expect(out.appointments.filter((a) => !occupies(a.state))).toHaveLength(2);
+  });
+
+  it("does NOT let a cancellation or a no-show inflate the booked count", async () => {
+    state.listAppointments = (async () => ({ appointments: wireRows })) as never;
+    const out = await listAppointmentsSafe(["site-dna"]);
+    const counts = dayCounts(out.appointments);
+    expect(counts.booked).toBe(1); // the completed one, and only that one
+    expect(counts.cancelled).toBe(1);
+    expect(counts.noShow).toBe(1);
+  });
+
+  it("counts a cancelled slot as FREE time, never as booked time", async () => {
+    state.listAppointments = (async () => ({ appointments: wireRows })) as never;
+    const out = await listAppointmentsSafe(["site-dna"]);
+
+    // 09:00-12:00 London, one clinician. Spans in minutes past London midnight.
+    const bounds = { startMin: 9 * 60, endMin: 12 * 60 };
+    const spanOf = (a: { start: string; durationMin: number }) => {
+      const startMin = Number(a.start.slice(11, 13)) * 60 + Number(a.start.slice(14, 16));
+      return { startMin, endMin: startMin + a.durationMin };
+    };
+    const occupied = out.appointments.filter((a) => occupies(a.state)).map(spanOf);
+
+    const cap = columnCapacity({
+      working: [bounds],
+      occupied,
+      breaks: [],
+      bounds,
+    });
+
+    // 180 minutes of clinical time, of which ONLY the 30 minute completed
+    // appointment is consumed. The cancelled hour and the missed half hour are
+    // both recoverable, so 150 minutes are free and the longest single run is
+    // the 09:30-12:00 stretch that starts the moment the completed one ends.
+    expect(cap.workingMin).toBe(180);
+    expect(cap.bookedMin).toBe(30);
+    expect(cap.freeMin).toBe(150);
+    expect(cap.longestFreeMin).toBe(150);
+    expect(cap.longestStartMin).toBe(9 * 60 + 30);
+  });
+});

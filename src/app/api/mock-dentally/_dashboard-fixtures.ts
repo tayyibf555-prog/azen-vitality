@@ -160,35 +160,121 @@ function patientsForSiteId(siteId: string): { id: string; name: string }[] {
 }
 
 /**
+ * A weighted pick from cumulative thresholds, consuming EXACTLY ONE rand().
+ *
+ * One draw per decision matters: the generator's PRNG is a single walking
+ * sequence shared with the slot times, the durations, the patient and the note,
+ * so a branch that drew twice where another drew once would shift every
+ * subsequent field and rewrite the whole book.
+ *
+ * The last entry is returned for anything at or above the final threshold, so
+ * the table can never fall off the end and return undefined.
+ */
+function rollState(rand: () => number, table: readonly (readonly [number, string])[]): string {
+  const roll = rand();
+  for (const [ceiling, state] of table) if (roll < ceiling) return state;
+  return table[table.length - 1][1];
+}
+
+/**
  * The state of a booking, which depends on where the day sits relative to today.
  *
- * A past day is settled: mostly completed, with the cancellations and missed
- * appointments a real book carries. Today is half done: slots before now are
- * completed, slots after it are still to happen, which is exactly what the
- * "appointments remaining to be completed" filter is for.
+ * REAL DENTALLY'S WHOLE VOCABULARY, in its own Title Case wire spelling:
+ * Pending, Confirmed, Arrived, In surgery, Completed, Cancelled, Did not attend.
+ * The generator used to emit four of those plus "booked", the mock's legacy word
+ * for confirmed (see appointment-state.ts: it does NOT exist on live Dentally and
+ * survives only as the normaliser's fallback for a row whose state is missing).
+ * Pending, Arrived and In surgery could therefore never appear on screen, so
+ * three of the diary's seven state treatments — the P, the clock and the S,
+ * exactly the notation this practice was trained on — were unreachable and
+ * unreviewable. A mock tidier than the practice hides defects rather than
+ * exposing them.
+ *
+ * A past day is SETTLED: mostly completed, with the cancellations and missed
+ * appointments a real book carries, plus a small tail nobody ever closed off.
+ * A future day has NOT HAPPENED: nothing on it can be completed, sat in or
+ * missed, but a patient can certainly have cancelled it already.
+ * TODAY is read against the clock, hour by hour, because "Arrived" and
+ * "In surgery" are claims about right now and inventing them on a settled day
+ * would be a lie about the book rather than a richer demo.
  */
-function stateFor(rand: () => number, daysBack: number, slotHour: number, nowHourLondon: number): string {
-  // A FUTURE day (daysBack < 0) has not happened yet: nothing on it can be
-  // completed, cancelled-by-attendance or missed. Without this branch the
+export function stateFor(
+  rand: () => number,
+  daysBack: number,
+  slotHour: number,
+  nowHourLondon: number,
+): string {
+  // A FUTURE day (daysBack < 0) has not happened yet. Without this branch the
   // slot-hour comparison below would file tomorrow's 09:00 as "Completed"
   // whenever the fixture is built after 09:00 today.
-  if (daysBack < 0) return rand() < 0.6 ? "Confirmed" : "booked";
+  if (daysBack < 0) {
+    return rollState(rand, [
+      [0.6, "Confirmed"],
+      [0.92, "Pending"],
+      [1, "Cancelled"],
+    ]);
+  }
   if (daysBack > 0) {
-    const roll = rand();
-    if (roll < 0.78) return "Completed";
-    if (roll < 0.89) return "Cancelled";
-    if (roll < 0.96) return "Did not attend";
-    // A small tail the practice never closed off. Real books have these, and the
-    // dashboard must not silently file them under a donut slice.
-    return "booked";
+    return rollState(rand, [
+      [0.76, "Completed"],
+      [0.86, "Cancelled"],
+      [0.93, "Did not attend"],
+      // The tail the practice never closed off. Real books have these — a
+      // clinician who never clicked through from Arrived, a confirmation left
+      // standing — and the dashboard must not silently file them under a donut
+      // slice. They are the only place the clock-independent reader can see a
+      // P, a clock or an S, which is why the tail is real states and not "booked".
+      [0.96, "Confirmed"],
+      [0.98, "Pending"],
+      [0.99, "Arrived"],
+      [1, "In surgery"],
+    ]);
   }
-  if (slotHour < nowHourLondon) {
-    const roll = rand();
-    if (roll < 0.86) return "Completed";
-    if (roll < 0.94) return "Cancelled";
-    return "Did not attend";
+
+  // TODAY, hour by hour against the London wall clock.
+  const delta = slotHour - nowHourLondon;
+  if (delta <= -2) {
+    // Long done.
+    return rollState(rand, [
+      [0.86, "Completed"],
+      [0.93, "Cancelled"],
+      [1, "Did not attend"],
+    ]);
   }
-  return rand() < 0.6 ? "Confirmed" : "booked";
+  if (delta === -1) {
+    // Just finished, or overrunning into this hour.
+    return rollState(rand, [
+      [0.55, "Completed"],
+      [0.8, "In surgery"],
+      [0.88, "Arrived"],
+      [1, "Did not attend"],
+    ]);
+  }
+  if (delta === 0) {
+    // Happening now: the one hour of the day where the saturated in-surgery
+    // block and the arrived clock belong.
+    return rollState(rand, [
+      [0.45, "In surgery"],
+      [0.83, "Arrived"],
+      [0.93, "Completed"],
+      [1, "Did not attend"],
+    ]);
+  }
+  if (delta === 1) {
+    // Next up. Some of them are already sitting in the waiting room.
+    return rollState(rand, [
+      [0.45, "Confirmed"],
+      [0.65, "Pending"],
+      [0.93, "Arrived"],
+      [1, "Cancelled"],
+    ]);
+  }
+  // Later today.
+  return rollState(rand, [
+    [0.58, "Confirmed"],
+    [0.92, "Pending"],
+    [1, "Cancelled"],
+  ]);
 }
 
 /**
@@ -204,6 +290,20 @@ function stateFor(rand: () => number, daysBack: number, slotHour: number, nowHou
  * So: only clinicians rostered at THIS site on THIS day get bookings, only
  * inside their own session, on a five minute grid, and never overlapping
  * themselves.
+ *
+ * AND SPREAD ACROSS THE SESSION, not packed against its start. The walking
+ * cursor used to advance by the appointment's own length plus an occasional
+ * quarter hour, so a site's nine bookings landed back-to-back from the moment
+ * each clinician's session opened and every column was empty from about 10:15
+ * onward: a practice whose entire working day happened before mid-morning. Two
+ * things fell out of that, neither of them a rendering fault:
+ *   - every capacity line read the same ("6h free · longest 6h at 10:00"),
+ *     because the longest free run was always "the rest of the day",
+ *   - "Arrived" and "In surgery" are claims about the hour containing NOW, so
+ *     they were unreachable on screen at any hour a practice manager is likely
+ *     to be looking at the diary.
+ * The stride below spaces the SAME number of bookings over the whole session,
+ * which is what a real book looks like and what makes the marks reviewable.
  */
 function appointmentsForSiteDay(
   siteId: string,
@@ -231,6 +331,32 @@ function appointmentsForSiteDay(
 
   // A walking cursor per clinician, so one clinician never double-books.
   const cursor = new Map(working.map((p) => [p.id, p.session.startMin]));
+
+  // The gap each clinician leaves between bookings, so their share of the day's
+  // rows covers their whole session instead of stacking against its opening.
+  //
+  // Derived from the MEAN duration (35 minutes across [15,30,30,30,45,60])
+  // rather than the actual draws, because the durations come off the shared PRNG
+  // inside the loop below and are not knowable here. It only has to be close:
+  // the overflow guard in the loop is the hard boundary, and the jitter moves
+  // each start by up to a quarter hour either way so the day is not a metronome.
+  const MEAN_DURATION_MIN = 35;
+  const strideGap = new Map(
+    working.map((p, index) => {
+      // Round-robin, so this clinician gets every working.length'th row.
+      const mine = Math.max(1, Math.ceil(Math.max(0, target - index) / working.length));
+      const sessionMin = Math.max(0, p.session.endMin - p.session.startMin);
+      const spare = sessionMin - mine * MEAN_DURATION_MIN;
+      // Divided by (mine - 0.5), not by `mine`: dividing by the count leaves a
+      // whole stride of dead time hanging off the end of every session, which is
+      // the same "the practice stops at lunch" artefact one notch later. Half a
+      // stride of tail is deliberate headroom, so the +15 jitter on the last
+      // booking can never push it past the session end and get it dropped by the
+      // overflow guard, which would silently change the day's count.
+      return [p.id, Math.max(0, Math.floor(spare / Math.max(1, mine - 0.5) / 5) * 5)];
+    }),
+  );
+
   const rows: MockAppointment[] = [];
   for (let i = 0; i < Math.max(0, target); i += 1) {
     const clinician = working[i % working.length];
@@ -252,10 +378,13 @@ function appointmentsForSiteDay(
       // Roughly a third of bookings carry a note, as in the real diary.
       notes: rand() < 0.34 ? pick(rand, NOTES) : undefined,
     });
-    // Leave a gap sometimes, so the day is not a solid unbroken block. Both the
-    // duration and the gap are multiples of five, and every session boundary is
-    // on a five minute mark, so every start time lands on the diary's own grid.
-    cursor.set(clinician.id, startMin + duration + (rand() < 0.25 ? 15 : 0));
+    // Advance by this clinician's stride, jittered by up to a quarter hour
+    // either way so their day is not a metronome. ONE rand() call, as before.
+    // The stride, the jitter, the duration and every session boundary are all
+    // multiples of five, so every start time lands on the diary's own grid.
+    const jitter = Math.round((rand() - 0.5) * 6) * 5; // -15..+15
+    const gap = Math.max(0, (strideGap.get(clinician.id) ?? 0) + jitter);
+    cursor.set(clinician.id, startMin + duration + gap);
   }
   return rows;
 }
@@ -281,6 +410,22 @@ function buildAppointments(today: string): MockAppointment[] {
   return rows;
 }
 
+/**
+ * The cache stamp: the London day AND the London hour.
+ *
+ * It used to be the day alone. Today's states are read against the clock, so on
+ * a dev server left running since breakfast the now-line crawled down a book
+ * whose states were frozen at the hour it booted: at 16:00 the "in surgery"
+ * block still sat at 09:00, three hours of the afternoon were still "Confirmed"
+ * with the now-line below them, and the one hour of the day that shows an
+ * arrived clock was in the past. Re-seeding costs nothing (the PRNG is keyed on
+ * site and day, so every other day rebuilds byte-identical) and the ids are
+ * deterministic, so in-session edits survive the rebuild.
+ */
+function bookStamp(): string {
+  return `${todayKey()}|${londonHourMinute(new Date()).slice(0, 2)}`;
+}
+
 let appointmentCache: { day: string; rows: MockAppointment[] } | null = null;
 
 /**
@@ -295,12 +440,15 @@ const generatedOverrides = new Map<string, Partial<MockAppointment>>();
 
 /**
  * The generated rolling appointment book, newest day last (the route sorts and
- * filters). Rebuilt once per London day, so a long-lived dev server does not
- * keep serving yesterday's "today".
+ * filters). Rebuilt once per London HOUR, so a long-lived dev server neither
+ * keeps serving yesterday's "today" nor freezes today's states at the hour it
+ * happened to start. See bookStamp.
  */
 export function generatedAppointments(): MockAppointment[] {
-  const day = todayKey();
-  if (appointmentCache?.day !== day) appointmentCache = { day, rows: buildAppointments(day) };
+  const stamp = bookStamp();
+  if (appointmentCache?.day !== stamp) {
+    appointmentCache = { day: stamp, rows: buildAppointments(todayKey()) };
+  }
   const rows = appointmentCache.rows;
   if (generatedOverrides.size === 0) return rows;
   return rows.map((r) => {
