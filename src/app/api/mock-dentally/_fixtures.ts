@@ -65,7 +65,11 @@ export interface MockTreatmentPlan {
   name: string;
   planned_private_treatment_value: number;
   amount_outstanding: number;
-  accepted_at: string; // ISO
+  /** ISO instant the patient accepted the plan, or NULL when they never did.
+   *  Nullable since the charting screen was built: an item sitting on a plan the
+   *  patient declined must not render identically to one on the live accepted plan,
+   *  and that state has to be reachable in dev or it is only ever seen on live. */
+  accepted_at: string | null; // ISO
   updated_at: string; // ISO
   /** ISO instant the plan was completed, or null when it is still open. Present as a
    *  FIELD on every row (even set to null) on purpose: that is how "no plans finished
@@ -415,6 +419,18 @@ export const MOCK_TREATMENT_PLANS: MockTreatmentPlan[] = [
     name: "Full mouth rehabilitation", planned_private_treatment_value: 7800,
     amount_outstanding: 7800, accepted_at: "2025-12-01T10:00:00Z", updated_at: "2026-06-10T09:00:00Z",
   },
+  // --- UNACCEPTED: presented, never accepted. accepted_at IS NULL. -----------
+  // Exists for the charting screen: an item on a plan the patient declined is a
+  // distinct origin there, and without a null-accepted plan in the fixtures that
+  // rendering could only ever be seen against live data. Kept small in value and
+  // NOT settled (amount_outstanding > 0), because the mock plans route treats a
+  // zero-outstanding plan as completed, which is the one status this row must not
+  // report.
+  {
+    id: "plan-011", patient_id: "pat-001", site_id: "site-cc",
+    name: "Crown UL4 (presented, not accepted)", planned_private_treatment_value: 780,
+    amount_outstanding: 780, accepted_at: null, updated_at: "2026-06-16T11:30:00Z",
+  },
 ];
 
 // --- Payment plans --------------------------------------------------------
@@ -428,6 +444,431 @@ export const MOCK_PAYMENT_PLANS: MockPaymentPlan[] = MOCK_TREATMENT_PLANS.filter
   patient_id: p.patient_id,
   outstanding: p.amount_outstanding,
 }));
+
+// --- Charting: categories, treatments, treatment plan items ---------------
+//
+// These three back the FDI charting screen, which is a READ-ONLY MIRROR of
+// Dentally. Nothing here is ever written back: there is no create route on any
+// charting resource upstream and no mock write route below.
+//
+// SHAPE NOTES, and read this before trusting the arrays. The field NAMES come
+// from developer.dentally.co; the wire SHAPES of `teeth` and `surfaces` are
+// UNVERIFIED, because no probe has run against a live charted patient. So the
+// rows below deliberately vary: an array of numbers, a bare string, a delimited
+// string and one value the parser cannot place at all. The read layer tolerates
+// all four and reports what it cannot place rather than dropping it, and this is
+// where that behaviour is exercised in dev rather than discovered on live data.
+//
+// A CHART DRAWN FROM A PARTIAL READ IS A FALSE CLINICAL PICTURE, so every awkward
+// case a real practice has is present here on purpose: whole-tooth work with no
+// surfaces at all, one tooth carrying both completed and planned work, one tooth
+// carrying NHS and private funding at once, a pre-existing base-chart restoration,
+// an item on a plan nobody accepted, mixed permanent and deciduous dentition on one
+// patient, an unrecognised surface letter, and a row whose teeth value is gibberish.
+//
+// No real patient names, addresses or balances from the source screenshots.
+
+export interface MockTreatmentCategory {
+  id: string;
+  name: string;
+}
+
+export interface MockTreatment {
+  id: string;
+  /** The STAFF-facing code a dentist types to find the treatment. */
+  code: string;
+  name: string;
+  treatment_category_id: string;
+  price: number;
+}
+
+export interface MockTreatmentPlanItem {
+  id: string;
+  patient_id: string;
+  treatment_plan_id: string | null;
+  /**
+   * The appointment CARD this row sits under on the plan panel, or null.
+   *
+   * NULL ON MOST ROWS ON PURPOSE. A live probe of production on 2026-08-02 found
+   * only 17 of 100 plan items carrying one: 83% of a real patient's treatment plan
+   * belongs to no appointment card at all. A fixture set where every row had a card
+   * would make the "items with no appointment" group unreachable in dev, and the
+   * panel would look complete on every local render while silently dropping most of
+   * a real plan — the same failure that let the blank surfaces and the unparsed
+   * Palmer teeth ship. The ratio below is kept deliberately close to the live one.
+   */
+  treatment_appointment_id: string | null;
+  treatment_id: string | null;
+  practitioner_id: string | null;
+  /** Deliberately `unknown`: the live shape is not verified, and typing it as
+   *  number[] here would quietly assert something no probe has established. */
+  teeth: unknown;
+  /** Deliberately `unknown`, for the same reason `teeth` is. Dentally's own
+   *  documentation says surfaces are INTEGERS (1-5, and 1-8 on molars), while
+   *  the observed chart reads as letter codes, so the fixtures hold both
+   *  shapes: "MOD" and a bare number. Typing it as string asserted a wire
+   *  shape no probe has established. */
+  surfaces: unknown;
+  region: string | null;
+  base_chart: boolean;
+  completed: boolean;
+  completed_at: string | null;
+  charged: boolean;
+  notes: string | null;
+  /** Staff wording. `patient_nomenclature` is the patient-facing twin; the chart
+   *  is a staff screen and must print this one. */
+  nomenclature: string;
+  patient_nomenclature: string;
+  price: number;
+  value: number;
+  duration: number;
+  nhs_treatment_cat: string | null;
+  uda_band: string | null;
+  payment_plan_id: number | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Categories, in the order a Dentally catalogue tends to list them.
+export const MOCK_TREATMENT_CATEGORIES: MockTreatmentCategory[] = [
+  { id: "cat-001", name: "Diagnostic" },
+  { id: "cat-002", name: "Restorative" },
+  { id: "cat-003", name: "Endodontics" },
+  { id: "cat-004", name: "Surgical" },
+  { id: "cat-005", name: "Prosthetics" },
+  { id: "cat-006", name: "Hygiene and prevention" },
+  { id: "cat-007", name: "Orthodontics" },
+  { id: "cat-008", name: "Cosmetic" },
+];
+
+// The catalogue. Codes follow the reference screen's own examples (0000 Bridge
+// Abutment, 103 NuSmile Consultation, 121 NHS Urgent Filling).
+//
+// The SPREAD OF FIRST LETTERS is deliberate, not decorative: the chart's alphabet
+// rail renders all 37 keys and shows an empty bucket as visibly disabled rather
+// than as a live control that jumps nowhere. With names starting A, B, C, D, E, F,
+// H, I, N, O, R, S, V and W, dev exercises populated AND empty buckets at once. A
+// catalogue that happened to fill every letter would test only half the rail.
+export const MOCK_TREATMENTS: MockTreatment[] = [
+  { id: "tr-000", code: "0000", name: "Bridge Abutment", treatment_category_id: "cat-005", price: 0 },
+  { id: "tr-103", code: "103", name: "NuSmile Consultation", treatment_category_id: "cat-001", price: 45 },
+  { id: "tr-121", code: "121", name: "NHS Urgent Filling", treatment_category_id: "cat-002", price: 26.8 },
+  { id: "tr-110", code: "110", name: "Amalgam Filling", treatment_category_id: "cat-002", price: 95 },
+  { id: "tr-111", code: "111", name: "Composite Filling", treatment_category_id: "cat-002", price: 185 },
+  { id: "tr-112", code: "112", name: "Crown - Porcelain", treatment_category_id: "cat-005", price: 780 },
+  { id: "tr-113", code: "113", name: "Bridge - 3 unit", treatment_category_id: "cat-005", price: 1950 },
+  { id: "tr-120", code: "120", name: "Denture - Full Upper", treatment_category_id: "cat-005", price: 890 },
+  { id: "tr-130", code: "130", name: "Endodontic Treatment - Molar", treatment_category_id: "cat-003", price: 650 },
+  { id: "tr-131", code: "131", name: "Extraction - Simple", treatment_category_id: "cat-004", price: 145 },
+  { id: "tr-132", code: "132", name: "Extraction - Surgical", treatment_category_id: "cat-004", price: 320 },
+  { id: "tr-140", code: "140", name: "Fissure Sealant", treatment_category_id: "cat-006", price: 35 },
+  { id: "tr-141", code: "141", name: "Fluoride Varnish", treatment_category_id: "cat-006", price: 25 },
+  { id: "tr-150", code: "150", name: "Hygiene - Scale and Polish", treatment_category_id: "cat-006", price: 68 },
+  { id: "tr-151", code: "151", name: "Implant - Single", treatment_category_id: "cat-005", price: 2400 },
+  { id: "tr-160", code: "160", name: "Inlay - Composite", treatment_category_id: "cat-002", price: 395 },
+  { id: "tr-170", code: "170", name: "Onlay - Gold", treatment_category_id: "cat-002", price: 620 },
+  { id: "tr-171", code: "171", name: "Orthodontic Assessment", treatment_category_id: "cat-007", price: 60 },
+  { id: "tr-181", code: "181", name: "Radiograph - Bitewing", treatment_category_id: "cat-001", price: 15 },
+  { id: "tr-190", code: "190", name: "Splint - Occlusal", treatment_category_id: "cat-005", price: 340 },
+  { id: "tr-191", code: "191", name: "Study Models", treatment_category_id: "cat-001", price: 55 },
+  { id: "tr-200", code: "200", name: "Veneer - Porcelain", treatment_category_id: "cat-008", price: 720 },
+  { id: "tr-210", code: "210", name: "Whitening - Home Kit", treatment_category_id: "cat-008", price: 295 },
+  { id: "tr-220", code: "220", name: "Root Surface Debridement", treatment_category_id: "cat-006", price: 120 },
+];
+
+/** Terse row builder: the fields below are the ones a case actually varies, and
+ *  everything else takes a sane default, so a reader sees the CASE and not the
+ *  twenty-odd identical keys around it. */
+function tpi(
+  id: string,
+  patient_id: string,
+  o: Partial<MockTreatmentPlanItem> & { nomenclature: string },
+): MockTreatmentPlanItem {
+  return {
+    id,
+    patient_id,
+    treatment_plan_id: null,
+    // Defaulting to NULL is the honest default: on live data most rows have no card.
+    treatment_appointment_id: null,
+    treatment_id: null,
+    // "prac-001" HERE WAS A DEV-ONLY BLACK HOLE. /v1/practitioners and every
+    // appointment in this file use ids from ROSTER ("prac-1", "prac-2", ...), so a
+    // plan item's practitioner_id could NEVER match one and the panel's clinician
+    // column was 100% blank locally whatever the code did. The defect it hid was
+    // real on live data, and it survived three passes because the mock was tidier
+    // than production in the one direction that mattered. Every plan item now names
+    // a real rostered id, and the awkward cases below name deliberately awkward ones.
+    practitioner_id: "prac-1",
+    teeth: [],
+    surfaces: "",
+    region: null,
+    base_chart: false,
+    completed: false,
+    completed_at: null,
+    charged: false,
+    notes: null,
+    patient_nomenclature: o.nomenclature,
+    price: 0,
+    value: 0,
+    duration: 20,
+    nhs_treatment_cat: null,
+    uda_band: null,
+    payment_plan_id: 2,
+    position: 1,
+    created_at: "2026-05-02T09:00:00Z",
+    updated_at: "2026-06-16T09:00:00Z",
+    ...o,
+  };
+}
+
+export const MOCK_TREATMENT_PLAN_ITEMS: MockTreatmentPlanItem[] = [
+  // === pat-001 (site-cc): the rich chart ==================================
+  // A multi-surface MOD on an upper right first molar, done and charged.
+  tpi("tpi-001", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [16], surfaces: "MOD", region: "UR", completed: true, completed_at: "2026-05-14T10:20:00Z",
+    charged: true, price: 185, value: 185, duration: 40, payment_plan_id: 2, position: 1,
+    notes: "MOD composite, shade A2.",
+  }),
+  // THE SAME TOOTH, planned rather than completed, and on NHS rather than private.
+  // Two things at once, both of which the screen has to keep apart: completed vs
+  // planned on one tooth, and a funding rail that has to draw TWO codes for tooth 16.
+  //
+  // ON CARD ta-001, which also carries a PRIVATE row (tpi-020). One card holding
+  // both funding codes is the ordinary case on a real plan, and a card footer that
+  // rolled the two into one number would be a claim about a claim.
+  // Worked by a DIFFERENT clinician from the one the card's diary appointment is
+  // booked with (appt-001a is prac-1, Dana Hale). That is ordinary - a card is
+  // booked with one person and a line on it can be another's - and it is the case
+  // that proves the initials come from the item's own practitioner_id rather than
+  // from the card heading above it.
+  tpi("tpi-002", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_appointment_id: "ta-001",
+    practitioner_id: "prac-2",
+    treatment_id: "tr-121", nomenclature: "NHS Urgent Filling",
+    patient_nomenclature: "Filling", teeth: [16], surfaces: "B", region: "UR",
+    price: 26.8, value: 26.8, payment_plan_id: 1, nhs_treatment_cat: "Band 2", uda_band: "2", position: 3,
+  }),
+  // === ta-001's other two rows, mirroring the reference screenshot exactly ====
+  // A ZERO-PRICE row. £0.00 is a real, ordinary value on a plan (an image taken as
+  // part of a band, a bridge abutment, an NHS item covered by the UDA) and it is
+  // NOT the same as "no price recorded". A footer that skipped zero rows, or a cell
+  // that rendered 0 as blank, would under-count the card and read as a missing row.
+  tpi("tpi-020", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_appointment_id: "ta-001",
+    treatment_id: "tr-181", nomenclature: "Intraoral Periapical Image",
+    teeth: [], surfaces: "", price: 0, value: 0, duration: 0, payment_plan_id: 2, position: 1,
+  }),
+  // NHS, zero price, 15 minutes. Its money sits in the UDA band, not in `price`.
+  tpi("tpi-021", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_appointment_id: "ta-001",
+    treatment_id: "tr-103", nomenclature: "Urgent Assessment - Problem Focused",
+    teeth: [], surfaces: "", price: 0, value: 0, duration: 15,
+    payment_plan_id: 1, nhs_treatment_cat: "Band 1", uda_band: "1", position: 2,
+  }),
+  // Occlusal-only findings across the upper anteriors, mirroring the observed
+  // Dentally screenshot. Four separate rows, as Dentally holds them.
+  tpi("tpi-003", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [11], surfaces: "O", price: 185, value: 185, position: 3,
+  }),
+  tpi("tpi-004", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [12], surfaces: "O", price: 185, value: 185, position: 4,
+  }),
+  tpi("tpi-005", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [21], surfaces: "O", price: 185, value: 185, position: 5,
+  }),
+  tpi("tpi-006", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [22], surfaces: "O", price: 185, value: 185, position: 6,
+  }),
+  // WHOLE-TOOTH WORK: a planned extraction carries no surfaces at all. A renderer
+  // that only draws surfaces draws this as a clean, unmarked tooth, which is the
+  // most direct route this screen has to a wrong-site event. It is in the fixtures
+  // so that failure is visible on the first local render.
+  //
+  // ON CARD ta-002, whose linked diary appointment DOES NOT EXIST. The card header
+  // therefore has no date, time or practitioner, and the panel must say why rather
+  // than render an undated card that reads as "not yet scheduled".
+  tpi("tpi-007", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_appointment_id: "ta-002",
+    treatment_id: "tr-131", nomenclature: "Extraction - Simple",
+    teeth: [26], surfaces: "", price: 145, value: 145, duration: 30, position: 1,
+    notes: "Unrestorable. Discussed replacement options.",
+  }),
+  // A multi-tooth item: one bridge spanning three lower left teeth, again with no
+  // surfaces. It must appear on ALL THREE teeth, not just the first abutment.
+  tpi("tpi-008", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-113", nomenclature: "Bridge - 3 unit",
+    teeth: [34, 35, 36], surfaces: "", price: 1950, value: 1950, duration: 90, position: 8,
+  }),
+  // BASE CHART: a pre-existing restoration Dentally recorded as the starting state
+  // rather than as planned or completed treatment.
+  // ALSO THE INACTIVE-CLINICIAN CASE. prac-9 is ROSTER's active:false row, and a
+  // restoration placed in 2019 by a clinician who has since left is exactly the
+  // shape of it. The panel read must NOT filter /v1/practitioners on `active` the
+  // way the booking picker does, or the oldest entries on a record - the ones a
+  // clinician is most likely to be checking - lose their attribution.
+  tpi("tpi-009", "pat-001", {
+    treatment_id: "tr-110", nomenclature: "Amalgam Filling", teeth: [46], surfaces: "MO",
+    practitioner_id: "prac-9",
+    base_chart: true, completed: true, completed_at: "2019-03-11T00:00:00Z",
+    price: 0, value: 0, payment_plan_id: 1, position: 9, notes: "Pre-existing on registration.",
+  }),
+  // AN UNRECOGNISED SURFACE LETTER. "X" is not one of the five regions. It must be
+  // shown as an unrecognised letter, never silently dropped: a swallowed letter is
+  // a surface a clinician believes was not recorded.
+  tpi("tpi-010", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-160", nomenclature: "Inlay - Composite",
+    teeth: [47], surfaces: "MODX", price: 395, value: 395, position: 10,
+  }),
+  // DELIBERATELY UNPARSEABLE TEETH. This row exists to exercise the unplaced
+  // affordance: it must be counted and listed with its raw value shown, never
+  // dropped.
+  //
+  // It used to say "UR6", which is Palmer notation and which parseTeeth now
+  // CONVERTS, because DENTALLY.md's correction says Palmer is what Dentally
+  // actually stores. A fixture whose whole job is to be unreadable has to hold
+  // something genuinely unreadable, so it holds a free-text value instead.
+  tpi("tpi-011", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-190", nomenclature: "Splint - Occlusal",
+    teeth: "whole arch", surfaces: "", price: 340, value: 340, position: 11,
+  }),
+  // PALMER NOTATION, WHICH IS WHAT LIVE DENTALLY SENDS. It must place on tooth 16
+  // exactly as [16] does, or every row on every live patient lands in unplaced
+  // and the arch draws thirty-two clean teeth.
+  tpi("tpi-015", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-110", nomenclature: "Fissure Sealant",
+    teeth: "UL7", surfaces: "O", price: 45, value: 45, duration: 15, position: 14,
+  }),
+  // A NUMERIC SURFACE, which is what Dentally's own documentation says the field
+  // holds ("numbered 1-5 ... and 1-8 for molar teeth"). We do not know which
+  // region each index is and will not guess, so this must render as a marked
+  // tooth with the value shown, and must NOT be mistaken for a whole-tooth
+  // finding such as an extraction.
+  tpi("tpi-016", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-160", nomenclature: "Composite - Posterior",
+    teeth: [37], surfaces: 6, price: 210, value: 210, duration: 40, position: 15,
+  }),
+  // ON A PLAN THE PATIENT NEVER ACCEPTED (plan-011, accepted_at null). This must
+  // not render identically to the accepted plan's work above.
+  // A PRACTITIONER ID THE PRACTITIONER LIST DOES NOT HOLD. Ordinary after a merge,
+  // or when the clinician sits at another site. Dentally DID record who planned
+  // this crown, so the initials cell must say that we could not look them up rather
+  // than go blank - a blank on this table means "Dentally sent nothing here", which
+  // for this row would be false.
+  tpi("tpi-012", "pat-001", {
+    treatment_plan_id: "plan-011", treatment_id: "tr-112", nomenclature: "Crown - Porcelain",
+    practitioner_id: "prac-not-on-this-site",
+    teeth: [24], surfaces: "MOD", price: 780, value: 780, duration: 60, position: 1,
+  }),
+  // Two tolerance cases: a BARE STRING and a DELIMITED STRING. Both must parse to
+  // the same thing an array of numbers would.
+  tpi("tpi-013", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-181", nomenclature: "Radiograph - Bitewing",
+    teeth: "17", surfaces: "", price: 15, value: 15, duration: 10, completed: true,
+    completed_at: "2026-05-14T10:05:00Z", charged: true, position: 12,
+  }),
+  // NO PRACTITIONER AT ALL. The one case where an empty initials cell is the true
+  // answer, kept beside the unresolvable row above so the two states are visibly
+  // different on one screen rather than only in a test.
+  tpi("tpi-014", "pat-001", {
+    treatment_plan_id: "plan-001", treatment_id: "tr-200", nomenclature: "Veneer - Porcelain",
+    practitioner_id: null,
+    teeth: "13,23", surfaces: "B", price: 1440, value: 1440, duration: 60, position: 13,
+  }),
+
+  // === pat-004 (site-cc): MIXED DENTITION ==================================
+  // Permanent AND deciduous work on one patient. Whichever arch the chart is
+  // showing, the other one's items must be counted rather than silently gone.
+  //
+  // EVERY ROW HERE HAS treatment_appointment_id null, and pat-004 has no treatment
+  // appointments at all. That is the majority case on live data (83% of items), and
+  // it is the one a panel built as pure "Appt. 1 / Appt. 2" cards renders as an
+  // empty screen for a patient with a full plan.
+  //
+  // The ids used to be tpi-015..tpi-018, which COLLIDED with pat-001's tpi-015 and
+  // tpi-016. Nothing keyed on them until the plan panel, which keys rows by id;
+  // treatmentPlanItemsForPlan() also crosses patients. Renumbered rather than left
+  // as a latent duplicate-key bug.
+  tpi("tpi-041", "pat-004", {
+    treatment_plan_id: "plan-004", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [36], surfaces: "O", completed: true, completed_at: "2026-06-04T14:10:00Z",
+    charged: true, price: 185, value: 185, position: 1,
+  }),
+  tpi("tpi-042", "pat-004", {
+    treatment_plan_id: "plan-004", treatment_id: "tr-140", nomenclature: "Fissure Sealant",
+    teeth: [55], surfaces: "O", price: 35, value: 35, duration: 15, payment_plan_id: 1,
+    nhs_treatment_cat: "Band 1", uda_band: "1", position: 2,
+  }),
+  tpi("tpi-043", "pat-004", {
+    treatment_plan_id: "plan-004", treatment_id: "tr-111", nomenclature: "Composite Filling",
+    teeth: [74], surfaces: "MO", price: 185, value: 185, position: 3,
+  }),
+  tpi("tpi-044", "pat-004", {
+    treatment_plan_id: "plan-004", treatment_id: "tr-131", nomenclature: "Extraction - Simple",
+    teeth: [85], surfaces: "", price: 145, value: 145, duration: 30, position: 4,
+  }),
+];
+
+// --- Treatment appointments: the plan panel's cards -----------------------
+//
+// One row per card on the treatment plan panel. READ ONLY, like every other
+// charting fixture: there is no create route on /v1/treatment_appointments
+// upstream and there is no mock write route below, so `+ add appointment` renders
+// disabled with its reason stated.
+//
+// FIELD NOTES, from PLAN-PANEL.md §2 (verified live 2026-08-02):
+//   - `position` IS the card number, zero-based. position 0 renders as "Appt. 1".
+//     Numbering is not invented from array order.
+//   - `notes` is the note printed in the card header. Readable; the Draft/mic
+//     editing affordances beside it are gated.
+//   - `appointment_id` links the card to a DIARY appointment, and that is where the
+//     header's date, time and practitioner come from — NOT from this object, which
+//     carries none of the three.
+//
+// THE DISTRIBUTION HERE IS DELIBERATELY AWKWARD, because production is. A mock
+// that is tidier than production is how the blank-surfaces bug survived local dev:
+//   - ta-001 resolves cleanly (appt-001a is a real diary row).
+//   - ta-002 names an appointment id that DOES NOT EXIST. Dangling references are
+//     ordinary after a cancellation or a merge, and the panel must say the header
+//     could not be resolved rather than draw an undated card.
+//   - ta-003 carries NO appointment_id at all and no items. A card that was created
+//     but never booked, and never filled. Two states a reader must be able to tell
+//     apart from ta-002's, and from "this patient has no cards".
+export interface MockTreatmentAppointment {
+  id: string;
+  patient_id: string;
+  treatment_plan_id: string | null;
+  /** ZERO-BASED card number. position 0 is "Appt. 1". */
+  position: number;
+  /** The note in the card header. */
+  notes: string | null;
+  bookable: boolean;
+  /** The DIARY appointment this card is booked as, or null when it is not booked. */
+  appointment_id: string | null;
+}
+
+export const MOCK_TREATMENT_APPOINTMENTS: MockTreatmentAppointment[] = [
+  {
+    id: "ta-001", patient_id: "pat-001", treatment_plan_id: "plan-001", position: 0,
+    notes: "Patient anxious about the assessment - allow extra chair time.",
+    bookable: true, appointment_id: "appt-001a",
+  },
+  {
+    id: "ta-002", patient_id: "pat-001", treatment_plan_id: "plan-001", position: 1,
+    notes: null, bookable: true,
+    // Deliberately dangling: no appointment with this id exists in MOCK_APPOINTMENTS.
+    appointment_id: "appt-does-not-exist",
+  },
+  {
+    id: "ta-003", patient_id: "pat-001", treatment_plan_id: "plan-001", position: 2,
+    notes: "To be booked once the RCT is reviewed.", bookable: true, appointment_id: null,
+  },
+];
 
 export interface MockAppointment {
   id: string;
@@ -491,7 +932,13 @@ export const MOCK_APPOINTMENTS: MockAppointment[] = [
   { id: "appt-017a", patient_id: "pat-017", site_id: "site-rv", start_time: "2026-01-05T10:00:00Z", state: "Completed" },
   { id: "appt-018a", patient_id: "pat-018", site_id: "site-cc", start_time: "2025-12-20T10:00:00Z", state: "Completed" },
   // An active patient WITH a future booking (must NOT appear in the dormant book).
-  { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked" },
+  //
+  // ALSO the diary appointment that plan-panel card ta-001 is booked as, which is
+  // why it carries a duration and a practitioner: the card HEADER's date, time and
+  // clinician are read off this row, not off the treatment_appointment. Strip these
+  // and ta-001 renders with a blank clinician on a booked appointment.
+  { id: "appt-001a", patient_id: "pat-001", site_id: "site-cc", start_time: "2026-07-20T10:00:00Z", state: "booked",
+    duration: 45, reason: "Urgent assessment", practitioner: "Dana Hale", practitioner_id: "prac-1" },
 
   // --- Diary fixtures (relative to NOW = 2026-06-18, a Thursday) -----------
   // A populated week so the Calendar and Today views are meaningful. These
@@ -676,6 +1123,28 @@ export function paymentPlansForPatient(patientId: string): MockPaymentPlan[] {
 
 export function treatmentPlansForSite(siteId: string): MockTreatmentPlan[] {
   return MOCK_TREATMENT_PLANS.filter((p) => p.site_id === siteId);
+}
+
+/** ONE patient's charting items. The chart read filters by patient again on its
+ *  own side, as a safety net against a source that ignores the filter. */
+export function treatmentPlanItemsForPatient(patientId: string): MockTreatmentPlanItem[] {
+  return MOCK_TREATMENT_PLAN_ITEMS.filter((i) => i.patient_id === patientId);
+}
+/** One plan's charting items, so the item -> plan -> patient join is exercisable. */
+/** One patient's plan-panel cards, oldest card first (by `position`, the card number). */
+export function treatmentAppointmentsForPatient(patientId: string): MockTreatmentAppointment[] {
+  return MOCK_TREATMENT_APPOINTMENTS.filter((t) => t.patient_id === patientId).sort(
+    (a, b) => a.position - b.position,
+  );
+}
+
+/** One plan's cards. Both filters compose in the route, as they do for items. */
+export function treatmentAppointmentsForPlan(planId: string): MockTreatmentAppointment[] {
+  return MOCK_TREATMENT_APPOINTMENTS.filter((t) => t.treatment_plan_id === planId);
+}
+
+export function treatmentPlanItemsForPlan(planId: string): MockTreatmentPlanItem[] {
+  return MOCK_TREATMENT_PLAN_ITEMS.filter((i) => i.treatment_plan_id === planId);
 }
 
 export function patientsForSite(siteId: string): MockPatient[] {

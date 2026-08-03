@@ -6,6 +6,7 @@ import { moreLabel, splitPinnedBand } from "@/lib/patient-notes/pin-layout";
 import type { NoteColour } from "@/lib/patient-notes/colours";
 import type { PatientNote } from "@/lib/patient-notes/types";
 import { NoteCard } from "./note-card";
+import { PanelFailed } from "./panel";
 import { usePatientNotes } from "./use-patient-notes";
 
 /**
@@ -139,10 +140,10 @@ function Band({
 
   if (failed) {
     return (
-      <p className="rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-[12.5px] text-status-amber">
+      <PanelFailed>
         We could not read this patient&apos;s pinned notes just now. Open the Notes tab to try again, and check
         Dentally before treating this patient.
-      </p>
+      </PanelFailed>
     );
   }
 

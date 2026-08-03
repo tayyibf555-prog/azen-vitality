@@ -14,7 +14,7 @@
 //     offered for an extraction, however free they are.
 // ===========================================================================
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   appointments: [] as Record<string, unknown>[],
@@ -133,7 +133,22 @@ async function call(body: Record<string, unknown> = {}) {
   return { res, json: (await res.json()) as Record<string, unknown> };
 }
 
+// THE CLOCK IS FROZEN, and this file cannot work without it.
+//
+// The route searches from the day AFTER max(today, DAY), while the mocked diary
+// above is pinned to the fortnight after DAY (2026-08-01 to 2026-08-14). Every day
+// that passes slides the searched window one day off the mocked one, and on
+// 2026-08-07 they stop overlapping altogether: every availability row is outside
+// the window, so the route returns an empty proposal list.
+//
+// That is the exact failure this file exists to catch — a confident empty — so it
+// would have been reported as a suitability regression rather than a stale
+// fixture. Freezing to DAY itself keeps `from` on DAY and the two windows aligned.
+//
+// Only Date is faked. Faking every timer would hang the async route under test.
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-31T08:00:00.000+01:00"));
   vi.clearAllMocks();
   h.appointments = [appointment()];
   h.appointmentsFailed = false;
@@ -148,6 +163,10 @@ beforeEach(() => {
   h.availabilityByCall = [];
   h.entriesByCall = [];
   h.caps = { caps: [...SUITABILITY_SEED], seeded: true };
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("a period that could not be read", () => {

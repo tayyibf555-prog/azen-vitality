@@ -2,7 +2,7 @@
 // override) is dropped from the outreach build BEFORE the expensive appointment read,
 // even though Dentally still has them active. Uses the REAL prefilter/history matcher;
 // only Dentally, the campaign repo and the override loader are doubled.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { OutreachCampaign } from "./types";
 
 const h = vi.hoisted(() => ({
@@ -67,10 +67,32 @@ function campaign(): OutreachCampaign {
   };
 }
 
+// THE CLOCK IS FROZEN, and the override this file tests is invisible without it.
+//
+// Both patients qualify only because their one visit (2025-06-01) falls inside the
+// default treatment lookback, which build.ts measures back from `new Date()`. That
+// window is 1095 days, so on 2028-05-31 the visit ages out of it, nobody is
+// enrolled, and BOTH assertions below start passing or failing for a reason that
+// has nothing to do with the exclusion:
+//
+//   - the exclusion test would still pass, but vacuously: p-excl is absent because
+//     the build enrolled no one at all, not because the override dropped them,
+//   - the control test, which exists precisely to prove the override is the cause,
+//     fails outright.
+//
+// Freezing a month after the visit keeps it a recent visit forever.
+//
+// Only Date is faked. Faking every timer would hang the async build tick.
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2025-07-01T09:00:00.000Z"));
   h.apptCalls = [];
   h.inserts = [];
   h.excluded = new Set(["p-excl"]);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("outreach build override exclusion", () => {

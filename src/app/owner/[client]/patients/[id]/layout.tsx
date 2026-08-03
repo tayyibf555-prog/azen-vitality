@@ -13,13 +13,21 @@ export default async function OwnerPatientRecordLayout({
 }) {
   const { client, id } = await params;
   return (
-    <PatientRecordShell
-      clientSlug={client}
-      patientId={id}
-      basePath={`/owner/${client}/patients/${id}`}
-      listHref={`/owner/${client}/patients`}
-    >
-      {children}
-    </PatientRecordShell>
+    // Identical to c/[client]/patients/[id]/layout.tsx, and it has to be. The owner
+    // tree renders the SAME PatientRecordShell under a layout carrying the SAME
+    // max-w-[1400px] + has-[[data-wide]]:max-w-none rule, so a marker set on one tree
+    // and not the other gives the owner a record that still jumps width between tabs
+    // while /c does not. A module wired into one tree and not the other is a class of
+    // failure this project has shipped once already.
+    <div data-wide>
+      <PatientRecordShell
+        clientSlug={client}
+        patientId={id}
+        basePath={`/owner/${client}/patients/${id}`}
+        listHref={`/owner/${client}/patients`}
+      >
+        {children}
+      </PatientRecordShell>
+    </div>
   );
 }

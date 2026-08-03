@@ -29,6 +29,19 @@ export async function GET(request: Request): Promise<Response> {
   const start = (page - 1) * perPage;
   const treatment_plans = all.slice(start, start + perPage).map((p) => ({
     ...p,
+    // REAL DENTALLY'S OWN FIELD NAME, emitted beside the mock's simplification.
+    //
+    // `planned_private_treatment_value` is this mock's invention (see the note
+    // above) and the reactivation and coordinator syncs read it off the wire by
+    // that name. Live Dentally calls the field `private_treatment_value`, and that
+    // is what the charting reads look for - so with only the mock's name on the
+    // wire, the treatment plan panel printed "Not given by Dentally" for the
+    // private plan value on EVERY panel in dev. The whole point of that figure is
+    // to sit beside our own sum of the rows so a DISAGREEMENT between Dentally and
+    // this screen is visible, and it could never be exercised or reviewed locally.
+    // A mock tidier than production is how the blank-surfaces bug survived dev.
+    private_treatment_value: p.planned_private_treatment_value,
+
     // `completed_at` is emitted on EVERY row, null included. A reader can then tell
     // "no plan finished in this window" (a fact) apart from "this source does not
     // expose finish dates" (unavailable), which the dashboard's finished/open counts

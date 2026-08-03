@@ -38,7 +38,7 @@ export function PanelSection({
  * the exact failure this project already shipped once.
  */
 export function PanelNote({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <p className={cn("text-[11px] leading-[1.45] text-faint", className)}>{children}</p>;
+  return <p className={cn("max-w-prose text-[11px] leading-[1.45] text-faint", className)}>{children}</p>;
 }
 
 /** A real read that returned nothing. Category A: "this patient has none." */
@@ -57,7 +57,7 @@ export function PanelEmpty({ children }: { children: React.ReactNode }) {
  */
 export function PanelFailed({ children }: { children: React.ReactNode }) {
   return (
-    <p className="rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2.5 text-[12.5px] text-status-amber">
+    <p className="max-w-prose rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2.5 text-[12.5px] text-status-amber">
       {children}
     </p>
   );

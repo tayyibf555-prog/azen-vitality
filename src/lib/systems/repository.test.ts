@@ -33,12 +33,14 @@ import {
   getDisabledSlugs,
   getSystemStates,
   setSystemEnabled,
+  __resetDisabledSlugsFailureLogForTests,
 } from "./repository";
 import { SYSTEMS } from "./catalog";
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.set({ data: null, error: null });
+  __resetDisabledSlugsFailureLogForTests();
 });
 
 describe("isSystemEnabled (default ON, fail OPEN)", () => {
@@ -76,6 +78,58 @@ describe("getDisabledSlugs", () => {
     h.set({ data: null, error: { message: "down" } });
     const disabled = await getDisabledSlugs("vitality");
     expect(disabled.size).toBe(0);
+  });
+});
+
+describe("getDisabledSlugs failure log dedupe (the 120-issues bug)", () => {
+  it("logs the first occurrence of a failure loudly", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.set({ data: null, error: { message: "table missing" } });
+    await getDisabledSlugs("vitality");
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("does not re-log an immediate repeat of the SAME failure for the SAME client", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.set({ data: null, error: { message: "table missing" } });
+    await getDisabledSlugs("vitality");
+    await getDisabledSlugs("vitality");
+    await getDisabledSlugs("vitality");
+    // Naive mutation to try: dedupe on clientId alone (drop the reason from the
+    // key). That mutation would ALSO pass this assertion (still just 1 log),
+    // which is exactly why the next test exists to catch it.
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("still logs a DIFFERENT failure reason for the same client (proves the key isn't clientId-only)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.set({ data: null, error: { message: "table missing" } });
+    await getDisabledSlugs("vitality");
+    h.set({ data: null, error: { message: "permission denied" } });
+    await getDisabledSlugs("vitality");
+    // A clientId-only dedupe (the tempting-but-wrong mutation) would swallow
+    // this second, materially different failure and leave spy at 1 call.
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
+
+  it("still logs the same reason for a DIFFERENT client", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.set({ data: null, error: { message: "table missing" } });
+    await getDisabledSlugs("vitality");
+    await getDisabledSlugs("other-client");
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
+
+  it("the fail-open return value (empty set) is unchanged whether logged or suppressed", async () => {
+    h.set({ data: null, error: { message: "table missing" } });
+    const first = await getDisabledSlugs("vitality");
+    const second = await getDisabledSlugs("vitality");
+    expect(first.size).toBe(0);
+    expect(second.size).toBe(0);
   });
 });
 

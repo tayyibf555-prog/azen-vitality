@@ -8,6 +8,7 @@ import { cn, relativeTime } from "@/lib/utils";
 import { Loader2, ShieldAlert, Check, X, History } from "lucide-react";
 import { isPatientAdminRole } from "@/lib/patient/roles";
 import { FAILED_COPY } from "@/lib/patient/tabs";
+import { PanelFailed } from "@/components/client/patients/record/panel";
 import type { DentallySyncResult, PatientAdminStatus } from "@/lib/patient-status/types";
 
 // Roles allowed to SEE and USE the control come from lib/patient/roles, the same list the
@@ -192,11 +193,7 @@ export function PatientStatusManager({
 
   return (
     <section className="space-y-3 rounded-xl border border-line bg-card-muted/30 px-4 py-3.5">
-      {unavailable ? (
-        <p className="rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-[12.5px] text-status-amber">
-          {FAILED_COPY.status}
-        </p>
-      ) : null}
+      {unavailable ? <PanelFailed>{FAILED_COPY.status}</PanelFailed> : null}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">Status</span>

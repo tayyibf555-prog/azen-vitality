@@ -86,14 +86,18 @@ export const PATIENT_TABS: readonly PatientTab[] = [
   },
   {
     slug: "chart",
+    // PARTIAL from the day the FDI chart landed. /v1/treatment_plan_items is a
+    // real read, so the chart is no longer category B. What it CANNOT reach
+    // (BPE, perio, tooth status, images) is stated on the chart itself, beside
+    // the affordance it concerns, which is where a caveat belongs.
+    //
+    // The old willHold promised "and it will write back to Dentally". That is
+    // now known to be false: Dentally publishes no create route on any charting
+    // resource. It must not survive this commit.
     label: "Chart",
-    availability: "unreadable",
-    cannotRead:
-      "We cannot read the tooth chart. Dentally does not expose charting through the connection we have.",
-    willHold:
-      "When it is built, this tab will hold the full FDI chart, upper and lower, with a crown diagram and " +
-      "surfaces grid per tooth, the treatment code list and plan templates, BPE, history and the base chart, " +
-      "and it will write back to Dentally.",
+    availability: "partial",
+    cannotRead: "",
+    willHold: "",
   },
   {
     slug: "appointments",
@@ -188,6 +192,12 @@ export const EMPTY_COPY = {
   // Worded so it cannot be read as "this patient has never been contacted".
   correspondence: "No messages have been sent to this patient from this platform.",
   tasks: "No open tasks for this patient.",
+  // Worded so it cannot be read as "every tooth is present and sound". The
+  // chart draws treatment ITEMS; it does not draw the dentition.
+  chartItems:
+    "No treatment items on this patient's chart in Dentally. This chart shows treatment items and not tooth " +
+    "status, so this does not tell you whether every tooth is present or sound.",
+  chartDraft: "Nothing has been planned on this screen for this patient.",
   // Worded so it cannot be read as "nothing has ever happened to this record",
   // which is the failure mode the Audit tab is most prone to.
   audit: "No changes have been made to this patient through this platform.",
@@ -220,6 +230,16 @@ export const FAILED_COPY = {
     "We could not read this patient's status just now, so we cannot show whether the practice has marked them " +
     "inactive or do-not-contact. Check before contacting this patient.",
   statusChip: "Status not read",
+  // THE LOUDEST FALSE CLAIM AVAILABLE ON THE RECORD, if it were missing. A
+  // failed chart read renders 32 unmarked teeth, which a clinician reads as a
+  // fact about the patient. The chart's status bar is always rendered so this
+  // sentence always has somewhere to go.
+  chartItems:
+    "We could not read this patient's chart from Dentally just now, so nothing on this chart can be relied on. " +
+    "An unmarked tooth here does not mean an unmarked tooth in Dentally.",
+  treatments:
+    "We could not read the treatment list from Dentally just now, so treatments cannot be selected or named.",
+  chartDraft: "We could not read what has been planned on this screen for this patient just now.",
 } as const;
 
 /** Category C: on our own side, and stated as one quiet line, never a row of chips. */
@@ -252,4 +272,120 @@ export const CANNOT_READ_COPY = {
     "Shows recall, no-show and reactivation tasks. Coordinator, after-hours, speed-to-lead and smile assessment " +
     "tasks are not keyed to a patient, so they cannot be listed here.",
   medicalHistoryFlag: "Medical history not read",
+  /** The chart's BPE marker. Deliberately the same SHAPE as the medical flag
+   *  above and kept beside it: Dentally puts a RED dot on BPE when one is due,
+   *  we cannot know, and a bare grey dot in that trained position reads as
+   *  "checked, nothing due", which is a claim. Words, not a dot. */
+  bpeFlag: "BPE not read",
+
+  // -------------------------------------------------------------------------
+  // THE CHART'S SEVEN. Each one is rendered somewhere on the chart, beside the
+  // affordance it concerns, and each names DENTALLY as the place to look.
+  //
+  // Dentally's API exposes NO periodontal data and NO BPE scores at all
+  // (verified: "perio" appears in their documentation only inside the word
+  // "period"), while Dentally's OWN charting screen has both. So a BPE or perio
+  // region rendering as empty, blank or greyed-out would tell a dentist "no
+  // findings" when the truth is "not available here", and that is a plausible
+  // contributor to a missed diagnosis. None of these may be omitted, and none
+  // of them may be a disabled control with no explanation.
+  // -------------------------------------------------------------------------
+  bpe:
+    "We cannot read BPE scores. Dentally does not expose them through the connection we have, so this chart " +
+    "cannot tell you what the last basic periodontal examination found or whether one is due. Open this " +
+    "patient in Dentally to see their BPE history.",
+  perioOnChart:
+    "We cannot read periodontal charting. Dentally holds pocket depths, bleeding and recession on its own " +
+    "chart and exposes no part of it through the connection we have, so nothing on this screen reflects this " +
+    "patient's periodontal condition. Check Dentally before treating this patient.",
+  toothStatus:
+    "We cannot read tooth status. This chart draws the treatment items Dentally returns, not the dentition " +
+    "itself, so a tooth drawn here may be missing, extracted, crowned or unerupted in Dentally, which is the " +
+    "record.",
+  chartImages:
+    "We cannot read chart images. Dentally holds radiographs and clinical photographs against the chart and " +
+    "does not expose them through the connection we have, so open this patient in Dentally to view them.",
+  cloudGallery:
+    "We cannot read the Cloud Gallery. Dentally's imaging gallery sits outside the connection we have, so " +
+    "whatever it holds for this patient can only be seen in Dentally.",
+  baseChartStatus:
+    "Base chart treatment items are shown here, but we cannot read Dentally's socket level tooth status. That " +
+    "is where Dentally holds whether a tooth is present, missing, retained or implanted, and it is not exposed " +
+    "through the connection we have.",
+  chartHistoryScope:
+    "This is the history held in Dentally's treatment plan items. We cannot read Dentally's full clinical " +
+    "history, which also holds base chart changes, clinical notes and periodontal assessments, so this list is " +
+    "narrower than the one on Dentally's own chart.",
 } as const;
+
+/**
+ * Everything else the chart screen says, so no sentence on it lives untested
+ * inside JSX.
+ *
+ * These are not category B "cannot read" sentences, so they are kept apart from
+ * CANNOT_READ_COPY rather than diluting it. They ARE swept for British English
+ * and for em-dashes alongside it.
+ */
+export const CHART_COPY = {
+  // Lives here, not in write-gate.ts, so the copy sweep covers it.
+  writeBlockedTitle:
+    "Charting is authored in Dentally. Dentally publishes no way for this platform to create or change " +
+    "charting, so this control is shown for reference and cannot act from here.",
+  planTemplates:
+    "Treatment plan templates are held in Dentally and cannot be applied from here. Open this patient in " +
+    "Dentally to use one.",
+  historyExport: "Exports the lines shown here, as they were read from Dentally at the time above.",
+  truncated:
+    "This chart read reached its page limit, so it may not be the whole of this patient's chart. Check " +
+    "Dentally before relying on it.",
+  // A SEPARATE SENTENCE, because it is a separate fact. The catalogue walk and
+  // the patient's own chart shared one flag, so a practice whose stock treatment
+  // list runs past five hundred rows printed "this may not be the whole of this
+  // patient's chart" on every patient, forever, while the chart itself had been
+  // read in full. A caveat that is always on is a caveat nobody reads, and this
+  // one is about the LIST, not about the person.
+  truncatedCatalogue:
+    "The treatment list read reached its page limit, so some treatments may be missing from the list on the " +
+    "left. The chart itself is unaffected.",
+  // Dentally sends surfaces as numbers, and its own documentation does not say
+  // which region each number is. Marking a real surface with a guessed name is a
+  // wrong surface on a clinical record, so the number is shown and never
+  // converted.
+  unreadSurfaces:
+    "Some treatment items name surfaces in a form this platform cannot place on a tooth diagram, so those " +
+    "surfaces are shown as the value Dentally sent rather than drawn. The tooth is marked and the values are " +
+    "listed in History.",
+  staleness:
+    "Charting done in Dentally after this time is not shown here. Refresh to read the chart again.",
+  offArch:
+    "Treatment items on the other dentition are not drawn in this view. Turn on the combined chart to see " +
+    "both dentitions at once.",
+  unplaced:
+    "Some treatment items name teeth this platform could not read, so they are not drawn on the arch. They " +
+    "are listed in History with the value Dentally sent.",
+  draftDisabled:
+    "Planning on this screen is switched off, so this chart is a read only mirror. Charting is done in " +
+    "Dentally.",
+  draftSaveFailed:
+    "That change was not saved. Nothing has been sent to Dentally, and what is on this screen may not be what " +
+    "is stored.",
+  socketStatus:
+    "Dentally sets tooth status from the socket menu on its own chart. That menu is not exposed through the " +
+    "connection we have.",
+} as const;
+
+/**
+ * Which tab a record opens on, by role.
+ *
+ * DENTALLY.md:114 says a practitioner's patient records open on Chart and
+ * everyone else opens on Details. roles.ts has no practitioner role today
+ * (client_owner, client_coordinator and agency_admin only), so this returns
+ * "details" for every role that currently exists and "chart" for a
+ * client_practitioner that does not exist yet.
+ *
+ * It is NOT wired to a route. Naming and testing a behaviour we cannot yet
+ * ship is the honest form; omitting it silently was not.
+ */
+export function defaultPatientTabForRole(role: string | null | undefined): PatientTabSlug {
+  return role === "client_practitioner" ? "chart" : "details";
+}

@@ -19,6 +19,8 @@ import { TabAudit } from "./tab-audit";
 import { TabCorrespondence } from "./tab-correspondence";
 import { TabDetails } from "./tab-details";
 import { TabNotes } from "./tab-notes";
+import { TabChart } from "./tab-chart";
+import { TabPerio } from "./tab-perio";
 import { TabRecalls } from "./tab-recalls";
 import { TabTasks } from "./tab-tasks";
 import { UnavailablePanel } from "./unavailable-panel";
@@ -37,9 +39,24 @@ import { RecordSummary } from "./record-summary";
  * audit trail, Tasks does not fetch the recall touches, and so on: the record is opened
  * all day and most opens read one tab.
  *
- * Medical, Chart and Perio render UnavailablePanel directly rather than through three
- * one-line wrapper files: the panel already takes the slug and reads every word of its
- * copy from lib/patient/tabs.ts, so a wrapper would add a file and no behaviour.
+ * Medical renders UnavailablePanel directly rather than through a one-line wrapper
+ * file: the panel already takes the slug and reads every word of its copy from
+ * lib/patient/tabs.ts, so a wrapper would add a file and no behaviour.
+ *
+ * CHART IS NO LONGER ONE OF THEM. It renders from /v1/treatment_plan_items, which is
+ * a real read, so its tab entry moved to "partial" and its cannotRead sentence was
+ * blanked in the same commit.
+ *
+ * NOR IS PERIO, AND IT LEFT THE PANEL FOR THE OPPOSITE REASON TO THE CHART. The chart
+ * became fillable because a Dentally read was found. Nothing was found for perio:
+ * Dentally exposes no periodontal resource of any kind, and PATIENT_TABS still says
+ * "unreadable" because that sentence is about DENTALLY and is still true. What changed
+ * is that this platform can now AUTHOR periodontal findings of its own — a second
+ * clinical record, which is why it ships gated off and why the tab renders its own
+ * gate notice rather than the shared panel. UnavailablePanel says "we cannot read
+ * this"; the perio tab has to say "we can hold this, we are not holding it, and the
+ * record you want is in Dentally", which is a different sentence and a different
+ * screen.
  */
 export async function RecordTabContent({
   clientSlug,
@@ -61,8 +78,32 @@ export async function RecordTabContent({
   const nowIso = new Date().toISOString();
   const siteId = patient.siteId;
 
-  if (slug === "medical" || slug === "chart" || slug === "perio") {
+  if (slug === "medical") {
     return <UnavailablePanel slug={slug} />;
+  }
+
+  if (slug === "perio") {
+    // nowIso, not a clock read inside the tab. The entry grid stamps its LOCAL
+    // preview with the instant the screen was opened; the record itself is stamped
+    // by the server on save. Sharing this record's one "now" is what stops the
+    // header and the panel below it ever disagreeing about when this page is.
+    return (
+      <TabPerio
+        clientSlug={clientSlug}
+        siteId={siteId}
+        patientId={patient.id}
+        nowIso={nowIso}
+      />
+    );
+  }
+
+  if (slug === "chart") {
+    // No nowIso, and it is the only tab that takes none. The others render an age
+    // and so must share one "now"; the chart renders no present tense at all. Every
+    // time it prints comes from ChartRead.fetchedAt, captured inside the read at
+    // fetch time, so a chart left open on a surgery screen states when it was read
+    // rather than implying it is current.
+    return <TabChart clientSlug={clientSlug} siteId={siteId} patientId={patient.id} />;
   }
 
   if (slug === "details") {

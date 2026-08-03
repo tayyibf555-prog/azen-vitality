@@ -412,6 +412,281 @@ body[data-diary-dragging] {
   --fund-private: #c2600f;
   --fund-udc: #5b6472;
 
+  /* -----------------------------------------------------------------------
+     CHARTING (FDI).
+
+     The system had NO tooth colour: DENTALLY.md calls the crown diagram "cream",
+     and --cream (line 12) is the cool blue-grey PAGE BACKGROUND whose own comment
+     says the name is kept for compatibility only. Without a token here "the crowns
+     are cream" becomes a raw hex in tooth.tsx, which house style forbids.
+
+     COLOUR ENCODES STATE, NOT TREATMENT FAMILY. DENTALLY.md's observed chart is
+     a state vocabulary (yellow across the occlusals of the upper anteriors, a
+     grey centre square on one upper molar). The diary's --type-N palette is
+     keyed on treatment FAMILY and puts filling, crown, bridge, veneer, inlay and
+     composite in one slot, so a restorative chart drawn from it would be a
+     single amber.
+
+     THESE ARE NO LONGER ALIASES INTO --type-N, AND THAT IS THE POINT OF THIS
+     BLOCK. They were, and the result was the owner's complaint holding this
+     screen back: side by side with Dentally, our charted surfaces read as pale
+     cream where Dentally's read as a saturated gold. The cause is structural
+     rather than a bad hue pick. --type-N's own comment states its contract —
+     "every fill sits near L*92, so 9.5px of its own ink on it clears AA" — because
+     a diary block CARRIES TEXT. Every one of those fills therefore lands within
+     1.1:1 of the card behind it, which is exactly right under a treatment name and
+     invisible in a 20px trapezoid with nothing written on it. Measured, the old
+     chart fills ran 1.09:1 / 1.11:1 / 1.27:1 / 1.17:1 against --card. A clinician
+     reads this from a metre away, so the chart's fills carry nothing but
+     themselves and must be judged on that job alone. The fills now run
+     2.98 / 1.85 / 4.01 / 1.89 against --card: two to four times the separation
+     from an unmarked tooth, which is what "unmistakable at a distance" costs.
+     Different job, different luminance. It is not a second colour system; it is
+     the same state vocabulary at the weight the state vocabulary needs.
+
+     AND THE TONE PASS (2026-08-02) IS A SEPARATE, SMALLER CORRECTION SITTING ON TOP
+     OF THAT ONE. The owner put a full-resolution Dentally screenshot beside ours.
+     The structure matched; the tonal weight did not, in four specific ways, and all
+     four are answered in this block rather than in a component:
+
+       1. Dentally's crowns are FILLED a warm cream. Ours were --chart-tooth
+          #fdfaf4 — L*98.3, C*3.2, 1.01:1 against the card, which is to say white.
+          The arch read as line art beside a drawing. See --chart-tooth below.
+       2. The grid row band was --card-muted, a BLUE-tinted grey (C*5.6 at hue
+          265deg). Dentally's is a faint NEUTRAL grey. See --chart-row-band.
+       3. The violet was far louder than anything on Dentally's screen: C*63.3, the
+          second most chromatic thing on the chart after the gold itself.
+       4. The gold read a shade orange of theirs: Lab hue 80deg.
+
+     LEGIBILITY WAS NOT TRADED FOR CALM, AND THE NUMBERS BELOW ARE THE PROOF. No
+     fill lost contrast against the card, no dichromat pair got worse than the
+     palette's existing floor, and the worst whole-tooth RING pair actually improved
+     (12.3 -> 14.1). Quieter is not paler here: the violet came DOWN in chroma and
+     DOWN in lightness at the same time, so it separates more strongly from the card
+     (3.11:1 -> 4.01:1) while shouting less. That is the only kind of "tone down"
+     this screen can afford.
+
+     THE STATE VOCABULARY IS UNCHANGED. Gold is still planned, grey-steel is still
+     completed, violet is still an unaccepted plan, cyan is still the base chart.
+     CHARTING.md 5 records that red = planned and blue/black = completed is
+     confirmed across every vendor checked with no reversed example anywhere, and
+     Dentrix Ascend makes it non-configurable on purpose; grey-steel for completed
+     sits inside that convention's "or black" and the observed Dentally molar.
+     NOTHING HERE MAY BE INVERTED. Changing which state owns which hue is a
+     clinical change, not a visual one, and does not belong in a legibility pass.
+
+     COLOUR-BLIND SEPARATION IS A LUMINANCE LADDER FIRST, A HUE SECOND, because
+     luminance is the one channel no dichromat loses. Every pair of fills, and
+     separately every pair of LINES, is simulated for deuteranopia, protanopia and
+     tritanopia and scored as CIE76 dE in Lab.
+
+     THE METHOD IS NAMED BECAUSE THE ANSWER DEPENDS ON IT. Re-measured 2026-08-02
+     with Viénot 1999 LMS applied to LINEARISED sRGB. An earlier revision of this
+     comment quoted a worst tritan pair of 10.2 from a Viénot/Brettel mix; the two
+     methods disagree most on tritanopia specifically, which is the rare form and
+     the one whose simulation is least settled. Anyone re-checking these numbers
+     will get the figures below with Viénot and different ones with Brettel, and
+     that is a property of the simulation rather than of the palette. The two
+     COMMON forms — deuteranopia and protanopia — agree closely under either.
+
+       FILLS, worst pair under ANY form:  16.8  (completed vs base, deuteranopia)
+       LINES, worst pair under ANY form:  14.1  (base vs draft, tritanopia)
+
+     Both of those pairs are UNTOUCHED by the tone pass: completed, base and draft
+     all kept their values. The pairs the tone pass did move are the violet's, and
+     they moved in the safe direction — the violet fill against completed is 25.1
+     under deuteranopia and against base 24.1, and the violet RING against completed
+     went from 12.3 to 24.6 under tritanopia, which is what raised the ring floor.
+     The old pre-legibility palette scored 2.3 — completed against base under
+     protanopia was literally the same colour.
+
+     Only ONE warm hue exists on the chart on purpose:
+     a second one (a green for the base chart, say) would sit on the red-green
+     confusion line with the gold and undo the whole exercise. Colour is still not
+     the only channel — the legend names every state, the tooltip spells it out,
+     and the draft alone is dashed and glyphed — but two states that read alike to
+     a deuteranope is a bad chart even when the words are correct.
+
+     THE DEFAULT STATE IS NOT TINTED AND MUST NOT BECOME SO. An unfilled surface
+     draws --card and an unfilled crown draws --chart-tooth. A chart where
+     everything looks slightly charted is worse than a pale one, because the
+     reader loses the ability to skim for marks at all.
+
+     FILLING THE CROWNS DID NOT WEAKEN THAT, AND THE REASON IS STRUCTURAL RATHER
+     THAN CHROMATIC. The crown cream is now a real fill, so the obvious worry is
+     that a cream tooth reads as a faintly charted one. It cannot, for three
+     independent reasons, and the colour is only the third:
+       - The crown and the surface grid are DIFFERENT CELLS in different strips of
+         the arch. A surface fill never appears on a crown and a crown fill never
+         appears in a grid, so the two are never the same slot on the screen.
+       - No state is ever painted ON the crown. A whole-tooth finding — extraction,
+         crown, bridge, endodontic, implant — is a 3px RING, never a fill; tooth.tsx
+         says so in as many words. So a filled crown carries no state by
+         construction, and every crown in the mouth carries the same cream whether
+         it is charted or not.
+       - And the colour is far off every state anyway: worst separation from any of
+         the four fills under any dichromacy is 32.4 (vs base under protanopia), and
+         under normal vision the nearest is 41.0. There is no near-miss to exploit.
+     The surface default is what actually carries "unmarked", it is still --card,
+     and it must stay --card.
+
+     LIGHT THEME ONLY, DELIBERATELY, AND THIS FILE IS WHY. Line 6 of this
+     stylesheet: "No OS dark-mode flipping. Single source of truth." There is no
+     dark theme anywhere in the app — no @media (prefers-color-scheme), no
+     [data-theme], and two "dark:" strings in the whole of src/, both of which are
+     the token name --blue-dark. Giving these values a dark override would make the
+     chart the ONLY element on the page that flips, painting a dark-mode gold onto a
+     --card that stayed #f9fbfe, which is worse than either theme. If a dark theme
+     is ever built, these are the exact lines it must override, and the rule to
+     carry over is the ladder above: keep the four fills' luminance ORDER and their
+     pairwise dE, inverted about the new background.
+
+     RE-CONFIRMED IN THE TONE PASS, against a brief that asked for both themes. The
+     grep is still clean — zero prefers-color-scheme, zero [data-theme] — so a dark
+     block added here would be dead CSS until an OS-level media query woke it, at
+     which point it would fire on a page whose every other surface stayed light and
+     paint a dark chart into a white record. That is not a theme, it is a bug with a
+     trigger, and on THIS screen it is a clinical one: the states are calibrated
+     against #f9fbfe and nothing else. The dark values belong in the same commit as
+     the app's dark theme, not before it.
+
+     Raw CSS variables, deliberately NOT added to @theme inline, for the same
+     reason recorded at the --type-N block: they are consumed as
+     style={{ fill: "var(--chart-planned-fill)" }} and never as an interpolated
+     Tailwind class, which would silently render transparent.
+
+     WHAT THE HUES MEAN IS STILL A READING OF THE SCREENSHOT, NOT A MEASUREMENT.
+     openRisk #6 is open: gold for planned and grey for completed follow the two
+     states actually observed, and these are the lines to change once the owner
+     confirms what Dentally's own yellow and grey mean. ---------------------- */
+  /* THE CROWN ITSELF, and now an actual FILL rather than the memory of one. It was
+     #fdfaf4: L*98.3, C*3.2, 1.01:1 against the card — a warm white, which at a
+     metre is a white, which is why the arch read as line art beside Dentally's
+     drawing. It is now L*90.4, C*14.4 at Lab hue 88deg (a warm cream/tan) and
+     1.23:1 against the card, so a tooth is a filled shape you can see the outline
+     of rather than an outline with nothing in it.
+     WHY NOT DARKER. Two ceilings, and it sits just under the lower one:
+       - The whole-tooth RING is drawn on this. Those five rings measure 3.73:1
+         (planned), 3.73:1 (base), 5.90:1 (unaccepted), 5.86:1 (draft) and 6.65:1
+         (completed) on this cream — all still clear of the 3:1 floor for a
+         meaningful graphic. A tan two steps deeper puts planned and base under it,
+         and that ring is the ONLY mark a surfaceless extraction ever gets.
+       - Separation from the gold. Under tritanopia the crown-vs-planned dE is 35.2
+         here; it falls to 19.7 by #eddcbd. 35 is a comfortable margin, 20 is not. */
+  --chart-tooth: #f0e2c8;
+  /* The crown SILHOUETTE. Raised from #c4ccd9 (1.56:1 on the old crown, which is
+     below the 3:1 floor for a meaningful graphic and disappeared at a metre) to
+     2.33:1, and now RE-raised because the crown it sits on got darker: #9aa8bd on
+     the new cream measured 1.88:1, which handed back most of that fix. #8794ac
+     restores it to 2.39:1 — a touch better than the 2.33:1 it was tuned to.
+     The grid's uncharted regions already stroke in --muted at 4.59:1, so the crown
+     was the one part of the tooth drawn in a line nobody could see — and it is the
+     part carrying real root and cusp anatomy. Still deliberately subordinate to
+     every state line below (the quietest of those is 3.73:1 on the same cream):
+     chrome must never out-shout a finding. */
+  --chart-tooth-line: #8794ac;
+  /* THE GRID ROW BAND, behind each of the two surface rows, running the full width.
+     A TOKEN RATHER THAN A UTILITY CLASS because the arch used bg-card-muted, and
+     --card-muted is a blue-grey CARD SURFACE (#e6edf7, C*5.6 at hue 265deg) doing a
+     second job it was never toned for. Side by side with Dentally that blue was
+     visible: theirs is a faint NEUTRAL grey and reads as paper, ours read as a
+     panel. This is the same faintness — 1.14:1 against the card, against the old
+     band's 1.14:1, so nothing got heavier — with the hue taken out (C*1.0).
+     IT MUST STAY FAINTER THAN THE UNCHARTED SURFACE IS WHITE. The grid's unmarked
+     regions are filled --card and sit ON this band; that 1.14:1 is what makes a
+     row of unmarked surfaces read as white squares on paper rather than as a solid
+     grey block with nothing in it. Deepening this band is the fastest way to make
+     the chart look charted everywhere, which is the failure the block above names.
+     Consumed by chart-arch.tsx as a style value, not as a Tailwind class: like
+     every variable in this block it is outside @theme inline. */
+  --chart-row-band: #ececea;
+  /* THERE IS NO SEPARATE INTERIOR-DETAIL COLOUR, and that is a decision rather than
+     an omission. The root divisions ARE the silhouette: tooth-shape.ts emits the
+     crown and every root as subpaths of ONE `d`, so a single stroke in the line
+     above draws the outline and the furcation together and the whole-tooth ring
+     traces exactly the tooth being charted. A second, lighter token would need a
+     second element carrying a second copy of the same geometry — which is the one
+     thing that file is built to avoid, because two copies drift and the ring ends
+     up round a different tooth from the fill. If interior modelling that is NOT
+     part of the silhouette is ever drawn (a pulp chamber, a cusp ridge), add the
+     token then, lighter than the line above so the outline still wins. */
+  /* Steel: completed IN DENTALLY. A fact about the tooth, and the observed grey
+     centre square made confident. The lightest of the three cool states, which is
+     what keeps it off the cyan below for a protanope (dE 16.7, was 2.3). */
+  --chart-completed-fill: #8494ab;
+  --chart-completed-line: #3f4d67;
+  /* Gold: PLANNED in Dentally. Dentally's own saturated gold and the brightest
+     thing on the chart, which is correct — planned work is what the clinician is
+     scanning for. The only warm hue here, so it cannot collide with anything on
+     the red-green confusion line.
+     NUDGED OFF ORANGE, AND ONLY OFF ORANGE. #f2b01c sat at Lab hue 80deg, which is
+     an amber; beside Dentally's it read warm. This is hue 86deg — a gold. Every
+     other property is held or improved ON PURPOSE, because the previous complaint
+     about this token was that it was PALE and saturation was the fix, and a hue
+     tweak is the easiest place to give that back by accident:
+        L*  76.1 -> 76.0   (unchanged: not lightened)
+        C*  76.1 -> 78.0   (very slightly UP: not desaturated)
+        vs --card 1.84:1 -> 1.85:1
+     The line follows the fill by the same 8deg (hue 74 -> 82) so the outline of a
+     planned surface is the same colour family as its fill; it holds 4.60:1 on the
+     card against 4.69:1 before, which is inside rounding for the ring's job. */
+  --chart-planned-fill: #e6b505;
+  --chart-planned-line: #946c05;
+  /* Violet: on a plan the patient has NOT accepted. An intention, not a fact, and
+     CHARTING.md 5 records purple as a genuine separate state in the vendor
+     conventions. Darkest of the four, so it separates from steel on luminance
+     where a dichromat cannot use the hue.
+     TONED. #a37ae8 was C*63.3 — the second most chromatic thing on the chart, after
+     the gold that is SUPPOSED to be the loudest, and for a state that is only an
+     intention. On Dentally's screen nothing shouts like that. Now C*46.3, a 27%
+     drop, which puts it between the base chart's 36.9 and the gold's 78.0 instead
+     of beside the gold.
+     DOWN IN LIGHTNESS AT THE SAME TIME, AND THAT IS THE WHOLE TRICK. L* 59.5 ->
+     52.1. Steel sits at L*60.8, and the old violet was a single point below it —
+     "darkest of the four" was true by rounding. It is now nine points below, so the
+     pair that a deuteranope resolves on luminance alone genuinely resolves: 25.1 dE
+     against completed, 24.1 against base, both comfortably over the palette's 16.8
+     floor. And it separates from the card MORE than before (3.11:1 -> 4.01:1),
+     which is why this is a tone change rather than a legibility regression.
+     THE LINE WENT DARKER AND KEPT ITS CHROMA, DELIBERATELY, and the naive move here
+     is a trap worth recording. Matching the line to the fill's new calm (a mid
+     violet around #66429f) collapses it onto --chart-draft-line: 2.6 dE under
+     deuteranopia, i.e. the SAME COLOUR to the commonest dichromat. Both are drawn
+     as whole-tooth rings, so that is an unaccepted plan and our own unsent draft
+     rendering identically on the tooth. The violet ring's chroma is load-bearing
+     against that blue and must not be spent on calm. #6e2cc0 is darker than the old
+     #7a45e2 (L* 44.1 -> 35.8) at nearly the same chroma, which buys two things at
+     once: 22.8 dE from the draft blue, and 1.82:1 of its own fill against the old
+     1.35:1, so the outline of an unaccepted surface no longer sinks into it. */
+  --chart-unaccepted-fill: #8b6ebc;
+  --chart-unaccepted-line: #6e2cc0;
+  /* Cyan: from the BASE CHART in Dentally — pre-existing dentition rather than
+     treatment. Bright and high-chroma so it is never mistaken for the steel of
+     completed work, which is the pair that failed hardest before. */
+  --chart-base-fill: #3ccadf;
+  --chart-base-line: #0b7d98;
+  /* OUTLINE ONLY. Our draft never gets a fill, and it is the only dashed, glyphed
+     origin — that shape difference, not this colour, is what makes it survive a
+     photocopy into a complaint file. Kept as the system's lead blue at 5.86:1 on
+     the crown, which is the tick's dominant background (it was 7.2:1 before the
+     crown was filled, and the floor for a graphic is 3:1); over a completed steel
+     fill the corner tick drops to ~2.4:1, accepted because the dashed outline and
+     the legend both still name it.
+     IT IS ALSO THE CONSTRAINT ON THE VIOLET RING, which is not obvious from here.
+     Deuteranopia pulls a low-chroma violet onto this blue — see the note at
+     --chart-unaccepted-line. Anything that lowers THIS token's chroma tightens that
+     pair from the other side. */
+  --chart-draft-line: var(--blue-royal);
+  /* FUNDING (NHS / private / UDC) is NOT redefined here. --fund-nhs, --fund-private
+     and --fund-udc are 21 lines up, they are the diary's rail and the conventions
+     clinicians here were trained on, and tooth.tsx reuses them verbatim so the two
+     screens cannot come to disagree about what blue means. They also already pass:
+     4.07:1 or better against every backdrop the rail sits on, and a worst-pair dE
+     of 19.9 across deuteranopia, protanopia and tritanopia. They were never part of
+     the pale --type-N ramp, which is why they never had the problem this block
+     exists to fix. Forking them into chart-only copies would buy nothing and cost
+     the shared vocabulary. */
+
   /* GREY MEANS OFF: the default background of every diary column body, onto
      which working time is painted white. Deliberately DARKER than --card-muted
      (#eef4fb, already a card surface) so a grey column can never be misread as

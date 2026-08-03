@@ -18,6 +18,46 @@ import { SYSTEMS, SYSTEM_SLUGS } from "./catalog";
 
 const TABLE = "system_toggle";
 
+// ---------------------------------------------------------------------------
+// DEDUPE for getDisabledSlugs' fail-open log line.
+//
+// getDisabledSlugs is called once per navigation by every DISPLAY surface that
+// renders the "N issues" panel. In local dev (noauth config, no service-role
+// key) every single call fails the same way, so the console fills with 100+
+// copies of the identical line and buries whatever error actually matters.
+//
+// Fix: log the FIRST occurrence of a given (clientId, reason) pair loudly,
+// then stay quiet for exact repeats. A DIFFERENT reason for the same client
+// (or the same reason for a different client) is a materially different fact
+// and must still log — a naive dedupe keyed on clientId alone would swallow a
+// brand-new fault (e.g. a permissions error appearing after a table-missing
+// error had already been seen) which is worse than the noise this fixes.
+//
+// The key is derived from the error's own code/message, not from the raw
+// error object, so it stays small and stable. loggedDisabledSlugsFailures is
+// a module-level Set that lives for the process lifetime (this runs on a
+// long-lived server) — capped at MAX_TRACKED_FAILURES and cleared wholesale
+// if it somehow grows past that, so a pathological stream of distinct error
+// shapes cannot leak memory. Clearing just re-arms logging for reasons
+// already seen, which is safe: fail-open logging noise, never behaviour, is
+// the only thing that dedupe controls.
+// ---------------------------------------------------------------------------
+
+const MAX_TRACKED_DISABLED_SLUGS_FAILURES = 500;
+const loggedDisabledSlugsFailures = new Set<string>();
+
+function disabledSlugsFailureReason(err: unknown): string {
+  const anyErr = err as { code?: unknown; message?: unknown } | null | undefined;
+  if (anyErr && typeof anyErr.code === "string" && anyErr.code) return anyErr.code;
+  if (anyErr && typeof anyErr.message === "string" && anyErr.message) return anyErr.message;
+  return String(err);
+}
+
+/** Test-only: clear the dedupe state so each test starts with a clean slate. */
+export function __resetDisabledSlugsFailureLogForTests(): void {
+  loggedDisabledSlugsFailures.clear();
+}
+
 /**
  * Is one system enabled for a client? True unless a row explicitly disables it.
  * Never throws: a read error resolves to enabled (see FAIL-OPEN above).
@@ -84,7 +124,14 @@ export async function getDisabledSlugs(clientId: string): Promise<Set<string>> {
     if (error) throw error;
     return new Set((data ?? []).map((r) => String((r as { module_slug: string }).module_slug)));
   } catch (err) {
-    console.error(`[systems] getDisabledSlugs(${clientId}) failed; defaulting to none disabled`, err);
+    const key = `${clientId}::${disabledSlugsFailureReason(err)}`;
+    if (!loggedDisabledSlugsFailures.has(key)) {
+      if (loggedDisabledSlugsFailures.size >= MAX_TRACKED_DISABLED_SLUGS_FAILURES) {
+        loggedDisabledSlugsFailures.clear();
+      }
+      loggedDisabledSlugsFailures.add(key);
+      console.error(`[systems] getDisabledSlugs(${clientId}) failed; defaulting to none disabled`, err);
+    }
     return new Set();
   }
 }

@@ -10,7 +10,7 @@
 // Two independent guards are asserted here, because either alone is one bug away from
 // a blocked clinician: find_slots must never OFFER a raw window, and book must never
 // WRITE longer than the treatment needs even if it is handed one anyway.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { makeDispatch } from "./tools";
 import type { AgentContext } from "./types";
 
@@ -41,6 +41,23 @@ function deps(availability: unknown[], overrides: Partial<AgentContext> = {}) {
 }
 
 const MIN = 60_000;
+
+// THE CLOCK IS FROZEN, and this test cannot work without it.
+//
+// The slots below are hard-coded to 2026-08-02T13:30+01:00. `book` refuses a slot in
+// the past — tools.ts anchors the availability read to Math.max(Date.now(), ...) — so
+// on 2026-08-02 these tests passed all morning and began failing at 13:30, and would
+// have failed on every run for the rest of the repository's life. The failure looked
+// exactly like a booking regression: createAppointment simply never called.
+//
+// Only Date is faked. Faking every timer would hang the async paths under test.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-02T08:00:00.000+01:00"));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("find_slots never offers a raw availability window", () => {
   it("cuts a 390 minute window into 30 minute bookable units", async () => {

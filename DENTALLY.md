@@ -88,7 +88,99 @@ The build below is the same UI in all three cases. What changes is where a click
 ### Charting (FDI)
 Full FDI tooth chart, upper and lower, both quadrants numbered outward from the midline (8..1 | 1..8, repeated top and bottom, with R and L marked at both ends).
 
-**Each tooth** is a crown diagram (cream) plus a **five-region surfaces grid**: four trapezoids around a centre square, which is the standard mesial / distal / buccal / lingual / occlusal layout. A charted surface is filled; the observed chart shows yellow across the occlusal of the six upper anteriors, and a grey centre square on one upper molar. The two surface rows sit on a faint banded background.
+#### MEASURED GEOMETRY, from a full-resolution Dentally screenshot (2026-08-02)
+
+The owner's verdict on our first pass was "you make everything small it should be bigger", and he
+is right by a factor of three. These are measurements off the real screen, not preferences.
+
+| thing | Dentally | ours (v1) |
+|---|---|---|
+| tooth column width | **~88px** | 26–28px |
+| surface grid | **~75 x 72px** | ~22px |
+| crown diagram | **~75 wide x 85 tall** | tiny |
+| gap between teeth | ~13px | 3px |
+| chart area | **fills all width right of the treatment list** | floated in whitespace |
+| treatment list panel | ~530px fixed | similar, fine |
+
+**THE ARCH FILLS THE WIDTH.** 16 columns spread across the entire content area right of the
+treatment list. It does not sit in a centred box with air either side. This is the single change
+that makes the screen readable across a surgery, which is the whole point — a clinician reads this
+from a metre away, not from a laptop keyboard.
+
+**Vertical order, top to bottom** (the occlusal surfaces face each other in the middle, which is
+anatomically how the arches meet):
+
+```
+R                                        L      <- side labels
+8 7 6 5 4 3 2 1 | 1 2 3 4 5 6 7 8               <- numbers
+[cream crown diagrams, roots pointing UP]        <- upper crowns, OUTBOARD
+[surface grids]                                  <- upper grids
+------------------------------------------       (small gap)
+[surface grids]                                  <- lower grids
+[cream crown diagrams, roots pointing DOWN]      <- lower crowns, OUTBOARD
+8 7 6 5 4 3 2 1 | 1 2 3 4 5 6 7 8               <- numbers again
+R                                        L      <- side labels again
+```
+
+**The surface grid is an outer square with a smaller square inside it, and a diagonal line from
+each outer corner to the matching inner corner.** That yields five regions: four trapezoids (top,
+right, bottom, left) around a centre square. Thin dark outline, white fill, no rounding.
+
+A faint grey horizontal band sits behind each grid row, running the full width.
+
+#### Surface index → region. Positional, NOT anatomical.
+
+Dentally: *"numbered 1-5 ... and 1-8 for molar teeth. Surface numbering starts from the top left
+hand corner of the tooth and is counted clockwise around the edge of the tooth and into the center."*
+
+Read literally, and corroborated by live data (§CHARTING.md 2.6):
+
+- **Non-molars (1–5):** `1` = top trapezoid, `2` = right, `3` = bottom, `4` = left, `5` = **centre**.
+- **Molars (1–8):** the periphery is the same four trapezoids `1`–`4`; the centre square is
+  subdivided into four quadrants `5`–`8`. "Around the edge **and into the center**" describes
+  exactly this: count the rim, then count the middle.
+
+This reading is supported by the live distribution — index `5` dominates non-molars and `8`
+dominates molars, and the centre (occlusal/incisal) is by far the most restored surface on any
+tooth. It is the only reading that explains why the two schemes differ *only* in the centre.
+
+**Render by POSITION, never by anatomical name.** We know where region 2 sits on the diagram; we do
+not know with certainty whether it is buccal or mesial, because that depends on how Dentally
+orients each quadrant. Painting a region is safe. Labelling it "buccal" in text is a wrong-surface
+clinical claim. So: fill the correct region, and in the tooltip/History print the index verbatim
+("surface 2") until Dentally confirms the anatomy.
+
+#### Bottom-right control row
+A blue circular **+** button sits at the LEFT of the row. The controls are right-aligned as a
+connected group: `Cloud Gallery | Images | BPE ● | History | Base Chart | ⚙`. The BPE dot is RED
+and solid when one is due.
+
+#### The two plan cards
+Side by side, full width. Title and one line of body on the left, the action button on the RIGHT
+edge of each card: a solid blue **New treatment plan**, and an outline **Select template**.
+
+**Each tooth** is a crown diagram (cream) plus a surfaces grid: four trapezoids around a centre square, which is the standard mesial / distal / buccal / lingual / occlusal layout. A charted surface is filled; the observed chart shows yellow across the occlusal of the six upper anteriors, and a grey centre square on one upper molar. The two surface rows sit on a faint banded background.
+
+> **CORRECTION, verified against the API on 2026-08-01 — the screenshot reading above was
+> incomplete, and a build that follows it will mis-render every molar.**
+>
+> **Teeth are Palmer notation, not FDI.** The API states plainly: *"All teeth are stored using
+> Palmer notation."* FDI appears nowhere in their documentation. So an FDI chart needs an exact
+> Palmer→FDI conversion on the way in and FDI→Palmer on the way out. This is a WRONG-SITE risk,
+> not a formatting preference: a conversion that is off by one quadrant labels the contralateral
+> tooth. It must be a pure, exhaustively tested function covering all 32 permanent and all 20
+> deciduous teeth.
+>
+> **Surfaces are integers, and molars are not five-region.** The API states: *"Surfaces are
+> numbered 1-5 for incisors, canines, premolars and deciduous teeth and 1-8 for molar teeth.
+> Surface numbering starts from the top left hand corner of the tooth and is counted clockwise
+> around the edge of the tooth and into the center."*
+>
+> So the five-trapezoid grid is correct ONLY for incisors, canines, premolars and deciduous teeth.
+> **Molars carry 8 surface regions**, numbered clockwise from the top-left and inward. Rendering a
+> molar with five regions silently drops three chartable surfaces — a restoration charted in
+> Dentally would simply not appear on our chart. Tooth-type must therefore drive the geometry, and
+> the surface index is a NUMBER, never an MOD-style letter code.
 
 **Left panel**, top to bottom:
 - A segmented control: **PD** (permanent dentition, selected), **DD** (deciduous), **Base** (base chart, disabled unless in base mode), a dropdown chevron for chart preferences, and a collapse control.

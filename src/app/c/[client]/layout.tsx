@@ -78,14 +78,23 @@ export default async function ClientLayout({
             <div className="hidden lg:block">
               <ClientSectionBar disabledSlugs={disabledSlugs} />
             </div>
-            <div className="min-h-0 flex-1 lg:overflow-y-auto">
+            <div className="min-h-0 flex-1 [scrollbar-gutter:stable] lg:overflow-y-auto">
               {/* The two :has() variants are gated on a marker only the diary sets
                   (data-diary), so every other /c page is byte-identical. The diary
                   needs a DEFINITE height for its own two-axis scroller, and needs
                   to reach past the 1400px cap: on a 1920 reception monitor that cap
-                  throws away 388px, which is four clinician columns. */}
+                  throws away 388px, which is four clinician columns.
+
+                  data-wide is the WIDTH HALF of that and nothing else. The tooth
+                  chart needs the same escape from the 1400px cap - after the rail
+                  and a 300px treatment panel it would have roughly 1050px for a
+                  32-tooth arch, and a tooth too small to hit accurately is a
+                  mis-click that charts the wrong tooth - but it must NOT take the
+                  diary's h-full or space-y-0, which are that screen's two-axis
+                  scroller. The arch keeps its own overflow-x container for
+                  genuinely narrow laptops. */}
               <main className="lg:has-[[data-diary]]:h-full">
-                <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
+                <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 has-[[data-wide]]:max-w-none sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
                   {children}
                 </div>
               </main>

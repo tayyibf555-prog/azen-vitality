@@ -6,7 +6,18 @@ export class DentallyError extends Error {
   }
 }
 
-interface Opts { apiKey: string; baseUrl: string; fetchImpl?: FetchImpl; userAgent?: string; }
+interface Opts {
+  apiKey: string;
+  baseUrl: string;
+  fetchImpl?: FetchImpl;
+  userAgent?: string;
+  /**
+   * Refuse every non-GET on this client, throwing before the request is built.
+   * Set on the client that carries the READ key — see assertWritable below for
+   * why a comment was not enough.
+   */
+  readOnly?: boolean;
+}
 
 /**
  * Hard per-request timeout. Without it a hung connection stalls until the 300s
@@ -29,6 +40,13 @@ function shiftDay(ymd: string | undefined, days: number): string | undefined {
 }
 
 export interface ListPlansArgs { siteId: string; patientId?: string; updatedAfter?: string; page?: number; perPage?: number; }
+/** One patient's charting items. patient_id ONLY: see listTreatmentPlanItems. */
+export interface ListTreatmentPlanItemsArgs { patientId: string; page?: number; perPage?: number; }
+/** One patient's treatment APPOINTMENTS — the cards on the plan panel. patient_id
+ *  ONLY, for the same reason listTreatmentPlanItemsArgs carries nothing else. */
+export interface ListTreatmentAppointmentsArgs { patientId: string; page?: number; perPage?: number; }
+/** The practice-wide treatment catalogue / its categories. Neither is patient-scoped. */
+export interface ListCatalogueArgs { page?: number; perPage?: number; }
 export interface ListPatientsArgs { siteId: string; updatedAfter?: string; query?: string; page?: number; perPage?: number; }
 /** Availability is PER PRACTITIONER on live Dentally: /v1/appointments/availability
  *  takes start_time/finish_time (ISO datetimes, NOT dates) + practitioner_ids[] and
@@ -59,6 +77,40 @@ export class DentallyClient {
    */
   private buildUrl(path: string): URL {
     return new URL(this.opts.baseUrl.replace(/\/+$/, "") + path);
+  }
+
+  /**
+   * THE READ-ONLY LATCH. Every write method calls this first, so a client built
+   * with `readOnly: true` cannot issue one — it throws before the fetch, rather
+   * than sending a request and hoping Dentally refuses it.
+   *
+   * WHY THIS EXISTS AS CODE AND NOT AS A COMMENT. read.ts used to assert that
+   * write paths avoid the read key "so a read-only key can never be used to
+   * attempt a write against real Dentally". That guarantee was never real, in
+   * two ways at once. The key named DENTALLY_PROD_READONLY_API_KEY is not
+   * read-only: its x-oauth-scopes header carries the bare umbrella forms
+   * (patient, appointment, financials, treatments), each of which Dentally
+   * defines as including create, update and delete over ~51,000 live patients.
+   * And nothing stopped a caller passing that key to a method that writes.
+   *
+   * The only thing standing between that key and a destructive call was a
+   * User-Agent check on Dentally's side — a 403 reading "Please make sure your
+   * request has an acceptable User-Agent header", which this client satisfies
+   * on every request. So the credential was, in practice, unguarded from any
+   * code path that ran here.
+   *
+   * Rotating the key to genuinely :read scopes is still owed and is the real
+   * fix. This latch is the belt: it makes the property the comment claimed
+   * actually hold, on our side, today.
+   */
+  private assertWritable(method: string, path: string): void {
+    if (this.opts.readOnly) {
+      throw new DentallyError(
+        0,
+        `refusing ${method} ${path}: this DentallyClient is read-only. ` +
+          `Writes must go through the write client (see isDentallyWriteEnabled).`,
+      );
+    }
   }
 
   private async get<T>(path: string, query: Record<string, string | number | Array<string | number> | undefined> = {}): Promise<T> {
@@ -93,6 +145,110 @@ export class DentallyClient {
       site_id: a.siteId, patient_id: a.patientId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
+  // --- CHARTING (all five READ-ONLY) --------------------------------------
+  //
+  // These five back the FDI charting screen and its treatment plan panel, which
+  // are a READ-ONLY MIRROR of Dentally. NO create/update/delete method is added
+  // for any charting resource and none may be: Dentally publishes no create route
+  // on treatment_plan_items, treatments, treatment_categories, treatment_plans or
+  // treatment_appointments, and a POST 404s on all five. Inventing one is
+  // forbidden by their T&Cs, and a client method that looks like a write path is
+  // how someone later tries.
+  //
+  // THE FIFTH (listTreatmentAppointments) IS THE ONE MOST LIKELY TO TEMPT A
+  // WRITE, because the panel it feeds renders `+ add appointment`, `Charge`,
+  // `Complete treatment plan` and `Submit claim`. Every one of those is rendered
+  // DISABLED with its reason stated on screen. `Charge` in particular stays
+  // disabled even if a route is later discovered: it moves money, and it does not
+  // ship without the owner's separate written sign-off. Do not add a write method
+  // here because the API happened to allow one.
+  //
+  // NOT CALIBRATED AGAINST LIVE. Every other comment on this class records what a
+  // real probe returned; these do not, because no probe has run. The field names
+  // come from developer.dentally.co (verified 2026-08-01) and nothing more. The
+  // `teeth` and `surfaces` wire shapes in particular are unverified, which is why
+  // the read layer tolerates arrays, delimited strings and bare numbers and
+  // reports anything it cannot place rather than dropping it.
+
+  /**
+   * ONE patient's charting items, PAGED.
+   *
+   * SENDS patient_id AND NOTHING ELSE. No site_id, deliberately:
+   *   - patient_id is the documented filter for this endpoint;
+   *   - the patient was already resolved (and site-checked) in scope upstream, so
+   *     the site adds no safety here;
+   *   - listAppointments' own comment records what happens when we send a param
+   *     the live API ignores — it reads as though the window were filtered upstream
+   *     when it is not, and that is exactly how a miscalibration slipped through
+   *     once already.
+   * Whether live honours patient_id is itself unverified, so charting-read.ts keeps
+   * a client-side patient filter as a safety net the same way the plans read does.
+   */
+  listTreatmentPlanItems(a: ListTreatmentPlanItemsArgs) {
+    return this.get<{ treatment_plan_items: unknown[] }>("/v1/treatment_plan_items", {
+      patient_id: a.patientId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
+  /**
+   * ONE patient's TREATMENT APPOINTMENTS, PAGED. These are the cards on the plan
+   * panel: `position` is the card number (position 0 renders as "Appt. 1"),
+   * `notes` is the note printed in the card header, and `appointment_id` links the
+   * card to a real DIARY appointment.
+   *
+   * THE DATE, TIME AND PRACTITIONER IN A CARD HEADER ARE NOT ON THIS OBJECT. They
+   * live on the diary appointment named by `appointment_id`, which is a separate
+   * read (see resolveCardHeaders in charting-read.ts). A reader who assumes
+   * otherwise renders a card with no date and no clinician on a booked
+   * appointment, which is read as "not yet scheduled" — a false fact about the
+   * patient's care, produced by a missing join.
+   *
+   * SENDS patient_id AND NOTHING ELSE, exactly as listTreatmentPlanItems does and
+   * for the reasons spelled out there: patient_id is the documented filter, the
+   * patient was already site-checked upstream, and sending a parameter the live
+   * API ignores reads as a scoping this call does not perform. Whether live
+   * honours patient_id is unverified, so charting-read.ts keeps a client-side
+   * patient filter as a safety net.
+   */
+  listTreatmentAppointments(a: ListTreatmentAppointmentsArgs) {
+    return this.get<{ treatment_appointments: unknown[] }>("/v1/treatment_appointments", {
+      patient_id: a.patientId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
+  /** The practice's treatment catalogue (the left-hand list on the chart). Not
+   *  patient-scoped and not site-scoped: the catalogue is a practice-wide list. */
+  listTreatments(a: ListCatalogueArgs = {}) {
+    return this.get<{ treatments: unknown[] }>("/v1/treatments", {
+      page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
+  /** The catalogue's categories, for the chart's category filter. */
+  listTreatmentCategories(a: ListCatalogueArgs = {}) {
+    return this.get<{ treatment_categories: unknown[] }>("/v1/treatment_categories", {
+      page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
+  /**
+   * The patient's treatment PLAN ROWS, for the chart's plan tabs.
+   *
+   * Same endpoint as listTreatmentPlans and a deliberate second entry point rather
+   * than a shared one. listTreatmentPlans is live-calibrated for the dashboard's
+   * value/outstanding scan and its callers depend on that shape; read.ts's
+   * PlanRecord then drops the row's `id` entirely, and a plan tab needs the id, the
+   * acceptance date and the completion date. Keeping this call separate means the
+   * chart can be recalibrated against live without touching a query the dashboard
+   * relies on. site_id IS sent here, unchanged from listTreatmentPlans, because
+   * that is the calibrated shape for this path.
+   */
+  listTreatmentPlansById(a: { siteId: string; patientId: string; page?: number; perPage?: number }) {
+    return this.get<{ treatment_plans: unknown[] }>("/v1/treatment_plans", {
+      site_id: a.siteId, patient_id: a.patientId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+    });
+  }
+
   getPatient(id: string) { return this.get<{ patient: unknown }>(`/v1/patients/${id}`); }
 
   /** Exact patient count for a site straight from the index metadata: real Dentally
@@ -109,6 +265,7 @@ export class DentallyClient {
 
   /** Register a new patient (onboarding). */
   async createPatient(payload: Record<string, unknown>) {
+    this.assertWritable("POST", "/v1/patients");
     const url = this.buildUrl("/v1/patients");
     let res: Response;
     try {
@@ -143,6 +300,7 @@ export class DentallyClient {
    * (dentallyAgentClient), so it can never touch real Dentally until writes are enabled.
    */
   async updatePatient(id: string, fields: Record<string, unknown>) {
+    this.assertWritable("PUT", "/v1/patients/:id");
     const url = this.buildUrl(`/v1/patients/${id}`);
     let res: Response;
     try {
@@ -338,15 +496,27 @@ export class DentallyClient {
     });
   }
 
-  /** A site's practitioners (live shape: {id, active, site_id, user:{...}}). Used to
-   *  drive availability, which is queried per practitioner id. */
-  listPractitioners(siteId: string) {
+  /**
+   * A site's practitioners (live shape: {id, active, site_id, user:{...}}). Used to
+   * drive availability, which is queried per practitioner id, and to put a NAME
+   * against the practitioner_id every treatment_plan_item carries.
+   *
+   * `page` IS NOW SENT, and defaults to 1 so every existing caller keeps exactly
+   * the request it made before. It exists because the plan panel's read walks this
+   * endpoint with the same pageAll() every other list read on that path uses: a
+   * caller that took the first response as the whole answer would, at a practice
+   * with more than a page of practitioners, silently fail to name the clinician on
+   * a clinical record and render an empty initials column instead. Sending the
+   * parameter is harmless if Dentally ignores it and correct if it does not.
+   */
+  listPractitioners(siteId: string, a: { page?: number; perPage?: number } = {}) {
     return this.get<{ practitioners: unknown[] }>("/v1/practitioners", {
-      site_id: siteId, per_page: 100,
+      site_id: siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
 
   async createAppointment(payload: Record<string, unknown>) {
+    this.assertWritable("POST", "/v1/appointments");
     const url = this.buildUrl("/v1/appointments");
     let res: Response;
     try {
@@ -369,6 +539,7 @@ export class DentallyClient {
 
   /** Edit an existing appointment, e.g. move it to a new start_time (reschedule). */
   async updateAppointment(id: string, payload: Record<string, unknown>) {
+    this.assertWritable("PUT", "/v1/appointments/:id");
     const url = this.buildUrl(`/v1/appointments/${id}`);
     let res: Response;
     try {
@@ -397,6 +568,7 @@ export class DentallyClient {
 
   /** Cancel an existing appointment (sets its state to cancelled). */
   async cancelAppointment(id: string) {
+    this.assertWritable("DELETE", "/v1/appointments/:id");
     const url = this.buildUrl(`/v1/appointments/${id}`);
     let res: Response;
     try {

@@ -14,8 +14,21 @@ import { londonDayStartIso, londonDayEndIso } from "@/lib/calendar/availability"
  *
  * WRITE paths (the agent booking appointments or creating patients, in
  * src/lib/agent/tools.ts via the inbound/voice routes' own client) deliberately do
- * NOT use this: they read DENTALLY_API_KEY directly, so a read-only key can never
- * be used to attempt a write against real Dentally.
+ * NOT use this: they go through dentallyAgentClient() and read DENTALLY_WRITE_*.
+ *
+ * THAT SEPARATION IS NOW ENFORCED, NOT MERELY INTENDED. This comment used to end
+ * "so a read-only key can never be used to attempt a write against real Dentally",
+ * and that was false twice over. The key named DENTALLY_PROD_READONLY_API_KEY is
+ * NOT read-only - its x-oauth-scopes header carries Dentally's bare umbrella forms
+ * (patient, appointment, financials, treatments), each of which their own docs
+ * define as including create, update and delete, over ~51,000 live patient records.
+ * And nothing in the code stopped a caller handing that key to a write method;
+ * the only thing that ever did was a User-Agent check on Dentally's side, which
+ * this client satisfies on every request.
+ *
+ * So dentallyFromEnv() now builds the client with `readOnly: true`, and
+ * DentallyClient.assertWritable() throws before any non-GET is even constructed.
+ * Rotating the key to genuine :read scopes remains owed and is the real fix.
  */
 export function dentallyReadKey(): string {
   return process.env.DENTALLY_PROD_READONLY_API_KEY || process.env.DENTALLY_API_KEY || "";
@@ -30,6 +43,10 @@ export function dentallyFromEnv(): DentallyClient {
   return new DentallyClient({
     apiKey: dentallyReadKey(),
     baseUrl: process.env.DENTALLY_BASE_URL ?? "https://api.dentally.co",
+    // Every caller of this function reads. Verified: all five write methods are
+    // reached only via dentallyAgentClient(). The latch makes that a property of
+    // the code rather than a convention someone can breach by accident.
+    readOnly: true,
   });
 }
 
