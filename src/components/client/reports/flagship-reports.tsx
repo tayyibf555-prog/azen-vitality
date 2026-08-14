@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Activity, Banknote, Info, AlertTriangle } from "lucide-react";
+import { Activity, Banknote, Info, AlertTriangle, ClipboardCheck } from "lucide-react";
 import { SectionCard } from "@/components/primitives";
 import { hundredthsToUda, formatPenceGbp } from "@/lib/dashboard/money";
 import {
@@ -11,6 +11,16 @@ import {
   type Tally,
   type BandCell,
 } from "@/lib/reports/nhs-activity";
+import type {
+  NhsClinicalReport,
+  ClinicalStatePair,
+  ClinicalCounts,
+} from "@/lib/reports/nhs-clinical-activity";
+import {
+  CLINICAL_BANNER_SEGMENTS,
+  FORBIDDEN_CLAIMS,
+  AMBIGUITY_FLAGS,
+} from "@/lib/reports/nhs-clinical-calibration";
 import {
   ALLOCATION_CONDITION_LABELS,
   ALLOCATION_CONDITION_NOTES,
@@ -24,7 +34,12 @@ import {
   RunCoverage,
 } from "@/components/client/reports/allocation-table";
 import type { ReportPreset } from "@/lib/reports/report-window";
-import type { NhsBandReadResult, PaymentAllocationReadResult, PractitionerRef } from "@/lib/reports/flagship-read";
+import type {
+  NhsBandReadResult,
+  PaymentAllocationReadResult,
+  NhsClinicalReadResult,
+  PractitionerRef,
+} from "@/lib/reports/flagship-read";
 
 // ---------------------------------------------------------------------------
 // Thin renderers over the two pure report aggregations. Every figure on screen
@@ -533,23 +548,427 @@ function PaymentAllocationReportView({
   );
 }
 
-// === The two-tab wrapper =====================================================
+// === Report C: NHS clinical completion (completed vs pending) ================
+
+// The same period set as Report A: her questions are month-shaped ("band ones
+// this month"). Opens on this month, matching the server's initial read.
+const CLINICAL_PRESETS: { key: ReportPreset; label: string }[] = [
+  { key: "this_month", label: "This month" },
+  { key: "last_month", label: "Last month" },
+  { key: "last_30", label: "Last 30 days" },
+  { key: "this_quarter", label: "This quarter" },
+  { key: "contract_ytd", label: "Contract year" },
+];
+
+const EMPTY_CLINICAL_COUNTS: ClinicalCounts = {
+  items: 0,
+  courses: 0,
+  patients: 0,
+  itemsWithoutPlanId: 0,
+};
+const EMPTY_CLINICAL_PAIR: ClinicalStatePair = {
+  completed: EMPTY_CLINICAL_COUNTS,
+  pending: EMPTY_CLINICAL_COUNTS,
+};
+
+// Pick the right PRECOMPUTED total for the clinician/band selection. Courses and
+// patients are distinct sets and are NOT summable across bands, so the total is
+// always read from the aggregation, never re-summed on the client.
+function pickClinicalTotal(
+  report: NhsClinicalReport,
+  clinician: string,
+  band: BandKey | "all",
+): ClinicalStatePair {
+  if (clinician === "all") {
+    if (band === "all") return report.grandTotal;
+    return report.byBand.find((c) => c.band === band) ?? EMPTY_CLINICAL_PAIR;
+  }
+  const prac = report.practitioners.find(
+    (p) => p.practitionerId === (clinician === "none" ? null : clinician),
+  );
+  if (!prac) return EMPTY_CLINICAL_PAIR;
+  if (band === "all") return prac.total;
+  return prac.bands.find((c) => c.band === band) ?? EMPTY_CLINICAL_PAIR;
+}
+
+function BannerSegments() {
+  return (
+    <>
+      {CLINICAL_BANNER_SEGMENTS.map((s, i) =>
+        s.emphasis === "strong" ? (
+          <strong key={i} className="font-semibold">
+            {s.text}
+          </strong>
+        ) : s.emphasis === "code" ? (
+          <code key={i} className="rounded bg-black/5 px-1 py-0.5 text-[11.5px]">
+            {s.text}
+          </code>
+        ) : s.emphasis === "em" ? (
+          <em key={i}>{s.text}</em>
+        ) : (
+          <span key={i}>{s.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+// One clinical cell = courses (lead), items, patients. Courses is the headline
+// unit per the brief; items and patients sit alongside, muted.
+function ClinicalNumbers({ c }: { c: ClinicalCounts }) {
+  return (
+    <>
+      <td className="px-2.5 py-2 text-right tabular-nums font-semibold text-navy">{c.courses}</td>
+      <td className="px-2.5 py-2 text-right tabular-nums text-muted">{c.items}</td>
+      <td className="px-2.5 py-2 text-right tabular-nums text-muted">{c.patients}</td>
+    </>
+  );
+}
+
+const CLINICAL_HEAD_2 = ["Courses", "Items", "Patients"];
+
+function ClinicalFragmentRows({
+  name,
+  cells,
+  subtotal,
+  showSubtotal,
+}: {
+  name: string;
+  cells: { band: BandKey; completed: ClinicalCounts; pending: ClinicalCounts }[];
+  subtotal: ClinicalStatePair;
+  showSubtotal: boolean;
+}) {
+  return (
+    <>
+      {cells.map((c, i) => (
+        <tr key={c.band} className="border-b border-line last:border-0">
+          <td className="px-2.5 py-2 text-left text-ink">
+            {i === 0 ? (
+              <span className="font-medium text-navy">{name}</span>
+            ) : (
+              <span className="text-faint">·</span>
+            )}
+            <span className="ml-2 text-muted">{BAND_LABELS[c.band]}</span>
+          </td>
+          <ClinicalNumbers c={c.completed} />
+          <ClinicalNumbers c={c.pending} />
+        </tr>
+      ))}
+      {showSubtotal ? (
+        <tr className="border-b border-line bg-card-muted/30 text-[12px] text-muted">
+          <td className="px-2.5 py-1.5 text-left font-medium">{name} — all bands</td>
+          <ClinicalNumbers c={subtotal.completed} />
+          <ClinicalNumbers c={subtotal.pending} />
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function NhsClinicalReportView({
+  clientSlug,
+  initial,
+}: {
+  clientSlug: string;
+  initial: NhsClinicalReadResult;
+}) {
+  const [preset, setPreset] = useState<ReportPreset>("this_month");
+  const [data, setData] = useState<NhsClinicalReadResult>(initial);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [clinician, setClinician] = useState<string>("all");
+  const [band, setBand] = useState<BandKey | "all">("all");
+
+  const load = useCallback(
+    async (p: ReportPreset) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/reports/nhs-clinical?client=${encodeURIComponent(clientSlug)}&preset=${p}`,
+        );
+        const json = (await res.json().catch(() => ({}))) as { ok?: boolean } & Partial<NhsClinicalReadResult> & { error?: string };
+        if (!res.ok || !json.ok || !json.window) throw new Error(json.error || "Could not load the report.");
+        setData(json as NhsClinicalReadResult);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not load the report.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [clientSlug],
+  );
+
+  function choose(p: ReportPreset) {
+    if (p === preset || loading) return;
+    setPreset(p);
+    void load(p);
+  }
+
+  const report = data.report;
+  const nameById = new Map<string, string>(data.practitioners.map((pr) => [pr.id, pr.name]));
+  const clinicianName = (id: string | null) => (id === null ? "Unattributed" : nameById.get(id) ?? id);
+
+  const rows = report
+    ? report.practitioners
+        .filter((r) => clinician === "all" || r.practitionerId === (clinician === "none" ? null : clinician))
+        .map((r) => ({
+          practitionerId: r.practitionerId,
+          cells: r.bands.filter((c) => band === "all" || c.band === band),
+          total: r.total,
+        }))
+        .filter((r) => r.cells.length > 0)
+    : [];
+  const displayTotal = report ? pickClinicalTotal(report, clinician, band) : EMPTY_CLINICAL_PAIR;
+
+  const filterLabel =
+    clinician === "all" && band === "all"
+      ? "Whole practice"
+      : `${clinician === "all" ? "All clinicians" : clinicianName(clinician === "none" ? null : clinician)}${band === "all" ? "" : ` · ${BAND_LABELS[band]}`}`;
+
+  // The "course counts are a floor" figure: banded items with no plan id.
+  const itemsWithoutPlanId = report
+    ? report.grandTotal.completed.itemsWithoutPlanId + report.grandTotal.pending.itemsWithoutPlanId
+    : 0;
+
+  const bandWord = band === "all" ? "" : `${BAND_LABELS[band].toLowerCase()} `;
+
+  return (
+    <SectionCard
+      title="NHS completion by clinician and band"
+      description="Treatment recorded as completed versus still pending, per clinician and band — the half the claims report cannot show, because a claim is only raised once a course closes. Read from the clinical record, not from Compass."
+      actions={<PeriodBar presets={CLINICAL_PRESETS} value={preset} onChange={choose} disabled={loading} />}
+    >
+      <div className="space-y-4">
+        {/* Always on, never dismissible. Wording lives in nhs-clinical-calibration.ts. */}
+        <Warning>
+          <BannerSegments />
+        </Warning>
+
+        {error ? <Warning>{error}</Warning> : null}
+
+        {data.unavailableReason ? (
+          <Unavailable reason={data.unavailableReason} />
+        ) : report ? (
+          <>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+                <label className="flex items-center gap-1.5 text-muted">
+                  Clinician
+                  <select
+                    value={clinician}
+                    onChange={(e) => setClinician(e.target.value)}
+                    className="rounded-md border border-line bg-card px-2 py-1 text-ink"
+                  >
+                    <option value="all">All clinicians</option>
+                    {report.practitioners.map((r) =>
+                      r.practitionerId === null ? (
+                        <option key="none" value="none">
+                          Unattributed
+                        </option>
+                      ) : (
+                        <option key={r.practitionerId} value={r.practitionerId}>
+                          {clinicianName(r.practitionerId)}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <label className="flex items-center gap-1.5 text-muted">
+                  Band
+                  <select
+                    value={band}
+                    onChange={(e) => setBand(e.target.value as BandKey | "all")}
+                    className="rounded-md border border-line bg-card px-2 py-1 text-ink"
+                  >
+                    <option value="all">All bands</option>
+                    {BAND_KEYS.map((b) => (
+                      <option key={b} value={b}>
+                        {BAND_LABELS[b]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="text-[11.5px] text-faint">{loading ? "Loading…" : windowText(data.window)}</p>
+            </div>
+
+            {/* Headline, phrased the way Blerta asks it. Leads with COURSES, and
+                keeps the two states SEPARATE: a course or patient can be partly
+                done, appearing in both, so completed and pending are never summed
+                (only items, which fall in exactly one state, are additive). */}
+            <p className="text-[13px] leading-relaxed text-ink">
+              <span className="font-semibold text-navy">{filterLabel}</span>, {windowText(data.window)}:{" "}
+              <span className="font-semibold tabular-nums text-status-green">
+                {displayTotal.completed.courses}
+              </span>{" "}
+              {bandWord}courses completed and{" "}
+              <span className="font-semibold tabular-nums text-status-amber">
+                {displayTotal.pending.courses}
+              </span>{" "}
+              still with pending treatment.{" "}
+              <span className="text-muted">
+                That is{" "}
+                <span className="tabular-nums">{displayTotal.completed.items}</span> completed and{" "}
+                <span className="tabular-nums">{displayTotal.pending.items}</span> pending items across{" "}
+                <span className="tabular-nums">{displayTotal.completed.patients}</span>/
+                <span className="tabular-nums">{displayTotal.pending.patients}</span> patients
+                (completed / pending).
+              </span>
+            </p>
+
+            {rows.length === 0 ? (
+              <Unavailable reason="No NHS treatment items match this period and filter." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-[13px]">
+                  <thead>
+                    <tr className="border-b border-line text-left">
+                      <th
+                        rowSpan={2}
+                        className="px-2.5 py-2 text-left text-[11px] font-medium uppercase tracking-[0.04em] text-faint align-bottom"
+                      >
+                        Clinician / band
+                      </th>
+                      <th
+                        colSpan={3}
+                        className="px-2.5 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.04em] text-status-green border-l border-line"
+                      >
+                        Completed
+                      </th>
+                      <th
+                        colSpan={3}
+                        className="px-2.5 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.04em] text-status-amber border-l border-line"
+                      >
+                        Pending
+                      </th>
+                    </tr>
+                    <tr className="border-b border-line text-left">
+                      {CLINICAL_HEAD_2.map((h, i) => (
+                        <th
+                          key={`c-${h}`}
+                          className={`px-2.5 py-1.5 text-right text-[10.5px] font-medium uppercase tracking-[0.03em] text-faint ${i === 0 ? "border-l border-line" : ""}`}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                      {CLINICAL_HEAD_2.map((h, i) => (
+                        <th
+                          key={`p-${h}`}
+                          className={`px-2.5 py-1.5 text-right text-[10.5px] font-medium uppercase tracking-[0.03em] text-faint ${i === 0 ? "border-l border-line" : ""}`}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <ClinicalFragmentRows
+                        key={r.practitionerId ?? "none"}
+                        name={clinicianName(r.practitionerId)}
+                        cells={r.cells}
+                        subtotal={r.total}
+                        showSubtotal={band === "all" && r.cells.length > 1}
+                      />
+                    ))}
+                    <tr className="border-t-2 border-line-strong bg-card-muted/40 font-semibold">
+                      <td className="px-2.5 py-2 text-left text-navy">Total · {filterLabel}</td>
+                      <ClinicalNumbers c={displayTotal.completed} />
+                      <ClinicalNumbers c={displayTotal.pending} />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* The visible reconcile: nothing counted vanishes silently. */}
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5 text-[11.5px] text-muted">
+                <p className="font-semibold text-navy">What was scanned, and where it went</p>
+                <ul className="mt-1.5 space-y-1">
+                  <li>{report.totalItemsScanned} treatment items read for this period.</li>
+                  <li>{report.excludedNonNhs} excluded as private / non-NHS (no band).</li>
+                  <li>{report.excludedOutOfWindow} excluded as outside the period.</li>
+                  <li>
+                    {report.droppedUnreadable} could not be placed (no id, a duplicate, or a completed
+                    item with no completion date) — excluded, not counted as zero.
+                  </li>
+                </ul>
+              </div>
+              <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5 text-[11.5px] text-muted">
+                <p className="font-semibold text-navy">Read the course counts as a floor</p>
+                <p className="mt-1.5">
+                  {itemsWithoutPlanId} banded item{itemsWithoutPlanId === 1 ? "" : "s"} in this period
+                  carry no treatment plan id and cannot be grouped into a course, so every course count
+                  is at least the number shown, not exactly it.
+                </p>
+                <p className="mt-1.5 text-faint">
+                  Per-site scope is via the clinician roster
+                  {data.filterPathUsed === "group-slice"
+                    ? " (read via the whole-group fallback: the per-clinician filter was unavailable on this run)."
+                    : "; a clinician working at two sites appears under each."}
+                </p>
+              </div>
+            </div>
+
+            {/* Forbidden claims — enforced on screen as well as in the const. */}
+            <div className="rounded-lg border border-line bg-card-muted/40 px-3 py-2.5 text-[12px] text-muted">
+              <p className="font-semibold text-navy">What these numbers are not</p>
+              <ul className="mt-1.5 space-y-1">
+                {FORBIDDEN_CLAIMS.map((f) => (
+                  <li key={f.claim} className="flex gap-2">
+                    <span className="mt-0.5 text-status-red">•</span>
+                    <span>
+                      <span className="font-medium text-ink">Not {f.claim}.</span> {f.because}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Open decisions — confirm before treating a headline as final. */}
+            <div className="rounded-lg border border-tint-blue-line bg-tint-blue px-3 py-2.5 text-[12px] text-status-blue">
+              <p className="font-semibold">Confirm with the practice before relying on a single figure</p>
+              <ul className="mt-1.5 space-y-1.5">
+                {AMBIGUITY_FLAGS.map((a) => (
+                  <li key={a.question}>
+                    <span className="font-medium">{a.question}</span> {a.recommendation}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>
+        ) : (
+          <Unavailable reason="Report unavailable." />
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+// === The three-tab wrapper ===================================================
 
 export function FlagshipReports({
   clientSlug,
   nhs,
   pay,
+  clinical,
 }: {
   clientSlug: string;
   nhs: NhsBandReadResult;
   pay: PaymentAllocationReadResult;
+  clinical: NhsClinicalReadResult;
 }) {
-  const [tab, setTab] = useState<"nhs" | "pay">("nhs");
+  const [tab, setTab] = useState<"nhs" | "clinical" | "pay">("nhs");
   return (
     <div className="space-y-5">
-      <div role="tablist" className="inline-flex gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]">
+      <div role="tablist" className="inline-flex flex-wrap gap-0.5 rounded-lg border border-line-strong bg-card p-[3px]">
         <TabButton active={tab === "nhs"} onClick={() => setTab("nhs")} icon={<Activity size={15} />}>
           NHS activity
+        </TabButton>
+        <TabButton active={tab === "clinical"} onClick={() => setTab("clinical")} icon={<ClipboardCheck size={15} />}>
+          NHS completion
         </TabButton>
         <TabButton active={tab === "pay"} onClick={() => setTab("pay")} icon={<Banknote size={15} />}>
           Payment allocation
@@ -557,6 +976,8 @@ export function FlagshipReports({
       </div>
       {tab === "nhs" ? (
         <NhsActivityReport clientSlug={clientSlug} initial={nhs} />
+      ) : tab === "clinical" ? (
+        <NhsClinicalReportView clientSlug={clientSlug} initial={clinical} />
       ) : (
         <PaymentAllocationReportView clientSlug={clientSlug} initial={pay} />
       )}

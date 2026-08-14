@@ -10,7 +10,8 @@ export type TaskModule =
   | "noshow"
   | "after-hours"
   | "smile-assessment"
-  | "compliance";
+  | "compliance"
+  | "medical-history";
 
 export type TaskKind =
   | "contact_lead"
@@ -22,7 +23,8 @@ export type TaskKind =
   | "action_assessment"
   | "compliance_audit"
   | "compliance_policy"
-  | "compliance_training";
+  | "compliance_training"
+  | "review_medical_history";
 
 export type TaskStatus = "open" | "done" | "snoozed" | "dismissed";
 
@@ -37,6 +39,7 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   compliance_audit: "Compliance audit",
   compliance_policy: "Compliance policy",
   compliance_training: "Staff training",
+  review_medical_history: "Review medical history",
 };
 
 /**

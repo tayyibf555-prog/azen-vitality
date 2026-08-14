@@ -353,6 +353,10 @@ async function rawPatientSearch(siteId: string, query: string): Promise<PatientR
         gender: null,
         smsConsent: false,
         emailConsent: false,
+        // Part of the "rest, left null" set above: this dedupe projection does not
+        // read Dentally's medical_alert, so false/null here is not a claim about it.
+        medicalAlert: false,
+        medicalAlertText: null,
         // Read from the row rather than defaulted: this IS a real Dentally patient
         // payload, and a hard-coded null here would report "no plan on file" for a
         // patient who has one.

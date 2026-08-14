@@ -7,9 +7,19 @@ import { StatusPill } from "@/components/primitives";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
 import { londonDateLabel } from "@/lib/time/london";
 import { FUNDING_LABEL } from "@/lib/calendar/funding";
-import { CANNOT_READ_COPY, EMPTY_COPY, FAILED_COPY } from "@/lib/patient/tabs";
+import { EMPTY_COPY, FAILED_COPY } from "@/lib/patient/tabs";
 import { patientStatusChip } from "@/lib/patient/status-chip";
+import { medicalHeaderPill, type MedicalPillTone } from "@/lib/patient-medical/review-status";
 import { gbp } from "@/lib/utils";
+
+// Presentation only: which StatusPill colour each medical tone renders as. The
+// quick-view has no review read of its own (its API does not carry one), so the
+// pill only ever resolves to the Dentally alert mirror (red) or nothing here.
+const MEDICAL_PILL_TONE: Record<Exclude<MedicalPillTone, "none">, "danger" | "warning" | "neutral"> = {
+  alert: "danger",
+  "review-due": "warning",
+  unread: "neutral",
+};
 import type { PatientDetail, PatientRecord, ReadHealth } from "@/lib/dentally/read";
 import type { PatientDerived } from "@/lib/patient/record-derive";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
@@ -165,6 +175,16 @@ export function PatientQuickView({
     ? [patient.smsConsent ? "SMS" : null, patient.emailConsent ? "Email" : null].filter(Boolean).join(", ") ||
       "No marketing consent"
     : "";
+  // Same tested rule as the record header, with no review read here (this surface
+  // has no gated read): so it resolves to the Dentally medical_alert mirror alone —
+  // red when set, nothing when not, matching Dentally's empty alert slot.
+  const medPill = patient
+    ? medicalHeaderPill({
+        medicalAlert: patient.medicalAlert,
+        medicalAlertText: patient.medicalAlertText,
+        review: null,
+      })
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -197,10 +217,13 @@ export function PatientQuickView({
               ) : patient ? (
                 <span>Date of birth not on file</span>
               ) : null}
-              {/* Same neutral grey flag as the record page, in the same position and
-                  with the same words. Not red (red is a real alert) and not absent
-                  (an empty slot reads as "no alert"). */}
-              <StatusPill tone="neutral">{CANNOT_READ_COPY.medicalHistoryFlag}</StatusPill>
+              {/* The same computed medical pill as the record header: RED when
+                  Dentally flags an alert (with its text on hover), and NOTHING when
+                  it does not — mirroring Dentally's empty alert slot. Never a static
+                  "not read" pill on this surface. */}
+              {medPill && medPill.tone !== "none" ? (
+                <StatusPill tone={MEDICAL_PILL_TONE[medPill.tone]}>{medPill.label}</StatusPill>
+              ) : null}
               {chip ? <StatusPill tone={chip.tone}>{chip.label}</StatusPill> : null}
               {fundingLabel ? <StatusPill tone="neutral">{fundingLabel}</StatusPill> : null}
               {data?.siteName ? <span className="truncate">{data.siteName}</span> : null}

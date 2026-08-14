@@ -16,6 +16,9 @@ export const KIND_BASE: Record<TaskKind, number> = {
   compliance_policy: 64, // a missing / review-due required policy
   compliance_training: 60, // overdue / expiring mandatory staff training
   follow_up_plan: 62, // money on the table, but not time-critical
+  // A medical-history review is a legal obligation before treatment, but it is a
+  // desk task, not time-critical to the minute; it sits with the clinical-admin band.
+  review_medical_history: 58,
   reactivate: 54,
   chase_recall: 48,
 };

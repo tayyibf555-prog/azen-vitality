@@ -11,6 +11,7 @@ import {
   CalendarPlus,
   CalendarRange,
   ClipboardCheck,
+  FileCheck,
   FileText,
   Fingerprint,
   HeartPulse,
@@ -154,6 +155,17 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: Wallet,
         status: "live",
         note: "Outstanding balances across accepted treatment plans, ranked by what is owed, live from Dentally.",
+      },
+      {
+        slug: "fp17",
+        label: "NHS declarations",
+        icon: FileCheck,
+        status: "live",
+        // Roles: no `roles` array = owner, agency and the practice coordinator can
+        // see it (front-desk records work, like Onboarding); the clinician is denied
+        // via CLINICIAN_SLUGS. Ships GATED OFF via the kill switch (seeded disabled in
+        // migration 0071); the owner turns it on from System controls.
+        note: "NHS FP17/PR consent + exemption declarations patients complete from a per-patient link, captured in this platform for the practice's records. It is NOT submitted to the NHS (Compass) from here — the NHS claim is still made in Dentally. Switched off until turned on in System controls.",
       },
     ],
   },
@@ -485,7 +497,9 @@ export const NAV_CATEGORIES: NavCategory[] = [
     icon: Users,
     // Onboarding lives here (not Growth): reviewing + registering new-patient form
     // submissions is a reception task, and Patients is where a receptionist looks.
-    slugs: ["patients", "payments", "onboarding", "recall", "reactivation", "treatment-coordinator", "no-show-defence", "reviews"],
+    // NHS declarations (fp17) sits alongside it for the same reason — reviewing
+    // captured consent + exemption declarations is front-desk records work.
+    slugs: ["patients", "payments", "onboarding", "fp17", "recall", "reactivation", "treatment-coordinator", "no-show-defence", "reviews"],
   },
   {
     key: "messages",

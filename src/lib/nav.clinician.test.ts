@@ -108,11 +108,16 @@ const BASELINE: Record<string, string[]> = {
  * - "staff-check-in" already existed and was already visible to agency + owner as a
  *   placeholder, so flipping it live added nothing for them. The coordinator IS a
  *   genuine grant, for the same reason: attendance exceptions are the manager's job.
+ * - "fp17" (added in the clinical-record parity wave) is the NHS FP17/PR consent +
+ *   exemption declaration module. It carries no `roles` array — reviewing captured
+ *   declarations is front-desk records work, exactly like Onboarding — so all three
+ *   non-clinician roles gain it. The clinician does NOT (it is not in CLINICIAN_SLUGS),
+ *   which the tests below still prove.
  */
 const ADDED_TONIGHT: Record<string, string[]> = {
-  agency_admin: ["absence"],
-  client_owner: ["absence"],
-  client_coordinator: ["absence", "staff-check-in"],
+  agency_admin: ["absence", "fp17"],
+  client_owner: ["absence", "fp17"],
+  client_coordinator: ["absence", "staff-check-in", "fp17"],
 };
 
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */

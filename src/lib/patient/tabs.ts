@@ -71,18 +71,26 @@ export const PATIENT_TABS: readonly PatientTab[] = [
   },
   {
     slug: "medical",
+    // PARTIAL from the day medical-history capture landed, and it left the
+    // "unreadable" set for the SAME reason perio did — not the chart's. The chart
+    // became fillable because a Dentally read was found. Medical's Dentally endpoint
+    // (/v1/medical_histories) EXISTS but is permanently empty for this practice
+    // (0 rows across 51k patients, verified GET-only), so nothing is mirrored from
+    // it — but the patient's own `medical_alert` flag IS a real read now
+    // (PatientRecord.medicalAlert), and this platform AUTHORS a medical-history
+    // questionnaire + review log of its own (gated off by default). So the tab
+    // renders its own screen — the alert mirror, the questionnaire, the review
+    // status — with every caveat stated inline, exactly as the chart tab was
+    // migrated above.
+    //
+    // The old cannotRead asserted "no client method, no endpoint, no table, no
+    // column." Every clause of that is now false, so it must not survive this
+    // commit — a blanked sentence, and the tab routes to its own component
+    // (record-tab-content.tsx) rather than the shared "we cannot read this" panel.
     label: "Medical",
-    availability: "unreadable",
-    // The hardest case in the whole record, and the one the honesty rule exists for.
-    // There is no medical read of any kind here: no client method, no endpoint, no
-    // table, no column. "No medical history recorded" would be a fabrication that a
-    // clinician could act on.
-    cannotRead:
-      "We cannot read medical history. Dentally does not expose it through the connection we have, " +
-      "so this tab cannot tell you whether this patient has any. Check Dentally before treating this patient.",
-    willHold:
-      "When it is available, this tab will hold the medical history form, alerts, allergies, medications " +
-      "and the date it was last updated.",
+    availability: "partial",
+    cannotRead: "",
+    willHold: "",
   },
   {
     slug: "chart",
@@ -297,6 +305,19 @@ export const CANNOT_READ_COPY = {
     "Shows recall, no-show and reactivation tasks, plus after-hours callbacks where the caller's number was " +
     "recognised. Coordinator, speed-to-lead and smile assessment tasks are not keyed to a patient, so they " +
     "cannot be listed here.",
+  /**
+   * The record header's neutral medical wording.
+   *
+   * SEMANTICS UPDATED. This used to be the header's PERMANENT pill, correct back
+   * when there was no medical read of any kind. Now medical_alert is readable and a
+   * review can be stored, so the header renders a computed THREE-STATE pill instead
+   * (medicalHeaderPill in src/lib/patient-medical/review-status.ts): red when
+   * Dentally flags an alert, amber when a review is due, and this exact neutral
+   * wording ONLY when the review status could not be READ — a failed read, never a
+   * permanent state. It is kept here as the canonical neutral wording, and it is the
+   * SHAPE bpeFlag below copies (words, not a dot); the pill's failed-read label uses
+   * this same string, and this test-pinned constant is what stops the two drifting.
+   */
   medicalHistoryFlag: "Medical history not read",
   /** The chart's BPE marker. Deliberately the same SHAPE as the medical flag
    *  above and kept beside it: Dentally puts a RED dot on BPE when one is due,

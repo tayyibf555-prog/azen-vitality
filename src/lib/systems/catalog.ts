@@ -98,6 +98,17 @@ export const SYSTEMS: SystemDef[] = [
     halts: "The public new-patient onboarding form goes offline.",
   },
   {
+    // The FP17/PR consent + exemption declaration capture. Ships DORMANT (seeded
+    // disabled in migration 0071): the wording is a legal declaration and must be
+    // signed off before switch-on, so the owner turns it on here when the practice is
+    // ready. Switching it off makes the public form 503 and hides the module. Nothing
+    // this captures is ever submitted to the NHS (Compass).
+    slug: "fp17",
+    label: "NHS exemption declarations",
+    group: "Acquisition",
+    halts: "The public NHS consent + exemption declaration form goes offline and the module is hidden.",
+  },
+  {
     // Headless system: no dashboard page of its own (the switch lives in the
     // systems control panel, which renders from SYSTEMS directly). Controls the
     // PUBLIC /book page's ability to create real Dentally appointments.

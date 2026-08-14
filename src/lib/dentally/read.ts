@@ -208,6 +208,20 @@ export interface PatientRecord {
   smsConsent: boolean;
   emailConsent: boolean;
   /**
+   * Dentally's own `medical_alert` boolean. The ONLY populated medical signal on
+   * the patient object (verified: /v1/medical_histories exists but is permanently
+   * empty for this practice), so this is the one Dentally medical fact we mirror —
+   * and it is DIFFERENT from the medical-history questionnaire this platform may
+   * author (src/lib/patient-medical). It rides the SAME `GET /v1/patients/:id`
+   * payload every other field here comes from; toPatient simply never picked it.
+   * Absent reads as false, which is how the record renders no alert rather than a
+   * guessed one.
+   */
+  medicalAlert: boolean;
+  /** The free text behind `medical_alert`, e.g. "Penicillin anaphylaxis", or null.
+   *  Shown only when medicalAlert is true; never used to imply an alert on its own. */
+  medicalAlertText: string | null;
+  /**
    * The patient's Dentally payment plan id, or null when there is none on file.
    *
    * Funding (NHS / Private / UDC) is a PATIENT-level fact: an appointment payload
@@ -312,6 +326,11 @@ function toPatient(r: Record<string, unknown>): PatientRecord {
     gender: normaliseGender(r.gender),
     smsConsent: bool(r.use_sms),
     emailConsent: bool(r.use_email),
+    // Free add: the same payload already carries these. medical_alert is the one
+    // populated medical field on the Dentally patient object; medical_alert_text is
+    // its detail. Absent stays false/null so a record with no alert renders none.
+    medicalAlert: bool(r.medical_alert),
+    medicalAlertText: str(r.medical_alert_text),
     paymentPlanId: readPlanId(r),
   };
 }

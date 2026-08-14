@@ -8,6 +8,8 @@ import { listCaptures } from "@/lib/after-hours/repository";
 import { afterHoursTaskCopy, captureTiming } from "@/lib/after-hours/call-outcome";
 import { getSiteById } from "@/lib/after-hours/hours";
 import { listResponses } from "@/lib/smile-assessment/repository";
+import { isMedicalHistoryEnabled } from "@/lib/patient-medical/gate";
+import { listOutstandingReviews } from "@/lib/patient-medical/repository";
 import { londonDateTimeLabel } from "@/lib/time/london";
 import { computePriority, applyOverlay } from "./logic";
 import { getOverlayMap } from "./repository";
@@ -182,6 +184,32 @@ async function smileAssessmentCandidates(ctx: TaskQueueContext): Promise<Candida
     }));
 }
 
+async function medicalHistoryCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
+  // GATED OFF by default, and off is the shipping default. When the feature is off
+  // the repository would THROW rather than return [], so it is not called at all —
+  // exactly the perio posture. When on, listOutstandingReviews surfaces patients
+  // whose captured questionnaire has not been reviewed since it was captured. This
+  // signal is coarser than the appointment-aware header rule (the task queue has no
+  // per-patient appointment feed), and honest about being so.
+  if (!isMedicalHistoryEnabled()) return [];
+  const outstanding = await listOutstandingReviews(ctx.siteIds);
+  return outstanding.map((o) => ({
+    key: `medical-history:${o.siteId}:${o.dentallyPatientId}:review`,
+    module: "medical-history" as const,
+    kind: "review_medical_history" as const,
+    title: `Review medical history: ${o.patientName ?? "patient"}`,
+    subtitle: "Captured, not yet reviewed in this platform",
+    patientName: o.patientName ?? "Patient",
+    // From the stored dentallyPatientId, never a name match. Deep-links to the
+    // patient's Medical tab, where the review can be recorded.
+    patientId: o.dentallyPatientId,
+    siteId: o.siteId,
+    priority: computePriority("review_medical_history"),
+    dueHint: null,
+    href: `/c/${ctx.clientSlug}/patients/${o.dentallyPatientId}/medical`,
+  }));
+}
+
 // --- Aggregate --------------------------------------------------------------
 
 /**
@@ -212,6 +240,9 @@ const CANDIDATE_BUILDERS: readonly ((ctx: TaskQueueContext) => Promise<Candidate
   noshowCandidates,
   afterHoursCandidates,
   smileAssessmentCandidates,
+  // Gated OFF by default (perio precedent): returns [] until MEDICAL_HISTORY_ENABLED
+  // is set, so it adds no tasks in the shipping state.
+  medicalHistoryCandidates,
 ];
 
 export async function generateTasksWithHealth(ctx: TaskQueueContext): Promise<TaskQueueResult> {

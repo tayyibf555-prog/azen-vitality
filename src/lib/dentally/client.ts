@@ -44,6 +44,15 @@ function shiftDay(ymd: string | undefined, days: number): string | undefined {
 export interface ListPlansArgs { siteId: string; patientId?: string; updatedAfter?: string; page?: number; perPage?: number; }
 /** One patient's charting items. patient_id ONLY: see listTreatmentPlanItems. */
 export interface ListTreatmentPlanItemsArgs { patientId: string; page?: number; perPage?: number; }
+/**
+ * The REPORT read of /v1/treatment_plan_items: practitioner_id + updated_since ONLY.
+ * A completely separate entry point from the charting listTreatmentPlanItems (which
+ * sends patient_id) so the two calibrations cannot drift into each other.
+ * `practitionerId` is OPTIONAL: omit it for the whole-group updated_since slice the
+ * report's fallback path uses when the practitioner_id filter regresses (see the
+ * method's comment). NO site_id (the item has none), NO patient_id, NO sort_by.
+ */
+export interface ListTPIByPractitionerArgs { practitionerId?: string; updatedSince?: string; page?: number; perPage?: number; }
 /** One patient's treatment APPOINTMENTS — the cards on the plan panel. patient_id
  *  ONLY, for the same reason listTreatmentPlanItemsArgs carries nothing else. */
 export interface ListTreatmentAppointmentsArgs { patientId: string; page?: number; perPage?: number; }
@@ -232,6 +241,59 @@ export class DentallyClient {
     return this.get<{ treatment_plan_items: unknown[] }>("/v1/treatment_plan_items", {
       patient_id: a.patientId, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
+  }
+
+  /**
+   * The SAME endpoint, read the REPORT way: filtered by practitioner_id and
+   * updated_since, NOT by patient. This is the scan lever behind Report C
+   * (nhs-clinical-activity) — a cheap per-clinician, date-bounded read of the
+   * clinical completed/pending signal. Kept SEPARATE from listTreatmentPlanItems
+   * on purpose: that call is calibrated for the per-patient charting panel and its
+   * callers depend on that shape; recalibrating this path must never touch it.
+   *
+   * SENDS practitioner_id (when given) + updated_since + paging, AND NOTHING ELSE.
+   * No site_id (the item has none — 0/300 sampled — so per-site scoping is done via
+   * the practitioner roster upstream), no patient_id, and NO sort_by/sort_direction
+   * (they corrupt ordering; the default is already updated_at desc).
+   *
+   * MEASURED FILTER TABLE — read-only probes, 2026-08-14, base total 998,894:
+   *
+   *   practitioner_id=          WORKS (bare). A real id (193101) returned total
+   *                             32,810 with every sampled row matching; a bogus id
+   *                             returned total 0; it COMPOSES with updated_since
+   *                             (193101 + updated_since=2026-07-15 -> 2,168, 0.2s).
+   *                             THIS DIRECTLY CONTRADICTS the 2026-08-03 client.ts
+   *                             note that recorded practitioner_id as HTTP 500 on
+   *                             this endpoint. Either Dentally fixed it or 08-03 was
+   *                             transient; it is treated as VOLATILE — the report
+   *                             re-probes it at run time and falls back to a
+   *                             whole-group updated_since slice (this same method
+   *                             with practitionerId omitted) filtered to the site
+   *                             roster if it 500s again. A cold practitioner_id read
+   *                             WITHOUT updated_since was slow (~15s); always send
+   *                             updated_since = window.from.
+   *   updated_since=YYYY-MM-DD  WORKS (bare) — NOT filter[updated_since]. It is a
+   *                             SUPERSET for both halves: completed items have
+   *                             updated_at ~ completed_at, pending items have
+   *                             updated_at >= created_at >= from. The report then
+   *                             windows client-side on completed_at / created_at.
+   *   completed=true            IGNORED — filter clinically, client-side.
+   *   site_id=                  IGNORED, and there is no site_id on the row anyway.
+   *
+   * meta.total IS exposed on this endpoint ({ treatment_plan_items, meta:{ total,
+   * current_page } }), but the report pages until a short page rather than trusting
+   * it, exactly like every other list read here.
+   */
+  listTreatmentPlanItemsByPractitioner(a: ListTPIByPractitionerArgs) {
+    return this.get<{ treatment_plan_items: unknown[]; meta?: { total?: number; current_page?: number | string } }>(
+      "/v1/treatment_plan_items",
+      {
+        practitioner_id: a.practitionerId,
+        updated_since: a.updatedSince,
+        page: a.page ?? 1,
+        per_page: a.perPage ?? 100,
+      },
+    );
   }
 
   /**

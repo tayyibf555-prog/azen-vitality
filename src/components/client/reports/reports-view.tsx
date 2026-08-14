@@ -4,7 +4,7 @@ import { getClient } from "@/lib/mock";
 import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
 import { buildSnapshot } from "@/lib/reports/snapshot";
 import { presetWindow } from "@/lib/reports/report-window";
-import { readNhsBandReport, readPaymentAllocation } from "@/lib/reports/flagship-read";
+import { readNhsBandReport, readPaymentAllocation, readNhsClinicalReport } from "@/lib/reports/flagship-read";
 import { FlagshipReports, PAY_DEFAULT_PRESET } from "./flagship-reports";
 import { ReportsWorkspace } from "./reports-workspace";
 import { UsageSection } from "./usage-section";
@@ -36,11 +36,15 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
   const payWindow = presetWindow(PAY_DEFAULT_PRESET, now);
   const paySiteId = selection === ALL_SITES ? null : selection;
 
-  const [week, month, nhs, pay] = await Promise.all([
+  const [week, month, nhs, pay, clinical] = await Promise.all([
     buildSnapshot("week", siteIds),
     buildSnapshot("month", siteIds),
     readNhsBandReport({ siteIds, window: defaultWindow, now }),
     readPaymentAllocation({ siteIds, window: payWindow, siteId: paySiteId, now }),
+    // Report C opens on the same this-month window as Report A. Its per-clinician
+    // fan-out is cheap (one probe + a page or two per active clinician), so unlike
+    // the allocation report it can run inside the page render.
+    readNhsClinicalReport({ siteIds, window: defaultWindow, now }),
   ]);
 
   const hasActivity = month.enquiries > 0;
@@ -72,7 +76,7 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
         title="Practice reports"
         description="The reports Dentally will not give you in one place: NHS activity split by clinician and band, and payment allocation with every unconfirmed condition named."
       >
-        <FlagshipReports clientSlug={clientSlug} nhs={nhs} pay={pay} />
+        <FlagshipReports clientSlug={clientSlug} nhs={nhs} pay={pay} clinical={clinical} />
       </SectionCard>
 
       {hasActivity ? (

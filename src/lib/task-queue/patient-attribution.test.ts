@@ -21,9 +21,9 @@ const ASSIGNMENTS = [...SRC.matchAll(/patientId:\s*([^,\n]+)/g)].map((m) => m[1]
 
 describe("task -> patient attribution", () => {
   it("assigns a patientId in every candidate builder, so none can be forgotten", () => {
-    // seven modules: speed-to-lead, recall, reactivation, coordinator, noshow,
-    // after-hours, smile-assessment.
-    expect(ASSIGNMENTS).toHaveLength(7);
+    // eight modules: speed-to-lead, recall, reactivation, coordinator, noshow,
+    // after-hours, smile-assessment, medical-history.
+    expect(ASSIGNMENTS).toHaveLength(8);
   });
 
   it("derives it ONLY from a target's own dentallyPatientId, or leaves it null", () => {
@@ -38,12 +38,12 @@ describe("task -> patient attribution", () => {
     }
   });
 
-  it("keys exactly the four modules whose targets carry a patient id", () => {
+  it("keys exactly the five modules whose targets carry a patient id", () => {
     const keyed = ASSIGNMENTS.filter((v) => v !== "null");
-    // recall, reactivation, no-show and after-hours. The first three always carry
-    // a dentallyPatientId; an after-hours capture carries one whenever the caller
-    // was identified by phone number, and null when they were not.
-    expect(keyed).toHaveLength(4);
+    // recall, reactivation, no-show, after-hours and medical-history. All carry a
+    // dentallyPatientId on the stored row (an after-hours capture carries one
+    // whenever the caller was identified by phone, and null when they were not).
+    expect(keyed).toHaveLength(5);
   });
 
   it("surfaces the after-hours capture's own dentallyPatientId, so an identified caller's callback reaches their record", () => {

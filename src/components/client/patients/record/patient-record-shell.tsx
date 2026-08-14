@@ -4,6 +4,7 @@ import { getViewScope } from "@/lib/site-view";
 import { getPatientRecordInScope } from "@/lib/patient/record";
 import { getOverride } from "@/lib/patient-status/repository";
 import { readNotesForRecord } from "@/lib/patient-notes/server-read";
+import { readMedicalReviewForHeader } from "@/lib/patient-medical/server-read";
 import { patientTabHref } from "@/lib/patient/tabs";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
 import { PatientRecordHeader } from "./patient-record-header";
@@ -61,7 +62,8 @@ export async function PatientRecordShell({
   // fall through to Dentally's active flag and render a green "Active" pill for a
   // patient the practice may have marked do_not_contact. The read's own success is
   // carried to the header, which says so in that same slot instead.
-  const [override, notes] = await Promise.all([
+  const nowIso = new Date().toISOString();
+  const [override, notes, medicalReview] = await Promise.all([
     getOverride(record.patient.siteId, record.patient.id).then(
       (o) => ({ ok: true, status: o?.status ?? null }),
       () => ({ ok: false, status: null as PatientAdminStatus | null }),
@@ -69,6 +71,15 @@ export async function PatientRecordShell({
     // The pinned band's own list, read here so the band paints in its final shape
     // rather than pushing the tab strip down a round trip later.
     readNotesForRecord(record.patient.siteId, record.patient.id),
+    // The header's medical pill. Gated + fail-soft inside the helper: null when the
+    // feature is off (the pill then shows the Dentally alert mirror alone), and
+    // { ok:false } on a read failure (the pill says "not read" rather than "none").
+    readMedicalReviewForHeader({
+      siteId: record.patient.siteId,
+      patientId: record.patient.id,
+      appointments: record.detail.appointments,
+      nowIso,
+    }),
   ]);
 
   return (
@@ -82,6 +93,7 @@ export async function PatientRecordShell({
         overrideUnavailable={!override.ok}
         listHref={listHref}
         medicalHref={patientTabHref(basePath, "medical")}
+        medicalReview={medicalReview}
       />
       {/* Above the tab strip on purpose: a pinned note must reach the reader whichever
           tab they are on, exactly as Dentally's band does. Seeded from the server read

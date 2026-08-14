@@ -57,18 +57,28 @@ describe("the honesty copy", () => {
   const unreadable = PATIENT_TABS.filter((t) => t.availability === "unreadable");
 
   // Chart LEFT this set the day it started rendering from
-  // /v1/treatment_plan_items. The test NAME goes stale as surely as the
-  // assertion, so both move in the same edit. The it.each below also asserts
-  // willHold.length > 0, which is why chart has to leave the set in the same
-  // commit that blanks its willHold.
-  it("covers Medical and Perio, the two with no source at all", () => {
-    expect(unreadable.map((t) => t.slug)).toEqual(["medical", "perio"]);
+  // /v1/treatment_plan_items. MEDICAL LEFT IT TOO, for the perio reason not the
+  // chart's: Dentally's /v1/medical_histories endpoint EXISTS but is permanently
+  // empty for this practice, and patient.medical_alert IS readable, so the tab is
+  // "partial" and AUTHORS its own questionnaire + review screen. Only perio, with no
+  // Dentally periodontal endpoint of any kind, is left with no source at all.
+  it("leaves only Perio with no source at all", () => {
+    expect(unreadable.map((t) => t.slug)).toEqual(["perio"]);
   });
 
   it("moves Chart to partial, and drops its promise to write back to Dentally", () => {
     expect(patientTab("chart").availability).toBe("partial");
     expect(patientTab("chart").cannotRead).toBe("");
     expect(patientTab("chart").willHold).toBe("");
+  });
+
+  it("moves Medical to partial, blanks its cannot-read sentence, and drops its old willHold", () => {
+    // Its old cannotRead asserted "no client method, no endpoint, no table, no
+    // column" - every clause now false. The honesty for the switched-off feature
+    // moved to MEDICAL_COPY (its own gated screen); the tab entry carries none.
+    expect(patientTab("medical").availability).toBe("partial");
+    expect(patientTab("medical").cannotRead).toBe("");
+    expect(patientTab("medical").willHold).toBe("");
   });
 
   it.each(unreadable)("$slug says it cannot read, and never that there is none", (tab) => {
@@ -78,10 +88,6 @@ describe("the honesty copy", () => {
     expect(tab.cannotRead.toLowerCase()).not.toContain("recorded");
     expect(tab.cannotRead.toLowerCase()).not.toContain("none");
     expect(tab.willHold.length).toBeGreaterThan(0);
-  });
-
-  it("tells a clinician to check Dentally before treating, on the medical tab only", () => {
-    expect(patientTab("medical").cannotRead).toContain("Check Dentally before treating this patient");
   });
 
   it("keeps the empty and failed sentences distinct for every stream that has both", () => {
@@ -126,7 +132,10 @@ describe("the honesty copy", () => {
     expect(s.toLowerCase()).not.toContain("none");
   });
 
-  it("keeps the header's medical flag neutral in wording", () => {
+  it("keeps the medical flag's neutral wording, now the header pill's failed-read label", () => {
+    // The header no longer renders this permanently - it computes a three-state pill
+    // (medicalHeaderPill) and uses this exact wording only for the failed-read state.
+    // The value is pinned here so that pill label and this constant cannot drift.
     expect(CANNOT_READ_COPY.medicalHistoryFlag).toBe("Medical history not read");
   });
 

@@ -22,6 +22,8 @@ function patient(over: Partial<PatientRecord> = {}): PatientRecord {
     gender: null,
     smsConsent: false,
     emailConsent: false,
+    medicalAlert: false,
+    medicalAlertText: null,
     paymentPlanId: null,
     ...over,
   };

@@ -19,10 +19,10 @@ import { TabCorrespondence } from "./tab-correspondence";
 import { TabDetails } from "./tab-details";
 import { TabNotes } from "./tab-notes";
 import { TabChart } from "./tab-chart";
+import { TabMedical } from "./tab-medical";
 import { TabPerio } from "./tab-perio";
 import { TabRecalls } from "./tab-recalls";
 import { TabTasks } from "./tab-tasks";
-import { UnavailablePanel } from "./unavailable-panel";
 import { RecordSummary } from "./record-summary";
 
 /**
@@ -38,9 +38,13 @@ import { RecordSummary } from "./record-summary";
  * audit trail, Tasks does not fetch the recall touches, and so on: the record is opened
  * all day and most opens read one tab.
  *
- * Medical renders UnavailablePanel directly rather than through a one-line wrapper
- * file: the panel already takes the slug and reads every word of its copy from
- * lib/patient/tabs.ts, so a wrapper would add a file and no behaviour.
+ * Medical NO LONGER renders UnavailablePanel, and it left the panel for the same
+ * reason perio did, not the chart's. The chart became fillable because a Dentally
+ * read was found. Medical's Dentally endpoint (/v1/medical_histories) EXISTS but is
+ * permanently empty for this practice, so what changed is that this platform now
+ * AUTHORS a medical-history questionnaire + review log of its own — a second
+ * clinical record, gated off, which renders its own screen (the alert mirror, the
+ * questionnaire, the review log) rather than the shared "we cannot read this" panel.
  *
  * CHART IS NO LONGER ONE OF THEM. It renders from /v1/treatment_plan_items, which is
  * a real read, so its tab entry moved to "partial" and its cannotRead sentence was
@@ -78,7 +82,23 @@ export async function RecordTabContent({
   const siteId = patient.siteId;
 
   if (slug === "medical") {
-    return <UnavailablePanel slug={slug} />;
+    // No longer the UnavailablePanel: Dentally's /v1/medical_histories exists but is
+    // permanently empty for this practice, so this platform AUTHORS a medical-history
+    // questionnaire + review log of its own (gated off, perio archetype). The ONE
+    // Dentally mirror is patient.medicalAlert, already on the record read and passed
+    // straight through. Appointments feed the appointment-aware review rule. nowIso,
+    // not a clock read inside the tab, so the header and this panel share one "now".
+    return (
+      <TabMedical
+        clientSlug={clientSlug}
+        siteId={siteId}
+        patientId={patient.id}
+        nowIso={nowIso}
+        medicalAlert={patient.medicalAlert}
+        medicalAlertText={patient.medicalAlertText}
+        appointments={detail.appointments}
+      />
+    );
   }
 
   if (slug === "perio") {

@@ -21,6 +21,7 @@ import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
 import { OnboardingView } from "@/components/client/onboarding/onboarding-view";
+import { Fp17View } from "@/components/fp17/fp17-view";
 import { AfterHoursView } from "@/components/client/after-hours/after-hours-view";
 import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view";
 import { AgentView } from "@/components/client/agent/agent-view";
@@ -126,6 +127,13 @@ export default async function OwnerModulePage({
 
   if (module === "onboarding") {
     return <OnboardingView clientSlug={client} />;
+  }
+
+  // NHS FP17/PR consent + exemption declarations. A dedicated /owner/[client]/fp17
+  // page shadows this branch at runtime (owner parity), but owner-module-coverage
+  // requires the literal here, exactly like `patients`.
+  if (module === "fp17") {
+    return <Fp17View clientSlug={client} />;
   }
 
   if (module === "after-hours") {

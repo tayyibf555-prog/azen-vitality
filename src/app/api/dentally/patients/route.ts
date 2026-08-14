@@ -63,6 +63,10 @@ async function recallRows(siteIds: string[]): Promise<PatientRow[]> {
       gender: null,
       smsConsent: t.consent.sms,
       emailConsent: t.consent.email,
+      // A recall_target does not hold Dentally's medical_alert; this row is marked
+      // partial and never renders a medical pill, so false/null here is not a claim.
+      medicalAlert: false,
+      medicalAlertText: null,
       paymentPlanId: null,
       // recall_target genuinely does not hold contact details, a date of birth or a
       // payment plan, so those nulls are NOT facts about the patient. Marked partial

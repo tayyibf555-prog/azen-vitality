@@ -85,6 +85,8 @@ const EXEMPT: Record<string, Exemption> = {
   "landing-lead": { kind: "public", reason: "public landing-page lead capture, budget-guarded" },
   "onboarding/submit": { kind: "public", reason: "public new-patient onboarding form submit" },
   "onboarding/upload": { kind: "public", reason: "public onboarding document upload" },
+  "medical-history/public-submit": { kind: "public", reason: "public patient-facing medical-history questionnaire submit (token-verified)" },
+  "fp17/submit": { kind: "public", reason: "public FP17/PR consent + exemption declaration submit, token-bound + budget-guarded" },
   "smile-assessment/token": { kind: "public", reason: "public quiz: mints the session token" },
   "smile-assessment/next": { kind: "public", reason: "public quiz: serves the next question" },
   "smile-assessment/submit": { kind: "public", reason: "public quiz submit, signed submit token" },
@@ -147,6 +149,7 @@ const EXEMPT: Record<string, Exemption> = {
   "patient-notes/transcribe": { kind: "clinician", slug: "patients", reason: "voice dictation for those notes" },
   "charting/draft": { kind: "clinician", slug: "patients", reason: "the FDI chart, a tab of the patient record" },
   "perio/[action]": { kind: "clinician", slug: "patients", reason: "the perio chart, a tab of the patient record" },
+  "medical-history/[action]": { kind: "clinician", slug: "patients", reason: "the medical-history tab of the patient record" },
   "patients/[id]/profile": { kind: "clinician", slug: "patients", reason: "patient record; already role-gated by requirePatientAdmin" },
   "patients/[id]/status": { kind: "clinician", slug: "patients", reason: "patient record; already role-gated by requirePatientAdmin" },
 
@@ -300,5 +303,22 @@ describe("the API guard and the page guard are the same lock in two places", () 
     for (const role of ["agency_admin", "client_owner", "client_coordinator"] as const) {
       expect(canRoleAccessModule(role, "conversations")).toBe(true);
     }
+  });
+});
+
+describe("the flagship reports routes stay OWNER-ONLY at the API layer", () => {
+  // Reports is owner-only (its page calls requireModuleAccess("reports"); the nav
+  // OWNER_ROLES lists it). The page guard never runs on these data routes, so each
+  // must repeat requireOwnerRole or a coordinator/clinician could pull the
+  // per-clinician breakdowns the screen denies them. nhs-clinical is Report C, the
+  // completed-vs-pending sibling of nhs-activity; the same lock must hold on it.
+  const reportRoutes = ["reports/nhs-activity", "reports/nhs-clinical", "reports/payment-allocation"];
+
+  it.each(reportRoutes)("%s exists and calls requireOwnerRole after requireUser", (route) => {
+    expect(ROUTES).toContain(route);
+    const src = routeSource(route);
+    expect(src).toContain("requireUser");
+    expect(src).toContain("requireClientAccess");
+    expect(src).toContain("requireOwnerRole(");
   });
 });
