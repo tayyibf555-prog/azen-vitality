@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   APPROVER_ROLES,
   MAX_ABSENCE_SPAN_DAYS,
+  SELF_REQUEST_ROLES,
   absenceBlocksShift,
   addDayKey,
   canCancel,
@@ -221,9 +222,30 @@ describe("canRequest", () => {
     expect(canRequest("client_clinician", "staff-1", null)).toBe(false);
   });
 
+  it("lets a member of staff request only their own absence", () => {
+    // The fifth role, added with the self-service surface. Same shape as the
+    // clinician: their own, from their own session, and nobody else's.
+    expect(canRequest("client_staff", "staff-1", "staff-1")).toBe(true);
+    expect(canRequest("client_staff", "staff-2", "staff-1")).toBe(false);
+  });
+
+  it("refuses a member of staff with no resolved staff record", () => {
+    expect(canRequest("client_staff", "staff-1", null)).toBe(false);
+  });
+
+  it("SELF_REQUEST_ROLES is exactly the two non-approver roles, and none of them approves", () => {
+    // A named list, so widening it is a decision rather than an edit inside an
+    // if-statement. Neither role may ever also decide.
+    expect([...SELF_REQUEST_ROLES]).toEqual(["client_clinician", "client_staff"]);
+    for (const role of SELF_REQUEST_ROLES) {
+      expect(APPROVER_ROLES).not.toContain(role);
+    }
+  });
+
   it("refuses an empty target staff id whatever the role", () => {
     expect(canRequest("client_owner", "", null)).toBe(false);
     expect(canRequest(null, "", null)).toBe(false);
+    expect(canRequest("client_staff", "", "staff-1")).toBe(false);
   });
 });
 

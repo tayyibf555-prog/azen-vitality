@@ -1,5 +1,6 @@
 import { serviceClient } from "@/lib/supabase/server";
 import { DEFAULT_ROTA_CONFIG, normaliseConfig } from "./config";
+import type { PublicationSnapshot } from "./publish";
 import type { Availability, RotaConfig, RotaShift, RotaShiftStatus, RotaStaff } from "./types";
 
 // Server-only CRUD for the rota tables (service-role). Owners/managers manage staff
@@ -218,6 +219,14 @@ interface ShiftRow {
   status: string;
   notified_at: string | null;
   created_at: string;
+  // Added by 0074. Optional on the row type ON PURPOSE: `select("*")` against a
+  // database that has not run 0074 yet simply does not return them, and a row type
+  // that insisted on their presence would turn a missing column into a type lie.
+  origin?: string | null;
+  paired_staff_id?: string | null;
+  note?: string | null;
+  published_at?: string | null;
+  published_version?: number | null;
 }
 
 function rowToShift(r: ShiftRow): RotaShift {
@@ -233,22 +242,253 @@ function rowToShift(r: ShiftRow): RotaShift {
     status: r.status as RotaShiftStatus,
     notifiedAt: r.notified_at,
     createdAt: r.created_at,
+    // A row from before 0074 has no origin, and "the machine made it" is the only
+    // thing it could have been: manual editing did not exist.
+    origin: r.origin === "manual" ? "manual" : "generated",
+    pairedStaffId: r.paired_staff_id ?? null,
+    note: r.note ?? null,
+    publishedAt: r.published_at ?? null,
+    publishedVersion: r.published_version ?? null,
   };
 }
 
+export interface ListShiftsOptions {
+  /** Limit to these sites. Omit for every site the client has. */
+  siteIds?: string[];
+  /**
+   * Limit to these statuses. Omit to return EVERYTHING, tombstones included.
+   *
+   * The default is deliberately everything: the generator needs to see the
+   * tombstones (they are the record of what a person deleted) and so does the
+   * editing grid, which greys them rather than pretending they never existed.
+   */
+  statuses?: RotaShiftStatus[];
+  /**
+   * Limit to these staff members. THE SELF-SERVICE NARROWING, applied at the
+   * query so a self-service caller's request never loads the rest of the team's
+   * week and then filters it in the response.
+   */
+  staffIds?: string[];
+  /**
+   * Only shifts that have been PUBLISHED — a `published_at` stamp is present.
+   *
+   * A draft rota is a manager thinking out loud, and showing one to the person who
+   * would have to turn up for it is worse than showing no rota at all. The same
+   * rule is enforced again in `@/lib/my-work/rules` where the rows are rendered;
+   * this is the half that keeps the drafts out of the response in the first place.
+   */
+  publishedOnly?: boolean;
+}
+
+/**
+ * "This column does not exist yet" — the publish columns arrive with 0074, and
+ * `42703` is Postgres's undefined_column (the clock repository's note on 0068).
+ */
+function isMissingPublishColumn(error: { code?: string } | null): boolean {
+  return error?.code === "42703" || error?.code === "42P01";
+}
+
 /** Shifts for a client within `[from, to]` (inclusive `YYYY-MM-DD` day keys). */
-export async function listShifts(clientId: string, from: string, to: string): Promise<RotaShift[]> {
+export async function listShifts(
+  clientId: string,
+  from: string,
+  to: string,
+  opts?: ListShiftsOptions,
+): Promise<RotaShift[]> {
   const db = serviceClient();
-  const { data, error } = await db
+  let q = db
     .from("rota_shift")
     .select("*")
     .eq("client_id", clientId)
     .gte("shift_date", from)
-    .lte("shift_date", to)
+    .lte("shift_date", to);
+  if (opts?.siteIds && opts.siteIds.length > 0) q = q.in("site_id", opts.siteIds);
+  if (opts?.statuses && opts.statuses.length > 0) q = q.in("status", opts.statuses);
+  if (opts?.staffIds && opts.staffIds.length > 0) q = q.in("staff_id", opts.staffIds);
+  if (opts?.publishedOnly) q = q.not("published_at", "is", null);
+  const { data, error } = await q
     .order("shift_date", { ascending: true })
     .order("start_time", { ascending: true });
-  if (error) throw error;
+  if (error) {
+    // Before 0074 there is no `published_at` column, so a published-only read
+    // cannot be answered. NOTHING has been published in that state — publishing
+    // did not exist — so the honest answer is an empty list, and the alternative
+    // (dropping the filter and returning the drafts) is the one thing this option
+    // exists to prevent. Only ever taken for a published-only read: every other
+    // caller still gets the error.
+    if (opts?.publishedOnly && isMissingPublishColumn(error)) return [];
+    throw error;
+  }
   return (data as ShiftRow[]).map(rowToShift);
+}
+
+/** One shift, scoped to the caller's client so a foreign id reads as absent. */
+export async function getShift(id: string, clientId: string): Promise<RotaShift | null> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("rota_shift")
+    .select("*")
+    .eq("id", id)
+    .eq("client_id", clientId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToShift(data as ShiftRow) : null;
+}
+
+export interface CreateManualShiftInput {
+  clientId: string;
+  siteId: string;
+  staffId: string;
+  shiftDate: string;
+  startTime: string;
+  endTime: string;
+  role: string;
+  pairedStaffId?: string | null;
+  note?: string | null;
+}
+
+/**
+ * Add a shift a person decided on.
+ *
+ * Always `origin='manual'`, which is what protects it from the generator. If the
+ * slot already carries a tombstone (the manager deleted it and has now changed
+ * their mind) the unique key would collide, so this UPSERTS onto the same key and
+ * brings the row back as a live manual shift rather than answering "duplicate" to
+ * somebody who is looking at an empty square.
+ */
+export async function createManualShift(input: CreateManualShiftInput): Promise<RotaShift> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("rota_shift")
+    .upsert(
+      {
+        client_id: input.clientId,
+        site_id: input.siteId,
+        staff_id: input.staffId,
+        shift_date: input.shiftDate,
+        start_time: input.startTime,
+        end_time: input.endTime,
+        role: input.role,
+        status: "scheduled",
+        origin: "manual",
+        paired_staff_id: input.pairedStaffId ?? null,
+        note: input.note ?? null,
+        // Re-using a tombstoned slot starts a fresh promise: whatever was published
+        // about the old shift is no longer what this one says.
+        notified_at: null,
+        published_at: null,
+        published_version: null,
+      },
+      { onConflict: "client_id,staff_id,shift_date,start_time" },
+    )
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToShift(data as ShiftRow);
+}
+
+export interface UpdateShiftInput {
+  siteId?: string;
+  staffId?: string;
+  shiftDate?: string;
+  startTime?: string;
+  endTime?: string;
+  role?: string;
+  pairedStaffId?: string | null;
+  note?: string | null;
+}
+
+/**
+ * Move or amend a shift.
+ *
+ * ALWAYS flips `origin` to 'manual', including on a row the generator created. That
+ * is the rule that makes an edit stick (`originAfterEdit` states it, under test): a
+ * moved shift that stayed 'generated' would be re-derived from the config and moved
+ * straight back on the next run.
+ *
+ * Returns true when a row matched; false for an unknown id or one owned by another
+ * client, so the API can answer 404 rather than a misleading {ok:true}.
+ */
+export async function updateShift(
+  id: string,
+  clientId: string,
+  fields: UpdateShiftInput,
+  /**
+   * True when the edit invalidates what the staff member was already told, decided
+   * by `notificationIsStale` in `./edit`. Resetting the status is what puts the
+   * shift back in front of the 24/7 sweep so the CORRECTION goes out; without it a
+   * shift texted on Monday and moved on Tuesday is never mentioned again.
+   */
+  resetNotification = false,
+): Promise<boolean> {
+  const patch: Record<string, unknown> = { origin: "manual" };
+  if (resetNotification) {
+    patch.status = "scheduled";
+    patch.notified_at = null;
+  }
+  if (fields.siteId !== undefined) patch.site_id = fields.siteId;
+  if (fields.staffId !== undefined) patch.staff_id = fields.staffId;
+  if (fields.shiftDate !== undefined) patch.shift_date = fields.shiftDate;
+  if (fields.startTime !== undefined) patch.start_time = fields.startTime;
+  if (fields.endTime !== undefined) patch.end_time = fields.endTime;
+  if (fields.role !== undefined) patch.role = fields.role;
+  if (fields.pairedStaffId !== undefined) patch.paired_staff_id = fields.pairedStaffId;
+  if (fields.note !== undefined) patch.note = fields.note;
+
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("rota_shift")
+    .update(patch)
+    .eq("id", id)
+    .eq("client_id", clientId) // scope the write to the caller's client
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Delete a shift, as a TOMBSTONE.
+ *
+ * Never a hard delete, and that is the whole point: a deleted row is
+ * indistinguishable from a slot that was never generated, so the next run of the
+ * generator puts the shift straight back. `status='removed'` is the record that a
+ * person decided this shift should not happen, and `generateShifts` both refuses to
+ * re-create it and counts it as coverage so no replacement is invented either.
+ *
+ * `origin` is set to 'manual' alongside, because a deletion is a human decision
+ * exactly as much as a move is.
+ */
+export async function tombstoneShift(id: string, clientId: string): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("rota_shift")
+    .update({ status: "removed", origin: "manual" })
+    .eq("id", id)
+    .eq("client_id", clientId)
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+/** Apply a set of pairings (both halves of each pair), scoped to one client. */
+export async function setPairings(
+  clientId: string,
+  assignments: { shiftId: string; pairedStaffId: string | null }[],
+): Promise<number> {
+  if (assignments.length === 0) return 0;
+  const db = serviceClient();
+  let applied = 0;
+  for (const a of assignments) {
+    const { data, error } = await db
+      .from("rota_shift")
+      .update({ paired_staff_id: a.pairedStaffId })
+      .eq("id", a.shiftId)
+      .eq("client_id", clientId)
+      .select("id");
+    if (error) throw error;
+    applied += data?.length ?? 0;
+  }
+  return applied;
 }
 
 /**
@@ -256,6 +496,12 @@ export async function listShifts(clientId: string, from: string, to: string): Pr
  * start_time) key: re-running generate for the same weeks never doubles a slot.
  * Returns how many rows were newly inserted (ignoreDuplicates means existing
  * rows are skipped, so this reflects genuinely new shifts).
+ *
+ * `origin` is DELIBERATELY not in the payload. The generator only ever creates
+ * generated shifts, so the column default ('generated', 0074) says exactly the right
+ * thing, and leaving it out means this insert keeps working on a database that has
+ * not run 0074 yet. The 24/7 sweep calls this; it must not be the thing that breaks
+ * if the migration and the deploy land in the wrong order.
  */
 export async function insertShifts(shifts: RotaShift[]): Promise<number> {
   if (shifts.length === 0) return 0;
@@ -310,6 +556,137 @@ export async function markNotified(shiftIds: string[]): Promise<void> {
   const { error } = await db
     .from("rota_shift")
     .update({ status: "notified", notified_at: new Date().toISOString() })
+    .in("id", shiftIds);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Publications.
+// ---------------------------------------------------------------------------
+
+interface PublicationRow {
+  id: string;
+  client_id: string;
+  site_id: string | null;
+  week_start: string;
+  version: number;
+  published_by: string | null;
+  published_at: string;
+  shift_count: number;
+  snapshot: unknown;
+  notified_count: number;
+  simulated_count: number;
+}
+
+export interface RotaPublication {
+  id: string;
+  clientId: string;
+  siteId: string | null;
+  weekStart: string;
+  version: number;
+  publishedBy: string | null;
+  publishedAt: string;
+  shiftCount: number;
+  snapshot: PublicationSnapshot;
+  notifiedCount: number;
+  simulatedCount: number;
+}
+
+function rowToPublication(r: PublicationRow): RotaPublication {
+  return {
+    id: r.id,
+    clientId: r.client_id,
+    siteId: r.site_id,
+    weekStart: r.week_start,
+    version: r.version,
+    publishedBy: r.published_by,
+    publishedAt: r.published_at,
+    shiftCount: r.shift_count,
+    snapshot: r.snapshot as PublicationSnapshot,
+    notifiedCount: r.notified_count,
+    simulatedCount: r.simulated_count ?? 0,
+  };
+}
+
+/**
+ * Every publication of one week, newest version first.
+ *
+ * `siteId` is matched EXACTLY, null included: publishing "all sites" and publishing
+ * "site A" are two different promises to two different audiences, and diffing one
+ * against the other would report changes nobody made.
+ */
+export async function listPublications(
+  clientId: string,
+  weekStart: string,
+  siteId: string | null,
+): Promise<RotaPublication[]> {
+  const db = serviceClient();
+  let q = db
+    .from("rota_publication")
+    .select("*")
+    .eq("client_id", clientId)
+    .eq("week_start", weekStart);
+  q = siteId === null ? q.is("site_id", null) : q.eq("site_id", siteId);
+  const { data, error } = await q.order("version", { ascending: false });
+  if (error) throw error;
+  return (data as PublicationRow[]).map(rowToPublication);
+}
+
+export interface RecordPublicationInput {
+  clientId: string;
+  siteId: string | null;
+  weekStart: string;
+  version: number;
+  publishedBy: string | null;
+  shiftCount: number;
+  snapshot: PublicationSnapshot;
+  notifiedCount: number;
+  simulatedCount: number;
+}
+
+/**
+ * Write the publication row.
+ *
+ * A plain INSERT, never an upsert: the unique (client, site, week, version) key is
+ * what stops two people publishing the same version at once and one of them
+ * silently overwriting the other's snapshot. A collision surfaces as an error the
+ * route turns into "somebody else just published this week, reload and try again",
+ * which is the truth.
+ */
+export async function recordPublication(input: RecordPublicationInput): Promise<RotaPublication> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("rota_publication")
+    .insert({
+      client_id: input.clientId,
+      site_id: input.siteId,
+      week_start: input.weekStart,
+      version: input.version,
+      published_by: input.publishedBy,
+      shift_count: input.shiftCount,
+      snapshot: input.snapshot,
+      notified_count: input.notifiedCount,
+      simulated_count: input.simulatedCount,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return rowToPublication(data as PublicationRow);
+}
+
+/** Stamp the published version onto the shifts it contained. */
+export async function markPublished(
+  clientId: string,
+  shiftIds: string[],
+  version: number,
+  publishedAt: string,
+): Promise<void> {
+  if (shiftIds.length === 0) return;
+  const db = serviceClient();
+  const { error } = await db
+    .from("rota_shift")
+    .update({ published_at: publishedAt, published_version: version })
+    .eq("client_id", clientId)
     .in("id", shiftIds);
   if (error) throw error;
 }

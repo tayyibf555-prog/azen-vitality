@@ -1,6 +1,7 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { presetWindow, customWindow, REPORT_PRESETS, type ReportPreset } from "@/lib/reports/report-window";
 import { readNhsBandReport } from "@/lib/reports/flagship-read";
 
@@ -31,6 +32,10 @@ export async function GET(request: Request): Promise<Response> {
   // breakdown the screen denies them. Matches reports/generate and payment-allocation.
   const roleDenied = requireOwnerRole(auth);
   if (roleDenied) return roleDenied;
+  // THE PER-PERSON GATE, on top of the owner role.
+  // The NHS activity report carries per-clinician UDA breakdowns — individual performance data about named colleagues.
+  const capabilityDenied = await requireCapability(auth, "reports.nhs.view");
+  if (capabilityDenied) return capabilityDenied;
 
   const presetRaw = url.searchParams.get("preset");
   const from = url.searchParams.get("from");

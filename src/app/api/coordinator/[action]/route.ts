@@ -15,6 +15,7 @@ import type {
   TreatmentOpportunity,
 } from "@/lib/coordinator/types";
 import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -278,6 +279,16 @@ export async function POST(
   // tenancy control, not a role one: a clinician's siteIds cover their own practice.
   const moduleDenied = requireModuleApiAccess(auth, "treatment-coordinator");
   if (moduleDenied) return moduleDenied;
+
+  // THE PER-PERSON GATE on the SEND. Releasing a drafted message puts a text on a
+  // real patient's phone in the practice's name; approving or drafting one does
+  // not. Only "send" is gated, so a team member can still prepare the work for
+  // somebody else to release — which is the arrangement a practice that wants
+  // this control usually wants.
+  if (action === "send") {
+    const capabilityDenied = await requireCapability(auth, "messaging.lifecycle.send");
+    if (capabilityDenied) return capabilityDenied;
+  }
 
   // Per-site authz: every coordinator action carries an opportunityId. Resolve
   // its site and gate, mirroring recall/reactivation, so a user can't drive

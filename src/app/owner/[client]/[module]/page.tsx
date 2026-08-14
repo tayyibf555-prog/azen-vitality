@@ -17,6 +17,11 @@ import { ComplianceView } from "@/components/client/compliance/compliance-view";
 import { RotaView } from "@/components/client/rota/rota-view";
 import { AbsenceView } from "@/components/client/absence/absence-view";
 import { StaffCheckInView } from "@/components/client/staff-check-in/staff-check-in-view";
+import { StaffHrView } from "@/components/client/hr/staff-hr-view";
+import { HoursView } from "@/components/client/hr/hours-view";
+import { MyWorkView } from "@/components/client/my-work/my-work-view";
+import { PeopleLogins } from "@/components/client/permissions/people-logins";
+import { PermissionsView } from "@/components/client/permissions/permissions-view";
 import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
@@ -115,6 +120,44 @@ export default async function OwnerModulePage({
 
   if (module === "staff-check-in") {
     return <StaffCheckInView clientSlug={client} />;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The campaign 6 workforce modules. Same rule as the two above: each is
+  // status:"live" in CLIENT_NAV, so owner-module-coverage.test.ts requires a
+  // literal branch here. Without one the owner sees "this module is being built"
+  // while the practice sees the real screen — the exact drift that test exists
+  // to catch, and the reason the /owner if-chain is the integrator's file.
+  // ---------------------------------------------------------------------------
+  if (module === "staff-hr") {
+    // The document vault and the policy e-sign panels mount INSIDE StaffHrView
+    // (its own documented seam), so this branch stays one line as they land.
+    return <StaffHrView clientSlug={client} />;
+  }
+
+  if (module === "hours") {
+    return <HoursView clientSlug={client} />;
+  }
+
+  if (module === "my-work") {
+    // Deliberately reachable from the owner shell too. "My work" is the caller's
+    // OWN rota, holiday, documents and signatures, resolved from the session —
+    // an owner who also works clinical days has one, and the page shows theirs,
+    // never somebody else's.
+    return <MyWorkView clientSlug={client} />;
+  }
+
+  if (module === "permissions") {
+    // BOTH panels, in the same order as /c/[client]/permissions: who can log in,
+    // then what each of them may do. Owner parity means the same screen, not a
+    // subset of it — a half-provisioned login is what happens when the invite
+    // half is only on one of the two routes.
+    return (
+      <>
+        <PeopleLogins clientSlug={client} />
+        <PermissionsView clientSlug={client} />
+      </>
+    );
   }
 
   if (module === "reviews") {

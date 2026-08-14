@@ -1,4 +1,5 @@
-import { requireUser } from "@/lib/auth/guard";
+import { requireUser, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import {
   transcribeAudio,
   transcriptionEnabled,
@@ -17,6 +18,26 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25MB, matches common provider limit
 export async function POST(request: Request): Promise<Response> {
   const auth = await requireUser();
   if (auth instanceof Response) return auth;
+
+  // THE SAME MODULE LOCK ITS PARENT CARRIES. This route dictates INTO the patient
+  // record, so it belongs to the "patients" module exactly as /api/patient-notes
+  // does — but it shipped with `requireUser` alone, which means every signed-in
+  // role could reach it. That was a gap on two counts: it is a paid third-party
+  // call any session could spend, and it is a patient-record surface. Closing it
+  // is part of adding the fifth role rather than a change of its own.
+  //
+  // NO CLIENT OR SITE CHECK, deliberately and not by omission: the endpoint takes
+  // no client, no site and no patient. It receives an audio blob, returns text, and
+  // touches no practice data, so there is no tenancy to scope. If a future version
+  // ever attaches the transcript to a patient, it gains the full
+  // requireClientAccess -> requireSiteAccess -> patientBelongsToSite chain first.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
+  // THE SAME KEY AS ITS PARENT. Dictation is note-writing with a microphone, and
+  // it also spends money on a third-party transcription call, so it must not be
+  // reachable by somebody whose note-writing has been switched off.
+  const capabilityDenied = await requireCapability(auth, "patient.note.write");
+  if (capabilityDenied) return capabilityDenied;
 
   if (!transcriptionEnabled()) {
     return Response.json(

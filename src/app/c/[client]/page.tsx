@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/primitives";
 import { PracticeDashboard } from "@/components/client/dashboard/practice-dashboard";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import { readPracticeDashboard } from "@/lib/dashboard/read";
+import { requireIndexAccess } from "@/lib/auth/page-guard";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
 
@@ -25,6 +26,16 @@ export const dynamic = "force-dynamic";
 // list below its stats band, which the dashboard already reproduces; "Next
 // actions" then follows as the platform's own addition, in the position where a
 // manager has finished reading the day and wants to know what to do about it.
+//
+// ---------------------------------------------------------------------------
+// NOT EVERY ROLE READS THIS PAGE (campaign 6, decision 15).
+// ---------------------------------------------------------------------------
+// Everything above — the takings strip, outstanding accounts, invoiced totals,
+// UDA, and a day list carrying patient names — is exactly what a `client_staff`
+// login must never see. That role holds "" in its allow-list only so the shell
+// admits it and no redirect loop forms; `requireIndexAccess` is what forwards it
+// to its own surface, and it runs BEFORE `readPracticeDashboard`, so the money is
+// not so much as fetched for somebody who may not see it.
 // ---------------------------------------------------------------------------
 
 export default async function ClientHomePage({
@@ -33,6 +44,8 @@ export default async function ClientHomePage({
   params: Promise<{ client: string }>;
 }) {
   const { client: clientSlug } = await params;
+  // FIRST, and before any read: a role that may not have this page is forwarded.
+  await requireIndexAccess(clientSlug);
   const client = getClient(clientSlug);
   if (!client) {
     return <PageHeader title="Overview" description="This client could not be found." />;

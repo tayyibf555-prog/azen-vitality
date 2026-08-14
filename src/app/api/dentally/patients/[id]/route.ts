@@ -1,5 +1,5 @@
 import { getPatientRecord, getPatientRecordInScope } from "@/lib/patient/record";
-import { requireUser, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { numberHealthFor, type NumberHealth } from "@/lib/messaging/number-health";
 import { getOverride } from "@/lib/patient-status/repository";
 import { getSite } from "@/lib/mock/clients";
@@ -41,6 +41,14 @@ export async function GET(
   if (!siteId) return Response.json({ ok: false, error: "siteId is required" }, { status: 400 });
   const denied = requireSiteAccess(auth, siteId);
   if (denied) return denied;
+  // THE MODULE LOCK, which requireSiteAccess is not a substitute for: `siteIds`
+  // holds every site of the caller's OWN practice, so it is a tenancy control and
+  // never a role one. Without this line a `client_staff` session could pull any
+  // patient's full record — contact details, medical alert, appointment history —
+  // by id. "patients" is in CLINICIAN_SLUGS and carries no `roles` array (so the
+  // four roles that had this route are unaffected) and is not in STAFF_SLUGS.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
 
   try {
     // requireSiteAccess only proves the CALLER may reach the site they named. It does

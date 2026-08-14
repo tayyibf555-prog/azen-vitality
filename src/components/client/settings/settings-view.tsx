@@ -11,7 +11,9 @@ import {
   Megaphone,
   Lock,
   Clock,
+  FolderLock,
 } from "lucide-react";
+import { STAFF_DOCS_BUCKET } from "@/lib/hr/documents";
 import { PageHeader, SectionCard, StatCard, StatusPill, type Tone } from "@/components/primitives";
 import { getClient, getSites } from "@/lib/mock";
 import { authEnforced } from "@/lib/auth/guard";
@@ -62,6 +64,15 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
   const resendKey = Boolean(process.env.RESEND_API_KEY);
   const reviewLink = Boolean(process.env.REVIEW_LINK_URL);
   const cronSecret = Boolean(process.env.CRON_SECRET);
+  // THE STAFF DOCUMENT VAULT'S PRIVATE STORAGE BUCKET.
+  //
+  // A migration cannot create a Storage bucket, so this one is created as a recorded
+  // integration step and the flag says it has been done. It is listed here BECAUSE
+  // OF WHAT HAPPENED WITH THE `onboarding` BUCKET: that one was created out of band
+  // with no record anywhere, so a fresh environment failed at the first upload with
+  // an opaque message and nothing on any screen to explain it. This row is the
+  // explanation, in advance.
+  const staffDocsBucket = Boolean(process.env.STAFF_DOCS_BUCKET_READY);
   const authOn = authEnforced();
   const dryRun = isDryRun();
 
@@ -135,6 +146,16 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
       envKeys: authOn ? [] : ["SUPABASE_SERVICE_ROLE_KEY"],
     },
     {
+      name: "Staff document storage",
+      icon: FolderLock,
+      powers: `The private "${STAFF_DOCS_BUCKET}" bucket holding staff documents and policy PDFs.`,
+      state: staffDocsBucket ? "connected" : "missing",
+      detail: staffDocsBucket
+        ? `The private "${STAFF_DOCS_BUCKET}" bucket has been recorded as created. This is a recorded setting, not a live check of the bucket.`
+        : `Create the private "${STAFF_DOCS_BUCKET}" bucket in Supabase Storage, then set this flag. Until it exists, uploading a staff document or a policy will fail.`,
+      envKeys: staffDocsBucket ? [] : ["STAFF_DOCS_BUCKET_READY"],
+    },
+    {
       name: "Scheduler",
       icon: Clock,
       powers: "The 24/7 background jobs (recalls, reminders, drains).",
@@ -181,6 +202,11 @@ export function SettingsView({ clientSlug }: { clientSlug: string }) {
       label: "Scheduler secret set",
       done: cronSecret,
       hint: "Background jobs run on a protected endpoint.",
+    },
+    {
+      label: "Staff document storage created",
+      done: staffDocsBucket,
+      hint: `The private "${STAFF_DOCS_BUCKET}" bucket exists, so the staff vault and policy library can store files.`,
     },
     {
       label: "Meta account connected",

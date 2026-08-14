@@ -21,13 +21,27 @@ const store = vi.hoisted(() => ({
 vi.mock("@/lib/mock/clients", () => ({
   getClient: (slug: string) => (slug === "vitality" ? { id: "vitality", slug: "vitality" } : undefined),
 }));
-vi.mock("@/lib/auth/guard", () => ({
-  requireUser: async () => store.authResponse ?? store.user,
-  requireClientAccess: (u: User | null, cid: string) =>
-    u && u.role !== "agency_admin" && u.clientId !== cid ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-  requireSiteAccess: (u: User | null, sid: string) =>
-    u && !u.siteIds.includes(sid) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-}));
+
+vi.mock("@/lib/auth/guard", async () => {
+  // THE REAL PREDICATES, not stubs. The module gate is what keeps a `client_staff`
+  // login out of the patient record, and the clinical-write gate is what keeps a
+  // coordinator from authoring one. A mock that returned null unconditionally would
+  // let either regress here in silence, which is the opposite of what these tests
+  // are for. The tenancy mocks below stay hand-written because they need the store.
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  const { isClinicalWriteRole } = await import("@/lib/patient/roles");
+  const forbidden = () => Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  return {
+    requireUser: async () => store.authResponse ?? store.user,
+    requireClientAccess: (u: User | null, cid: string) =>
+      u && u.role !== "agency_admin" && u.clientId !== cid ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireSiteAccess: (u: User | null, sid: string) =>
+      u && !u.siteIds.includes(sid) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireModuleApiAccess: (u: User | null, slug: string) =>
+      u && !canRoleAccessModule(u.role as Parameters<typeof canRoleAccessModule>[0], slug) ? forbidden() : null,
+    requireClinicalWriteRole: (u: User | null) => (u && !isClinicalWriteRole(u.role) ? forbidden() : null),
+  };
+});
 vi.mock("@/lib/dentally/read", () => ({
   getPatientById: async () => store.patient,
 }));
@@ -49,10 +63,21 @@ vi.mock("@/lib/patient-chart/draft-repository", () => ({
   },
 }));
 
+// The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the
+// 503 when auth is not enforced — is proven in
+// src/lib/auth/capability-guard.test.ts; the fs sweep in
+// src/app/api/destructive-route-capability-coverage.test.ts proves this route
+// calls it. Stubbed open here so these cases stay about the route's own logic.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
+
 import { GET, POST } from "./route";
 import { CHART_COPY } from "@/lib/patient/tabs";
 
-const USER: User = { id: "u1", name: "Blerta", role: "client_coordinator", clientId: "vitality", siteIds: ["site-cc"] };
+const USER: User = { id: "u1", name: "Dr Sara Malik", role: "client_clinician", clientId: "vitality", siteIds: ["site-cc"] };
 
 function post(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/charting/draft", {
@@ -207,5 +232,53 @@ describe("the happy path", () => {
     await POST(post(VALID));
     const res = await POST(post({ ...VALID, action: "clear" }));
     expect((await res.json()).draft).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// THE CLINICAL-WRITE TIGHTENING, campaign 6.
+//
+// Charting a tooth is a clinical act: it becomes part of the patient's record and
+// is attributed to whoever made it. Before this change every role attached to the
+// practice could POST here, including a coordinator (which is what the fixture user
+// in this file used to be). The READ is deliberately untouched — the practice
+// manager books around the plan and answers the phone about it.
+//
+// And one layer out: a `client_staff` login reaches neither, because "patients" is
+// not in STAFF_SLUGS.
+// ===========================================================================
+describe("who may write the chart draft, and who may only read it", () => {
+  const coordinator: User = {
+    id: "u2", name: "Blerta", role: "client_coordinator", clientId: "vitality", siteIds: ["site-cc"],
+  };
+  const staff: User = {
+    id: "u3", name: "Nadia", role: "client_staff", clientId: "vitality", siteIds: ["site-cc"],
+  };
+
+  it("the coordinator may still READ a draft", async () => {
+    store.user = coordinator;
+    const res = await GET(get("client=vitality&siteId=site-cc&patientId=pat-1"));
+    expect(res.status).toBe(200);
+  });
+
+  it("but may no longer WRITE one, and nothing is stored", async () => {
+    store.user = coordinator;
+    const res = await POST(post(VALID));
+    expect(res.status).toBe(403);
+    expect(store.rows).toEqual([]);
+  });
+
+  it("the clinician may do both", async () => {
+    store.user = USER;
+    expect((await GET(get("client=vitality&siteId=site-cc&patientId=pat-1"))).status).toBe(200);
+    expect((await POST(post(VALID))).status).toBe(200);
+    expect(store.rows).toHaveLength(1);
+  });
+
+  it("the staff role reaches NEITHER: the module gate refuses it first", async () => {
+    store.user = staff;
+    expect((await GET(get("client=vitality&siteId=site-cc&patientId=pat-1"))).status).toBe(403);
+    expect((await POST(post(VALID))).status).toBe(403);
+    expect(store.rows).toEqual([]);
   });
 });

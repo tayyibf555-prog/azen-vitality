@@ -30,6 +30,21 @@ vi.mock("@/lib/calendar/access", () => ({
   requireDiaryRead: async () => ({ auth: null, siteId: "site-cc", clientId: "vitality" }),
 }));
 
+// The route now also carries the MODULE gate, which requireDiaryRead is not a
+// substitute for: it proves the caller holds the site, and every client role holds
+// every site of its own practice. The real predicate is used here, with the mocked
+// `auth: null` above meaning enforcement-off, so it passes through exactly as the
+// real guard does in the un-enforced pilot.
+vi.mock("@/lib/auth/guard", async () => {
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  return {
+    requireModuleApiAccess: (u: { role?: string } | null, slug: string) =>
+      u && !canRoleAccessModule(u.role as Parameters<typeof canRoleAccessModule>[0], slug)
+        ? Response.json({ ok: false, error: "forbidden" }, { status: 403 })
+        : null,
+  };
+});
+
 vi.mock("@/lib/dentally/read", () => ({
   listAppointmentsSafe: h.listAppointments,
   listSitePractitionersSafe: async () => ({ practitioners: [{ id: "prac-1", name: "Jin Kim" }], failed: false }),

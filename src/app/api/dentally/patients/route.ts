@@ -3,7 +3,7 @@ import { getViewSiteIds } from "@/lib/site-view";
 import { listPatients, searchPatients, type PatientRecord } from "@/lib/dentally/read";
 import type { PatientListRow } from "@/lib/patient/list-row";
 import { listTargets } from "@/lib/recall/repository";
-import { requireUser, requireClientAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +93,14 @@ export async function GET(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
+  // THE MODULE LOCK. requireClientAccess admits EVERY role attached to this
+  // practice, so without this line a `client_staff` session — a receptionist or a
+  // nurse — could read and search the whole 51,000-patient base from here, which is
+  // precisely what the fifth role exists not to have. "patients" is in
+  // CLINICIAN_SLUGS and carries no `roles` array, so the four roles that had this
+  // route keep it unchanged; it is not in STAFF_SLUGS, so the staff role gets a 403.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
   const siteIds = await getViewSiteIds(client.id);
   try {
     // Search spans the whole base and overrides the filter.

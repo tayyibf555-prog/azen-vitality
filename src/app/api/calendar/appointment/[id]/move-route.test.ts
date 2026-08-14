@@ -43,6 +43,8 @@ const h = vi.hoisted(() => ({
   publicPhone: null as string | null,
   twoSites: false,
   otherSitePractitioners: { practitioners: [] as { id: string; name: string }[], failed: false },
+  /** What requireCapability("diary.appointment.move") answers. null = allowed. */
+  capabilityDenied: null as Response | null,
 }));
 
 vi.mock("@/lib/dentally/client", () => ({
@@ -130,6 +132,17 @@ vi.mock("@/lib/calendar/access", () => ({
   requireDiaryAdmin: async () => ({ auth: h.user, siteId: "site-cc", clientId: "vitality" }),
 }));
 
+// The PER-PERSON gate (step 3b of the chain), faked at the seam like every other
+// I/O boundary here: the real one reads user_capability through the service-role
+// client, and its own behaviour — including the 503 when auth is not enforced —
+// is proven in src/lib/auth/capability-guard.test.ts. What THIS file proves is
+// that the move refuses when it says no, and that nothing reaches Dentally when
+// it does.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => h.capabilityDenied,
+  hasCapability: async () => h.capabilityDenied === null,
+}));
+
 import { PATCH } from "./route";
 
 // Fri 31 Jul 2026 is BST, so 09:30 London is 08:30Z. Written as instants
@@ -203,6 +216,7 @@ beforeEach(() => {
   };
   h.systemEnabled = true;
   h.writeEnabled = true;
+  h.capabilityDenied = null;
   h.applyWrite = true;
   h.listThrows = false;
   h.readBackThrows = false;
@@ -277,6 +291,29 @@ describe("the guard chain", () => {
       const { res } = await call();
       expect(res.status).toBe(200);
     }
+  });
+
+  it("refuses when the PERSON's capability has been revoked, even though the role allows it", async () => {
+    // The role check above says a practice manager may move appointments. This
+    // says THIS practice manager may not — the owner turned it off for her on the
+    // People & logins screen. Both gates are real and neither replaces the other.
+    h.capabilityDenied = Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+    const { res, json } = await call();
+    expect(res.status).toBe(403);
+    expect(json.error).toBe("forbidden");
+    expect(h.updateAppointment).not.toHaveBeenCalled();
+    expect(h.insertMove).not.toHaveBeenCalled();
+  });
+
+  it("checks the capability BEFORE the kill switch and the write gate", async () => {
+    // Ordering matters: a caller who may not act must not cause a toggle read, a
+    // Dentally client build, or any other work on their behalf.
+    h.capabilityDenied = Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+    h.systemEnabled = false;
+    h.writeEnabled = false;
+    h.listThrows = true; // any read at all would throw and change the status
+    const { res } = await call();
+    expect(res.status).toBe(403);
   });
 
   it("stops at the owner's kill switch before any write", async () => {

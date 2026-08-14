@@ -49,6 +49,7 @@ const CONFIG: RotaConfig = {
   rolesNeeded: { dentist: 1, nurse: 1 },
   notifyLeadDays: 7,
   generateWeeksAhead: 1,
+  pairRoles: null,
 };
 const WEEK = ["2026-07-06"];
 

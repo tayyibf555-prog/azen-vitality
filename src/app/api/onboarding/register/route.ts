@@ -1,5 +1,6 @@
 import { getClient, getSites, getSite, dentallySiteId } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getSubmission, setStatus } from "@/lib/onboarding/repository";
 import { searchPatients, type PatientRecord } from "@/lib/dentally/read";
@@ -135,6 +136,12 @@ export async function POST(request: Request): Promise<Response> {
   // reception work, and requireClientAccess admits every role attached to the client.
   const moduleDenied = requireModuleApiAccess(auth, "onboarding");
   if (moduleDenied) return moduleDenied;
+  // THE PER-PERSON GATE. Registering a submission CREATES A PATIENT IN DENTALLY —
+  // a record in the practice's clinical system that cannot be unmade from here.
+  // Reaching the Onboarding module is reception work; creating the record is a
+  // decision the practice may want to keep with named people.
+  const capabilityDenied = await requireCapability(auth, "patient.create");
+  if (capabilityDenied) return capabilityDenied;
 
   // Idempotency: a submission already registered is never re-created (a stray double
   // click or a replayed request must not create a second Dentally patient).

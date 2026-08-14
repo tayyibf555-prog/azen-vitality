@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Save, Check, AlertTriangle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SectionCard } from "@/components/primitives";
+import { SectionCard, Toggle } from "@/components/primitives";
 import { resolveSteps } from "@/lib/onboarding/resolve";
 import type {
   CustomQuestion,
@@ -375,7 +375,7 @@ export function FormBuilder({
                               checked={isRequired}
                               onChange={(next) => toggleRequired(q.key, next)}
                               label={`Make "${q.label}" required`}
-                              small
+                              size="sm"
                             />
                             Required
                           </label>
@@ -472,7 +472,7 @@ export function FormBuilder({
                     checked={draft.required}
                     onChange={(next) => setDraft((d) => ({ ...d, required: next }))}
                     label="Make this question required"
-                    small
+                    size="sm"
                   />
                   Make this required
                 </label>
@@ -566,46 +566,3 @@ export function FormBuilder({
   );
 }
 
-/* ---------------------------------------------------------------------------
- * A small, accessible switch (role=switch). Used for include + required toggles.
- * ------------------------------------------------------------------------- */
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-  small,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-  small?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={[
-        "relative inline-flex shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-1 focus-visible:ring-offset-card",
-        small ? "h-4 w-7" : "h-5 w-9",
-        checked ? "border-blue-dark bg-blue-dark" : "border-line-strong bg-card-muted",
-      ].join(" ")}
-    >
-      <span
-        className={[
-          "inline-block rounded-full bg-white shadow-sm transition-transform",
-          small ? "h-3 w-3" : "h-3.5 w-3.5",
-          checked
-            ? small
-              ? "translate-x-3.5"
-              : "translate-x-4"
-            : "translate-x-0.5",
-        ].join(" ")}
-        aria-hidden
-      />
-    </button>
-  );
-}

@@ -19,11 +19,16 @@ import { CLIENT_NAV } from "@/lib/nav";
 // moving an appointment is switched separately from reading the diary, but both
 // live on the one 'calendar' nav module. The owner needs to be able to stop diary
 // writes without hiding the diary.
+// "staff-esign" is headless for the same reason: policy signing is a panel inside
+// Staff HR and My work rather than a module, and it ships DISABLED (migration
+// 0077) because the legal framing must be agreed before anyone signs anything —
+// so the switch that turns it on has to exist somewhere the owner can reach.
 const HEADLESS_SYSTEM_SLUGS = new Set([
   "online-booking",
   "outreach",
   "whatsapp-agent",
   "calendar-writes",
+  "staff-esign",
 ]);
 
 describe("systems catalog", () => {

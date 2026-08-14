@@ -10,6 +10,7 @@
 // ===========================================================================
 
 import { requireDiaryRead } from "@/lib/calendar/access";
+import { requireModuleApiAccess } from "@/lib/auth/guard";
 import { loadDiaryDay, MAX_DIARY_DAYS } from "@/lib/calendar/day-load";
 import { listAppointmentsSafe, listSitePractitionersSafe } from "@/lib/dentally/read";
 
@@ -31,6 +32,16 @@ export async function GET(request: Request): Promise<Response> {
 
   const access = await requireDiaryRead(siteId);
   if (access instanceof Response) return access;
+
+  // THE MODULE LOCK, ON TOP OF THE TENANCY LOCK, and the two are not the same
+  // thing. `requireDiaryRead` proves the caller is signed in and holds this site —
+  // and every client role holds every site of its own practice, so on its own it
+  // admits a receptionist to the live diary. This line asks the one question that
+  // separates them: may THIS ROLE reach the Calendar module at all. "calendar" is
+  // in CLINICIAN_SLUGS and carries no `roles` array, so nothing changes for the
+  // four roles that had it; it is not in STAFF_SLUGS, so `client_staff` gets a 403.
+  const moduleDenied = requireModuleApiAccess(access.auth, "calendar");
+  if (moduleDenied) return moduleDenied;
 
   const dayKeys = [
     ...new Set(

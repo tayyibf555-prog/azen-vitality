@@ -17,6 +17,7 @@
 // ===========================================================================
 
 import { requireDiaryAdmin } from "@/lib/calendar/access";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { validateEntryInput } from "@/lib/calendar/entries";
 import { insertEntry, softDeleteEntry, updateEntry } from "@/lib/calendar/repository";
 import { recordUsage } from "@/lib/telemetry";
@@ -72,6 +73,12 @@ export async function POST(request: Request): Promise<Response> {
   const access = await requireDiaryAdmin(siteId, practitionerId);
   if (access instanceof Response) return access;
 
+  // THE PER-PERSON GATE, on top of requireDiaryAdmin's role gate. Every method on
+  // this route is a write to the practice's own diary; the owner can withhold it
+  // from one named individual without taking the whole diary away from them.
+  const capabilityDenied = await requireCapability(access.auth, "diary.entry.write");
+  if (capabilityDenied) return capabilityDenied;
+
   // Built field by field rather than forwarded, so nothing else a caller put on
   // the body can reach the validator or the database.
   const check = validateEntryInput({
@@ -121,6 +128,8 @@ export async function PATCH(request: Request): Promise<Response> {
 
   const access = await requireDiaryAdmin(siteId, practitionerId);
   if (access instanceof Response) return access;
+  const capabilityDenied = await requireCapability(access.auth, "diary.entry.write");
+  if (capabilityDenied) return capabilityDenied;
 
   // Built field by field rather than forwarded, so nothing else a caller put on
   // the body can reach the validator or the database.
@@ -171,6 +180,8 @@ export async function DELETE(request: Request): Promise<Response> {
   // the site the caller has already been proved to hold.
   const access = await requireDiaryAdmin(siteId);
   if (access instanceof Response) return access;
+  const capabilityDenied = await requireCapability(access.auth, "diary.entry.write");
+  if (capabilityDenied) return capabilityDenied;
 
   try {
     const removed = await softDeleteEntry(id, siteId);

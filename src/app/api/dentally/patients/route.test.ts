@@ -29,10 +29,21 @@ vi.mock("@/lib/dentally/read", () => ({
   searchPatients: h.searchPatients,
 }));
 vi.mock("@/lib/recall/repository", () => ({ listTargets: h.listTargets }));
-vi.mock("@/lib/auth/guard", () => ({
-  requireUser: h.requireUser,
-  requireClientAccess: h.requireClientAccess,
-}));
+vi.mock("@/lib/auth/guard", async () => {
+  // The module gate uses the REAL predicate. It is the only guard on this route
+  // that asks about the caller's ROLE — requireUser and requireClientAccess both
+  // admit every role attached to the practice — so a stub returning null would let
+  // a `client_staff` login search the whole patient base with the suite still green.
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  return {
+    requireUser: h.requireUser,
+    requireClientAccess: h.requireClientAccess,
+    requireModuleApiAccess: (u: { role?: string } | null, slug: string) =>
+      u && !canRoleAccessModule(u.role as Parameters<typeof canRoleAccessModule>[0], slug)
+        ? Response.json({ ok: false, error: "forbidden" }, { status: 403 })
+        : null,
+  };
+});
 
 import { GET } from "./route";
 

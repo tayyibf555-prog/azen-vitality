@@ -42,6 +42,23 @@ export const APPROVER_ROLES: readonly Role[] = [
 ] as const;
 
 /**
+ * The roles that may raise a request FOR THEMSELVES AND NOBODY ELSE.
+ *
+ * Not approvers, and deliberately not an addition to `APPROVER_ROLES`: a nurse
+ * asking for a week off is not a nurse deciding she may have it. Both roles here
+ * are deny-by-default allow-list roles (CLINICIAN_SLUGS / STAFF_SLUGS), so this
+ * is the ONLY thing that lets either of them reach the absence route at all, and
+ * `canRequest` still refuses them unless the target staff id is the one resolved
+ * from their own session.
+ *
+ * `client_staff` was added with the self-service surface. Without it a
+ * receptionist could open My work, see the holiday tab, and be refused by the
+ * rule underneath it — the exact "dead surface" the clinician had before this
+ * change (their Holiday page rendered and every call 403'd).
+ */
+export const SELF_REQUEST_ROLES: readonly Role[] = ["client_clinician", "client_staff"] as const;
+
+/**
  * The longest single request we accept, in inclusive calendar days. A year-long
  * "absence" is almost always a typo in the year field, and it would silently strip a
  * staff member out of every generated rota. Longer genuine leave (maternity, a
@@ -179,9 +196,13 @@ export function canCancel(
  * Whether `role` may raise a request for `targetStaffId`.
  *
  * Approvers record absence for anyone (a manager entering a phone call about
- * sickness). A clinician may only ever request their own: `selfStaffId` is resolved
- * server-side from the session, never taken from the request body, so this cannot be
- * spoofed by posting somebody else's staff id.
+ * sickness). A clinician or a member of staff may only ever request their own:
+ * `selfStaffId` is resolved server-side from the session, never taken from the
+ * request body, so this cannot be spoofed by posting somebody else's staff id.
+ *
+ * A login with no staff record (`selfStaffId` null) is refused rather than
+ * defaulted to anything, which is what makes the unlinked case visible instead of
+ * silently filing somebody's holiday against the wrong person.
  */
 export function canRequest(
   role: Role | null,
@@ -190,7 +211,7 @@ export function canRequest(
 ): boolean {
   if (!targetStaffId) return false;
   if (role === null || APPROVER_ROLES.includes(role)) return true;
-  if (role === "client_clinician") return selfStaffId !== null && selfStaffId === targetStaffId;
+  if (SELF_REQUEST_ROLES.includes(role)) return selfStaffId !== null && selfStaffId === targetStaffId;
   return false;
 }
 

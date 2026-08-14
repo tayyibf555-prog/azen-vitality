@@ -3,6 +3,7 @@ import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { buildReportPrompt, cleanLine } from "@/lib/reports/ai";
 import { buildSnapshot, type ReportPeriod } from "@/lib/reports/snapshot";
 
@@ -43,6 +44,10 @@ export async function POST(request: Request): Promise<Response> {
   if (denied) return denied;
   const roleDenied = requireOwnerRole(auth);
   if (roleDenied) return roleDenied;
+  // THE PER-PERSON GATE, on top of the owner role.
+  // Running a report scans the practice's whole patient and appointment data and produces a document that leaves the building. Owner-level by role; per-person by this.
+  const capabilityDenied = await requireCapability(auth, "reports.run");
+  if (capabilityDenied) return capabilityDenied;
 
   const period: ReportPeriod = body.period === "week" ? "week" : "month";
   const siteIds = await getViewSiteIds(client.id);

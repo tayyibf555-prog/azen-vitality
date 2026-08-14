@@ -1,14 +1,14 @@
 import { getClient, getSites } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireApproverRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { generateShifts, upcomingWeekStarts } from "@/lib/rota/generate";
 import { londonDayKey } from "@/lib/time/london";
-import { listStaff, getConfig, insertShifts } from "@/lib/rota/repository";
+import { listStaff, getConfig, insertShifts, listShifts } from "@/lib/rota/repository";
 import { listApprovedAbsence } from "@/lib/absence/repository";
 import { addDayKey } from "@/lib/absence/rules";
 import type { Absence } from "@/lib/absence/types";
 import type { OpeningHours } from "@/lib/types";
-import type { RotaSite } from "@/lib/rota/types";
+import type { RotaShift, RotaSite } from "@/lib/rota/types";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +53,18 @@ export async function POST(request: Request): Promise<Response> {
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
-  const roleDenied = requireOwnerRole(auth);
+  //
+  // WIDENED FROM requireOwnerRole TO requireApproverRole (campaign 6), and it is a
+  // decision on the record rather than a tidy-up. The practice manager is a
+  // `client_coordinator` in this platform and she is the rota's PRIMARY user, so the
+  // owner-only guard meant she could not make a single rota API call — the module
+  // locked out the person it was built for. Its two siblings (absence,
+  // staff-check-in) were widened to the approver list for exactly this reason and
+  // the rota was missed. `requireApproverRole` reads APPROVER_ROLES from
+  // `@/lib/absence/rules`, so the HTTP edge and the pure decision rules cannot
+  // drift, and the clinician and the staff role are still refused by it.
+  // nav.staff.test.ts names this widening and pins all four routes.
+  const roleDenied = requireApproverRole(auth);
   if (roleDenied) return roleDenied;
 
   const config = await getConfig(client.id);
@@ -88,6 +99,31 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // THE SHIFTS ALREADY STORED over exactly this window.
+  //
+  // Without this the generator is blind to what a person decided: a manually deleted
+  // shift is just an absent row, so it is re-created, and a manually moved shift gets
+  // a generated twin dropped on top of it. Both used to happen on EVERY page load,
+  // silently. `existing` is pure input, like `absences`, so the generator still reads
+  // no database of its own -- this route reads it and hands it over.
+  //
+  // Read defensively for the same reason absence is: if this read fails we generate
+  // as we always did rather than taking the rota down. That is a WEAKER guarantee,
+  // not a broken one, and it is the right trade for a read that only ever fails when
+  // the database is already unhappy.
+  let existing: RotaShift[] = [];
+  if (weekStartDates.length > 0) {
+    try {
+      existing = await listShifts(
+        client.id,
+        weekStartDates[0],
+        addDayKey(weekStartDates[weekStartDates.length - 1], 6),
+      );
+    } catch {
+      existing = [];
+    }
+  }
+
   const shifts = generateShifts({
     staff,
     sites,
@@ -95,8 +131,12 @@ export async function POST(request: Request): Promise<Response> {
     weekStartDates,
     today: londonDayKey(now),
     absences,
+    existing,
   });
   const inserted = await insertShifts(shifts);
 
-  return Response.json({ ok: true, weeks, generated: shifts.length, inserted, shifts });
+  // `shifts` is now what was MISSING, not the whole week, so it is no longer usable
+  // as a read of the rota. It is returned for the count only; the page reads the week
+  // from GET /api/rota/shifts, which returns rows with real ids and real statuses.
+  return Response.json({ ok: true, weeks, generated: shifts.length, inserted });
 }

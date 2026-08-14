@@ -11,11 +11,14 @@ import {
   CalendarPlus,
   CalendarRange,
   ClipboardCheck,
+  Clock,
   FileCheck,
   FileText,
   Fingerprint,
+  FolderLock,
   HeartPulse,
   Home,
+  KeyRound,
   LayoutDashboard,
   LayoutTemplate,
   ListChecks,
@@ -35,6 +38,7 @@ import {
   Sunrise,
   TrendingUp,
   UserPlus,
+  UserRound,
   Users,
   Wallet,
   Zap,
@@ -89,6 +93,44 @@ export const CLINICIAN_SLUGS = new Set<string>([
   "patients",
   "absence",
   "staff-check-in",
+  // ADDED (campaign 6): "my-work" is the staff self-service surface — their own
+  // published rota, their own holiday, their own documents, their own policy
+  // signatures. A clinician is a member of staff too, and the nav item's `roles`
+  // array names them, so leaving it out of this set would have made that array a
+  // grant that reads as a grant and does nothing. It adds no data the clinician
+  // did not already have: every tab is scoped to the caller's OWN staff record.
+  "my-work",
+]);
+
+/**
+ * THE STAFF ALLOW-LIST. The complete set of module slugs a `client_staff` may see
+ * in the nav or reach by direct URL. Two entries. Nothing else. Ever.
+ *
+ * WHY A FIFTH ROLE RATHER THAN REUSING THE CLINICIAN. `CLINICIAN_SLUGS` grants
+ * "calendar" and "patients" — the live diary and the whole 51k-patient database.
+ * A nurse or a receptionist must not have either. Narrowing the clinician's set to
+ * fit them would break the clinician; widening the staff set to the clinician's is
+ * the opposite of what a staff login is for. So they are two allow-lists, not one.
+ *
+ * WHY AN ALLOW-LIST AT ALL — the same reason as CLINICIAN_SLUGS, and worth
+ * restating because it is the entire safety argument: this nav is allow-BY-DEFAULT.
+ * `roleCanSeeItem` returns true for any item carrying no `roles` array and
+ * `canRoleAccessModule` returns true for a slug it does not recognise, and roughly
+ * two thirds of the modules carry no `roles` array. A fifth role added the obvious
+ * way would inherit Conversations, Recall, Reactivation, Payments and every agent
+ * on day one. The branch below is consulted as the FIRST LINE of both predicates
+ * and RETURNS, so the four existing roles never reach it and their evaluation path
+ * is byte-identical to before. `nav.staff.test.ts` pins that with hard baselines.
+ *
+ * The API layer is a SEPARATE lock and does not come free with this one: the
+ * thirteen `kind:"clinician"` exemptions in
+ * `src/app/api/client-api-module-guard-coverage.test.ts` now each name the exact
+ * roles that may reach them, and that test proves this role is refused the diary
+ * and the patient database at the route layer too.
+ */
+export const STAFF_SLUGS = new Set<string>([
+  "", // the Overview index — where /c/[client] lands them, as it lands every role
+  "my-work", // their rota, their holiday, their documents, their signatures
 ]);
 
 export interface NavGroup {
@@ -106,6 +148,33 @@ export const CLIENT_NAV: NavGroup[] = [
     label: "Overview",
     items: [
       { slug: "", label: "Overview", icon: LayoutDashboard, status: "live" },
+      {
+        slug: "my-work",
+        label: "My work",
+        icon: UserRound,
+        status: "live",
+        // THE STAFF SELF-SERVICE SURFACE. One slug, five tabs (my rota, my
+        // clock, my holiday, my documents, my signatures), every one of them
+        // scoped to the CALLER'S OWN staff record resolved from the session —
+        // never from a body parameter. It is here in Overview rather than Staff &
+        // Ops because it is a personal surface, not a management one.
+        //
+        // HOW EACH ROLE ACTUALLY REACHES IT, because two different mechanisms are
+        // in play and this array only governs one of them:
+        //   agency_admin / client_owner / client_coordinator  — this array.
+        //   client_clinician  — CLINICIAN_SLUGS (the early return in
+        //                       roleCanSeeItem fires before this array is read).
+        //   client_staff      — STAFF_SLUGS, same early-return mechanism.
+        // They are listed here anyway so the intent is on the record in one place;
+        // both allow-lists contain "my-work", so the array and the behaviour agree.
+        roles: [
+          ...OWNER_ROLES,
+          "client_coordinator",
+          "client_clinician",
+          "client_staff",
+        ],
+        note: "Your own working page: the shifts you have been published, clocking yourself in and out, your holiday requests and their status, your own documents, and any practice policy waiting for your signature. Everything on it is scoped to you.",
+      },
     ],
   },
   {
@@ -347,7 +416,16 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Staff rota",
         icon: CalendarRange,
         status: "live",
-        roles: OWNER_ROLES,
+        // WIDENED (campaign 6), and it is a decision rather than drift. The module
+        // note says "owners and managers", but the array said OWNER_ROLES, so the
+        // practice manager — a client_coordinator in this platform, and the rota's
+        // PRIMARY user — could not open the page or make a single rota API call.
+        // Its two siblings below (Holiday & absence, Staff check-in) were widened
+        // for exactly this reason and this one was missed. All four rota API routes
+        // move from requireOwnerRole to requireApproverRole in the same change, so
+        // the page and the API agree; `nav.staff.test.ts` names the delta and pins
+        // the route change.
+        roles: [...OWNER_ROLES, "client_coordinator"],
         note: "Owners and managers set staffing rules; the rota is generated automatically from opening hours and staff availability, and each staff member is texted their shifts.",
       },
       {
@@ -373,6 +451,31 @@ export const CLIENT_NAV: NavGroup[] = [
         // owners. Clinicians clock themselves in via the CLINICIAN_SLUGS allow-list.
         roles: [...OWNER_ROLES, "client_coordinator"],
         note: "Staff clock in and out on their own phone by tapping an NFC tag mounted at the practice. The tag proves the place (a cryptographic NTAG 424 DNA tag emits a fresh signed code on every tap, so it cannot be photographed, copied or relayed) and their login proves the person. Attendance is compared against the rota and anything unusual (off-network, well before the shift, never clocked out) is raised to the practice manager as an exception rather than blocking anyone. Deliberately NOT biometric: face and fingerprint attendance is special category data, and the ICO has enforced against exactly that use. Self-employed associates are excluded by design, since clocking them like employees carries employment-status risk for the practice.",
+      },
+      {
+        slug: "hours",
+        label: "Hours & pay",
+        icon: Clock,
+        status: "live",
+        // Same reasoning as Holiday & absence, Staff check-in and (now) Staff rota:
+        // the practice manager runs the month's hours, so the coordinator role sits
+        // alongside the owners. HOURS AND COST ONLY — no payments, no HMRC/RTI, no
+        // payslips — and the pay columns are omitted SERVER-side for anyone without
+        // pay access, never merely hidden in the client.
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "The month's worked hours per person, derived from clock-in/out pairs and compared against the rota, with anything unresolved (a missed clock-out, a shift with no clocking) called out before the month can be marked final. Cost is shown only to logins with pay access. Hours and cost only: this is not payroll, and nothing here is submitted to HMRC.",
+      },
+      {
+        slug: "staff-hr",
+        label: "Staff HR",
+        icon: FolderLock,
+        status: "live",
+        // Owner + agency + the practice manager, for the same reason as its
+        // siblings. Pay rates are a SEPARATE permission inside the module (owner
+        // and agency by default), enforced by omitting the fields from the server
+        // response, so a coordinator with the module does not thereby see pay.
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "The employee file: contact and emergency details, employment dates, holiday entitlement, the document vault (right to work, DBS, GDC registration, indemnity, contracts) with expiry tracking, and the practice policies each person has signed. Employee personal data under UK GDPR: access is logged and pay is a separate permission.",
       },
       {
         slug: "daily-brief",
@@ -419,6 +522,17 @@ export const CLIENT_NAV: NavGroup[] = [
         // the owner and the coordinator may see and tick it. No `roles` = every role.
         note: "The go-live checklist: the thirteen items we need from the practice (with three go-live gates that block patient messaging) to move the platform from read-and-review mode to fully live, with per-item detail on what each means and how to do it.",
       },
+      {
+        slug: "permissions",
+        label: "People & logins",
+        icon: KeyRound,
+        status: "live",
+        // OWNER-ONLY, v1, and not negotiable at this level: this is the screen that
+        // decides who can reach what. A role that could edit it could grant itself
+        // anything, so it stays with the practice owner and the agency admin.
+        roles: OWNER_ROLES,
+        note: "Who can log in, at what level, and what each level can reach. Invite a colleague by email (they set their own password — no password ever passes through us or the practice), assign their role, link their login to their staff record, and switch an individual permission on or off. Removing access disables the login rather than deleting the record, so the audit trail survives.",
+      },
       { slug: "settings", label: "Settings", icon: Settings, status: "live", roles: OWNER_ROLES, note: "Connect your services and go live: integration status (Dentally, messaging, email, reviews, Meta, auth, scheduler), the messaging mode, the practice and its sites, and a go-live checklist. Status only, set the keys to connect." },
     ],
   },
@@ -429,11 +543,12 @@ export const CLIENT_MODULE_SLUGS = CLIENT_NAV.flatMap((g) => g.items.map((i) => 
 
 /** Whether a role may see/reach a single nav item. No `roles` = open to all. */
 function roleCanSeeItem(role: Role, item: NavItem): boolean {
-  // THE CLINICIAN BRANCH IS FIRST, AND RETURNS. Deny-by-default for the one role
-  // that must not inherit the allow-by-default line below. Because it returns
-  // before anything else runs, the other three roles evaluate exactly as they did
-  // before this branch existed.
+  // THE TWO ALLOW-LIST BRANCHES ARE FIRST, AND THEY RETURN. Deny-by-default for
+  // the two roles that must not inherit the allow-by-default line below. Because
+  // they return before anything else runs, the other three roles evaluate exactly
+  // as they did before either branch existed.
   if (role === "client_clinician") return CLINICIAN_SLUGS.has(item.slug);
+  if (role === "client_staff") return STAFF_SLUGS.has(item.slug);
   return !item.roles || item.roles.includes(role);
 }
 
@@ -479,7 +594,11 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "home",
     label: "Home",
     icon: Home,
-    slugs: [""],
+    // "my-work" joins Home rather than Operations because it is the person's own
+    // page, not a management surface — and because for a client_staff login it is
+    // the ONLY other destination they have, so filing it under an "Operations"
+    // header would give a receptionist a one-item management area and nothing else.
+    slugs: ["", "my-work"],
   },
   // THE DIARY GETS ITS OWN RAIL BUTTON, as it does in the reference, rather than
   // sitting as a tab under Home. It is the most-used screen in the practice and
@@ -517,7 +636,23 @@ export const NAV_CATEGORIES: NavCategory[] = [
     key: "operations",
     label: "Operations",
     icon: Briefcase,
-    slugs: ["getting-started", "rota", "absence", "staff-check-in", "compliance", "reports", "co-pilot", "controls", "settings"],
+    // The workforce block (rota -> absence -> check-in -> hours -> HR file) runs in
+    // the order a manager works it: who is on, who is off, who turned up, what that
+    // came to, and the person's file behind it all.
+    slugs: [
+      "getting-started",
+      "rota",
+      "absence",
+      "staff-check-in",
+      "hours",
+      "staff-hr",
+      "compliance",
+      "reports",
+      "co-pilot",
+      "controls",
+      "permissions",
+      "settings",
+    ],
   },
 ];
 
@@ -597,13 +732,48 @@ export const EXTRA_OWNER_ONLY_SLUGS = new Set<string>(["practice-brain"]);
  * owner-only when listed in EXTRA_OWNER_ONLY_SLUGS, otherwise open.
  */
 export function canRoleAccessModule(role: Role, slug: string): boolean {
-  // THE CLINICIAN BRANCH IS FIRST, AND RETURNS — see CLINICIAN_SLUGS. It has to
-  // precede the `if (!item) return true` fall-through below, which would otherwise
-  // hand an unrecognised slug straight to the clinician. The other three roles
-  // never reach this line, so nothing about their access changed.
+  // THE TWO ALLOW-LIST BRANCHES ARE FIRST, AND THEY RETURN — see CLINICIAN_SLUGS
+  // and STAFF_SLUGS. They have to precede the `if (!item) return true`
+  // fall-through below, which would otherwise hand an unrecognised slug straight
+  // to a deny-by-default role: any module added without a nav entry would be open
+  // to it. The other three roles never reach these lines, so nothing about their
+  // access changed.
   if (role === "client_clinician") return CLINICIAN_SLUGS.has(slug);
+  if (role === "client_staff") return STAFF_SLUGS.has(slug);
   if (EXTRA_OWNER_ONLY_SLUGS.has(slug)) return OWNER_ROLES.includes(role);
   const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === slug);
   if (!item) return true; // unknown slug: not owner-restricted here (the page itself 404s)
   return roleCanSeeItem(role, item);
+}
+
+// ---------------------------------------------------------------------------
+// WHERE THE INDEX LANDS A ROLE.
+// ---------------------------------------------------------------------------
+/**
+ * The page `/c/[client]` should forward this role to, or null to render the
+ * Overview it already renders.
+ *
+ * WHY THIS EXISTS AT ALL, and why it is not simply STAFF_SLUGS losing "".
+ * `/c/[client]` IS the practice dashboard: the takings strip, outstanding
+ * accounts, invoiced totals, UDA, and the day's appointment list carrying
+ * patient names. That is the money and the diary — precisely the two things a
+ * `client_staff` login exists NOT to have. But "" has to stay in STAFF_SLUGS,
+ * because "/" routes every non-agency, non-owner role to /c/[client] and the
+ * shell's `guardPage` admits them there: removing "" would bounce a staff login
+ * from "/" to /c/[client] to "/" for ever. So the ALLOW-LIST admits them to the
+ * route and the PAGE forwards them, which is the only arrangement that is both
+ * loop-free and safe.
+ *
+ * A pure function rather than an `if` in the page for the usual reason: an
+ * `if (user.role === "client_staff")` buried in a server component is a rule
+ * nothing can test, and this is the one rule standing between a receptionist and
+ * the practice's takings. It is called from the page BEFORE any dashboard read,
+ * so the numbers are never even fetched for a role that may not see them.
+ */
+export function indexRedirectFor(role: Role, clientSlug: string): string | null {
+  // Deny-by-default in spirit: only the roles whose OWN allow-list contains the
+  // index render it. `client_staff` holds "" so the layout admits them, and is
+  // sent to the one surface built for them instead.
+  if (role === "client_staff") return `/c/${clientSlug}/my-work`;
+  return null;
 }

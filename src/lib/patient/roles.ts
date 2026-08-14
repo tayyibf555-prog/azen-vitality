@@ -1,3 +1,5 @@
+import type { Role } from "@/lib/types";
+
 /**
  * Who may administer a patient record: change their status, or edit their details.
  *
@@ -22,4 +24,38 @@ const ROLE_SET: ReadonlySet<string> = new Set(PATIENT_ADMIN_ROLES);
 /** True when this role may administer a patient record. */
 export function isPatientAdminRole(role: string | null | undefined): boolean {
   return typeof role === "string" && ROLE_SET.has(role);
+}
+
+/**
+ * Who may WRITE a clinical record: the chart draft, a perio chart or BPE, a
+ * medical-history questionnaire or review, and the retraction of any of those.
+ *
+ * A DIFFERENT LIST FROM PATIENT_ADMIN_ROLES, and the difference is the point.
+ * Administering a patient (changing their status, correcting a phone number) is
+ * front-desk work, and the practice manager does it every day. Recording a
+ * periodontal finding, charting a tooth or signing off a medical history is a
+ * CLINICAL act: it becomes part of the patient's clinical record, it is attributed
+ * to whoever made it (GDC 4.1.4), and it is not the receptionist's or the
+ * coordinator's to make. So this list swaps `client_coordinator` for
+ * `client_clinician` and keeps the two accountable roles above them.
+ *
+ * `client_staff` appears in NEITHER list, which is the fifth role's whole design:
+ * a nurse or receptionist login reaches no part of the patient record at all.
+ *
+ * Read + write are deliberately not the same gate. The coordinator can still READ
+ * a chart or a medical history (they book around it and they answer the phone about
+ * it); what they lose is the ability to author one. The read side stays governed by
+ * the module gate on "patients".
+ */
+export const CLINICAL_WRITE_ROLES: readonly Role[] = [
+  "agency_admin",
+  "client_owner",
+  "client_clinician",
+] as const;
+
+const CLINICAL_WRITE_SET: ReadonlySet<string> = new Set<string>(CLINICAL_WRITE_ROLES);
+
+/** True when this role may author (or retract) an entry in the clinical record. */
+export function isClinicalWriteRole(role: string | null | undefined): boolean {
+  return typeof role === "string" && CLINICAL_WRITE_SET.has(role);
 }

@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CalendarRange, Users, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatCard } from "@/components/primitives";
-import type { RotaShift, RotaStaff } from "@/lib/rota/types";
-import { RotaThisWeek } from "./rota-this-week";
+import { isLiveShift, type RotaShift, type RotaStaff } from "@/lib/rota/types";
+import { RotaSchedule } from "./rota-schedule";
 import { RotaStaffPanel } from "./rota-staff-panel";
 import { RotaSettingsPanel } from "./rota-settings-panel";
 
@@ -23,7 +23,7 @@ import { RotaSettingsPanel } from "./rota-settings-panel";
 type TabKey = "week" | "staff" | "settings";
 
 const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
-  { key: "week", label: "This week", icon: CalendarRange },
+  { key: "week", label: "Rota", icon: CalendarRange },
   { key: "staff", label: "Staff", icon: Users },
   { key: "settings", label: "Settings", icon: Settings2 },
 ];
@@ -47,13 +47,11 @@ export function RotaWorkspace({
   const [shiftsThisWeek, setShiftsThisWeek] = useState(0);
   const [notified, setNotified] = useState(0);
 
-  // The generate route returns shifts for every site (there is no scoped read
-  // route), so we filter to the selected site(s) here for the displayed grid and
-  // the shift counts. A stable Set keeps the filter cheap and referentially safe
-  // for the memoised child.
-  const scopedSiteIds = useMemo(() => new Set(siteIds), [siteIds]);
-  const inScope = useCallback((s: RotaShift) => scopedSiteIds.has(s.siteId), [scopedSiteIds]);
-
+  // Site scoping now happens SERVER-side, in GET /api/rota/shifts, which honours the
+  // same view scope the Staff tab does. The client-side filter that used to live
+  // here existed only because the read was a POST to the generator, which had no
+  // scope at all; keeping it would be a second copy of a rule that can drift.
+  //
   // Sites the view covers: every configured site for "All sites", else just the one.
   const siteCount = siteIds.length;
 
@@ -72,29 +70,27 @@ export function RotaWorkspace({
     void refreshStaffCount();
   }, [refreshStaffCount]);
 
-  // The "This week" tab reports its loaded shifts here, so the StatCards reflect the
-  // same data without a second generate call. Scope to the selected site(s) so the
-  // counts match the grid.
-  const onShiftsLoaded = useCallback(
-    (shifts: RotaShift[]) => {
-      const week = shifts.filter((s) => inScope(s) && withinDays(s.shiftDate, 7));
-      setShiftsThisWeek(week.length);
-      setNotified(week.filter((s) => s.status === "notified").length);
-    },
-    [inScope],
-  );
+  // The rota tab reports its loaded shifts here, so the StatCards describe exactly
+  // what is on screen -- the week or the month being looked at -- rather than a
+  // different window the reader cannot see. Tombstoned and cancelled shifts are
+  // excluded: nobody is working them.
+  const onShiftsLoaded = useCallback((shifts: RotaShift[]) => {
+    const live = shifts.filter(isLiveShift);
+    setShiftsThisWeek(live.length);
+    setNotified(live.filter((s) => s.status === "notified").length);
+  }, []);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-x-7 gap-y-4">
         <StatCard label="Staff" value={staffCount} dot="bg-status-blue" hint="Active on the rota" />
         <StatCard
-          label="Shifts this week"
+          label="Shifts on screen"
           value={shiftsThisWeek}
           dot="bg-status-blue"
-          hint={isAllSites || !siteName ? "Generated across all sites" : `Generated for ${siteName}`}
+          hint={isAllSites || !siteName ? "Across all sites" : `At ${siteName}`}
         />
-        <StatCard label="Notified" value={notified} dot="bg-status-green" hint="Texted their shifts" />
+        <StatCard label="Told about it" value={notified} dot="bg-status-green" hint="Sent their shifts" />
         <StatCard label="Sites" value={siteCount} dot="bg-line-strong" hint="Covered by the rota" />
       </div>
 
@@ -128,7 +124,7 @@ export function RotaWorkspace({
 
       <div role="tabpanel" id={`rota-panel-${tab}`} aria-labelledby={`rota-tab-${tab}`}>
         {tab === "week" ? (
-          <RotaThisWeek clientSlug={clientSlug} inScope={inScope} onShiftsLoaded={onShiftsLoaded} />
+          <RotaSchedule clientSlug={clientSlug} siteIds={siteIds} onShiftsLoaded={onShiftsLoaded} />
         ) : null}
         {tab === "staff" ? (
           <RotaStaffPanel clientSlug={clientSlug} onChanged={refreshStaffCount} />
@@ -137,14 +133,4 @@ export function RotaWorkspace({
       </div>
     </div>
   );
-}
-
-/** Whether a `YYYY-MM-DD` shift date is within `days` days from today (whole-day, UTC-anchored). */
-function withinDays(shiftDate: string, days: number): boolean {
-  const start = Date.parse(`${shiftDate}T00:00:00Z`);
-  if (Number.isNaN(start)) return false;
-  const now = Date.now();
-  const todayUtc = now - (now % 86_400_000);
-  const diffDays = Math.round((start - todayUtc) / 86_400_000);
-  return diffDays >= 0 && diffDays < days;
 }

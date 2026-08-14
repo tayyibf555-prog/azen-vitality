@@ -6,6 +6,7 @@ import { runAgentTurn } from "@/lib/agent/run";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "@/lib/copilot/tools";
 import { buildCopilotSystemPrompt } from "@/lib/copilot/prompt";
 import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { recordUsage } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +59,11 @@ export async function POST(request: Request): Promise<Response> {
   // across every non-clinician module rather than expressed a different way here.
   const moduleDenied = requireModuleApiAccess(auth, "co-pilot");
   if (moduleDenied) return moduleDenied;
+  // THE PER-PERSON GATE. The co-pilot reads across the practice's data to answer,
+  // so holding it is close to holding a read of everything. Module access is
+  // already owner-only; this narrows it to a named owner login.
+  const capabilityDenied = await requireCapability(auth, "system.copilot.ask");
+  if (capabilityDenied) return capabilityDenied;
 
   // Honour the top-bar site switcher: this route is called from the browser WITH
   // the user's cookie, so the co-pilot's tools query only the selected site (the

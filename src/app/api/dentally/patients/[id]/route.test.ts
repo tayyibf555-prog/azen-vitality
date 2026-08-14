@@ -20,10 +20,21 @@ const h = vi.hoisted(() => ({
   numberHealthFor: vi.fn(),
 }));
 
-vi.mock("@/lib/auth/guard", () => ({
-  requireUser: h.requireUser,
-  requireSiteAccess: h.requireSiteAccess,
-}));
+vi.mock("@/lib/auth/guard", async () => {
+  // The REAL module predicate. requireSiteAccess is a TENANCY control — a client
+  // user holds every site of their own practice — so the module gate is the only
+  // role check on this route, and stubbing it would erase the check these tests
+  // are meant to protect.
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  return {
+    requireUser: h.requireUser,
+    requireSiteAccess: h.requireSiteAccess,
+    requireModuleApiAccess: (u: { role?: string } | null, slug: string) =>
+      u && !canRoleAccessModule(u.role as Parameters<typeof canRoleAccessModule>[0], slug)
+        ? Response.json({ ok: false, error: "forbidden" }, { status: 403 })
+        : null,
+  };
+});
 vi.mock("@/lib/patient/record", () => ({
   getPatientRecord: h.getPatientRecord,
   getPatientRecordInScope: h.getPatientRecordInScope,

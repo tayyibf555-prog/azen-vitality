@@ -1,4 +1,5 @@
 import { requirePatientAdmin } from "@/lib/patient/access";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { recordUsage } from "@/lib/telemetry";
 import { getSite } from "@/lib/mock/clients";
 import { canonicaliseProfile, parseProfileChanges } from "@/lib/patient/profile";
@@ -55,6 +56,14 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   // which fields are editable or whether the patient exists.
   const gate = await requirePatientAdmin(id, siteId);
   if (gate instanceof Response) return gate;
+
+  // THE PER-PERSON GATE, after the role gate and before anything is parsed. The
+  // role says a practice manager may correct a patient's details; this says which
+  // named person may. The GET above is deliberately NOT gated on it: reading what
+  // is on file is not editing it, and a read-only form with an honest explanation
+  // is more use to somebody than a 403.
+  const capabilityDenied = await requireCapability(gate.auth, "patient.profile.edit");
+  if (capabilityDenied) return capabilityDenied;
 
   // Strict whitelist. The raw body NEVER reaches Dentally: `changes` is rebuilt field by
   // field from keys we recognise, so a patient id, a site id or any other Dentally field

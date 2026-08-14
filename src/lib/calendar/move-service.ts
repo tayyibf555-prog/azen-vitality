@@ -29,6 +29,7 @@
 import { DentallyError, type DentallyClient } from "@/lib/dentally/client";
 import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { authEnforced, requireClientAccess, requireSiteAccess, requireUser } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { dentallySiteId, getSite } from "@/lib/mock/clients";
 import { isPatientAdminRole } from "@/lib/patient/roles";
@@ -313,6 +314,19 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
   // PATIENT_ADMIN_ROLES, never requireOwnerRole. client_coordinator IS how the
   // practice manager is represented here, and she is the diary's primary user.
   if (!isPatientAdminRole(user?.role)) return json({ ok: false, error: "forbidden" }, 403);
+
+  // --- 3b. the PERSON, not just the role ------------------------------------
+  //
+  // The role check above says "a practice manager may move appointments". This
+  // says "this practice manager may". They compose and neither replaces the
+  // other: the role is the default, the capability is the practice's decision
+  // about one named individual, and an owner who has revoked it here means it.
+  //
+  // Placed AFTER the role check so a caller who was never going to be allowed
+  // learns nothing about which capabilities exist, and BEFORE the site, the kill
+  // switch and the write gate so no work is done for a caller who cannot act.
+  const capabilityDenied = await requireCapability(user, "diary.appointment.move");
+  if (capabilityDenied) return capabilityDenied;
 
   // --- 4. site and client ---------------------------------------------------
   const site = getSite(body.siteId);

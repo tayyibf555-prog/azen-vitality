@@ -64,13 +64,50 @@ describe("requireModuleApiAccess denies the clinician everything outside its all
   });
 });
 
-describe("requireModuleApiAccess admits the clinician its own five modules", () => {
+describe("requireModuleApiAccess admits the clinician its own six modules", () => {
   it.each([...CLINICIAN_SLUGS])("allows %s", (slug) => {
     expect(requireModuleApiAccess(user("client_clinician"), slug)).toBe(null);
   });
 
-  it("is exactly five, and exactly these (a silent widening fails here)", () => {
-    expect([...CLINICIAN_SLUGS].sort()).toEqual(["", "absence", "calendar", "patients", "staff-check-in"]);
+  it("is exactly six, and exactly these (a silent widening fails here)", () => {
+    // WAS FIVE until campaign 6 added "my-work", the staff self-service surface, to
+    // CLINICIAN_SLUGS. Moved by hand and with a reason, which is what this pin is
+    // for: a clinician is a member of staff, and every tab of my-work is scoped to
+    // the caller's OWN staff record, so it hands over no practice-wide data the way
+    // "calendar" and "patients" do.
+    expect([...CLINICIAN_SLUGS].sort()).toEqual([
+      "",
+      "absence",
+      "calendar",
+      "my-work",
+      "patients",
+      "staff-check-in",
+    ]);
+  });
+});
+
+describe("requireModuleApiAccess denies the FIFTH role everything outside two slugs", () => {
+  // The whole reason the fifth role could be added at all. This guard is the API
+  // half of the lock; the page half is `requireModuleAccess` and the nav half is
+  // only cosmetic. A staff session that got past requireUser + requireClientAccess +
+  // requireSiteAccess — all of which admit it — is stopped here and nowhere else.
+  it.each(DENIED_TO_CLINICIAN.concat(["calendar", "patients", "absence", "staff-check-in", "rota"]))(
+    "refuses %s with a 403",
+    async (slug) => {
+      const denied = requireModuleApiAccess(user("client_staff"), slug);
+      expect(denied).toBeInstanceOf(Response);
+      expect(denied?.status).toBe(403);
+      await expect(denied?.json()).resolves.toEqual({ ok: false, error: "forbidden" });
+    },
+  );
+
+  it("allows exactly the Overview and My work", () => {
+    expect(requireModuleApiAccess(user("client_staff"), "")).toBe(null);
+    expect(requireModuleApiAccess(user("client_staff"), "my-work")).toBe(null);
+  });
+
+  it("refuses an unknown slug, so a typo is not an open door for it either", () => {
+    expect(requireModuleApiAccess(user("client_staff"), "not-a-module")?.status).toBe(403);
   });
 });
 

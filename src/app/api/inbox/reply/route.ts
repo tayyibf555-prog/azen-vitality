@@ -1,5 +1,6 @@
 import { getClient, getSites } from "@/lib/mock";
 import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { getPatientById } from "@/lib/dentally/read";
 import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
@@ -54,6 +55,12 @@ export async function POST(request: Request): Promise<Response> {
   // any patient in the practice from a module they cannot even see in the nav.
   const moduleDenied = requireModuleApiAccess(auth, "conversations");
   if (moduleDenied) return moduleDenied;
+  // THE PER-PERSON GATE. The module gate answers "may you see the inbox"; this
+  // answers "may you send from it". Reading a thread and texting a patient in the
+  // practice's name are different acts, and a practice may reasonably want the
+  // second one held by fewer people than the first.
+  const capabilityDenied = await requireCapability(auth, "messaging.patient.reply");
+  if (capabilityDenied) return capabilityDenied;
   if (!contactRef || !body) {
     return Response.json({ ok: false, error: "contactRef and body are required" }, { status: 400 });
   }

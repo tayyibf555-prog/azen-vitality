@@ -26,13 +26,27 @@ const store = vi.hoisted(() => ({
   retractResult: { id: "q1" } as unknown,
 }));
 
-vi.mock("@/lib/auth/guard", () => ({
-  requireUser: async () => store.requireUserResponse ?? store.user,
-  requireClientAccess: (user: User, clientId: string) =>
-    user && user.clientId !== clientId ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-  requireSiteAccess: (user: User, siteId: string) =>
-    user && !user.siteIds.includes(siteId) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-}));
+
+vi.mock("@/lib/auth/guard", async () => {
+  // THE REAL PREDICATES, not stubs. The module gate is what keeps a `client_staff`
+  // login out of the patient record, and the clinical-write gate is what keeps a
+  // coordinator from authoring one. A mock that returned null unconditionally would
+  // let either regress here in silence, which is the opposite of what these tests
+  // are for. The tenancy mocks below stay hand-written because they need the store.
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  const { isClinicalWriteRole } = await import("@/lib/patient/roles");
+  const forbidden = () => Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  return {
+    requireUser: async () => store.requireUserResponse ?? store.user,
+    requireClientAccess: (user: User, clientId: string) =>
+      user && user.clientId !== clientId ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireSiteAccess: (user: User, siteId: string) =>
+      user && !user.siteIds.includes(siteId) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireModuleApiAccess: (user: User, slug: string) =>
+      user && !canRoleAccessModule(user.role as Parameters<typeof canRoleAccessModule>[0], slug) ? forbidden() : null,
+    requireClinicalWriteRole: (user: User) => (user && !isClinicalWriteRole(user.role) ? forbidden() : null),
+  };
+});
 
 vi.mock("@/lib/mock/clients", () => ({
   getClient: (slug: string) => (slug === "vitality" ? { id: "vitality", slug: "vitality" } : undefined),
@@ -41,6 +55,17 @@ vi.mock("@/lib/mock/clients", () => ({
 vi.mock("@/lib/dentally/read", () => ({
   getPatientById: async (id: string) => (store.patientSiteId ? { id, siteId: store.patientSiteId } : null),
 }));
+
+// The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the
+// 503 when auth is not enforced — is proven in
+// src/lib/auth/capability-guard.test.ts; the fs sweep in
+// src/app/api/destructive-route-capability-coverage.test.ts proves this route
+// calls it. Stubbed open here so these cases stay about the route's own logic.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
 
 // PARTIAL mock: the real error classes are kept (the route does `instanceof`),
 // only the database calls are stubbed.
@@ -118,7 +143,7 @@ function reviewBody(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 beforeEach(() => {
-  store.user = { id: "u1", name: "Blerta", role: "client_coordinator", clientId: "vitality", siteIds: ["site-cc"] };
+  store.user = { id: "u1", name: "Dr Sara Malik", role: "client_clinician", clientId: "vitality", siteIds: ["site-cc"] };
   store.requireUserResponse = null;
   store.patientSiteId = "site-cc";
   store.savedQuestionnaires = [];
@@ -227,7 +252,7 @@ describe("attribution", () => {
   it("records which clinician wrote a review, and when", async () => {
     await post("review", reviewBody());
     const input = store.savedReviews[0].input as { author: unknown; reviewedAt: string };
-    expect(input.author).toEqual({ id: "u1", name: "Blerta", gdcNumber: null });
+    expect(input.author).toEqual({ id: "u1", name: "Dr Sara Malik", gdcNumber: null });
     expect(Date.parse(input.reviewedAt)).not.toBeNaN();
   });
 
@@ -272,7 +297,7 @@ describe("recording a questionnaire (staff fallback)", () => {
     };
     expect(input.questionBankVersion).toMatch(/^uk-dental-mh-/);
     expect(input.capturedVia).toBe("staff");
-    expect(input.author).toEqual({ id: "u1", name: "Blerta", gdcNumber: null });
+    expect(input.author).toEqual({ id: "u1", name: "Dr Sara Malik", gdcNumber: null });
     expect(input.answers).toEqual([
       { key: "diabetes", answer: "no", detail: null },
       { key: "anticoagulants", answer: "yes", detail: "apixaban" },
@@ -360,7 +385,7 @@ describe("retracting a questionnaire", () => {
     expect(store.retracted[0]).toMatchObject({
       id: "q1",
       reason: "recorded on the wrong patient",
-      by: { id: "u1", name: "Blerta" },
+      by: { id: "u1", name: "Dr Sara Malik" },
       scope: { siteId: "site-cc", patientId: "p1" },
     });
     store.retractResult = null;
@@ -407,5 +432,59 @@ describe("when something goes wrong", () => {
 
   it("carries the two-records notice on the disabled path via the copy module", () => {
     expect(MEDICAL_COPY.disabled).toContain("MEDICAL_HISTORY_ENABLED");
+  });
+});
+
+// ===========================================================================
+// THE CLINICAL-WRITE TIGHTENING, campaign 6.
+//
+// Recording or reviewing a medical history — or retracting one — is a clinical act:
+// it becomes part of the patient's record and is attributed to whoever made it (GDC
+// 4.1.4). Before this change every role attached to the practice could POST here,
+// the fixture user in this file included, which was a coordinator. The READ is
+// deliberately untouched: the front desk legitimately looks at whether a history is
+// on file and when it was last reviewed.
+//
+// The PUBLIC patient-facing route (medical-history/public-submit) is unaffected —
+// it is token-verified, has no session at all, and is the only path that writes a
+// null-author questionnaire.
+//
+// And one layer out: a `client_staff` login reaches neither, because "patients" is
+// not in STAFF_SLUGS.
+// ===========================================================================
+describe("who may write a medical history, and who may only read one", () => {
+  const coordinator = { id: "u2", name: "Blerta", role: "client_coordinator", clientId: "vitality", siteIds: ["site-cc"] };
+  const staff = { id: "u3", name: "Nadia", role: "client_staff", clientId: "vitality", siteIds: ["site-cc"] };
+
+  it("the coordinator may still READ", async () => {
+    store.user = coordinator;
+    expect((await get("latest")).status).toBe(200);
+  });
+
+  it("but may no longer write a questionnaire, a review or a retraction, and nothing is stored", async () => {
+    store.user = coordinator;
+    for (const [action, payload] of [
+      ["questionnaire", questionnaireBody()],
+      ["review", reviewBody()],
+      ["retract", { ...SCOPE, id: "q1", reason: "entered on the wrong patient record" }],
+    ] as const) {
+      expect((await post(action, payload)).status, action).toBe(403);
+    }
+    expect(store.savedQuestionnaires).toEqual([]);
+    expect(store.savedReviews).toEqual([]);
+    expect(store.retracted).toEqual([]);
+  });
+
+  it("the clinician may still do both", async () => {
+    expect((await get("latest")).status).toBe(200);
+    expect((await post("review", reviewBody())).status).toBe(200);
+    expect(store.savedReviews).toHaveLength(1);
+  });
+
+  it("the staff role reaches NEITHER: the module gate refuses it first", async () => {
+    store.user = staff;
+    expect((await get("latest")).status).toBe(403);
+    expect((await post("review", reviewBody())).status).toBe(403);
+    expect(store.savedReviews).toEqual([]);
   });
 });

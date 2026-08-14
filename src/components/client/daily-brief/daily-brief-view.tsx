@@ -46,6 +46,9 @@ const ROLE_GREETING: Record<Role, string> = {
   // all (daily-brief is not in CLINICIAN_SLUGS), so this line is a safe default
   // rather than a decision that the brief is part of their view.
   client_clinician: "Here is your morning brief for today's list.",
+  // Same again: "daily-brief" is not in STAFF_SLUGS, so a client_staff login
+  // cannot reach this page. Exhaustiveness only, not a grant.
+  client_staff: "Here is your morning brief for today.",
 };
 
 function longDate(now: Date): string {

@@ -120,6 +120,31 @@ const ADDED_TONIGHT: Record<string, string[]> = {
   client_coordinator: ["absence", "staff-check-in", "fp17"],
 };
 
+/**
+ * A SECOND, LATER DELTA — campaign 6 (the fifth role + the HR lane).
+ *
+ * Kept separate from ADDED_TONIGHT rather than merged into it, for the same reason
+ * ADDED_TONIGHT is separate from BASELINE: a delta folded into the layer beneath it
+ * stops being a decision anybody can read, and the next reviewer cannot tell which
+ * night granted what. Each line here has its counterpart in `nav.staff.test.ts`,
+ * which is where the reasoning lives and where the fifth role itself is proven.
+ *
+ * - "my-work" is the new staff self-service surface. Every staff-facing role gets
+ *   it, including the clinician (via CLINICIAN_SLUGS — see test 6 below, which is
+ *   why that pin moved from five modules to six).
+ * - "hours" and "staff-hr" are the new Hours & pay and Staff HR modules: owner,
+ *   agency and the practice manager, matching absence and staff-check-in.
+ * - "permissions" is People & logins, owner-only.
+ * - "rota" for the COORDINATOR is a widening of an existing module, not a new one:
+ *   the practice manager is the rota's primary user and the owner-only array locked
+ *   her out of the page and all four of its API routes.
+ */
+const ADDED_CAMPAIGN_6: Record<string, string[]> = {
+  agency_admin: ["my-work", "hours", "staff-hr", "permissions"],
+  client_owner: ["my-work", "hours", "staff-hr", "permissions"],
+  client_coordinator: ["my-work", "hours", "staff-hr", "rota"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<string, string[]> = {
   agency_admin: ["practice-brain"],
@@ -135,7 +160,7 @@ describe("1. the existing three roles are byte-identical apart from the named de
   it.each(["agency_admin", "client_owner", "client_coordinator"] as const)(
     "%s sees exactly its baseline nav plus tonight's named additions, and nothing else",
     (role) => {
-      const expected = [...BASELINE[role], ...ADDED_TONIGHT[role]];
+      const expected = [...BASELINE[role], ...ADDED_TONIGHT[role], ...ADDED_CAMPAIGN_6[role]];
       expect(sorted(navSlugs(role))).toEqual(sorted(expected));
     },
   );
@@ -146,6 +171,7 @@ describe("1. the existing three roles are byte-identical apart from the named de
       const expected = [
         ...BASELINE[role],
         ...ADDED_TONIGHT[role],
+        ...ADDED_CAMPAIGN_6[role],
         ...EXTRA_ALLOWED_NOT_IN_NAV[role],
       ];
       expect(sorted(allowedSlugs(role))).toEqual(sorted(expected));
@@ -229,9 +255,19 @@ describe("6. CLINICIAN_SLUGS contains only real modules", () => {
     }
   });
 
-  it("names the exact five modules a clinician gets", () => {
+  it("names the exact six modules a clinician gets", () => {
+    // WAS FIVE. "my-work" was added in campaign 6 and this pin moved with it,
+    // deliberately: the clinician's allow-list is the tightest in the platform and a
+    // silent addition to it is exactly what this assertion exists to catch, so the
+    // addition has to be made here, by hand, with a reason.
+    //
+    // The reason: my-work is the staff self-service surface (own published rota, own
+    // holiday, own documents, own policy signatures) and a clinician is a member of
+    // staff. Every tab of it is scoped to the CALLER'S OWN staff record resolved from
+    // the session, so it grants no data the clinician did not already hold — unlike
+    // "calendar" or "patients", which are practice-wide.
     expect(sorted([...CLINICIAN_SLUGS])).toEqual(
-      sorted(["", "calendar", "patients", "absence", "staff-check-in"]),
+      sorted(["", "calendar", "patients", "absence", "staff-check-in", "my-work"]),
     );
   });
 });

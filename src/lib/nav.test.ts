@@ -93,7 +93,7 @@ describe("sidebar categories (rail + panel nav)", () => {
     for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
   });
 
-  it("gives the coordinator exactly three Operations modules: Getting started, plus Holiday & absence and Staff check-in, deliberately added 2026-08-03", () => {
+  it("gives the coordinator exactly six Operations modules: the workforce block plus Getting started", () => {
     const cats = categoriesForRole("client_coordinator");
     const keys = cats.map((c) => c.key);
     // The everyday categories survive.
@@ -110,13 +110,29 @@ describe("sidebar categories (rail + panel nav)", () => {
     // an explicit `roles: [...OWNER_ROLES, "client_coordinator"]` array in CLIENT_NAV,
     // so the widening is one readable line per module rather than a default.
     //
-    // Nothing else moved: everything still absent from this list (rota, compliance,
-    // reports, co-pilot, controls, settings) remains owner-only, and the assertion is
-    // still an exact toEqual so the NEXT unannounced addition fails here.
+    // WIDENED AGAIN, campaign 6, and again as a decision rather than drift. Three
+    // more modules join, all for the same stated reason — the practice manager is a
+    // client_coordinator and these are her job:
+    //
+    //   "rota"      was owner-only by an oversight the 2026-08-03 pass missed. The
+    //               module's own note reads "owners and managers", but its `roles`
+    //               array did not, so she could not open the page or make a single
+    //               rota API call. All four rota routes moved from requireOwnerRole
+    //               to requireApproverRole in the same change.
+    //   "hours"     new module (Hours & pay): the month's worked hours and cost.
+    //   "staff-hr"  new module (Staff HR): the employee file and document vault.
+    //
+    // Nothing else moved: everything still absent from this list (compliance,
+    // reports, co-pilot, controls, permissions, settings) remains owner-only, and the
+    // assertion is still an exact toEqual in NAV_CATEGORIES order, so the NEXT
+    // unannounced addition fails here.
     expect(operations?.items.map((i) => i.slug)).toEqual([
       "getting-started",
+      "rota",
       "absence",
       "staff-check-in",
+      "hours",
+      "staff-hr",
     ]);
   });
 

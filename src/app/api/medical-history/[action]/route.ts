@@ -1,5 +1,13 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireSiteAccess } from "@/lib/auth/guard";
+import {
+  requireUser,
+  requireClientAccess,
+  requireSiteAccess,
+  requireModuleApiAccess,
+  requireClinicalWriteRole,
+} from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
+import type { Capability } from "@/lib/capabilities/keys";
 import { getPatientById } from "@/lib/dentally/read";
 import { isMedicalHistoryEnabled, MEDICAL_COPY } from "@/lib/patient-medical/gate";
 import { QUESTION_BANK_VERSION, isKnownQuestionKey } from "@/lib/patient-medical/questions";
@@ -86,6 +94,7 @@ async function authorise(
   clientSlug: string,
   siteId: string,
   patientId: string,
+  opts?: { write?: boolean; capability?: Capability },
 ): Promise<Authorised | Response> {
   const client = getClient(clientSlug);
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 404 });
@@ -94,6 +103,30 @@ async function authorise(
   if (auth instanceof Response) return auth;
   const deniedClient = requireClientAccess(auth, client.id);
   if (deniedClient) return deniedClient;
+
+  // THE MODULE LOCK. The medical history is a tab of the patient record, so it belongs
+  // to the "patients" module; the checks around it are TENANCY checks and admit
+  // every role attached to this practice. Without this line a `client_staff`
+  // login — a nurse or a receptionist — could read and write it.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
+
+  // THE CLINICAL-WRITE LOCK, on writes only. Recording or reviewing a medical history, or retracting one, is a clinical
+  // act: it becomes part of the patient's clinical record and is attributed to
+  // whoever made it (GDC 4.1.4). So writes are clinician + owner + agency. The
+  // coordinator keeps the READ and loses the write — a deliberate narrowing of
+  // what this route accepted before, not an oversight.
+  if (opts?.write) {
+    const writeDenied = requireClinicalWriteRole(auth);
+    if (writeDenied) return writeDenied;
+    // AND THE PER-PERSON GATE. The role list says a clinician may author here;
+    // this says which clinician may, and which of the two acts on this route they
+    // may perform — recording an exam and RETRACTING one are different keys.
+    if (opts.capability) {
+      const capabilityDenied = await requireCapability(auth, opts.capability);
+      if (capabilityDenied) return capabilityDenied;
+    }
+  }
 
   if (!siteId || !patientId) {
     return Response.json({ ok: false, error: "siteId and patientId are required" }, { status: 400 });
@@ -301,6 +334,13 @@ export async function POST(
     String(payload.client ?? ""),
     String(payload.siteId ?? ""),
     String(payload.patientId ?? ""),
+    {
+      write: true,
+      // Retraction is its OWN capability: withdrawing an entry from the clinical
+      // record is the act an inspector asks about by name, and a practice may want
+      // it held by fewer people than recording one.
+      capability: action === "retract" ? "clinical.record.retract" : "clinical.medical-history.write",
+    },
   );
   if (auth instanceof Response) return auth;
 

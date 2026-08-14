@@ -22,6 +22,7 @@ import {
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -394,6 +395,16 @@ export async function POST(
   // Dentally; driving the outbound recall campaign off them is a different job.
   const moduleDenied = requireModuleApiAccess(auth, "recall");
   if (moduleDenied) return moduleDenied;
+
+  // THE PER-PERSON GATE on the SEND. Releasing a drafted message puts a text on a
+  // real patient's phone in the practice's name; approving or drafting one does
+  // not. Only "send" is gated, so a team member can still prepare the work for
+  // somebody else to release — which is the arrangement a practice that wants
+  // this control usually wants.
+  if (action === "send") {
+    const capabilityDenied = await requireCapability(auth, "messaging.lifecycle.send");
+    if (capabilityDenied) return capabilityDenied;
+  }
   if (auth && typeof body.targetId === "string") {
     const siteId = body.targetId.split(":")[0];
     const denied = requireSiteAccess(auth, siteId);

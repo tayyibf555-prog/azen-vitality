@@ -1,6 +1,7 @@
 import { getClient } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { listDeclarations } from "@/lib/fp17/repository";
 import type { Fp17Status } from "@/lib/fp17/types";
@@ -31,6 +32,12 @@ export async function GET(request: Request): Promise<Response> {
   if (denied) return denied;
   const moduleDenied = requireModuleApiAccess(auth, "fp17");
   if (moduleDenied) return moduleDenied;
+  // A VIEW capability, not a write one, so it does NOT fail closed when auth is
+  // unenforced (see keys.ts `destructive`). Declarations carry a patient's NHS
+  // exemption grounds, which is health-adjacent personal data the practice may
+  // want to scope to named people even inside a module they can all reach.
+  const capabilityDenied = await requireCapability(auth, "clinical.fp17.view");
+  if (capabilityDenied) return capabilityDenied;
 
   try {
     // Scope the worklist to the dashboard's selected site (browser-called route,

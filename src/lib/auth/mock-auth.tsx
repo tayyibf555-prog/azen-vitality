@@ -50,6 +50,17 @@ export const MOCK_USERS: Record<Role, SessionUser> = {
     role: "client_clinician",
     clientId: "vitality",
   },
+  // Dev-preview stand-in only, exactly as above. Migration 0073 widens the
+  // app_user CHECK constraint to admit 'client_staff' and seeds nobody: a staff
+  // login exists only once the practice invites the person by name, so nothing
+  // here creates access.
+  client_staff: {
+    id: "u-vitality-staff",
+    name: "Nadia Hussain",
+    email: "nadia@vitalitydental.co.uk",
+    role: "client_staff",
+    clientId: "vitality",
+  },
 };
 
 interface AuthContextValue {

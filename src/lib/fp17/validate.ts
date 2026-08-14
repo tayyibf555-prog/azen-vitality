@@ -56,8 +56,12 @@ const SIGNATURE_METHODS: readonly SignatureMethod[] = ["typed", "drawn", "ipad"]
 // value is a cheap DoS. A typed signature is a name; a drawn/iPad signature is a
 // small PNG data-URL. The worklist never re-serves the signature VALUE (only method
 // + signedAt), so the larger cap bounds storage abuse, not response size.
-const MAX_TYPED_SIGNATURE = 120;
-const MAX_IMAGE_SIGNATURE = 250_000; // ~250 KB data-URL, enough for a drawn signature
+// EXPORTED so the staff e-sign module can IMPORT these rather than retype them
+// (lib/hr/esign.ts). Two capture surfaces with two copies of "250000" is how one of
+// them silently becomes 2,500,000 a year later; a shared constant cannot drift, and
+// esign's tests assert it is the same number rather than an equal-looking one.
+export const MAX_TYPED_SIGNATURE = 120;
+export const MAX_IMAGE_SIGNATURE = 250_000; // ~250 KB data-URL, enough for a drawn signature
 const MAX_NAME = 120;
 const MAX_DOB = 40;
 

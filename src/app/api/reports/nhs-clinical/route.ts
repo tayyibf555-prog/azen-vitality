@@ -1,6 +1,7 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { presetWindow, customWindow, REPORT_PRESETS, type ReportPreset } from "@/lib/reports/report-window";
 import { readNhsClinicalReport } from "@/lib/reports/flagship-read";
 
@@ -30,6 +31,10 @@ export async function GET(request: Request): Promise<Response> {
   if (denied) return denied;
   const roleDenied = requireOwnerRole(auth);
   if (roleDenied) return roleDenied;
+  // THE PER-PERSON GATE, on top of the owner role.
+  // Report C, the completed-vs-pending sibling of nhs-activity. Same data, same gate.
+  const capabilityDenied = await requireCapability(auth, "reports.nhs.view");
+  if (capabilityDenied) return capabilityDenied;
 
   const presetRaw = url.searchParams.get("preset");
   const from = url.searchParams.get("from");

@@ -1,6 +1,7 @@
 import "server-only";
 import { canAccessClient, getSessionUser, type AuthedUser } from "./session";
 import { APPROVER_ROLES } from "@/lib/absence/rules";
+import { isClinicalWriteRole } from "@/lib/patient/roles";
 import { canRoleAccessModule } from "@/lib/nav";
 
 /**
@@ -62,6 +63,31 @@ export function requireOwnerRole(user: AuthedUser | null): Response | null {
  */
 export function requireApproverRole(user: AuthedUser | null): Response | null {
   if (user && !APPROVER_ROLES.includes(user.role)) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+  return null;
+}
+
+/**
+ * 403 Response if an enforced user may not AUTHOR an entry in the clinical record;
+ * else null.
+ *
+ * Additive, like `requireApproverRole`, and for the mirror-image reason. The routes
+ * that write the chart draft, the perio charts and BPEs, the medical-history
+ * questionnaires and reviews, and the retraction of any of them, previously ran on
+ * `requireUser -> requireClientAccess -> requireSiteAccess` and therefore accepted
+ * EVERY role attached to the practice. `requireApproverRole` would have been exactly
+ * backwards here: it admits the coordinator and refuses the clinician, and the
+ * clinician is the one person these routes exist for.
+ *
+ * The role list lives in `@/lib/patient/roles` (where it is under test, beside
+ * PATIENT_ADMIN_ROLES) so the HTTP edge and the pure lists cannot drift apart, the
+ * same arrangement `requireApproverRole` has with `@/lib/absence/rules`.
+ *
+ * No-op when user is null, matching every other guard in this file.
+ */
+export function requireClinicalWriteRole(user: AuthedUser | null): Response | null {
+  if (user && !isClinicalWriteRole(user.role)) {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   return null;

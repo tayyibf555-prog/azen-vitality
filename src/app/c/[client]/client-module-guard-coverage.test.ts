@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { CLIENT_NAV, canRoleAccessModule } from "@/lib/nav";
+import { CLIENT_NAV, canRoleAccessModule, indexRedirectFor } from "@/lib/nav";
 import type { Role } from "@/lib/types";
 
 // ===========================================================================
@@ -47,13 +47,25 @@ const NON_MODULE_ROUTES: Record<string, string> = {
   dashboard: "redirect-only stub: the dashboard became the Overview",
 };
 
-/** Every role the platform has. Typed so adding a fifth Role fails tsc here first. */
-const ALL_ROLES = ["agency_admin", "client_owner", "client_coordinator", "client_clinician"] as const;
+/**
+ * Every role the platform has. Typed so adding another Role fails tsc HERE first —
+ * which is exactly what happened when `client_staff` was added: this line was the
+ * first compile error of that change, before a single page had been written, which
+ * is the whole reason the exhaustiveness map exists rather than a bare array.
+ */
+const ALL_ROLES = [
+  "agency_admin",
+  "client_owner",
+  "client_coordinator",
+  "client_clinician",
+  "client_staff",
+] as const;
 const _EXHAUSTIVE: Record<Role, true> = {
   agency_admin: true,
   client_owner: true,
   client_coordinator: true,
   client_clinician: true,
+  client_staff: true,
 };
 void _EXHAUSTIVE;
 
@@ -118,13 +130,45 @@ describe("every client module page enforces its own module access", () => {
 });
 
 describe("the routes that are deliberately NOT guarded per page", () => {
-  it("the Overview index needs no guard because every role may reach it", () => {
-    // /c/[client]/page.tsx (slug "") is where the layout guard lands EVERY role,
-    // clinician included, so a guard there would be a no-op. That is only true
-    // while "" is open to all — the moment it is not, this test fails and the
-    // index needs `await requireModuleAccess("")` like everything else.
+  it("the Overview index is REACHABLE by every role, and RENDERED for only four", () => {
+    // THIS TEST USED TO SAY SOMETHING ELSE, AND WHAT IT SAID WAS WRONG.
+    //
+    // It read "the Overview index needs no guard because every role may reach it"
+    // and looped ALL_ROLES asserting `canRoleAccessModule(role, "") === true`. Once
+    // `client_staff` existed that sentence certified the exposure instead of
+    // catching it: the index IS the practice dashboard — takings, outstanding
+    // accounts, invoiced totals, UDA and the day's appointment list with patient
+    // names — and the one role defined as having neither the money nor the diary
+    // was landing on all of it, with this file calling it intended.
+    //
+    // Both halves are still true and they are now stated separately, because they
+    // are different claims:
+    //   REACHABLE  — "" stays in every role's allow-list, including STAFF_SLUGS,
+    //                or "/" would bounce a staff login back and forth for ever.
+    //   RENDERED   — the PAGE forwards `client_staff` to /c/<client>/my-work before
+    //                it reads anything, which is `indexRedirectFor` + the call to
+    //                `requireIndexAccess` asserted below.
     for (const role of ALL_ROLES) expect(canRoleAccessModule(role, "")).toBe(true);
     expect(existsSync(join(ROUTE_DIR, "page.tsx"))).toBe(true);
+
+    // Exactly one role is forwarded, and it is the one that must be. A future role
+    // added to STAFF_SLUGS-style deny-by-default has to make this decision here.
+    const forwarded = ALL_ROLES.filter((role) => indexRedirectFor(role, "vitality") !== null);
+    expect(forwarded).toEqual(["client_staff"]);
+    expect(indexRedirectFor("client_staff", "vitality")).toBe("/c/vitality/my-work");
+  });
+
+  it("the index page really calls the forwarding guard, and BEFORE it reads anything", () => {
+    // The predicate is inert until somebody calls it — the same lesson as
+    // `requireModuleAccess`, and the reason 24 pages once shipped unguarded. The
+    // ORDER is asserted as well as the presence: a forward that ran after
+    // `readPracticeDashboard` would still have fetched the practice's takings for a
+    // login that may not see them, and a redirect is not an excuse for a read.
+    const src = pageSource("page.tsx");
+    expect(src).toContain("await requireIndexAccess(clientSlug)");
+    expect(src.indexOf("await requireIndexAccess(clientSlug)")).toBeLessThan(
+      src.indexOf("readPracticeDashboard("),
+    );
   });
 
   it("the patient record's nested pages are guarded by their shared layout", () => {

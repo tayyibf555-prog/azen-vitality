@@ -1,5 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
 import { requireUser, requireOwnerRole, requireClientAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { dentallyReadKey } from "@/lib/dentally/read";
 import {
@@ -127,6 +128,12 @@ export async function PATCH(
     }
 
     case "launch": {
+      // THE PER-PERSON GATE, checked before every other launch condition. Launching
+      // starts messaging everybody the campaign matched, which is the largest
+      // single send this platform can make. requireOwnerRole (in loadGuarded) says
+      // an owner may; this says WHICH owner-level login may.
+      const capabilityDenied = await requireCapability(auth, "messaging.campaign.launch");
+      if (capabilityDenied) return capabilityDenied;
       // Launch is only valid from a fully built campaign, and is REFUSED while the
       // outreach system is switched off (its default). The send path is separately
       // fail-closed on the same switch; refusing here gives the owner a clear reason

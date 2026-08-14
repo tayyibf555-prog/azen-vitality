@@ -158,6 +158,20 @@ export const SYSTEMS: SystemDef[] = [
     halts: "Auto-rota generation and staff shift texts stop.",
   },
   {
+    // Headless system: policy e-signing is a PANEL inside Staff HR and My work,
+    // not a nav module of its own, so its switch lives here in the control panel.
+    //
+    // SHIPS DORMANT (migration 0077 seeds it disabled, the FP17 precedent). What
+    // this feature records is a login-bound attestation offered as CQC evidence,
+    // and the practice has to agree that framing before anybody is asked to
+    // affirm anything. Switching it on is a business decision, not a build step —
+    // which is exactly why it needs an owner switch rather than an env flag.
+    slug: "staff-esign",
+    label: "Policy signatures",
+    group: "Operations",
+    halts: "Nobody can be asked to sign a policy and no new version can be published. Signatures already recorded are kept.",
+  },
+  {
     slug: "daily-brief",
     label: "Daily brief",
     group: "Operations",

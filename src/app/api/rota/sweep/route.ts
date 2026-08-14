@@ -11,6 +11,7 @@ import {
   listStaff,
   getConfig,
   insertShifts,
+  listShifts,
   listUnnotifiedUpcoming,
   markNotified,
 } from "@/lib/rota/repository";
@@ -99,7 +100,31 @@ export async function POST(request: Request): Promise<Response> {
       const staff = await listStaff(client.id, { activeOnly: true });
       const sites = rotaSites(client.id);
       const weekStartDates = upcomingWeekStarts(now, config.generateWeeksAhead);
-      const shifts = generateShifts({ staff, sites, config, weekStartDates, today: londonDayKey(now) });
+      // What is already stored over this window. THE SWEEP IS THE WORST OFFENDER for
+      // the generate-fights-editing bug: it runs 24/7, so without this a shift the
+      // practice manager deleted at 5pm is back on the rota by the next tick, with
+      // nobody told and nothing logged. Passing the stored rows in makes the
+      // tombstones and the manual shifts visible to the generator.
+      let existingShifts: RotaShift[] = [];
+      if (weekStartDates.length > 0) {
+        try {
+          existingShifts = await listShifts(
+            client.id,
+            weekStartDates[0],
+            addDaysKey(weekStartDates[weekStartDates.length - 1], 6),
+          );
+        } catch {
+          existingShifts = [];
+        }
+      }
+      const shifts = generateShifts({
+        staff,
+        sites,
+        config,
+        weekStartDates,
+        today: londonDayKey(now),
+        existing: existingShifts,
+      });
       generated += await insertShifts(shifts);
 
       // 2) Text staff their unnotified shifts within the notify lead window.

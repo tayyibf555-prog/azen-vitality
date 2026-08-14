@@ -1,5 +1,13 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireSiteAccess } from "@/lib/auth/guard";
+import {
+  requireUser,
+  requireClientAccess,
+  requireSiteAccess,
+  requireModuleApiAccess,
+  requireClinicalWriteRole,
+} from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
+import type { Capability } from "@/lib/capabilities/keys";
 import { getPatientById } from "@/lib/dentally/read";
 import { isChartDraftEnabled } from "@/lib/charting/write-gate";
 import { isInArch } from "@/lib/charting/fdi";
@@ -51,12 +59,14 @@ async function patientBelongsToSite(auth: unknown, patientId: string, siteId: st
   return Boolean(patient && patient.siteId === siteId);
 }
 
-/** getClient -> requireUser -> requireClientAccess -> requireSiteAccess ->
- *  patientBelongsToSite, in that order, failing closed at every step. */
+/** getClient -> requireUser -> requireClientAccess -> MODULE -> [clinical write] ->
+ *  requireSiteAccess -> patientBelongsToSite, in that order, failing closed at
+ *  every step. */
 async function authorise(
   clientSlug: string,
   siteId: string,
   patientId: string,
+  opts?: { write?: boolean; capability?: Capability },
 ): Promise<Scope | Response> {
   const client = getClient(clientSlug);
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 404 });
@@ -65,6 +75,30 @@ async function authorise(
   if (auth instanceof Response) return auth;
   const deniedClient = requireClientAccess(auth, client.id);
   if (deniedClient) return deniedClient;
+
+  // THE MODULE LOCK. The chart is a tab of the patient record, so it belongs to the
+  // "patients" module; the three checks around it are tenancy checks and admit
+  // every role of this practice. Without this line a `client_staff` login could
+  // read and write any patient's chart draft.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
+
+  // THE CLINICAL-WRITE LOCK, on writes only. Charting a tooth is a clinical act
+  // that becomes part of the record and is attributed to whoever made it, so it is
+  // clinician + owner + agency. The coordinator keeps the READ (they book around
+  // the plan and answer the phone about it) and loses the write — a deliberate
+  // narrowing of what this route accepted before, not an oversight.
+  if (opts?.write) {
+    const writeDenied = requireClinicalWriteRole(auth);
+    if (writeDenied) return writeDenied;
+    // AND THE PER-PERSON GATE. The role list says a clinician may chart; this says
+    // which clinician may. They compose: a locum whose charting has been switched
+    // off is still a client_clinician and still reads the record.
+    if (opts.capability) {
+      const capabilityDenied = await requireCapability(auth, opts.capability);
+      if (capabilityDenied) return capabilityDenied;
+    }
+  }
 
   if (!siteId || !patientId) {
     return Response.json({ ok: false, error: "siteId and patientId are required" }, { status: 400 });
@@ -167,7 +201,10 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: "bad json" }, { status: 400 });
   }
 
-  const scope = await authorise(payload.client ?? "", payload.siteId ?? "", payload.patientId ?? "");
+  const scope = await authorise(payload.client ?? "", payload.siteId ?? "", payload.patientId ?? "", {
+    write: true,
+    capability: "clinical.chart.write",
+  });
   if (scope instanceof Response) return scope;
 
   // Checked AFTER authorisation and BEFORE any work, so an unauthorised caller

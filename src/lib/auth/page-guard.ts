@@ -2,7 +2,7 @@ import "server-only";
 import { notFound, redirect } from "next/navigation";
 import { authEnforced } from "./guard";
 import { canAccessClient, getAuthEmail, getSessionUser } from "./session";
-import { canRoleAccessModule } from "@/lib/nav";
+import { canRoleAccessModule, indexRedirectFor } from "@/lib/nav";
 import type { Role } from "@/lib/types";
 
 /**
@@ -45,4 +45,27 @@ export async function requireModuleAccess(slug: string): Promise<void> {
   // A missing user is the layout guard's concern (it redirects to /login); here we
   // only enforce role -> module. If somehow unresolved, fall through to notFound.
   if (!user || !canRoleAccessModule(user.role, slug)) notFound();
+}
+
+/**
+ * THE CLIENT INDEX'S OWN GUARD: forward a role that must not read the practice
+ * dashboard to the surface that IS theirs, before the dashboard is read.
+ *
+ * Not `requireModuleAccess("")` and not a `notFound()`: "" is genuinely in the
+ * staff allow-list (it has to be — see `indexRedirectFor`), and 404ing the page
+ * every login lands on would strand the role entirely. This forwards instead, and
+ * the destination is decided by the pure `indexRedirectFor`, which has its own
+ * tests.
+ *
+ * Called BEFORE any read on the page, so a role that may not see the takings does
+ * not cause them to be fetched. `redirect()` throws, so nothing after it runs.
+ */
+export async function requireIndexAccess(clientSlug: string): Promise<void> {
+  // Same posture as every other guard here: a no-op where sign-in is not
+  // configured, because there is no session and therefore no role to forward.
+  if (!authEnforced()) return;
+  const user = await getSessionUser();
+  if (!user) return; // the layout guard owns the anonymous case
+  const target = indexRedirectFor(user.role, clientSlug);
+  if (target) redirect(target);
 }

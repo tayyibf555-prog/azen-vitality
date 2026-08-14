@@ -76,6 +76,17 @@ vi.mock("@/lib/outreach/build", () => ({
   runOutreachBuildTick: async () => ({ ok: true, done: true, counts: {}, cursor: null }),
 }));
 
+// The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the
+// 503 when auth is not enforced — is proven in
+// src/lib/auth/capability-guard.test.ts; the fs sweep in
+// src/app/api/destructive-route-capability-coverage.test.ts proves this route
+// calls it. Stubbed open here so these cases stay about the route's own logic.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
+
 import { POST, GET } from "./route";
 import { PATCH } from "./[id]/route";
 

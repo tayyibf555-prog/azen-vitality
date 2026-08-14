@@ -25,13 +25,27 @@ const store = vi.hoisted(() => ({
   chart: null as unknown,
 }));
 
-vi.mock("@/lib/auth/guard", () => ({
-  requireUser: async () => store.requireUserResponse ?? store.user,
-  requireClientAccess: (user: User, clientId: string) =>
-    user && user.clientId !== clientId ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-  requireSiteAccess: (user: User, siteId: string) =>
-    user && !user.siteIds.includes(siteId) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-}));
+
+vi.mock("@/lib/auth/guard", async () => {
+  // THE REAL PREDICATES, not stubs. The module gate is what keeps a `client_staff`
+  // login out of the patient record, and the clinical-write gate is what keeps a
+  // coordinator from authoring one. A mock that returned null unconditionally would
+  // let either regress here in silence, which is the opposite of what these tests
+  // are for. The tenancy mocks below stay hand-written because they need the store.
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  const { isClinicalWriteRole } = await import("@/lib/patient/roles");
+  const forbidden = () => Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  return {
+    requireUser: async () => store.requireUserResponse ?? store.user,
+    requireClientAccess: (user: User, clientId: string) =>
+      user && user.clientId !== clientId ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireSiteAccess: (user: User, siteId: string) =>
+      user && !user.siteIds.includes(siteId) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireModuleApiAccess: (user: User, slug: string) =>
+      user && !canRoleAccessModule(user.role as Parameters<typeof canRoleAccessModule>[0], slug) ? forbidden() : null,
+    requireClinicalWriteRole: (user: User) => (user && !isClinicalWriteRole(user.role) ? forbidden() : null),
+  };
+});
 
 vi.mock("@/lib/mock/clients", () => ({
   getClient: (slug: string) => (slug === "vitality" ? { id: "vitality", slug: "vitality" } : undefined),
@@ -40,6 +54,17 @@ vi.mock("@/lib/mock/clients", () => ({
 vi.mock("@/lib/dentally/read", () => ({
   getPatientById: async (id: string) => (store.patientSiteId ? { id, siteId: store.patientSiteId } : null),
 }));
+
+// The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the
+// 503 when auth is not enforced — is proven in
+// src/lib/auth/capability-guard.test.ts; the fs sweep in
+// src/app/api/destructive-route-capability-coverage.test.ts proves this route
+// calls it. Stubbed open here so these cases stay about the route's own logic.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
 
 // PARTIAL mock: the real error classes are kept (the route does `instanceof` on
 // them), only the database calls are stubbed.
@@ -147,7 +172,7 @@ async function errorOf(res: Response): Promise<string> {
 }
 
 beforeEach(() => {
-  store.user = { id: "u1", name: "Blerta", role: "client_coordinator", clientId: "vitality", siteIds: ["site-cc"] };
+  store.user = { id: "u1", name: "Dr Sara Malik", role: "client_clinician", clientId: "vitality", siteIds: ["site-cc"] };
   store.requireUserResponse = null;
   store.patientSiteId = "site-cc";
   store.saved = [];
@@ -266,7 +291,7 @@ describe("attribution", () => {
   it("records which clinician wrote the entry, and when", async () => {
     await post("bpe", bpeBody());
     const input = store.saved[0].input as { recorded: { clinician: unknown; at: string } };
-    expect(input.recorded.clinician).toEqual({ id: "u1", name: "Blerta", gdcNumber: null });
+    expect(input.recorded.clinician).toEqual({ id: "u1", name: "Dr Sara Malik", gdcNumber: null });
     expect(Date.parse(input.recorded.at)).not.toBeNaN();
   });
 
@@ -397,7 +422,7 @@ describe("recording a BPE from the six-box grid", () => {
     expect(input.amendmentReason).toBe("depth mis-keyed at 16 mesiobuccal");
     // The amender's own name and their own instant. An amendment attributed to
     // the original's author is a record of a correction nobody made.
-    expect(input.recorded.clinician).toMatchObject({ id: "u1", name: "Blerta" });
+    expect(input.recorded.clinician).toMatchObject({ id: "u1", name: "Dr Sara Malik" });
     expect(Date.parse(input.recorded.at)).toBeGreaterThan(Date.parse("2026-01-01T00:00:00.000Z"));
   });
 
@@ -650,7 +675,7 @@ describe("retracting a record", () => {
     expect(store.retracted[0]).toMatchObject({
       id: "c1",
       reason: "recorded on the wrong patient",
-      by: { id: "u1", name: "Blerta" },
+      by: { id: "u1", name: "Dr Sara Malik" },
       scope: { siteId: "site-cc", patientId: "p1" },
     });
   });
@@ -849,5 +874,53 @@ describe("the BPE entry screen's payload", () => {
     const res = await post("bpe", { ...SCOPE, ...toSavePayload(state) });
     expect(res.status).toBe(200);
     expect(store.saved[0].input).toMatchObject({ probe: "other", probeNote: "Michigan O" });
+  });
+});
+
+// ===========================================================================
+// THE CLINICAL-WRITE TIGHTENING, campaign 6.
+//
+// Recording a periodontal finding — or retracting one — is a clinical act: it
+// becomes part of the patient's record and is attributed to whoever made it (GDC
+// 4.1.4). Before this change every role attached to the practice could POST here,
+// the fixture user in this file included, which was a coordinator. The READ is
+// deliberately untouched.
+//
+// And one layer out: a `client_staff` login reaches neither, because "patients" is
+// not in STAFF_SLUGS.
+// ===========================================================================
+describe("who may write a perio record, and who may only read one", () => {
+  const coordinator = { id: "u2", name: "Blerta", role: "client_coordinator", clientId: "vitality", siteIds: ["site-cc"] };
+  const staff = { id: "u3", name: "Nadia", role: "client_staff", clientId: "vitality", siteIds: ["site-cc"] };
+
+  it("the coordinator may still READ", async () => {
+    store.user = coordinator;
+    expect((await get("bpe")).status).toBe(200);
+  });
+
+  it("but may no longer write a BPE, a chart or a retraction, and nothing is stored", async () => {
+    store.user = coordinator;
+    for (const [action, payload] of [
+      ["bpe", bpeBody()],
+      ["chart", chartBody()],
+      ["retract", { ...SCOPE, id: "x", reason: "entered on the wrong patient record" }],
+    ] as const) {
+      expect((await post(action, payload)).status, action).toBe(403);
+    }
+    expect(store.saved).toEqual([]);
+    expect(store.retracted).toEqual([]);
+  });
+
+  it("the clinician may still do both", async () => {
+    expect((await get("bpe")).status).toBe(200);
+    expect((await post("bpe", bpeBody())).status).toBe(200);
+    expect(store.saved).toHaveLength(1);
+  });
+
+  it("the staff role reaches NEITHER: the module gate refuses it first", async () => {
+    store.user = staff;
+    expect((await get("bpe")).status).toBe(403);
+    expect((await post("bpe", bpeBody())).status).toBe(403);
+    expect(store.saved).toEqual([]);
   });
 });

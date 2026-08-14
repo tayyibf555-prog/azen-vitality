@@ -1,6 +1,7 @@
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { presetWindow, customWindow, REPORT_PRESETS, type ReportPreset } from "@/lib/reports/report-window";
 import { readPaymentAllocation } from "@/lib/reports/flagship-read";
 
@@ -47,6 +48,10 @@ export async function GET(request: Request): Promise<Response> {
   // sibling reports/generate route.
   const roleDenied = requireOwnerRole(auth);
   if (roleDenied) return roleDenied;
+  // THE PER-PERSON GATE, on top of the owner role.
+  // Which payments settled which invoices — the practice's money, read-only, and the one real member of the money family (no write path exists anywhere).
+  const capabilityDenied = await requireCapability(auth, "reports.allocation.view");
+  if (capabilityDenied) return capabilityDenied;
 
   const presetRaw = url.searchParams.get("preset");
   const from = url.searchParams.get("from");

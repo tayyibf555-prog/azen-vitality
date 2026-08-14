@@ -1,5 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireApproverRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { updateStaff, deleteStaff, type UpdateStaffInput } from "@/lib/rota/repository";
 import type { Availability } from "@/lib/rota/types";
@@ -7,7 +7,18 @@ import type { Availability } from "@/lib/rota/types";
 export const dynamic = "force-dynamic";
 
 // PATCH/DELETE a single rota staff member. Both guarded (requireUser +
-// requireClientAccess + requireOwnerRole) and scoped to the caller's client.
+// requireClientAccess + requireApproverRole) and scoped to the caller's client.
+//
+// WIDENED FROM requireOwnerRole TO requireApproverRole (campaign 6), and it is a
+// decision on the record rather than a tidy-up. The practice manager is a
+// `client_coordinator` in this platform and she is the rota's PRIMARY user, so the
+// owner-only guard meant she could not make a single rota API call — the module
+// locked out the person it was built for. Its two siblings (absence,
+// staff-check-in) were widened to the approver list for exactly this reason and
+// the rota was missed. `requireApproverRole` reads APPROVER_ROLES from
+// `@/lib/absence/rules`, so the HTTP edge and the pure decision rules cannot
+// drift, and the clinician and the staff role are still refused by it.
+// nav.staff.test.ts names this widening and pins all four routes.
 
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 
@@ -54,7 +65,7 @@ export async function PATCH(
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
-  const roleDenied = requireOwnerRole(auth);
+  const roleDenied = requireApproverRole(auth);
   if (roleDenied) return roleDenied;
 
   const fields: UpdateStaffInput = {};
@@ -106,7 +117,7 @@ export async function DELETE(
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
-  const roleDenied = requireOwnerRole(auth);
+  const roleDenied = requireApproverRole(auth);
   if (roleDenied) return roleDenied;
 
   const removed = await deleteStaff(id, client.id);

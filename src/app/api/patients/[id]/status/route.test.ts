@@ -30,6 +30,17 @@ vi.mock("@/lib/mock/clients", () => ({
   // site-cc belongs to vitality; anything else is unknown.
   getSite: (id: string) => (id === "site-cc" ? { clientId: "vitality" } : undefined),
 }));
+
+// The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the
+// 503 when auth is not enforced — is proven in
+// src/lib/auth/capability-guard.test.ts; the fs sweep in
+// src/app/api/destructive-route-capability-coverage.test.ts proves this route
+// calls it. Stubbed open here so these cases stay about the route's own logic.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
 vi.mock("@/lib/patient-status/service", () => ({ applyStatusChange: h.applyStatusChange }));
 vi.mock("@/lib/patient-status/repository", () => ({ getOverride: h.getOverride, listAudit: h.listAudit }));
 

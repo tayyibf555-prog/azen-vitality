@@ -1,5 +1,6 @@
 import { getClient } from "@/lib/mock/clients";
-import { requireUser, requireClientAccess, requireSiteAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import { getPatientById } from "@/lib/dentally/read";
 import {
   listNotes,
@@ -52,6 +53,14 @@ export async function GET(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
   const deniedClient = requireClientAccess(auth, client.id);
   if (deniedClient) return deniedClient;
+  // THE MODULE LOCK. requireClientAccess admits every role attached to this
+  // practice, so this line is the only one that asks whether the caller's ROLE may
+  // reach the patient record at all. Practice notes stay open to all four
+  // staff-facing roles — a receptionist writing "patient rang about their bill" is
+  // exactly what this feature is for — but "patients" is not in STAFF_SLUGS, so a
+  // `client_staff` login is refused: their surface is "my-work" and nothing else.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
 
   const siteId = url.searchParams.get("siteId") ?? "";
   const patientId = url.searchParams.get("patientId") ?? "";
@@ -88,6 +97,22 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 404 });
   const deniedClient = requireClientAccess(auth, client.id);
   if (deniedClient) return deniedClient;
+  // THE MODULE LOCK. requireClientAccess admits every role attached to this
+  // practice, so this line is the only one that asks whether the caller's ROLE may
+  // reach the patient record at all. Practice notes stay open to all four
+  // staff-facing roles — a receptionist writing "patient rang about their bill" is
+  // exactly what this feature is for — but "patients" is not in STAFF_SLUGS, so a
+  // `client_staff` login is refused: their surface is "my-work" and nothing else.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
+
+  // THE PER-PERSON GATE. Practice notes stay open to all four record roles by
+  // default (nothing is tightened here); this key exists so an owner can withhold
+  // note-writing from ONE named person — a locum, somebody under review — without
+  // taking the patient record away from them. GET is deliberately not gated:
+  // reading a note is not writing one.
+  const capabilityDenied = await requireCapability(auth, "patient.note.write");
+  if (capabilityDenied) return capabilityDenied;
 
   const siteId = payload.siteId ?? "";
   const patientId = payload.patientId ?? "";
@@ -170,6 +195,22 @@ export async function PATCH(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 404 });
   const deniedClient = requireClientAccess(auth, client.id);
   if (deniedClient) return deniedClient;
+  // THE MODULE LOCK. requireClientAccess admits every role attached to this
+  // practice, so this line is the only one that asks whether the caller's ROLE may
+  // reach the patient record at all. Practice notes stay open to all four
+  // staff-facing roles — a receptionist writing "patient rang about their bill" is
+  // exactly what this feature is for — but "patients" is not in STAFF_SLUGS, so a
+  // `client_staff` login is refused: their surface is "my-work" and nothing else.
+  const moduleDenied = requireModuleApiAccess(auth, "patients");
+  if (moduleDenied) return moduleDenied;
+
+  // THE PER-PERSON GATE. Practice notes stay open to all four record roles by
+  // default (nothing is tightened here); this key exists so an owner can withhold
+  // note-writing from ONE named person — a locum, somebody under review — without
+  // taking the patient record away from them. GET is deliberately not gated:
+  // reading a note is not writing one.
+  const capabilityDenied = await requireCapability(auth, "patient.note.write");
+  if (capabilityDenied) return capabilityDenied;
 
   const siteId = payload.siteId ?? "";
   const patientId = payload.patientId ?? "";

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { generateShifts, upcomingWeekStarts, type GenerateInput } from "./generate";
 import type { OpeningHours } from "@/lib/types";
 import type { Absence } from "@/lib/absence/types";
-import type { RotaConfig, RotaSite, RotaStaff } from "./types";
+import type { RotaConfig, RotaShift, RotaSite, RotaStaff } from "./types";
 
 const ALL_DAYS: OpeningHours = {
   monday: "09:00-17:30",
@@ -40,6 +40,7 @@ const CONFIG_ONE_EACH: RotaConfig = {
   rolesNeeded: { dentist: 1, nurse: 1 },
   notifyLeadDays: 7,
   generateWeeksAhead: 1,
+  pairRoles: null,
 };
 
 // The week of Mon 6 Jul 2026 .. Sun 12 Jul 2026.
@@ -187,7 +188,7 @@ describe("generateShifts", () => {
       staff({ id: "d2", role: "dentist" }),
       staff({ id: "d3", role: "dentist" }),
     ];
-    const config: RotaConfig = { rolesNeeded: { dentist: 1 }, notifyLeadDays: 7, generateWeeksAhead: 1 };
+    const config: RotaConfig = { rolesNeeded: { dentist: 1 }, notifyLeadDays: 7, generateWeeksAhead: 1, pairRoles: null };
     const target = "2026-07-13"; // the Monday of the week we compare across runs
 
     const asMap = (shifts: ReturnType<typeof generateShifts>) => {
@@ -276,6 +277,7 @@ describe("generateShifts absence seam", () => {
     rolesNeeded: { dentist: 1 },
     notifyLeadDays: 7,
     generateWeeksAhead: 1,
+    pairRoles: null,
   };
 
   const base: GenerateInput = {
@@ -375,5 +377,173 @@ describe("generateShifts absence seam", () => {
       absences: [absence({ id: "a1", staffId: "d1", startDate: "2026-07-07", endDate: "2026-07-09" })],
     });
     expect(datesFor(shifts, "d1")).toEqual(["2026-07-06", "2026-07-10", "2026-07-11"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE `existing` SEAM: the generator must stop fighting the manager.
+//
+// Every test below describes a way the rota used to undo somebody's edit, silently,
+// on the next page load. `existing` is pure input like `absences`, so each of these
+// is provable here rather than only against a live table and a 24/7 sweep.
+// ---------------------------------------------------------------------------
+
+function stored(over: Partial<RotaShift> & Pick<RotaShift, "staffId" | "shiftDate">): RotaShift {
+  return {
+    id: `sh-${over.staffId}-${over.shiftDate}`,
+    clientId: "vitality",
+    siteId: "site-a",
+    startTime: "09:00",
+    endTime: "17:30",
+    role: "dentist",
+    status: "scheduled",
+    origin: "generated",
+    ...over,
+  } as RotaShift;
+}
+
+describe("generateShifts existing-shift seam", () => {
+  const TWO_DENTISTS: RotaStaff[] = [
+    staff({ id: "d1", role: "dentist" }),
+    staff({ id: "d2", role: "dentist" }),
+  ];
+  const ONE_DENTIST_CONFIG: RotaConfig = {
+    rolesNeeded: { dentist: 1 },
+    notifyLeadDays: 7,
+    generateWeeksAhead: 1,
+    pairRoles: null,
+  };
+  const base: GenerateInput = {
+    staff: TWO_DENTISTS,
+    sites: ONE_SITE,
+    config: ONE_DENTIST_CONFIG,
+    weekStartDates: WEEK,
+  };
+  const MONDAY = "2026-07-06";
+
+  function onDay(shifts: RotaShift[], dayKey: string): RotaShift[] {
+    return shifts.filter((s) => s.shiftDate === dayKey);
+  }
+
+  it("behaves exactly as before when no existing shifts are supplied", () => {
+    const without = generateShifts(base);
+    const withEmpty = generateShifts({ ...base, existing: [] });
+    expect(withEmpty).toEqual(without);
+    expect(without.length).toBeGreaterThan(0);
+  });
+
+  it("re-generation never overwrites a manual shift", () => {
+    // THE HEADLINE. A manager put d2 on Monday by hand. Coverage for Monday is met,
+    // so the generator must write nothing into that slot -- not a second dentist on
+    // top, and not a replacement for the one it would have chosen itself.
+    const manual = stored({ staffId: "d2", shiftDate: MONDAY, origin: "manual" });
+    const shifts = generateShifts({ ...base, existing: [manual] });
+    expect(onDay(shifts, MONDAY)).toEqual([]);
+    // ...and the rest of the week is untouched, so this is a surgical skip and not
+    // a generator that gave up.
+    expect(shifts.length).toBe(generateShifts(base).length - 1);
+  });
+
+  it("re-generation never re-emits a manual shift for the same person either", () => {
+    // The other half: even if coverage were somehow short, the exact slot a person
+    // owns is never written again, so an edit to its times cannot be reverted.
+    const manual = stored({ staffId: "d1", shiftDate: MONDAY, origin: "manual", startTime: "09:00" });
+    const shifts = generateShifts({
+      ...base,
+      config: { ...ONE_DENTIST_CONFIG, rolesNeeded: { dentist: 2 } },
+      existing: [manual],
+    });
+    expect(onDay(shifts, MONDAY).some((s) => s.staffId === "d1")).toBe(false);
+  });
+
+  it("a removed shift is never re-created by generate", () => {
+    // THE SECOND HEADLINE. Deleting a shift writes a tombstone; without it, the
+    // deletion is an absent row and the next run puts the shift straight back.
+    const tombstone = stored({ staffId: "d1", shiftDate: MONDAY, status: "removed" });
+    const shifts = generateShifts({ ...base, existing: [tombstone] });
+    expect(onDay(shifts, MONDAY).some((s) => s.staffId === "d1")).toBe(false);
+  });
+
+  it("a removed shift is not quietly refilled by the next person in the rotation", () => {
+    // The subtle version of the same bug, and the one that would have survived a
+    // naive fix: block d1's slot only, and the round-robin simply hands Monday to
+    // d2, so the manager's deletion still produces a staffed Monday.
+    const tombstone = stored({ staffId: "d1", shiftDate: MONDAY, status: "removed" });
+    const shifts = generateShifts({ ...base, existing: [tombstone] });
+    expect(onDay(shifts, MONDAY)).toEqual([]);
+  });
+
+  it("a removed shift blocks only its own slot, never the rest of the week", () => {
+    const tombstone = stored({ staffId: "d1", shiftDate: MONDAY, status: "removed" });
+    const shifts = generateShifts({ ...base, existing: [tombstone] });
+    for (const day of ["2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10", "2026-07-11"]) {
+      expect(onDay(shifts, day).length, `${day} should still be covered`).toBe(1);
+    }
+  });
+
+  it("a CANCELLED shift frees the slot for somebody else (the opposite of removed)", () => {
+    // updateStaff() cancels a deactivated person's future shifts precisely so the
+    // slot is refilled. Collapsing 'cancelled' into 'removed' would strand every one
+    // of those days unstaffed, so the distinction is asserted rather than assumed.
+    const cancelled = stored({ staffId: "d1", shiftDate: MONDAY, status: "cancelled" });
+    const shifts = generateShifts({ ...base, existing: [cancelled] });
+    const monday = onDay(shifts, MONDAY);
+    expect(monday).toHaveLength(1);
+    expect(monday[0].staffId).toBe("d2");
+  });
+
+  it("an existing live shift stops the same slot being emitted twice", () => {
+    const live = stored({ staffId: "d1", shiftDate: MONDAY });
+    const shifts = generateShifts({ ...base, existing: [live] });
+    expect(onDay(shifts, MONDAY)).toEqual([]);
+  });
+
+  it("somebody already placed by hand is not booked a second time elsewhere that day", () => {
+    // Two sites, one nurse, and the manager has already placed her at site-b. The
+    // generator must not put her at site-a as well.
+    const twoSites: RotaSite[] = [
+      { id: "site-a", name: "Site A", openingHours: ALL_DAYS },
+      { id: "site-b", name: "Site B", openingHours: ALL_DAYS },
+    ];
+    const manual = stored({
+      staffId: "n1",
+      shiftDate: MONDAY,
+      siteId: "site-b",
+      role: "nurse",
+      origin: "manual",
+    });
+    const shifts = generateShifts({
+      staff: [staff({ id: "n1", role: "nurse" })],
+      sites: twoSites,
+      config: { rolesNeeded: { nurse: 1 }, notifyLeadDays: 7, generateWeeksAhead: 1, pairRoles: null },
+      weekStartDates: WEEK,
+      existing: [manual],
+    });
+    expect(onDay(shifts, MONDAY)).toEqual([]);
+  });
+
+  it("partial coverage is topped up, not skipped: 2 needed, 1 stored, 1 generated", () => {
+    const one = stored({ staffId: "d1", shiftDate: MONDAY });
+    const shifts = generateShifts({
+      ...base,
+      config: { ...ONE_DENTIST_CONFIG, rolesNeeded: { dentist: 2 } },
+      existing: [one],
+    });
+    const monday = onDay(shifts, MONDAY);
+    expect(monday).toHaveLength(1);
+    expect(monday[0].staffId).toBe("d2");
+  });
+
+  it("stays deterministic and idempotent: feeding its own output back produces nothing", () => {
+    // The property the 24/7 sweep depends on. Run once, store the result, run again
+    // against it: the second run must have nothing left to do. Without that, every
+    // tick would write more rows.
+    const first = generateShifts(base);
+    const withIds = first.map((s, i) => ({ ...s, id: `gen-${i}` }));
+    expect(generateShifts({ ...base, existing: withIds })).toEqual([]);
+  });
+
+  it("marks everything it generates as machine-decided", () => {
+    for (const shift of generateShifts(base)) expect(shift.origin).toBe("generated");
   });
 });

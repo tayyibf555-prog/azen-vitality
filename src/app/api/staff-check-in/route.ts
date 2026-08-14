@@ -5,6 +5,7 @@ import {
   requireSiteAccess,
   requireUser,
 } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { buildTodayView, validateClock } from "@/lib/clock/pairing";
 import { findStaffByAppUser, listEvents, listEventsForDay, recordEvent } from "@/lib/clock/repository";
@@ -153,10 +154,22 @@ export async function POST(request: Request): Promise<Response> {
 
   // Recording somebody ELSE's attendance is the practice manager's job, and the
   // event is marked as theirs.
+  //
+  // TWO DIFFERENT CAPABILITIES, because they are two different acts. Clocking
+  // yourself in is something everybody who works here does; recording it for
+  // somebody else is a manager's act that writes into another person's pay-
+  // relevant record. The branch already existed for the ROLE check — this adds
+  // the per-person one on the same fork, so an owner can withhold either from
+  // one named individual without touching the other.
   const onBehalf = targetId !== me?.id;
   if (onBehalf) {
     const roleDenied = requireApproverRole(auth);
     if (roleDenied) return roleDenied;
+    const capabilityDenied = await requireCapability(auth, "people.clock.record-for-other");
+    if (capabilityDenied) return capabilityDenied;
+  } else {
+    const capabilityDenied = await requireCapability(auth, "people.clock.self");
+    if (capabilityDenied) return capabilityDenied;
   }
 
   const staff = await getStaff(targetId, client.id);

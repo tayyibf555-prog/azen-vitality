@@ -16,21 +16,30 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * The four login levels.
+ * The five login levels.
  *
- * `client_clinician` is the newest and the most restricted: a dentist or hygienist
- * who needs their own diary, their patients, their holiday requests and their
- * clocking, and nothing else. It is granted PURELY by allow-list — see
- * CLINICIAN_SLUGS in `@/lib/nav`, which is consulted before any other rule.
- * That matters because the nav's default is allow-by-default (an item with no
- * `roles` array is open to every role), so a role added without an allow-list
- * would silently inherit two thirds of the platform.
+ * The last two are ALLOW-LIST roles, and that is the whole of their definition:
+ *
+ *   `client_clinician`  a dentist or hygienist — their own diary, their patients,
+ *                       their holiday requests and their clocking (CLINICIAN_SLUGS).
+ *   `client_staff`      a nurse, receptionist or administrator — their own work and
+ *                       nothing else (STAFF_SLUGS = {"", "my-work"}). Deliberately
+ *                       NOT the clinician's allow-list: that one grants "calendar"
+ *                       and "patients", i.e. the live diary and the whole patient
+ *                       database, which is exactly what a staff login must not have.
+ *
+ * Both are granted PURELY by allow-list — see CLINICIAN_SLUGS and STAFF_SLUGS in
+ * `@/lib/nav`, each consulted as an early return before any other rule. That
+ * matters because the nav's default is allow-BY-default (an item with no `roles`
+ * array is open to every role), so a role added without an allow-list would
+ * silently inherit two thirds of the platform.
  */
 export type Role =
   | "agency_admin"
   | "client_owner"
   | "client_coordinator"
-  | "client_clinician";
+  | "client_clinician"
+  | "client_staff";
 
 /**
  * OWNER-VERIFIED practice facts for public marketing surfaces (landing pages).

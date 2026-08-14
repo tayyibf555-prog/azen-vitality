@@ -32,13 +32,23 @@ const store = vi.hoisted(() => ({
 vi.mock("@/lib/mock/clients", () => ({
   getClient: (slug: string) => (slug === "vitality" ? { id: "vitality", slug: "vitality" } : undefined),
 }));
-vi.mock("@/lib/auth/guard", () => ({
-  requireUser: async () => store.user,
-  requireClientAccess: (u: User | null, cid: string) =>
-    u && u.role !== "agency_admin" && u.clientId !== cid ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-  requireSiteAccess: (u: User | null, sid: string) =>
-    u && !u.siteIds.includes(sid) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
-}));
+vi.mock("@/lib/auth/guard", async () => {
+  // THE REAL predicate for the module gate, not a stub: it is the only thing that
+  // keeps a `client_staff` login out of the patient record, and a mock returning
+  // null unconditionally would let that regress in silence.
+  const { canRoleAccessModule } = await import("@/lib/nav");
+  return {
+    requireUser: async () => store.user,
+    requireClientAccess: (u: User | null, cid: string) =>
+      u && u.role !== "agency_admin" && u.clientId !== cid ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireSiteAccess: (u: User | null, sid: string) =>
+      u && !u.siteIds.includes(sid) ? Response.json({ error: "forbidden" }, { status: 403 }) : null,
+    requireModuleApiAccess: (u: User | null, slug: string) =>
+      u && !canRoleAccessModule(u.role as Parameters<typeof canRoleAccessModule>[0], slug)
+        ? Response.json({ ok: false, error: "forbidden" }, { status: 403 })
+        : null,
+  };
+});
 vi.mock("@/lib/dentally/read", () => ({
   getPatientById: async () => store.patient,
 }));
@@ -81,6 +91,17 @@ vi.mock("@/lib/patient-notes/repository", () => ({
     return { ...row };
   },
 }));
+
+// The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the
+// 503 when auth is not enforced — is proven in
+// src/lib/auth/capability-guard.test.ts; the fs sweep in
+// src/app/api/destructive-route-capability-coverage.test.ts proves this route
+// calls it. Stubbed open here so these cases stay about the route's own logic.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
 // The route now fires a fire-and-forget usage event; stub the server-only seam so
 // this test does not pull in "server-only" (unresolved outside the Next bundler).
 vi.mock("@/lib/telemetry", () => ({ recordUsage: vi.fn() }));

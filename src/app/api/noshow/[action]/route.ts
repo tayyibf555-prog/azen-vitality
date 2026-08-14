@@ -14,6 +14,7 @@ import {
 import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
 import type { FreedSlot } from "@/lib/noshow/types";
 import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -73,6 +74,14 @@ async function handleCancel(body: Record<string, unknown>, auth: AuthedUser | nu
   if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
   const denied = siteDenied(auth, target.siteId);
   if (denied) return denied;
+  // THE PER-PERSON GATE. Until now this route asked only "may you reach no-show
+  // defence", so anybody who could open the module could cancel any appointment
+  // in it. Cancelling is irreversible from this side (the slot is then offered to
+  // the waitlist), which is exactly the kind of act the practice wanted to be able
+  // to withhold from an individual. Checked before the kill switch so a caller who
+  // cannot act causes no reads on their behalf.
+  const capabilityDenied = await requireCapability(auth, "diary.appointment.cancel");
+  if (capabilityDenied) return capabilityDenied;
   const off = await systemOff(target.siteId);
   if (off) return off;
 

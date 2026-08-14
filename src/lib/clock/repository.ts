@@ -1,6 +1,7 @@
 import "server-only";
 import { serviceClient } from "@/lib/supabase/server";
 import { londonDayEndIso, londonDayStartIso } from "@/lib/calendar/availability";
+import { collectPages } from "@/lib/hours/paging";
 import type { ClockEvent, ClockKind, ClockSource, ClockStaff } from "./types";
 
 // ===========================================================================
@@ -107,6 +108,74 @@ export async function listEvents(
     throw error;
   }
   return { ready: true, events: (data as EventRow[]).map(rowToEvent) };
+}
+
+/**
+ * EVERY clock event in a window, read in pages until the source is exhausted.
+ *
+ * WHY THIS EXISTS ALONGSIDE `listEvents`. That function caps at
+ * DEFAULT_EVENT_LIMIT (500), which is right for a day view and silently wrong
+ * for a month: thirty staff clocking in and out twice a day is roughly 1,800
+ * events, so a month read through it comes back with the first 500 and the hours
+ * report understates everybody's time, and therefore their pay, with no error
+ * anywhere. `listEvents` is left exactly as it was — every existing caller keeps
+ * its bounded read — and the month report uses this instead.
+ *
+ * The loop itself lives in `@/lib/hours/paging` where it is pure and tested; this
+ * function only supplies one page. `truncated` comes back true when the hard
+ * ceiling was reached, and the report REFUSES to be marked final while it is set
+ * rather than presenting a short month as a complete one.
+ *
+ * ORDERED BY (occurred_at, id), not by occurred_at alone: two events at the same
+ * instant have no defined order without the tiebreak, and a range query whose
+ * ordering is ambiguous can repeat or skip a row across a page boundary.
+ */
+export async function listAllEvents(
+  clientId: string,
+  opts: ListEventsOptions & { pageSize?: number; maxRows?: number },
+): Promise<{ ready: boolean; events: ClockEvent[]; truncated: boolean }> {
+  // An explicit empty staff scope means "nobody", which must return nothing
+  // rather than silently widening to everybody (same rule as listEvents).
+  if (opts.staffIds && opts.staffIds.length === 0) {
+    return { ready: true, events: [], truncated: false };
+  }
+
+  const db = serviceClient();
+  let ready = true;
+
+  const collected = await collectPages<ClockEvent>(
+    async (offset, limit) => {
+      let q = db
+        .from("staff_clock_event")
+        .select("*")
+        .eq("client_id", clientId)
+        .gte("occurred_at", opts.fromIso)
+        .lte("occurred_at", opts.toIso);
+
+      if (opts.staffIds) q = q.in("staff_id", opts.staffIds);
+      if (opts.siteIds && opts.siteIds.length > 0) q = q.in("site_id", opts.siteIds);
+
+      const { data, error } = await q
+        .order("occurred_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + limit - 1);
+
+      if (error) {
+        // The table is not there yet: the caller says "clocking is not switched
+        // on" out loud. Any other error still throws — a failed read must never
+        // arrive as an empty month.
+        if (isMissingRelation(error)) {
+          ready = false;
+          return [];
+        }
+        throw error;
+      }
+      return (data as EventRow[]).map(rowToEvent);
+    },
+    { pageSize: opts.pageSize, maxRows: opts.maxRows },
+  );
+
+  return { ready, events: collected.rows, truncated: collected.truncated };
 }
 
 /**

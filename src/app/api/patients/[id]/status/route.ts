@@ -4,6 +4,7 @@ import { applyStatusChange } from "@/lib/patient-status/service";
 import { getOverride, listAudit } from "@/lib/patient-status/repository";
 import { isPatientAdminStatus } from "@/lib/patient-status/types";
 import { requirePatientAdmin } from "@/lib/patient/access";
+import { requireCapability } from "@/lib/auth/capability-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,12 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   // routes now behave identically and cannot drift.
   const gate = await requirePatientAdmin(id, siteId);
   if (gate instanceof Response) return gate;
+
+  // THE PER-PERSON GATE. Marking a patient do-not-contact stops every automated
+  // message to them, and un-marking starts them again; both are decisions a
+  // practice may want to keep with named people. The GET stays open to the role.
+  const capabilityDenied = await requireCapability(gate.auth, "patient.status.change");
+  if (capabilityDenied) return capabilityDenied;
 
   const status = body.status;
   if (!isPatientAdminStatus(status)) {

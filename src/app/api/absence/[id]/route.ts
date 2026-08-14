@@ -1,6 +1,8 @@
 import { getClient } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess, requireApproverRole } from "@/lib/auth/guard";
+import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
+import { findStaffByAppUser } from "@/lib/clock/repository";
 import { getAbsence, listAbsence, decideAbsence, cancelAbsence } from "@/lib/absence/repository";
 import { canCancel, canDecide, findOverlapping } from "@/lib/absence/rules";
 
@@ -8,10 +10,34 @@ export const dynamic = "force-dynamic";
 
 // PATCH a single absence: approve, refuse or cancel it.
 //
-// Same guard chain as the collection route (requireUser -> requireClientAccess ->
-// requireApproverRole), then the PURE rules decide. Three separate refusals live in
-// canDecide and all of them apply here: wrong role, already decided, and approving
-// your own request. None of them is re-implemented in this file.
+// ===========================================================================
+// THE FORK IS ON THE ACT, NOT ON THE DOOR.
+//
+//   approve / refuse — a manager's decision. `requireApproverRole` plus the
+//                      `people.absence.approve` capability, exactly as before.
+//
+//   cancel          — WITHDRAWING YOUR OWN REQUEST IS PART OF MAKING ONE. A
+//                     member of staff who asked for next Tuesday off, then did
+//                     not need it, must be able to take it back without ringing
+//                     the manager. So the approver guard does not stand across
+//                     this branch; the pure `canCancel` decides, and it already
+//                     refuses a non-approver who is not the requester. A
+//                     non-approver cancelling somebody ELSE's absence therefore
+//                     cannot happen, and does not depend on this file getting a
+//                     conditional right.
+//
+// Two things keep the widening honest:
+//  - a non-approver's row lookup is narrowed to their OWN staff record (resolved
+//    from the session, never the body), so a foreign id reads as "not found"
+//    rather than "forbidden" — no existence oracle over absence ids;
+//  - the capability differs by act: cancelling your own is `people.absence.request`
+//    (the same key that let you raise it), cancelling somebody else's is
+//    `people.absence.approve`.
+//
+// Three refusals still live in canDecide and all of them apply here: wrong role,
+// already decided, and approving your own request. None is re-implemented in
+// this file.
+// ===========================================================================
 
 type Action = "approve" | "refuse" | "cancel";
 
@@ -60,12 +86,25 @@ export async function PATCH(
 
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
-  const roleDenied = requireApproverRole(auth);
-  if (roleDenied) return roleDenied;
 
   const action = body.action;
   if (!isAction(action)) return bad("action must be approve, refuse or cancel");
-  const decisionNote = str(body.decisionNote, 500) ?? null;
+
+  const canManage = requireApproverRole(auth) === null;
+
+  // THE PER-PERSON GATE. Deciding somebody else's holiday is a manager's act and
+  // keeps the approver key; withdrawing your own request is part of requesting
+  // one and carries the request key, so an owner can revoke either independently.
+  if (action === "cancel" && !canManage) {
+    const capabilityDenied = await requireCapability(auth, "people.absence.request");
+    if (capabilityDenied) return capabilityDenied;
+  } else {
+    // approve, refuse, or an approver cancelling: the manager's door.
+    const roleDenied = requireApproverRole(auth);
+    if (roleDenied) return roleDenied;
+    const capabilityDenied = await requireCapability(auth, "people.absence.approve");
+    if (capabilityDenied) return capabilityDenied;
+  }
 
   const role = auth?.role ?? null;
   const userId = auth?.id ?? null;
@@ -77,6 +116,19 @@ export async function PATCH(
     return dbUnavailable();
   }
   if (!absence) return bad("Absence not found", 404);
+
+  // A non-approver may only ever touch a row belonging to their OWN staff
+  // record. Answered as 404, deliberately: a 403 would confirm that the id
+  // exists, which is an existence oracle over the practice's absence table.
+  if (!canManage) {
+    let me;
+    try {
+      me = auth ? await findStaffByAppUser(client.id, auth.id) : null;
+    } catch {
+      return dbUnavailable();
+    }
+    if (!me || absence.staffId !== me.id) return bad("Absence not found", 404);
+  }
 
   if (action === "cancel") {
     if (!canCancel(role, absence, userId)) {
@@ -124,7 +176,7 @@ export async function PATCH(
       client.id,
       action === "approve" ? "approved" : "refused",
       userId,
-      decisionNote,
+      decisionNote(body),
     );
     // The repository's write is scoped to status = 'pending', so a false here means
     // somebody else decided it between our read and our write.
@@ -133,4 +185,9 @@ export async function PATCH(
   } catch {
     return dbUnavailable();
   }
+}
+
+/** The manager's note against a decision, trimmed and capped. */
+function decisionNote(body: Record<string, unknown>): string | null {
+  return str(body.decisionNote, 500) ?? null;
 }

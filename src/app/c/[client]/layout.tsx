@@ -33,22 +33,29 @@ export default async function ClientLayout({
   // a guard redirect still wins because Promise.all rejects with it.
   const [, disabled, selectedSite, cookieStore] = await Promise.all([
     guardPage({
-      // client_clinician belongs here or the role cannot log in AT ALL: "/" routes
-      // agency to /agency, owner to /owner, and EVERYTHING ELSE to /c/[client]. A
-      // clinician missing from this array is bounced by the guard back to "/",
-      // which sends them straight back here — an infinite redirect.
+      // client_clinician AND client_staff belong here or those roles cannot log in
+      // AT ALL: "/" routes agency to /agency, owner to /owner, and EVERYTHING ELSE
+      // to /c/[client]. A role missing from this array is bounced by the guard back
+      // to "/", which sends it straight back here — an infinite redirect.
       //
       // THIS GUARD DENIES NOTHING PER MODULE, AND MUST NOT BE READ AS IF IT DID.
       // It answers one question — may this signed-in user enter this client's shell
       // at all — and then every role in the array reaches every page underneath it.
-      // The clinician's deny-by-default allow-list (CLINICIAN_SLUGS) is enforced
-      // ONLY by `requireModuleAccess("<slug>")` inside each module page, which is a
-      // different call in a different file; the sidebar's filtering merely hides
-      // links and stops nobody typing a URL. A module page that forgets that call is
-      // open to every role that gets past this line, which is exactly what had
-      // happened to 24 of the 39 pages here. `client-module-guard-coverage.test.ts`
-      // now fails the suite if any module page under this route drops it.
-      roles: ["agency_admin", "client_owner", "client_coordinator", "client_clinician"],
+      // The two deny-by-default allow-lists (CLINICIAN_SLUGS, STAFF_SLUGS) are
+      // enforced ONLY by `requireModuleAccess("<slug>")` inside each module page,
+      // which is a different call in a different file; the sidebar's filtering
+      // merely hides links and stops nobody typing a URL. A module page that
+      // forgets that call is open to every role that gets past this line, which is
+      // exactly what had happened to 24 of the 39 pages here.
+      // `client-module-guard-coverage.test.ts` now fails the suite if any module
+      // page under this route drops it.
+      roles: [
+        "agency_admin",
+        "client_owner",
+        "client_coordinator",
+        "client_clinician",
+        "client_staff",
+      ],
       clientSlug: client,
     }),
     clientRecord ? getDisabledSlugs(clientRecord.id) : Promise.resolve(new Set<string>()),

@@ -115,6 +115,15 @@ vi.mock("@/lib/calendar/repository", () => ({
   listMovesForAppointment: async () => ({ moves: [], failed: false }),
 }));
 
+// The PER-PERSON capability gate, faked at the seam. Its own behaviour is proven
+// in src/lib/auth/capability-guard.test.ts; that this route calls it is proven by
+// the fs sweep in src/app/api/destructive-route-capability-coverage.test.ts.
+vi.mock("@/lib/auth/capability-guard", () => ({
+  requireCapability: async () => null,
+  hasCapability: async () => true,
+}));
+
+
 vi.mock("@/lib/telemetry", () => ({ recordUsage: async () => undefined }));
 
 import { performMove } from "./move-service";
