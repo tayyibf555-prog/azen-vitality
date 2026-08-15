@@ -27,10 +27,14 @@ const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
 
 export function SmileAssessmentWorkspace({
   clientSlug,
+  practiceName,
   responses,
   nowIso,
 }: {
   clientSlug: string;
+  /** The practice's display name, for the phone minis' branded header - the
+   *  same name the patient sees on the live quiz (page.tsx passes it there). */
+  practiceName?: string;
   responses: AssessmentResponse[];
   nowIso: string;
 }) {
@@ -78,7 +82,7 @@ export function SmileAssessmentWorkspace({
             <ResponsesTable responses={responses} nowIso={nowIso} />
           )
         ) : (
-          <CampaignsPanel clientSlug={clientSlug} />
+          <CampaignsPanel clientSlug={clientSlug} practiceName={practiceName} />
         )}
       </div>
     </div>

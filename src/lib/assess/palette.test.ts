@@ -33,6 +33,12 @@ import {
 const GLOBALS_PATH = "src/app/globals.css";
 const CLASSIC_QUIZ_PATH = "src/components/assess/assessment-quiz.tsx";
 const DETERMINISTIC_QUIZ_PATH = "src/components/assess/deterministic-assessment-quiz.tsx";
+/**
+ * The builder's phone-screen strip paints the SAME glow as the funnel it is a
+ * picture of (flow-phone-mini.tsx). It is on this list because a preview that
+ * drifted from the runtime would be lying about the very thing it exists to show.
+ */
+const PHONE_MINI_PATH = "src/components/client/smile-assessment/flow-phone-mini.tsx";
 
 function read(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -197,9 +203,9 @@ describe("the default palette is globals.css, not a fifth scheme", () => {
   // MUTATION: the glow literal is the one themed colour that lives inside a
   // component. Change it there and not here (or vice versa) and an unthemed quiz
   // and a default-themed quiz stop matching.
-  it("keeps the promoted glow in step with both quiz components", () => {
+  it("keeps the promoted glow in step with both quiz components and the preview", () => {
     expect(fallback.vars["assess-glow"]).toBe(ASSESS_GLOW_FALLBACK);
-    for (const path of [CLASSIC_QUIZ_PATH, DETERMINISTIC_QUIZ_PATH]) {
+    for (const path of [CLASSIC_QUIZ_PATH, DETERMINISTIC_QUIZ_PATH, PHONE_MINI_PATH]) {
       const source = read(path);
       expect(source, `${path} lost the glow token`).toContain(
         `var(--assess-glow,${ASSESS_GLOW_FALLBACK})`,

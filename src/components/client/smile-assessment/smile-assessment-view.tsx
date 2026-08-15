@@ -46,7 +46,12 @@ export async function SmileAssessmentView({ clientSlug }: { clientSlug: string }
         }
       />
 
-      <SmileAssessmentWorkspace clientSlug={clientSlug} responses={responses} nowIso={nowIso} />
+      <SmileAssessmentWorkspace
+        clientSlug={clientSlug}
+        practiceName={client.name}
+        responses={responses}
+        nowIso={nowIso}
+      />
     </>
   );
 }

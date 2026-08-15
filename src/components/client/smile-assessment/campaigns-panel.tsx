@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   Plus,
   Loader2,
@@ -19,11 +27,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, Tabs, type TabItem } from "@/components/primitives";
 import { GOAL_CATALOG, BUDGET_CATALOG, goalLabel } from "@/lib/smile-assessment/campaign";
-import { DEFAULT_PALETTE_KEY, PALETTES } from "@/lib/assess/palette";
+import { DEFAULT_PALETTE_KEY, PALETTES, paletteVars } from "@/lib/assess/palette";
 import { groupCampaignsByGoal } from "@/lib/smile-assessment/grouping";
-import { normaliseFlow, type FlowGraph } from "@/lib/smile-assessment/flow";
-import { describeEdge, describeNode } from "@/lib/smile-assessment/flow-edit";
-import { layoutFlow } from "@/lib/smile-assessment/flow-layout";
+import { nodeMap, normaliseFlow, type FlowGraph } from "@/lib/smile-assessment/flow";
+import { phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
+import { screenFor, type PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 import {
   SCRATCH_FLOW_KEY,
   flowTemplate,
@@ -41,7 +49,7 @@ import {
 import { AssessmentLivePreview } from "./assessment-live-preview";
 import { TemplateGallery } from "./template-gallery";
 import { FlowBuilder } from "./flow-builder";
-import { FlowCanvas } from "./flow-canvas";
+import { FlowPhoneCanvas } from "./flow-phone-canvas";
 
 /**
  * THE ASSESSMENTS PANEL, and the staged create wizard inside it.
@@ -185,7 +193,14 @@ function EmbedRow({ url, noDivider }: { url: string; noDivider?: boolean }) {
   );
 }
 
-export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
+export function CampaignsPanel({
+  clientSlug,
+  practiceName,
+}: {
+  clientSlug: string;
+  /** For the phone minis' branded header - the name the patient really sees. */
+  practiceName?: string;
+}) {
   const [campaigns, setCampaigns] = useState<AdminCampaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -440,6 +455,7 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
         {details && wizard.choice ? (
           <DetailsStage
             clientSlug={clientSlug}
+            practiceName={practiceName}
             choice={wizard.choice}
             lockedGoalKey={locked}
             form={form}
@@ -512,6 +528,7 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
 
 function DetailsStage({
   clientSlug,
+  practiceName,
   choice,
   lockedGoalKey,
   form,
@@ -524,6 +541,7 @@ function DetailsStage({
   onSubmit,
 }: {
   clientSlug: string;
+  practiceName?: string;
   choice: TemplateChoice;
   lockedGoalKey: string | null;
   form: FormState;
@@ -535,21 +553,40 @@ function DetailsStage({
   onCancel: () => void;
   onSubmit: (e: React.FormEvent) => void;
 }) {
-  // THE REAL DIAGRAM, at the size the builder draws it - not the gallery's
-  // abstract miniature. On the shelf a thumbnail is the right thing: it makes
-  // eight funnels COMPARABLE at a glance. Here there is only one funnel and one
-  // question about it ("is this the one I want attached?"), and that question is
-  // answered by the questions it asks, which a 30-unit-wide rect cannot show.
+  // THE FUNNEL AS THE SCREENS A PATIENT SEES, not as cards about them. There is
+  // one funnel here and one question about it ("is this the one I want
+  // attached?"), and that question is answered by the words a patient reads -
+  // the prompts, the answers they tap, the result they land on. An abstract card
+  // can name a step; it cannot show it.
   //
-  // READ-ONLY BY OMISSION. No onSelectNode/onSelectEdge, so FlowCanvas renders
-  // its cards and wires as plain graphics - no button roles, no tab stops, no
-  // click targets (flow-canvas.tsx:175,239-242). Editing happens on stage 3, on
-  // a funnel that exists.
+  // THE SAME LAYOUT ENGINE, at another size. phoneFlowLayout IS layoutFlow, run
+  // with phone metrics and no text (flow-phone-layout.ts), so the strip cannot
+  // show a shape the builder's canvas contradicts. The EDIT canvas on stage 3
+  // keeps its compact cards - that is the drawing you want while wiring, and
+  // flow-canvas.tsx is untouched by this.
+  //
+  // READ-ONLY BY OMISSION, still: nothing in the strip is focusable and there is
+  // no select callback, because the funnel has no campaign to be saved against
+  // yet. Editing happens on stage 3, on a funnel that exists.
   const canvasId = useId().replace(/:/g, "");
-  const layout = useMemo(
-    () => layoutFlow(choice.graph, { content: describeNode, edgeLabel: describeEdge }),
-    [choice.graph],
-  );
+  const layout = useMemo(() => phoneFlowLayout(choice.graph), [choice.graph]);
+  // The hero line is LIVE. The headline and intro being typed below are shown
+  // where a patient actually reads them - above the first question's prompt, on
+  // screen one (deterministic-assessment-quiz.tsx:549-555) - rather than as a
+  // standalone mockup of an opening screen the runtime does not have.
+  const screens = useMemo(() => {
+    const byId = nodeMap(choice.graph);
+    const out = new Map<string, PhoneScreen>();
+    for (const n of layout.nodes) {
+      const node = byId.get(n.id);
+      if (!node) continue;
+      out.set(
+        n.id,
+        screenFor(node, choice.graph, { headline: form.headline, intro: form.intro }, n.step),
+      );
+    }
+    return out;
+  }, [choice.graph, layout, form.headline, form.intro]);
   const questions = choice.graph.nodes.filter((n) => n.kind === "question").length;
 
   return (
@@ -576,16 +613,20 @@ function DetailsStage({
             <ChevronLeft size={13} /> Change template
           </Button>
         </div>
-        {/* The funnel itself, every step readable: this is the confirmation that
-            what was picked is what is about to be attached. Its own scroll box,
-            capped short, so a nine-step funnel never pushes the form it belongs
-            to off the bottom of the screen. */}
-        <FlowCanvas
-          idPrefix={canvasId}
-          layout={layout}
-          className="mt-2"
-          viewportClassName="max-h-[300px]"
-        />
+        {/* The funnel itself, every screen readable: this is the confirmation
+            that what was picked is what is about to be attached. Its own scroll
+            box, capped, so a nine-step funnel never pushes the form it belongs to
+            off the bottom of the screen.
+
+            THE SCHEME IS WORN HERE. paletteVars re-declares the raw tokens on
+            this wrapper, and because globals.css maps them with @theme inline,
+            every `text-navy` and `bg-card` beneath it repaints - so picking a
+            colour scheme three inches below re-themes the whole strip live, with
+            no state and no prop threading (palette.ts:5-17). The cast is because
+            paletteVars is React-free by design (palette.ts:340). */}
+        <div className="mt-2" style={paletteVars(form.theme) as CSSProperties}>
+          <FlowPhoneCanvas idPrefix={canvasId} layout={layout} screens={screens} practiceName={practiceName} />
+        </div>
       </div>
 
       {choice.note ? (
