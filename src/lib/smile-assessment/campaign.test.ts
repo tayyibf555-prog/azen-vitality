@@ -6,11 +6,14 @@ import {
   goalLabel,
   budgetMatches,
   toPublicCampaign,
+  toPublicFlow,
   GOAL_CATALOG,
   GOAL_KEYS,
   type Campaign,
 } from "./campaign";
 import { scoreAssessment, GOAL_MATCH_BONUS, BUDGET_MATCH_BONUS } from "./scoring";
+import { FLOW_SCHEMA_VERSION, type FlowGraph } from "./flow";
+import { Q_TIMELINE, Q_TREATMENT, questionById } from "./quiz";
 
 describe("slugify", () => {
   it("normalises a human name into a URL-safe slug", () => {
@@ -95,6 +98,9 @@ describe("toPublicCampaign", () => {
       headline: "Straighten your smile",
       intro: "Two minutes to your plan",
       status: "active",
+      flow: { schemaVersion: 1, entry: "w", nodes: [], edges: [] },
+      flowVersion: 3,
+      flowPublished: true,
       createdBy: "owner@vitality.co",
       createdAt: "2026-06-27T00:00:00Z",
       updatedAt: "2026-06-27T00:00:00Z",
@@ -114,6 +120,78 @@ describe("toPublicCampaign", () => {
     expect("goalNote" in pub).toBe(false);
     expect("createdBy" in pub).toBe(false);
     expect("clientId" in pub).toBe(false);
+    // The authored funnel is served separately, by toPublicFlow, and only after
+    // it validates. It must never ride along on the campaign payload unchecked.
+    expect("flow" in pub).toBe(false);
+    expect("flowPublished" in pub).toBe(false);
+  });
+});
+
+describe("toPublicFlow", () => {
+  /** A one-question funnel whose question really exists in the bank. */
+  const graph: FlowGraph = {
+    schemaVersion: FLOW_SCHEMA_VERSION,
+    entry: "w",
+    nodes: [
+      { id: "w", kind: "welcome" },
+      { id: "q1", kind: "question", questionId: Q_TREATMENT },
+      { id: "q2", kind: "question", questionId: Q_TIMELINE },
+      { id: "c", kind: "contact" },
+      { id: "r", kind: "outcome", band: "high" },
+    ],
+    edges: [
+      { from: "w", to: "q1", answer: null },
+      { from: "q1", to: "q2", answer: null },
+      { from: "q2", to: "c", answer: null },
+      { from: "c", to: "r", answer: "high" },
+    ],
+  };
+
+  it("NEVER ships an option weight to the browser", () => {
+    const pub = toPublicFlow(graph);
+    expect(pub).not.toBeNull();
+    // The bank definitely has weights, so this is a real strip and not a vacuous pass.
+    expect(questionById(Q_TREATMENT)!.options.every((o) => typeof o.weight === "number")).toBe(true);
+    for (const q of pub!.questions) {
+      for (const o of q.options) {
+        expect(Object.keys(o).sort()).toEqual(["label", "value"]);
+      }
+    }
+    expect(JSON.stringify(pub)).not.toContain("weight");
+  });
+
+  it("carries the prompt and options for exactly the questions the funnel asks", () => {
+    const pub = toPublicFlow(graph)!;
+    expect(pub.questions.map((q) => q.id)).toEqual([Q_TREATMENT, Q_TIMELINE]);
+    expect(pub.questions[0].prompt).toBe(questionById(Q_TREATMENT)!.prompt);
+    // A bank question this funnel never asks is not sent at all.
+    expect(pub.questions.some((q) => q.id === "location")).toBe(false);
+  });
+
+  it("does not send the same question twice when two nodes reuse it", () => {
+    const reused: FlowGraph = {
+      ...graph,
+      nodes: [...graph.nodes, { id: "q3", kind: "question", questionId: Q_TREATMENT }],
+    };
+    expect(toPublicFlow(reused)!.questions.map((q) => q.id)).toEqual([Q_TREATMENT, Q_TIMELINE]);
+  });
+
+  it("refuses the whole funnel when a node names a question the bank does not have", () => {
+    const broken: FlowGraph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === "q2" ? { id: "q2", kind: "question", questionId: "invented_question" } : n,
+      ),
+    };
+    expect(toPublicFlow(broken)).toBeNull();
+  });
+
+  it("returns a fresh graph, so a caller cannot mutate the stored row through it", () => {
+    const pub = toPublicFlow(graph)!;
+    expect(pub.graph).toEqual(graph);
+    expect(pub.graph.nodes[0]).not.toBe(graph.nodes[0]);
+    pub.graph.nodes[0].id = "tampered";
+    expect(graph.nodes[0].id).toBe("w");
   });
 });
 

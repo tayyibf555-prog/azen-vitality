@@ -24,15 +24,25 @@ type PreviewStyle = "classic" | "guided";
 export function AssessmentLivePreview({
   path,
   title,
+  flowPublished = false,
 }: {
   /** The campaign's public path, e.g. "/assess/vitality/invisalign" (no query). */
   path: string;
   title: string;
+  /**
+   * True when this campaign runs an AUTHORED funnel. The Classic | Guided switch
+   * is hidden, because v1 renders a drawn funnel in the Classic style only: the
+   * public page ignores ?style=guided when a flow is published
+   * (assessment-quiz.tsx), so leaving the switch on screen would offer the owner
+   * a mode that does not exist and then quietly not change anything. Defaults to
+   * false so every existing call site keeps today's behaviour exactly.
+   */
+  flowPublished?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const [style, setStyle] = useState<PreviewStyle>("classic");
 
-  const src = style === "guided" ? `${path}?style=guided&preview=1` : `${path}?preview=1`;
+  const src = style === "guided" && !flowPublished ? `${path}?style=guided&preview=1` : `${path}?preview=1`;
 
   return (
     <div className="mt-3 overflow-hidden rounded-[10px] border border-line">
@@ -46,27 +56,33 @@ export function AssessmentLivePreview({
           <span className="truncate font-mono text-[11px] text-muted">{src}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <div
-            role="tablist"
-            aria-label="Preview style"
-            className="inline-flex gap-0.5 rounded-md border border-line-strong bg-card p-[2px]"
-          >
-            {(["classic", "guided"] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                role="tab"
-                aria-selected={style === s}
-                onClick={() => setStyle(s)}
-                className={cn(
-                  "rounded px-2 py-0.5 text-[11px] font-semibold capitalize transition-colors",
-                  style === s ? "bg-navy text-white" : "text-muted hover:text-navy",
-                )}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+          {flowPublished ? (
+            <span className="rounded-md border border-line-strong bg-card px-2 py-0.5 text-[11px] font-semibold text-muted">
+              Your funnel
+            </span>
+          ) : (
+            <div
+              role="tablist"
+              aria-label="Preview style"
+              className="inline-flex gap-0.5 rounded-md border border-line-strong bg-card p-[2px]"
+            >
+              {(["classic", "guided"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  role="tab"
+                  aria-selected={style === s}
+                  onClick={() => setStyle(s)}
+                  className={cn(
+                    "rounded px-2 py-0.5 text-[11px] font-semibold capitalize transition-colors",
+                    style === s ? "bg-navy text-white" : "text-muted hover:text-navy",
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}

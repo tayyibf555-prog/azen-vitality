@@ -1,5 +1,8 @@
 import { serviceClient } from "@/lib/supabase/server";
 import type { Campaign, CampaignStatus } from "./campaign";
+import type { FlowGraph } from "./flow";
+import { describeFlowFailures, validateFlow, type FlowValidationFailure } from "./flow-validate";
+import { describeFlowCopyHits, scanFlowCopy, type FlowCopyHit } from "./flow-copy";
 
 // Server-only CRUD for smile_assessment_campaign (service-role; the public landing
 // reads via a safe-field GET, the internal management UI is requireUser-scoped).
@@ -26,6 +29,14 @@ interface CampaignRow {
   headline: string | null;
   intro: string | null;
   status: string;
+  // 0078. Optional in the TYPE on purpose, because they are optional in reality:
+  // 0078 is written but not applied, so `select("*")` against today's table simply
+  // does not return these three keys. Marking them required would be a lie the
+  // compiler happily believes, and the first campaign read would hand the runtime
+  // `flowVersion: undefined`. See the defaulting in rowToCampaign.
+  flow?: unknown;
+  flow_version?: number | null;
+  flow_published?: boolean | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -45,6 +56,13 @@ function rowToCampaign(r: CampaignRow): Campaign {
     headline: r.headline,
     intro: r.intro,
     status: (r.status as CampaignStatus) ?? "active",
+    // The pre-0078 defaults, and the ONLY place they are decided. All three point
+    // the same way: no funnel, never saved, not published, i.e. the adaptive quiz
+    // this campaign already runs. A practice on an un-migrated database sees
+    // exactly today's behaviour rather than an error.
+    flow: r.flow ?? null,
+    flowVersion: typeof r.flow_version === "number" ? r.flow_version : 0,
+    flowPublished: r.flow_published === true,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -129,6 +147,152 @@ export async function setCampaignStatus(id: string, clientId: string, status: Ca
     .eq("id", id)
     .eq("client_id", clientId); // scope the write to the caller's client
   if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// The authored funnel (0078).
+//
+// THIS FUNCTION IS THE CHOKE POINT, and that is its whole design.
+//
+// A funnel graph is the only thing in this module that can put NEW WORDS in front
+// of a patient and can silently change how leads are scored. Both checks therefore
+// live here, on the single path that writes the column, rather than at each call
+// site: the PUT route runs them too (so it can answer 400 with the list rather
+// than a 500), and the AI generator will want them as well, and "everyone
+// remembers to call the validator" is not a guarantee, it is a hope.
+//
+// The two failures are DIFFERENT ERRORS on purpose. "This graph is not a valid
+// funnel" and "this wording is not allowed in front of a patient" need different
+// wording back to the owner, and only the first is something the AI repair pass
+// can be asked to fix by re-routing.
+// ---------------------------------------------------------------------------
+
+/** The graph broke one or more of the eleven rules. Carries all of them. */
+export class FlowInvalidError extends Error {
+  constructor(readonly failures: FlowValidationFailure[]) {
+    super(`The funnel is not valid:\n${describeFlowFailures(failures)}`);
+    this.name = "FlowInvalidError";
+  }
+}
+
+/** Authored copy in the graph is non-compliant. Carries every offending string. */
+export class FlowCopyRejectedError extends Error {
+  constructor(readonly hits: FlowCopyHit[]) {
+    super(`The funnel's wording cannot be published:\n${describeFlowCopyHits(hits)}`);
+    this.name = "FlowCopyRejectedError";
+  }
+}
+
+/** Someone else saved this funnel since it was loaded. The caller re-reads. */
+export class FlowVersionConflictError extends Error {
+  constructor(readonly storedVersion: number) {
+    super("This funnel was saved by someone else. Reload it and try again.");
+    this.name = "FlowVersionConflictError";
+  }
+}
+
+/** Migration 0078 has not been applied to this database yet. */
+export class FlowColumnsMissingError extends Error {
+  constructor() {
+    super("The funnel builder needs migration 0078_assessment_flow.sql to be applied.");
+    this.name = "FlowColumnsMissingError";
+  }
+}
+
+/** Postgres/PostgREST both have a way of saying "no such column". Catch either. */
+function isMissingColumn(error: { code?: string | null; message?: string | null } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42703" || error.code === "PGRST204") return true;
+  return /column .*(flow|flow_version|flow_published).* does not exist/i.test(error.message ?? "");
+}
+
+export interface UpdateCampaignFlowInput {
+  id: string;
+  /** Scopes the write to the caller's practice, exactly as setCampaignStatus does. */
+  clientId: string;
+  /** The graph to store. Omit to leave the stored graph untouched. */
+  flow?: FlowGraph;
+  /** Publish state to set. Omit to leave it unchanged. */
+  published?: boolean;
+  /**
+   * The flow_version the caller believes is current. When supplied and it is not,
+   * the write is refused rather than silently overwriting a colleague's save. The
+   * builder sends the version it loaded; a publish-only toggle can omit it.
+   */
+  expectedVersion?: number;
+}
+
+export interface CampaignFlowState {
+  flowVersion: number;
+  flowPublished: boolean;
+}
+
+/**
+ * Save and/or publish a campaign's authored funnel. Returns the state afterwards.
+ *
+ * The version is bumped ONLY when the graph itself changes: publishing what is
+ * already stored is not a new version of the funnel, and treating it as one would
+ * make flow_version useless for attributing a response to the funnel that produced
+ * it (0078, smile_assessment_response.flow_version).
+ */
+export async function updateCampaignFlow(input: UpdateCampaignFlowInput): Promise<CampaignFlowState> {
+  if (input.flow) {
+    const result = validateFlow(input.flow);
+    if (!result.ok) throw new FlowInvalidError(result.failures);
+    const hits = scanFlowCopy(input.flow);
+    if (hits.length > 0) throw new FlowCopyRejectedError(hits);
+  }
+
+  const db = serviceClient();
+  const { data: current, error: readError } = await db
+    .from("smile_assessment_campaign")
+    .select("flow_version, flow_published")
+    .eq("id", input.id)
+    .eq("client_id", input.clientId)
+    .maybeSingle();
+  if (readError) {
+    if (isMissingColumn(readError)) throw new FlowColumnsMissingError();
+    throw readError;
+  }
+  if (!current) throw new FlowVersionConflictError(0); // gone, or not this client's
+
+  const storedVersion = typeof current.flow_version === "number" ? current.flow_version : 0;
+  if (typeof input.expectedVersion === "number" && input.expectedVersion !== storedVersion) {
+    throw new FlowVersionConflictError(storedVersion);
+  }
+
+  const nextVersion = input.flow ? storedVersion + 1 : storedVersion;
+  const nextPublished =
+    typeof input.published === "boolean" ? input.published : current.flow_published === true;
+
+  const patch: Record<string, unknown> = {
+    flow_version: nextVersion,
+    flow_published: nextPublished,
+    updated_at: new Date().toISOString(),
+  };
+  if (input.flow) patch.flow = input.flow;
+
+  // Guarded on the version we just read, so two simultaneous saves cannot both
+  // land: the loser matches no row and is told to reload. Postgres gives no
+  // read-then-write atomicity here otherwise, and a lost funnel edit is invisible.
+  const { data: written, error: writeError } = await db
+    .from("smile_assessment_campaign")
+    .update(patch)
+    .eq("id", input.id)
+    .eq("client_id", input.clientId)
+    .eq("flow_version", storedVersion)
+    .select("flow_version, flow_published")
+    .maybeSingle();
+  if (writeError) {
+    if (isMissingColumn(writeError)) throw new FlowColumnsMissingError();
+    throw writeError;
+  }
+  if (!written) throw new FlowVersionConflictError(storedVersion);
+
+  return {
+    flowVersion: typeof written.flow_version === "number" ? written.flow_version : nextVersion,
+    flowPublished: written.flow_published === true,
+  };
 }
 
 /** Response counts per campaign id, for the internal management list. */

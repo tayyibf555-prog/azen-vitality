@@ -13,41 +13,54 @@ import {
 import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
 import { resultCopy } from "@/lib/smile-assessment/result-copy";
+import { outcomeNodeFor, walkFlow, welcomeNode } from "@/lib/smile-assessment/flow-runtime";
+import type { PublicFlow } from "@/lib/smile-assessment/campaign";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { iconFor } from "./option-icons";
-import { GuidedAssessmentQuiz } from "./guided-assessment-quiz";
-import { DeterministicAssessmentQuiz } from "./deterministic-assessment-quiz";
-import type { PublicFlow } from "@/lib/smile-assessment/campaign";
 
-// Shared Smile Assessment quiz UI — an ADAPTIVE, one-question-at-a-time funnel.
-// The first question is deterministic (instant, no network); after each answer
-// the funnel asks the backend (/api/smile-assessment/next) for the single best
-// next question plus a short, warm AI transition line, until the backend says
-// "done". Then it captures light contact details and POSTs to
-// /api/smile-assessment/submit, showing a band-specific thank-you.
+// The DETERMINISTIC Smile Assessment funnel: the same screens as the Classic
+// quiz, but the next question comes from the funnel the practice DREW rather than
+// from the model. No /next call, no per-step wait, and the same path for every
+// patient who answers the same way.
 //
-// Used by both the generic page (/assess/<client>) and a campaign landing page
-// (/assess/<client>/<slug>). When a campaignSlug is set the submission is
-// attributed to that campaign, and the optional headline/intro reframe the hero
-// (shown only on the very first question screen).
+// WHY THIS IS A SEPARATE COMPONENT, like GuidedAssessmentQuiz before it.
+// AssessmentQuiz dispatches at the MOUNT BOUNDARY (assessment-quiz.tsx:133-152)
+// because ClassicAssessmentQuiz calls its hooks unconditionally: a mode branch
+// has to decide WHICH component mounts, never return early inside one that has
+// already started calling hooks. Duplicating the contact and thank-you screens is
+// the price, and it is deliberately paid: Classic's tested path is left untouched.
 //
-// This is a client component: it imports only pure quiz data + fetch — never a
-// server-only module.
+// THE ADAPTIVE FUNNEL IS THE FALLBACK, HERE TOO. The page only serves a flow that
+// re-validated on read, so `walkFlow` should never fail. If it does anyway - a
+// funnel edited underneath a loaded page, a graph that reached the runtime some
+// other way - this component does NOT strand the patient and does NOT skip to the
+// contact step. Skipping is the dangerous one: the submission would be missing
+// core questions, scoring.ts:98-105 would cap the band at "medium", and the
+// practice would silently get no fast-tracked leads (submit/route.ts:291). So it
+// degrades to the adaptive funnel mid-session instead, asking
+// /api/smile-assessment/next from the answers it already has. The patient sees a
+// working quiz either way; the console says what happened.
+//
+// This is a client component: it imports only pure quiz data + fetch, never a
+// server-only module. flow-runtime.ts imports nothing but flow.ts by design, so
+// the walk carries no scoring weights into the browser, and `flow.questions`
+// arrives already stripped to { id, prompt, options: [{ value, label }] } by
+// toPublicFlow (campaign.ts).
 
 type Channel = "sms" | "email" | "whatsapp";
 type Phase = "question" | "contact" | "thanks";
+/** "flow" walks the authored funnel; "adaptive" is the degraded fallback above. */
+type Mode = "flow" | "adaptive";
 
-/** A question as rendered in the funnel (options reduced to value + label). */
 interface FunnelQuestion {
   id: string;
   prompt: string;
   options: { value: string; label: string }[];
 }
 
-/** One step in the asked-question history, powering the Back affordance. */
 interface Step {
   question: FunnelQuestion;
-  /** The AI lead-in line shown above this question (absent on the first). */
+  /** The warm lead-in above this question (absent on the first screen). */
   transition?: string;
 }
 
@@ -61,15 +74,7 @@ interface NextResponse {
 
 interface SubmitResult {
   band: "high" | "medium" | "low";
-  /**
-   * True only when the submit route actually bridged this response into
-   * Speed-to-lead (a real contact happens or is retried). The thank-you copy
-   * is derived from band + this flag (see result-copy.ts), never from the
-   * server's raw "message" string, so it can never promise a callback that
-   * is not going to happen.
-   */
   leadCreated: boolean;
-  /** When set, the thank-you screen offers a direct link to the booking page. */
   bookingUrl?: string;
 }
 
@@ -78,50 +83,26 @@ interface Props {
   campaignSlug?: string;
   headline?: string | null;
   intro?: string | null;
-  /** Practice display name for the branded header (e.g. "Vitality Dental"). */
   practiceName?: string;
+  /** The authored funnel, already validated and stripped server-side. */
+  flow: PublicFlow;
   /**
-   * Visual/interaction style. Omitted (or "classic") renders exactly today's
-   * funnel, byte-identical. "guided" renders the premium one-question-per-screen
-   * GuidedAssessmentQuiz instead. No code path here ever DEFAULTS this to
-   * "guided" — callers must opt in explicitly (?style=guided on the public
-   * pages, or the Classic/Guided switch in the internal live preview).
-   */
-  style?: "classic" | "guided";
-  /**
-   * True only for the internal admin live-preview iframe (?preview=1 on the
-   * public pages). When true the funnel tracker no-ops (no telemetry from an
-   * owner clicking through a preview) and the final submit step is disabled
-   * with a small note, so opening a preview can never record a real enquiry
-   * or send a real SMS/email.
+   * True only for the internal admin live-preview iframe (?preview=1). The funnel
+   * tracker no-ops and the final submit is disabled, so an owner clicking through
+   * a preview can never record a real enquiry or fire a real text. Honoured here
+   * exactly as ClassicAssessmentQuiz honours it (assessment-quiz.tsx:89-96, 320).
    */
   previewMode?: boolean;
-  /**
-   * An AUTHORED funnel, already validated and stripped to public fields by the
-   * page. When present the quiz walks that graph instead of asking the model for
-   * the next question. Absent (the default, and every existing link) is the
-   * adaptive funnel, unchanged.
-   *
-   * v1 is Classic-only: `style` is ignored when a flow is present, because there
-   * is no Guided rendering of a drawn funnel yet and showing a mode that does not
-   * exist would be worse than ignoring the switch.
-   */
-  flow?: PublicFlow | null;
 }
 
-/** Normalise the first deterministic question into a FunnelQuestion. */
-function firstStep(): Step {
+/** The bank's opening question, for the degraded path only. */
+function bankFirstStep(): Step {
   const q = questionById(FIRST_QUESTION_ID);
   if (!q) {
-    // Defensive: the bank always defines the first question, but never crash.
     return { question: { id: FIRST_QUESTION_ID, prompt: "What are you most interested in?", options: [] } };
   }
   return {
-    question: {
-      id: q.id,
-      prompt: q.prompt,
-      options: q.options.map((o) => ({ value: o.value, label: o.label })),
-    },
+    question: { id: q.id, prompt: q.prompt, options: q.options.map((o) => ({ value: o.value, label: o.label })) },
   };
 }
 
@@ -143,44 +124,58 @@ function parseQuestion(raw: NextResponse["question"]): FunnelQuestion | null {
   return { id: r.id, prompt: r.prompt, options };
 }
 
-export function AssessmentQuiz(props: Props) {
-  // Dispatch to the premium Guided style. This is a SEPARATE component (never a
-  // conditional early-return inside ClassicAssessmentQuiz) on purpose:
-  // ClassicAssessmentQuiz calls hooks unconditionally on every render, so a
-  // style branch has to happen at the mount boundary (which component gets
-  // rendered), not as an early return before those hooks run.
-  //
-  // An authored funnel is checked FIRST and wins over `style`: v1 has no Guided
-  // rendering of a drawn funnel, so honouring ?style=guided here would silently
-  // drop the practice's own funnel and run the adaptive one instead.
-  if (props.flow) {
-    return <DeterministicAssessmentQuiz {...props} flow={props.flow} />;
-  }
-  if (props.style === "guided") {
-    return (
-      <GuidedAssessmentQuiz
-        clientSlug={props.clientSlug}
-        campaignSlug={props.campaignSlug}
-        headline={props.headline}
-        intro={props.intro}
-        practiceName={props.practiceName}
-        previewMode={props.previewMode}
-      />
-    );
-  }
-  return <ClassicAssessmentQuiz {...props} />;
-}
+export function DeterministicAssessmentQuiz({
+  clientSlug,
+  campaignSlug,
+  headline,
+  intro,
+  practiceName,
+  flow,
+  previewMode,
+}: Props) {
+  // The question wording, by id. Built once: the funnel only ever asks questions
+  // that are in here, because toPublicFlow refuses to build a payload otherwise.
+  const questions = useMemo(
+    () => new Map(flow.questions.map((q) => [q.id, q] as const)),
+    [flow.questions],
+  );
 
-function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, practiceName, previewMode }: Props) {
-  // The funnel history: history[history.length - 1] is the live question.
-  const [history, setHistory] = useState<Step[]>(() => [firstStep()]);
+  /** The graph's next demand, given some answers, in screen terms. */
+  function stepFor(answers: Record<string, string>): Step | "contact" | "stuck" {
+    const walk = walkFlow(flow.graph, answers);
+    if (walk.status === "contact") return "contact";
+    if (walk.status === "stuck") {
+      console.warn(`[assess] funnel could not route this session: ${walk.reason}`);
+      return "stuck";
+    }
+    const q = questions.get(walk.node.questionId);
+    if (!q) {
+      console.warn(`[assess] funnel asks for "${walk.node.questionId}", which was not published with it`);
+      return "stuck";
+    }
+    return { question: q, transition: walk.transition ?? undefined };
+  }
+
+  // The funnel's own opening screen. Computed once, at mount, and it decides which
+  // mode this session runs in.
+  const [opening] = useState<{ mode: Mode; step: Step }>(() => {
+    const first = stepFor({});
+    if (first === "contact" || first === "stuck") {
+      // A funnel that wants nothing, or cannot start, is not a funnel. Say so and
+      // run the adaptive quiz, which always works.
+      console.warn("[assess] falling back to the adaptive funnel for this session");
+      return { mode: "adaptive", step: bankFirstStep() };
+    }
+    return { mode: "flow", step: first };
+  });
+
+  const [mode, setMode] = useState<Mode>(opening.mode);
+  const [history, setHistory] = useState<Step[]>(() => [opening.step]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [phase, setPhase] = useState<Phase>("question");
-  // The just-picked option on the current question (held briefly before advancing).
   const [pendingValue, setPendingValue] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
 
-  // Contact step.
   const [firstName, setFirstName] = useState("");
   const [channel, setChannel] = useState<Channel>("sms");
   const [phone, setPhone] = useState("");
@@ -190,16 +185,12 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
 
-  // Bumped on every screen change so the entrance animation re-triggers.
   const [animKey, setAnimKey] = useState(0);
-  // Guards against double-advance from a rapid second click while thinking.
   const advancing = useRef(false);
 
-  // PII-free funnel telemetry (started / question_answered / contact_viewed /
-  // submitted). Created once via useState's lazy initializer (never a ref
-  // read/written during render) so listeners are not re-registered per render.
-  // previewMode (the internal admin live-preview iframe) must never emit
-  // telemetry: a no-op tracker, never the real createFunnelTracker.
+  // PII-free funnel telemetry, gated exactly as Classic gates it: previewMode gets
+  // a no-op tracker, never the real one, so an owner clicking through the inline
+  // preview emits nothing.
   const [tracker] = useState<FunnelTracker>(() =>
     previewMode
       ? { track: () => {}, flush: () => {} }
@@ -210,7 +201,15 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
   }, [tracker]);
 
   const current = history[history.length - 1];
-  const step = history.length; // 1-based count of questions shown so far.
+  const step = history.length;
+
+  // The funnel's own opening copy wins over the campaign's when it has any. A
+  // welcome node is an OVERRIDE of the hero line, not a separate screen: the
+  // campaign already owns a headline and an intro, and two sources of the same
+  // words on one screen is how they end up contradicting each other.
+  const welcome = useMemo(() => welcomeNode(flow.graph), [flow.graph]);
+  const heroHeadline = welcome?.headline ?? headline;
+  const heroIntro = welcome?.intro ?? intro;
 
   const progress = useMemo(() => {
     if (phase === "question") return Math.min(0.9, step / 6) * 100;
@@ -223,7 +222,6 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     return phone.trim() !== "";
   }, [firstName, channel, email, phone]);
 
-  /** Move to the contact phase (when the funnel is done, or as a safe fallback). */
   function goToContact() {
     setThinking(false);
     setPendingValue(null);
@@ -233,40 +231,51 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     tracker.track("contact_viewed");
   }
 
-  /** Record the chosen answer, then ask the backend for the next question. */
-  async function choose(value: string) {
-    if (advancing.current || thinking || busy) return;
-    advancing.current = true;
-    // Which question (1-based) they just answered — the index only, never the answer.
-    tracker.track("question_answered", { index: history.length });
-    const q = current.question;
-    const nextAnswers = { ...answers, [q.id]: value };
-
-    // Highlight the chosen option and start fetching the next question right
-    // away (no artificial delay) so it loads as fast as possible.
-    setPendingValue(value);
-    setAnswers(nextAnswers);
-    setError(null);
-    setThinking(true);
-
-    const got = await fetchNext(nextAnswers);
-    if (got === "error") {
-      // Endpoint should never fail, but if the network does, don't strand them.
-      goToContact();
-      return;
-    }
-    if (got.done) {
-      goToContact();
-      return;
-    }
-    setHistory((prev) => [...prev, { question: got.question, transition: got.transition }]);
+  function showStep(next: Step) {
+    setHistory((prev) => [...prev, next]);
     setPendingValue(null);
     setThinking(false);
     advancing.current = false;
     setAnimKey((k) => k + 1);
   }
 
-  /** POST /next with one retry. Returns a parsed step, "done", or "error". */
+  /** Record the answer, then take whichever route this session is running on. */
+  async function choose(value: string) {
+    if (advancing.current || thinking || busy) return;
+    advancing.current = true;
+    // The question INDEX only, never the answer itself.
+    tracker.track("question_answered", { index: history.length });
+    const nextAnswers = { ...answers, [current.question.id]: value };
+
+    setPendingValue(value);
+    setAnswers(nextAnswers);
+    setError(null);
+
+    if (mode === "flow") {
+      const next = stepFor(nextAnswers);
+      if (next === "contact") {
+        goToContact();
+        return;
+      }
+      if (next !== "stuck") {
+        // No network call at all: this is the whole point of a drawn funnel.
+        showStep(next);
+        return;
+      }
+      // Degrade rather than strand or skip. See the header.
+      setMode("adaptive");
+    }
+
+    setThinking(true);
+    const got = await fetchNext(nextAnswers);
+    if (got === "error" || got.done) {
+      goToContact();
+      return;
+    }
+    showStep({ question: got.question, transition: got.transition });
+  }
+
+  /** POST /next with one retry. The degraded path only. */
   async function fetchNext(
     nextAnswers: Record<string, string>,
   ): Promise<{ done: true } | { done: false; question: FunnelQuestion; transition?: string } | "error"> {
@@ -288,10 +297,7 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         }
         if (data.done) return { done: true };
         const question = parseQuestion(data.question);
-        if (!question) {
-          // Valid "ok" but no usable question — treat as the funnel finishing.
-          return { done: true };
-        }
+        if (!question) return { done: true };
         const transition = typeof data.transition === "string" ? data.transition : undefined;
         return { done: false, question, transition };
       } catch {
@@ -335,19 +341,13 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    // previewMode is also enforced by disabling the submit button below; this
-    // is defense in depth (e.g. an implicit Enter-key form submit).
+    // previewMode is also enforced by disabling the button below; this is defence
+    // in depth (an implicit Enter-key form submit).
     if (!canSubmit || busy || previewMode) return;
     setBusy(true);
     setError(null);
     try {
-      // Short-lived page token: marks this submission as coming from the real
-      // funnel (our pages or the practice-website iframe embed), which unlocks
-      // the instant first-contact text. Best effort — a failed fetch still
-      // records the assessment, the team just contacts the patient manually.
-      const pageToken = await fetch(
-        `/api/smile-assessment/token?client=${encodeURIComponent(clientSlug)}`,
-      )
+      const pageToken = await fetch(`/api/smile-assessment/token?client=${encodeURIComponent(clientSlug)}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j: { token?: string | null } | null) => j?.token ?? undefined)
         .catch(() => undefined);
@@ -391,20 +391,22 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     setBusy(false);
   }
 
+  // The authored result heading for the band we actually got. Only the HEADING:
+  // the body stays resultCopy(), which is derived from band + leadCreated +
+  // bookingUrl, so nothing here can promise a callback that is not going to happen.
+  const outcomeHeadline = result ? (outcomeNodeFor(flow.graph, result.band)?.headline ?? null) : null;
+
   const name = practiceName?.trim() || "Smile Assessment";
 
   return (
     <main className="relative mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-4 py-4 sm:px-5 sm:py-8">
       <style>{ENTER_KEYFRAMES}</style>
 
-      {/* Soft brand glow behind the card. */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,rgba(91,196,247,0.20),transparent_72%)]"
       />
 
-      {/* Compact horizontal brand lockup: every vertical pixel saved here keeps
-          the whole funnel on one phone screen. The question stays the hero. */}
       <header className="mb-3 flex items-center justify-center gap-2.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line bg-card shadow-[0_2px_10px_rgba(10,14,26,0.08)]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -417,7 +419,6 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
       </header>
 
       <div className="overflow-hidden rounded-[1.25rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
-        {/* Progress track — grows as steps complete, full at contact/thanks. */}
         <div className="h-1 w-full bg-card-muted" aria-hidden>
           <div
             className={[
@@ -430,7 +431,7 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
 
         <div className="p-5 sm:p-6">
           {phase === "thanks" && result ? (
-            <ThankYou result={result} />
+            <ThankYou result={result} outcomeHeadline={outcomeHeadline} />
           ) : phase === "contact" ? (
             <ContactStep
               animKey={animKey}
@@ -455,8 +456,8 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
               step={step}
               question={current.question}
               transition={current.transition}
-              headline={headline}
-              intro={intro}
+              headline={heroHeadline}
+              intro={heroIntro}
               answers={answers}
               pendingValue={pendingValue}
               thinking={thinking}
@@ -468,9 +469,7 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
         </div>
       </div>
 
-      {/* GDC/ASA-safe trust + the required suitability line. Never testimonials.
-          text-ink (not text-muted) on purpose: --muted misses AA contrast on the
-          cream page background at this small size. */}
+      {/* GDC/ASA-safe trust + the required suitability line. Never testimonials. */}
       <p className="mt-3 px-2 text-center text-[0.65rem] leading-relaxed text-ink">
         Your answers help us point you to the right next step; nothing here is medical advice. Our
         dentists are GDC registered and treatment suitability always depends on a clinical
@@ -514,9 +513,6 @@ function QuestionStep({
   const isFirst = step === 1;
   const selected = pendingValue ?? answers[question.id] ?? null;
 
-  // On advancing to a later question, move focus to the question region so a
-  // screen reader announces the new step (the screen changed under the user).
-  // Skipped on the first screen, which reads naturally top-down on load.
   const regionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (step > 1) regionRef.current?.focus();
@@ -543,8 +539,6 @@ function QuestionStep({
         ) : (
           <span />
         )}
-        {/* Honest momentum: the funnel is adaptive (no fixed total), so instead of a
-            question count that could read as endless, the chip signals closeness. */}
         <span className="rounded-full bg-card-muted px-2.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-ink">
           {step >= 3 ? `Question ${step} · nearly there` : `Question ${step}`}
         </span>
@@ -553,25 +547,18 @@ function QuestionStep({
       {isFirst ? (
         <div className="mb-3 space-y-1">
           {headline ? <p className="text-[0.8rem] font-semibold text-navy">{headline}</p> : null}
-          {/* The 5-second hook: outcome + time expectation before the first tap. */}
           <p className="text-[0.8rem] leading-snug text-muted">
-            {intro ||
-              "Find the right next step for your smile. About 30 seconds, no wrong answers."}
+            {intro || "Find the right next step for your smile. About 30 seconds, no wrong answers."}
           </p>
         </div>
       ) : transition ? (
-        // No icon on purpose: the sparkle glyph reads as "generic AI", which is
-        // exactly the wrong note for a warm human acknowledgment line.
         <p className="mb-3 text-[0.8rem] font-medium leading-snug text-blue-deep">{transition}</p>
       ) : null}
 
       <fieldset disabled={thinking}>
-        {/* The question is the hero on every screen. */}
         <legend className="mb-3 text-lg font-bold leading-snug text-navy [text-wrap:balance] sm:text-xl">
           {question.prompt}
         </legend>
-        {/* Option-heavy questions split into two columns on wider screens so the
-            card stays short; on phones a single column keeps rows tappable. */}
         <div className={["grid gap-2", question.options.length > 3 ? "sm:grid-cols-2" : ""].join(" ")}>
           {question.options.map((o) => {
             const checked = selected === o.value;
@@ -621,10 +608,8 @@ function QuestionStep({
         </div>
       </fieldset>
 
-      {/* While the next question resolves, sell that it is COMING: a light
-          skeleton of the next step under the answered options, so the wait reads
-          as progress rather than a stall. Purely decorative (aria-hidden); the
-          sr-only live region below carries the accessible announcement. */}
+      {/* Only ever shown on the degraded path: a drawn funnel has nothing to wait
+          for, so the next screen is already there. */}
       {thinking ? (
         <div aria-hidden className="mt-4 space-y-2 motion-safe:animate-pulse">
           <div className="h-4 w-2/3 rounded-md bg-card-muted" />
@@ -676,17 +661,13 @@ function ContactStep({
   onSubmit: (e: React.FormEvent) => void;
   onBack: () => void;
 }) {
-  // WhatsApp is hidden until the practice's WhatsApp sender is connected (Meta
-  // login pending): offering it would promise a channel we cannot yet send on.
-  // First contact goes by text; re-add the option when WhatsApp goes live.
+  // WhatsApp stays hidden until the practice's sender is connected: offering it
+  // would promise a channel we cannot yet send on.
   const channels: { key: Channel; label: string; icon: LucideIcon }[] = [
     { key: "sms", label: "Text", icon: MessageSquare },
     { key: "email", label: "Email", icon: Mail },
   ];
 
-  // The question fieldset disables itself while the last answer resolves, which
-  // drops keyboard focus to <body> when this screen swaps in. Focus the form (it
-  // is labelled by the heading) so the change is announced and Tab continues here.
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     formRef.current?.focus();
@@ -711,8 +692,6 @@ function ContactStep({
         Back
       </button>
 
-      {/* Results-teaser framing: the details unlock a promised, personal outcome
-          (peak-curiosity gate), never a bare "give us your details". */}
       <div className="flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-dark/10 text-blue-dark">
           <CheckCircle2 size={18} />
@@ -742,14 +721,10 @@ function ContactStep({
         />
       </label>
 
-      {/* fieldset/legend so screen readers announce the group question with each
-          channel toggle (mirrors the question step). */}
       <fieldset>
         <legend className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
           How would you like us to reply?
         </legend>
-        {/* Columns match the live channel count so the row always fills the card
-            evenly (WhatsApp rejoins this list once the sender is connected). */}
         <div className={["grid gap-2", channels.length === 3 ? "grid-cols-3" : "grid-cols-2"].join(" ")}>
           {channels.map((c) => {
             const active = channel === c.key;
@@ -804,12 +779,7 @@ function ContactStep({
         <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-[#b3261e]">{error}</p>
       ) : null}
 
-      <Button
-        type="submit"
-        variant="primary"
-        className="min-h-12 w-full"
-        disabled={!canSubmit || busy || previewMode}
-      >
+      <Button type="submit" variant="primary" className="min-h-12 w-full" disabled={!canSubmit || busy || previewMode}>
         {busy ? <Loader2 size={16} className="motion-safe:animate-spin" /> : null}
         See my next step
       </Button>
@@ -830,13 +800,13 @@ function ContactStep({
  * Thank-you screen
  * ------------------------------------------------------------------------- */
 
-function ThankYou({ result }: { result: SubmitResult }) {
+function ThankYou({ result, outcomeHeadline }: { result: SubmitResult; outcomeHeadline: string | null }) {
   return (
     <div className="flex flex-col items-center gap-3 py-4 text-center motion-safe:[animation:assessEnter_240ms_ease-out]">
       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-success/10 text-success">
         <CheckCircle2 size={24} />
       </span>
-      <h1 className="text-xl text-navy">Thank you</h1>
+      <h1 className="text-xl text-navy [text-wrap:balance]">{outcomeHeadline || "Thank you"}</h1>
       <p className="max-w-sm text-sm text-muted">
         {resultCopy(result.band, result.leadCreated, Boolean(result.bookingUrl))}
       </p>
@@ -849,6 +819,4 @@ function ThankYou({ result }: { result: SubmitResult }) {
   );
 }
 
-// Opacity + small translateY only (no layout-property animation). Gated behind
-// motion-safe: at the call site so prefers-reduced-motion users get no movement.
 const ENTER_KEYFRAMES = `@keyframes assessEnter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }`;

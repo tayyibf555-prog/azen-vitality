@@ -1,18 +1,79 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Plus, Loader2, Copy, Check, ExternalLink, Megaphone, X, Pause, Play } from "lucide-react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  Plus,
+  Loader2,
+  Copy,
+  Check,
+  ChevronLeft,
+  ExternalLink,
+  Megaphone,
+  X,
+  Pause,
+  Play,
+  GitBranch,
+  AlertTriangle,
+  Sparkles,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, Tabs, type TabItem } from "@/components/primitives";
-import { GOAL_CATALOG, BUDGET_CATALOG } from "@/lib/smile-assessment/campaign";
+import { GOAL_CATALOG, BUDGET_CATALOG, goalLabel } from "@/lib/smile-assessment/campaign";
 import { groupCampaignsByGoal } from "@/lib/smile-assessment/grouping";
 import { getClient } from "@/lib/mock/clients";
 import { AssessmentPreview } from "@/components/assess/assessment-preview";
+import { normaliseFlow, type FlowGraph } from "@/lib/smile-assessment/flow";
+import {
+  SCRATCH_FLOW_KEY,
+  flowTemplate,
+  templateForGoal,
+} from "@/lib/smile-assessment/flow-templates";
+import { flowThumbnail } from "@/lib/smile-assessment/flow-thumbnail";
+import {
+  INITIAL_WIZARD,
+  isDetailsOpen,
+  isGalleryOpen,
+  isListVisible,
+  lockedGoal,
+  wizardReducer,
+  type TemplateChoice,
+} from "@/lib/smile-assessment/wizard-state";
 import { AssessmentLivePreview } from "./assessment-live-preview";
+import { TemplateGallery, FlowShapeThumbnail } from "./template-gallery";
+import { FlowBuilder } from "./flow-builder";
+
+/**
+ * THE ASSESSMENTS PANEL, and the staged create wizard inside it.
+ *
+ * THREE SCREENS, ONE AT A TIME (wizard-state.ts owns the transitions):
+ *   1. Templates - a takeover of this section: search, categories, and a card per
+ *      starter funnel showing the actual shape of the funnel it would give you.
+ *   2. Details   - a short form ABOUT that choice. The goal is pre-filled and
+ *      locked to the template's own goal, with a back-link to change template.
+ *   3. The canvas - opened on the new campaign's card the moment it is created,
+ *      seeded with the funnel that was chosen.
+ *
+ * THE CREATE PATH IS NOT FORKED. Stage 2 fires the same POST, with the same body,
+ * to the same route as before; the funnel is a SECOND write afterwards, as a
+ * draft. The seeded campaigns and the duplicate-slug 409 (campaign-repository.ts:88)
+ * all depend on that one path, so the staging is presentation and nothing else.
+ *
+ * WHY A CHOICE IS NOW REQUIRED. There is no "skip" on stage 1, and that costs a
+ * practice nothing: the funnel is saved UNPUBLISHED, so the public link keeps
+ * running the adaptive funnel until the owner reads the canvas and switches it
+ * on. Start From Scratch is the escape hatch for someone who wants to draw their
+ * own, and it starts from the smallest funnel that is still legal rather than an
+ * empty canvas.
+ */
 
 // One campaign as returned by the admin API (GET/POST). Mirrors the toAdminView
 // shape on the server: the raw campaign plus labels, the public url/path and a
 // response count. We keep it local so this file owns its own contract.
+//
+// The three funnel fields are OPTIONAL on purpose. They arrive from the campaign
+// row once the flow columns exist; until then they are simply absent, every card
+// reads "Adaptive", and that is not a degraded display - it is the truth, because
+// a campaign with no authored funnel runs the adaptive one.
 interface AdminCampaign {
   id: string;
   slug: string;
@@ -32,6 +93,9 @@ interface AdminCampaign {
   url: string;
   path: string;
   responseCount: number;
+  flow?: unknown;
+  flowVersion?: number;
+  flowPublished?: boolean;
 }
 
 interface FormState {
@@ -120,13 +184,20 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [showForm, setShowForm] = useState(false);
+  // WHICH SCREEN IS ON, and what carries between them. The transitions are a
+  // pure, tested reducer (wizard-state.ts) rather than a handful of booleans, so
+  // "details is unreachable without a choice" is a rule something holds.
+  const [wizard, dispatch] = useReducer(wizardReducer, INITIAL_WIZARD);
+
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [flowNote, setFlowNote] = useState<string | null>(null);
 
   // The campaign whose URL we just created, so we can surface it with a copy button.
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  // STAGE 3: the campaign whose canvas opens by itself, because it was just made.
+  const [openCanvasFor, setOpenCanvasFor] = useState<string | null>(null);
 
   // Per-row "status change in flight" guard, keyed by campaign id.
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -149,10 +220,12 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
 
   // Reset + refetch whenever the client changes.
   useEffect(() => {
-    setShowForm(false);
+    dispatch({ type: "cancel" });
     setForm(EMPTY_FORM);
     setFormError(null);
     setCreatedUrl(null);
+    setOpenCanvasFor(null);
+    setFlowNote(null);
     void load();
   }, [load]);
 
@@ -160,12 +233,77 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
+  /**
+   * Stage 1 -> stage 2. The choice decides the goal, so the details screen opens
+   * with it filled in; a template IS a goal, and leaving the field free would let
+   * an Invisalign funnel be attached to a whitening assessment and ask the wrong
+   * question on the very first screen.
+   */
+  function choose(choice: TemplateChoice) {
+    setFormError(null);
+    setForm((f) => ({ ...f, goal: choice.goal ?? f.goal }));
+    dispatch({ type: "choose", choice });
+  }
+
+  /**
+   * Attach the chosen funnel to a just-created campaign, as a DRAFT.
+   *
+   * The version it comes back at is carried into the card, because the builder
+   * sends it as its concurrency check: keeping the row's pre-save version here
+   * would make the very first edit of a brand-new funnel collide with itself.
+   */
+  async function saveDraftFlow(
+    campaign: AdminCampaign,
+    graph: FlowGraph,
+  ): Promise<{ note: string | null; version: number | null }> {
+    try {
+      const res = await fetch(
+        `/api/smile-assessment/campaign/${encodeURIComponent(campaign.slug)}/flow?client=${encodeURIComponent(clientSlug)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientSlug, flow: graph, published: false }),
+        },
+      );
+      if (res.status === 404 || res.status === 503) {
+        return {
+          note: "The assessment was created, but funnels cannot be stored on this deployment yet, so it runs the adaptive funnel for now.",
+          version: null,
+        };
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        flowVersion?: number;
+      };
+      if (!res.ok || !data.ok) {
+        return {
+          note: `The assessment was created, but its funnel could not be saved${data.error ? `: ${data.error}` : "."} Open “Edit funnel” to try again.`,
+          version: null,
+        };
+      }
+      return {
+        note: null,
+        version: typeof data.flowVersion === "number" ? data.flowVersion : null,
+      };
+    } catch {
+      return {
+        note: "The assessment was created, but its funnel could not be saved. Open “Edit funnel” to try again.",
+        version: null,
+      };
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (submitting) return;
+    const choice = wizard.choice;
     setSubmitting(true);
     setFormError(null);
+    setFlowNote(null);
     try {
+      // UNCHANGED CREATE CONTRACT. Same route, same body, same field names as
+      // before the wizard existed.
       const res = await fetch("/api/smile-assessment/campaign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -184,16 +322,41 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
       if (!res.ok || !data.ok || !data.campaign) {
         throw new Error(data.error || `Could not create the assessment (${res.status}).`);
       }
-      setCampaigns((prev) => [data.campaign as AdminCampaign, ...prev]);
-      setCreatedUrl(data.campaign.url);
+      const created = data.campaign;
+
+      // The funnel is a SECOND write, after the campaign exists to hang it on.
+      // It is saved unpublished, so creating an assessment can never change what
+      // a patient sees until the owner has read the funnel and switched it on.
+      let note: string | null = null;
+      if (choice) {
+        const saved = await saveDraftFlow(created, choice.graph);
+        note = saved.note;
+        if (!note) {
+          created.flow = choice.graph;
+          created.flowPublished = false;
+          if (saved.version !== null) created.flowVersion = saved.version;
+          note =
+            "Its funnel is below, saved as a draft. Read it through and switch it on when you are happy.";
+        }
+      }
+
+      setCampaigns((prev) => [created, ...prev]);
+      setCreatedUrl(created.url);
+      setFlowNote(note);
       setForm(EMPTY_FORM);
-      setShowForm(false);
+      // STAGE 3: straight onto the canvas, seeded with what was chosen.
+      setOpenCanvasFor(created.id);
+      dispatch({ type: "created" });
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not create the assessment.");
     } finally {
       setSubmitting(false);
     }
   }
+
+  const updateCampaign = useCallback((id: string, patch: Partial<AdminCampaign>) => {
+    setCampaigns((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }, []);
 
   async function toggleStatus(campaign: AdminCampaign) {
     if (togglingId) return;
@@ -220,6 +383,10 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
   }
 
   const practiceName = getClient(clientSlug)?.name ?? "";
+  const gallery = isGalleryOpen(wizard);
+  const details = isDetailsOpen(wizard);
+  const creating = gallery || details;
+  const locked = lockedGoal(wizard);
 
   const slugPreview = (form.slug || form.name)
     .toLowerCase()
@@ -235,178 +402,64 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
       description="Create a targeted assessment, then use its custom URL as the destination for an ad. Each one tunes the scoring and the AI follow-up to its goal."
       actions={
         <Button
-          variant={showForm ? "secondary" : "primary"}
+          variant={creating ? "secondary" : "primary"}
           size="sm"
           onClick={() => {
             setFormError(null);
             setCreatedUrl(null);
-            setShowForm((s) => !s);
+            setFlowNote(null);
+            dispatch(creating ? { type: "cancel" } : { type: "open" });
           }}
         >
-          {showForm ? <X size={15} /> : <Plus size={15} />}
-          {showForm ? "Cancel" : "New assessment"}
+          {creating ? <X size={15} /> : <Plus size={15} />}
+          {creating ? "Cancel" : "New assessment"}
         </Button>
       }
     >
       <div className="space-y-5">
-        {/* Create form, with a live preview of the public funnel's landing screen. */}
-        {showForm ? (
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-            <form onSubmit={submit} className="rounded-xl border border-line-strong bg-card-muted/40 p-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="sm:col-span-2">
-                <label htmlFor="ca-name" className={labelClass}>
-                  Name (where will this link be used?) <span className="text-danger">*</span>
-                </label>
-                <input
-                  id="ca-name"
-                  type="text"
-                  required
-                  value={form.name}
-                  onChange={(e) => set("name", e.target.value)}
-                  placeholder="Website, Instagram bio, Google profile, Spring Invisalign ads..."
-                  className={inputClass}
-                />
-                <p className="mt-1 text-[11px] text-muted">
-                  This becomes the source label on every lead it brings in, so name it after the
-                  place the link or embed will live.
-                </p>
-              </div>
+        {/* STAGE 1. Takes the section over: one decision, one screen. */}
+        {gallery ? (
+          <TemplateGallery
+            clientSlug={clientSlug}
+            idealCustomer={form.idealCustomer}
+            targetBudget={form.targetBudget}
+            chosenKey={wizard.choice?.key ?? null}
+            onChoose={choose}
+            onClose={() => dispatch({ type: "cancel" })}
+          />
+        ) : null}
 
-              <div>
-                <label htmlFor="ca-goal" className={labelClass}>
-                  Goal
-                </label>
-                <select
-                  id="ca-goal"
-                  value={form.goal}
-                  onChange={(e) => set("goal", e.target.value)}
-                  className={inputClass}
-                >
-                  {GOAL_CATALOG.map((g) => (
-                    <option key={g.key} value={g.key}>
-                      {g.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="ca-budget" className={labelClass}>
-                  Target budget
-                </label>
-                <select
-                  id="ca-budget"
-                  value={form.targetBudget}
-                  onChange={(e) => set("targetBudget", e.target.value)}
-                  className={inputClass}
-                >
-                  {BUDGET_CATALOG.map((b) => (
-                    <option key={b.key} value={b.key}>
-                      {b.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="sm:col-span-2">
-                <label htmlFor="ca-ideal" className={labelClass}>
-                  Ideal customer (internal, used to tailor the AI follow-up)
-                </label>
-                <textarea
-                  id="ca-ideal"
-                  rows={2}
-                  value={form.idealCustomer}
-                  onChange={(e) => set("idealCustomer", e.target.value)}
-                  placeholder="Professionals in their 30s and 40s who want a straighter smile without braces."
-                  className={inputClass}
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label htmlFor="ca-headline" className={labelClass}>
-                  Public headline
-                </label>
-                <input
-                  id="ca-headline"
-                  type="text"
-                  value={form.headline}
-                  onChange={(e) => set("headline", e.target.value)}
-                  placeholder="Is Invisalign right for you?"
-                  className={inputClass}
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label htmlFor="ca-intro" className={labelClass}>
-                  Public intro
-                </label>
-                <textarea
-                  id="ca-intro"
-                  rows={2}
-                  value={form.intro}
-                  onChange={(e) => set("intro", e.target.value)}
-                  placeholder="Answer a few quick questions and we will tell you if you are a good fit."
-                  className={inputClass}
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label htmlFor="ca-slug" className={labelClass}>
-                  Custom URL (optional)
-                </label>
-                <input
-                  id="ca-slug"
-                  type="text"
-                  value={form.slug}
-                  onChange={(e) => set("slug", e.target.value)}
-                  placeholder="spring-invisalign"
-                  className={inputClass}
-                />
-                <p className="mt-1 text-xs text-muted">
-                  Becomes <span className="font-semibold text-ink">/assess/{clientSlug}/{slugPreview || "your-slug"}</span>
-                </p>
-              </div>
-            </div>
-
-            {formError ? (
-              <p className="mt-4 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
-                {formError}
-              </p>
-            ) : null}
-
-            <div className="mt-4 flex items-center gap-2">
-              <Button type="submit" variant="primary" size="sm" disabled={submitting || form.name.trim().length === 0}>
-                {submitting ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                Create assessment
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={submitting}
-                onClick={() => {
-                  setShowForm(false);
-                  setFormError(null);
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </form>
-
-            <AssessmentPreview practiceName={practiceName} headline={form.headline} intro={form.intro} />
-          </div>
+        {/* STAGE 2. Only reachable with a choice behind it, so the goal always
+            has something to lock to. */}
+        {details && wizard.choice ? (
+          <DetailsStage
+            clientSlug={clientSlug}
+            practiceName={practiceName}
+            choice={wizard.choice}
+            lockedGoalKey={locked}
+            form={form}
+            set={set}
+            slugPreview={slugPreview}
+            submitting={submitting}
+            formError={formError}
+            onBack={() => dispatch({ type: "back" })}
+            onCancel={() => {
+              dispatch({ type: "cancel" });
+              setFormError(null);
+            }}
+            onSubmit={submit}
+          />
         ) : null}
 
         {/* Just-created confirmation with the public URL. */}
-        {createdUrl && !showForm ? (
+        {createdUrl && !creating ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-success/20 bg-success/10 px-3 py-2.5">
             <div className="min-w-0">
               <p className="flex items-center gap-1.5 text-sm font-semibold text-success">
                 <Check size={15} /> Assessment created
               </p>
               <p className="mt-0.5 truncate text-xs text-ink">{createdUrl}</p>
+              {flowNote ? <p className="mt-1 text-xs text-ink">{flowNote}</p> : null}
             </div>
             <div className="flex items-center gap-2">
               <CopyLink url={createdUrl} />
@@ -415,10 +468,8 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
           </div>
         ) : null}
 
-        {/* List, grouped into one tab per goal (mirrors the Landing pages
-            section's treatment tabs). Each campaign card carries its own
-            embedded live preview with a Classic/Guided style switch. */}
-        {loadError ? (
+        {/* The list, hidden while a wizard screen is up: one screen at a time. */}
+        {!isListVisible(wizard) ? null : loadError ? (
           <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{loadError}</p>
         ) : loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
@@ -431,16 +482,283 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
             title="No assessments yet"
             description="Create your first assessment to get a custom public URL. Use that URL as the destination for an ad, and every submission lands here, scored to the goal you set."
           >
-            <Button variant="primary" size="sm" onClick={() => setShowForm(true)}>
+            <Button variant="primary" size="sm" onClick={() => dispatch({ type: "open" })}>
               <Plus size={15} /> New assessment
             </Button>
           </EmptyState>
         ) : (
-          <CampaignTabs campaigns={campaigns} togglingId={togglingId} onToggleStatus={toggleStatus} />
+          <CampaignTabs
+            clientSlug={clientSlug}
+            campaigns={campaigns}
+            togglingId={togglingId}
+            openCanvasFor={openCanvasFor}
+            onToggleStatus={toggleStatus}
+            onCampaignUpdated={updateCampaign}
+          />
         )}
       </div>
     </SectionCard>
   );
+}
+
+/* ---------------------------------------------------------------------------
+ * STAGE 2 - the details screen.
+ * ------------------------------------------------------------------------- */
+
+function DetailsStage({
+  clientSlug,
+  practiceName,
+  choice,
+  lockedGoalKey,
+  form,
+  set,
+  slugPreview,
+  submitting,
+  formError,
+  onBack,
+  onCancel,
+  onSubmit,
+}: {
+  clientSlug: string;
+  practiceName: string;
+  choice: TemplateChoice;
+  lockedGoalKey: string | null;
+  form: FormState;
+  set: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  slugPreview: string;
+  submitting: boolean;
+  formError: string | null;
+  onBack: () => void;
+  onCancel: () => void;
+  onSubmit: (e: React.FormEvent) => void;
+}) {
+  const thumb = useMemo(() => flowThumbnail(choice.graph), [choice.graph]);
+  const questions = choice.graph.nodes.filter((n) => n.kind === "question").length;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <form onSubmit={onSubmit} className="rounded-2xl border border-line-strong bg-card p-4">
+        {/* The choice, still on screen and still changeable. A back-link rather
+            than a re-opened gallery inline: one screen at a time, both ways. */}
+        <div className="rounded-xl border border-line bg-card-muted/50 p-2.5">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] font-semibold text-navy">{choiceLabel(choice)}</p>
+              <p className="mt-0.5 text-[11px] text-muted">
+                {questions} {questions === 1 ? "question" : "questions"}. Saved as a draft when you
+                create this, so the public link keeps running the adaptive funnel until you switch
+                it on.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[11.5px]"
+              onClick={onBack}
+            >
+              <ChevronLeft size={13} /> Change template
+            </Button>
+          </div>
+          {/* The same miniature the card showed, full width so it is legible
+              rather than a 20px smudge - this is the confirmation that what was
+              picked is what is about to be attached. */}
+          <div className="mt-2 rounded-lg border border-line bg-card p-2">
+            <FlowShapeThumbnail thumb={thumb} />
+          </div>
+        </div>
+
+        {choice.note ? (
+          <p className={noteToneClass(choice.source)}>
+            {choice.source === "ai" ? (
+              <Sparkles size={13} className="mt-px shrink-0" />
+            ) : (
+              <AlertTriangle size={13} className="mt-px shrink-0" />
+            )}
+            <span>{choice.note}</span>
+          </p>
+        ) : null}
+
+        <div className="mb-4 mt-4 border-b border-line pb-2.5">
+          <h4 className="text-title text-navy">Details</h4>
+          <p className="mt-0.5 text-caption font-normal text-muted">
+            Where this link will live, and what a patient sees when they land on it.
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label htmlFor="ca-name" className={labelClass}>
+              Name (where will this link be used?) <span className="text-danger">*</span>
+            </label>
+            <input
+              id="ca-name"
+              type="text"
+              required
+              autoFocus
+              value={form.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="Website, Instagram bio, Google profile, Spring Invisalign ads..."
+              className={inputClass}
+            />
+            <p className="mt-1 text-[11px] text-muted">
+              This becomes the source label on every lead it brings in, so name it after the
+              place the link or embed will live.
+            </p>
+          </div>
+
+          <div>
+            <span className={labelClass}>Goal</span>
+            {lockedGoalKey ? (
+              // LOCKED, because the funnel branches on it. The way to change it is
+              // to change the template, which is what the back-link above is for.
+              <div className="mt-1 flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-2">
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">
+                  {goalLabel(lockedGoalKey)}
+                </span>
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="shrink-0 text-[11.5px] font-semibold text-status-royal underline-offset-2 hover:underline"
+                >
+                  Change template
+                </button>
+              </div>
+            ) : (
+              <select
+                id="ca-goal"
+                aria-label="Goal"
+                value={form.goal}
+                onChange={(e) => set("goal", e.target.value)}
+                className={inputClass}
+              >
+                {GOAL_CATALOG.map((g) => (
+                  <option key={g.key} value={g.key}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="mt-1 text-[11px] text-muted">
+              {lockedGoalKey
+                ? "Set by the template you picked, because its questions branch on it."
+                : "A funnel built from scratch asks about any treatment, so pick whichever this link is for."}
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="ca-budget" className={labelClass}>
+              Target budget
+            </label>
+            <select
+              id="ca-budget"
+              value={form.targetBudget}
+              onChange={(e) => set("targetBudget", e.target.value)}
+              className={inputClass}
+            >
+              {BUDGET_CATALOG.map((b) => (
+                <option key={b.key} value={b.key}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label htmlFor="ca-ideal" className={labelClass}>
+              Ideal customer (internal, used to tailor the AI follow-up)
+            </label>
+            <textarea
+              id="ca-ideal"
+              rows={2}
+              value={form.idealCustomer}
+              onChange={(e) => set("idealCustomer", e.target.value)}
+              placeholder="Professionals in their 30s and 40s who want a straighter smile without braces."
+              className={inputClass}
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label htmlFor="ca-headline" className={labelClass}>
+              Public headline
+            </label>
+            <input
+              id="ca-headline"
+              type="text"
+              value={form.headline}
+              onChange={(e) => set("headline", e.target.value)}
+              placeholder="Is Invisalign right for you?"
+              className={inputClass}
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label htmlFor="ca-intro" className={labelClass}>
+              Public intro
+            </label>
+            <textarea
+              id="ca-intro"
+              rows={2}
+              value={form.intro}
+              onChange={(e) => set("intro", e.target.value)}
+              placeholder="Answer a few quick questions and we will tell you if you are a good fit."
+              className={inputClass}
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label htmlFor="ca-slug" className={labelClass}>
+              Custom URL (optional)
+            </label>
+            <input
+              id="ca-slug"
+              type="text"
+              value={form.slug}
+              onChange={(e) => set("slug", e.target.value)}
+              placeholder="spring-invisalign"
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-muted">
+              Becomes <span className="font-semibold text-ink">/assess/{clientSlug}/{slugPreview || "your-slug"}</span>
+            </p>
+          </div>
+        </div>
+
+        {formError ? (
+          <p className="mt-4 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
+            {formError}
+          </p>
+        ) : null}
+
+        <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
+          <Button type="submit" variant="primary" size="sm" disabled={submitting || form.name.trim().length === 0}>
+            {submitting ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+            Create assessment
+          </Button>
+          <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+
+      <AssessmentPreview practiceName={practiceName} headline={form.headline} intro={form.intro} />
+    </div>
+  );
+}
+
+/** The degradation banner's classes. Warning when something fell back, quiet
+ *  blue when the writer succeeded - the tone has to match the news. */
+function noteToneClass(source: TemplateChoice["source"]): string {
+  return source === "ai"
+    ? "mt-2.5 flex items-start gap-1.5 rounded-lg border border-blue-royal/20 bg-tint-royal px-3 py-2 text-[11.5px] text-status-royal"
+    : "mt-2.5 flex items-start gap-1.5 rounded-lg border border-warning/25 bg-tint-amber px-3 py-2 text-[11.5px] text-status-amber";
+}
+
+/** What the owner picked, in words. */
+function choiceLabel(choice: TemplateChoice): string {
+  if (choice.key === SCRATCH_FLOW_KEY) return "Built from scratch";
+  if (choice.source === "ai") return "Written for this goal";
+  return flowTemplate(choice.key)?.label ?? "Starter funnel";
 }
 
 /* ---------------------------------------------------------------------------
@@ -453,21 +771,23 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
  * that already-fetched state, so there is no RSC boundary to cross.
  * ------------------------------------------------------------------------- */
 
-function CampaignTabs({
-  campaigns,
-  togglingId,
-  onToggleStatus,
-}: {
+interface ListProps {
+  clientSlug: string;
   campaigns: AdminCampaign[];
   togglingId: string | null;
+  /** The campaign whose canvas opens on mount, because it was just created. */
+  openCanvasFor: string | null;
   onToggleStatus: (c: AdminCampaign) => void;
-}) {
+  onCampaignUpdated: (id: string, patch: Partial<AdminCampaign>) => void;
+}
+
+function CampaignTabs({ campaigns, ...rest }: ListProps) {
   const groups = groupCampaignsByGoal(campaigns);
   const goalTabs: TabItem[] = groups.map((group) => ({
     key: group.key,
     label: group.label,
     badge: group.campaigns.length,
-    content: <CampaignList campaigns={group.campaigns} togglingId={togglingId} onToggleStatus={onToggleStatus} />,
+    content: <CampaignList campaigns={group.campaigns} {...rest} />,
   }));
   const tabs: TabItem[] =
     groups.length > 1
@@ -476,7 +796,7 @@ function CampaignTabs({
             key: "all",
             label: "All",
             badge: campaigns.length,
-            content: <CampaignList campaigns={campaigns} togglingId={togglingId} onToggleStatus={onToggleStatus} />,
+            content: <CampaignList campaigns={campaigns} {...rest} />,
           },
           ...goalTabs,
         ]
@@ -485,35 +805,55 @@ function CampaignTabs({
   return <Tabs tabs={tabs} />;
 }
 
-function CampaignList({
-  campaigns,
-  togglingId,
-  onToggleStatus,
-}: {
-  campaigns: AdminCampaign[];
-  togglingId: string | null;
-  onToggleStatus: (c: AdminCampaign) => void;
-}) {
+function CampaignList({ campaigns, ...rest }: ListProps) {
   return (
     <ul className="space-y-3">
       {campaigns.map((c) => (
-        <CampaignCard key={c.id} campaign={c} togglingId={togglingId} onToggleStatus={onToggleStatus} />
+        <CampaignCard key={c.id} campaign={c} {...rest} />
       ))}
     </ul>
   );
 }
 
 /** One campaign: header + meta, its public URL, an embedded live preview
- *  (Classic/Guided), and any extra detail (ideal customer, embed snippet). */
+ *  (Classic/Guided), the funnel builder, and any extra detail. */
 function CampaignCard({
+  clientSlug,
   campaign,
   togglingId,
+  openCanvasFor,
   onToggleStatus,
+  onCampaignUpdated,
 }: {
+  clientSlug: string;
   campaign: AdminCampaign;
   togglingId: string | null;
+  openCanvasFor: string | null;
   onToggleStatus: (c: AdminCampaign) => void;
+  onCampaignUpdated: (id: string, patch: Partial<AdminCampaign>) => void;
 }) {
+  // STAGE 3. A campaign that was just created lands with its canvas already open,
+  // seeded with the funnel that was chosen for it - the wizard's last step, not a
+  // separate errand the owner has to remember to go on.
+  const [editing, setEditing] = useState(openCanvasFor === campaign.id);
+
+  // SHAPE ONLY, deliberately. normaliseFlow says "can this be read as a graph";
+  // whether it is a LEGAL funnel is validateFlow's business, and the builder is
+  // exactly where a legal-but-broken funnel needs to be opened and repaired. A
+  // blob that cannot even be read is a different thing, and it is said out loud
+  // rather than quietly replaced.
+  const stored = useMemo(() => {
+    const raw = campaign.flow;
+    if (raw === undefined || raw === null) return { graph: null, unreadable: false };
+    const graph = normaliseFlow(raw);
+    return { graph, unreadable: !graph };
+  }, [campaign.flow]);
+
+  const published = campaign.flowPublished === true;
+  const hasFunnel = stored.graph !== null || stored.unreadable;
+  const funnelTone = published ? "success" : hasFunnel ? "info" : "neutral";
+  const funnelLabel = published ? "Funnel live" : hasFunnel ? "Funnel draft" : "Adaptive";
+
   return (
     <li className="rounded-xl border border-line bg-card px-4 py-3.5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -523,6 +863,7 @@ function CampaignCard({
             <StatusPill tone={campaign.status === "active" ? "success" : "neutral"}>
               {campaign.status === "active" ? "Active" : "Paused"}
             </StatusPill>
+            <StatusPill tone={funnelTone}>{funnelLabel}</StatusPill>
           </div>
           <p className="mt-1 text-xs text-muted">
             <span className="text-ink">{campaign.goalLabel}</span>
@@ -534,21 +875,27 @@ function CampaignCard({
           </p>
         </div>
 
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => onToggleStatus(campaign)}
-          disabled={togglingId !== null}
-        >
-          {togglingId === campaign.id ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : campaign.status === "active" ? (
-            <Pause size={14} />
-          ) : (
-            <Play size={14} />
-          )}
-          {campaign.status === "active" ? "Pause" : "Activate"}
-        </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => setEditing((e) => !e)}>
+            {editing ? <X size={14} /> : <GitBranch size={14} />}
+            {editing ? "Close funnel" : "Edit funnel"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onToggleStatus(campaign)}
+            disabled={togglingId !== null}
+          >
+            {togglingId === campaign.id ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : campaign.status === "active" ? (
+              <Pause size={14} />
+            ) : (
+              <Play size={14} />
+            )}
+            {campaign.status === "active" ? "Pause" : "Activate"}
+          </Button>
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
@@ -564,7 +911,33 @@ function CampaignCard({
         </a>
       </div>
 
-      <AssessmentLivePreview path={campaign.path} title={campaign.name} />
+      {editing ? (
+        <FlowBuilder
+          clientSlug={clientSlug}
+          campaignSlug={campaign.slug}
+          campaignName={campaign.name}
+          graph={stored.graph ?? templateForGoal(campaign.goal).build()}
+          unreadable={stored.unreadable}
+          published={published}
+          flowVersion={typeof campaign.flowVersion === "number" ? campaign.flowVersion : null}
+          onSaved={(outcome) =>
+            onCampaignUpdated(campaign.id, {
+              flowPublished: outcome.published,
+              ...(outcome.version === null ? {} : { flowVersion: outcome.version }),
+            })
+          }
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
+
+      {/* The Guided style is a runtime the authored funnel does not have in v1,
+          so offering the switch on a flow-published campaign would preview a
+          funnel that does not exist. */}
+      <AssessmentLivePreview
+        path={campaign.path}
+        title={campaign.name}
+        flowPublished={published}
+      />
 
       <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3 text-xs">
         {campaign.idealCustomer ? (

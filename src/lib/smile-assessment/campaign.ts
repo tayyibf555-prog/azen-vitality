@@ -6,7 +6,8 @@
 // Pure data + helpers only (no I/O), so it is shared by the public landing page,
 // the submit endpoint, the scoring engine and the internal management UI.
 
-import { Q_TREATMENT } from "./quiz";
+import { Q_TREATMENT, questionById } from "./quiz";
+import type { FlowGraph } from "./flow";
 
 // ---------------------------------------------------------------------------
 // Goal catalogue. A goal maps to the Q_TREATMENT option value it targets (or null
@@ -149,6 +150,24 @@ export interface Campaign {
   headline: string | null;
   intro: string | null;
   status: CampaignStatus;
+  /**
+   * The authored funnel graph, EXACTLY as it sits in the jsonb column: raw and
+   * unchecked. null for every campaign that has never had one, which is every
+   * campaign until an owner draws one.
+   *
+   * Deliberately `unknown` and NOT a coerced FlowGraph, which is where this
+   * differs from rowToForm/normaliseFormConfig (onboarding/form-repository.ts:44).
+   * A funnel has two ways to be unusable - the blob is not readable as a graph, or
+   * it is readable but breaks one of the eleven routing rules - and only the
+   * SECOND can be reported to anyone. Coercing on read collapses them into a
+   * silent null. So the raw value travels, and every consumer goes through
+   * normaliseAndValidateFlow, which names which of the two happened and why.
+   */
+  flow: unknown;
+  /** Monotonic save counter. 0 = never saved. */
+  flowVersion: number;
+  /** Whether the public runtime may use `flow` at all. See migration 0078. */
+  flowPublished: boolean;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -175,6 +194,78 @@ export function toPublicCampaign(c: Campaign): PublicCampaign {
     goalLabel: goalLabel(c.goal),
     headline: c.headline,
     intro: c.intro,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The public funnel payload.
+// ---------------------------------------------------------------------------
+
+/**
+ * A question as the patient's browser is allowed to see it: id, prompt, and the
+ * option values and labels. This is byte-for-byte the shape `questionPayload`
+ * already returns from the adaptive funnel (api/smile-assessment/next/route.ts:75),
+ * which is the point - the two modes must not ship the browser different things
+ * about the same question.
+ *
+ * WHAT IS MISSING FROM IT IS THE FEATURE. QuizOption carries a `weight`
+ * (quiz.ts:17-21): the practice's intent/fit scoring model, and the reason a lead
+ * bands high or low. It is never sent. Publishing it would let anyone reverse the
+ * qualification model straight out of the page source, and would hand a competitor
+ * the one genuinely proprietary thing in the funnel. So the strip happens HERE, on
+ * the server, once, rather than being remembered by each component.
+ */
+export interface PublicFlowQuestion {
+  id: string;
+  prompt: string;
+  options: { value: string; label: string }[];
+}
+
+/**
+ * Everything the deterministic runtime needs and nothing it does not: the routing
+ * graph (ids, authored copy, option values) plus the wording for exactly the
+ * questions this funnel asks. A question in the bank that this funnel never asks
+ * is not sent either.
+ */
+export interface PublicFlow {
+  graph: FlowGraph;
+  questions: PublicFlowQuestion[];
+}
+
+/**
+ * Build the public payload for a VALIDATED graph.
+ *
+ * Returns null when any question node names an id that is not in the bank. That
+ * cannot happen after validateFlow (rule 2 catches it), and the null is still
+ * here on purpose: it means a caller that forgets to validate gets no funnel and
+ * falls back to the adaptive one, rather than serving a patient a question screen
+ * with a missing prompt. Loud failure, working quiz.
+ */
+export function toPublicFlow(graph: FlowGraph): PublicFlow | null {
+  const questions: PublicFlowQuestion[] = [];
+  const seen = new Set<string>();
+  for (const n of graph.nodes) {
+    if (n.kind !== "question" || seen.has(n.questionId)) continue;
+    const q = questionById(n.questionId);
+    if (!q) return null;
+    seen.add(n.questionId);
+    questions.push({
+      id: q.id,
+      prompt: q.prompt,
+      // Mapped field by field, never spread: a spread would carry `weight` the
+      // moment anyone adds a field to QuizOption, and nobody would notice.
+      options: q.options.map((o) => ({ value: o.value, label: o.label })),
+    });
+  }
+  // A fresh graph, so nothing downstream can mutate the campaign row's copy of it.
+  return {
+    graph: {
+      schemaVersion: graph.schemaVersion,
+      entry: graph.entry,
+      nodes: graph.nodes.map((n) => ({ ...n })),
+      edges: graph.edges.map((e) => ({ ...e })),
+    },
+    questions,
   };
 }
 

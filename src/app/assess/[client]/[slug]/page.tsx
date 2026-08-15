@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { AssessmentQuiz } from "@/components/assess/assessment-quiz";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
-import { toPublicCampaign } from "@/lib/smile-assessment/campaign";
+import { toPublicCampaign, toPublicFlow, type PublicFlow } from "@/lib/smile-assessment/campaign";
+import { normaliseAndValidateFlow, describeFlowFailures } from "@/lib/smile-assessment/flow-validate";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import { getClient } from "@/lib/mock/clients";
 
 // Public campaign landing page (/assess/<client>/<slug>). The ad destination for a
@@ -67,6 +69,17 @@ export default async function CampaignAssessmentPage({
   const clientRecord = getClient(client);
   if (!clientRecord) notFound();
 
+  // THE KILL SWITCH, checked on the PAGE and not only in the API.
+  //
+  // The owner-only per-system switch for `smile-assessment` was enforced in two
+  // places: /api/smile-assessment/next (next/route.ts:192) and at submit
+  // (submit/route.ts:266). Both are things the ADAPTIVE quiz calls. A funnel that
+  // walks an authored graph never calls /next at all, so with the switch off it
+  // would happily ask every question and only fail at the last step, after the
+  // patient had typed their name and number in. Turning a system off has to mean
+  // the door is shut, so the check belongs here, before anything renders.
+  if (!(await isSystemEnabled(clientRecord.id, "smile-assessment"))) notFound();
+
   // Degrade a transient read error to a clean 404 rather than a 500.
   let campaign = null;
   try {
@@ -77,6 +90,38 @@ export default async function CampaignAssessmentPage({
   if (!campaign) notFound();
 
   const pub = toPublicCampaign(campaign);
+
+  // THE AUTHORED FUNNEL, if this campaign has one that is published AND still
+  // valid. Both halves matter and neither is redundant:
+  //
+  //   published  the owner said so. There is no draft campaign status to hide a
+  //              half-built funnel behind (0060), so the boolean is the gate.
+  //   valid      re-checked HERE, on every request, not trusted from the write
+  //              that stored it. quiz.ts can lose a question, the schema can move,
+  //              a row can be edited by hand. Validating at read is what makes any
+  //              of that a fallback instead of a broken quiz.
+  //
+  // Anything short of both, and the page serves the adaptive funnel, which always
+  // works. It is never an empty screen and never a half-funnel: the whole point of
+  // normaliseFlow being all-or-nothing (flow.ts) is that there is no middle state
+  // to render. The reason is logged, because a funnel silently not running is
+  // exactly the failure an owner would never notice.
+  let flow: PublicFlow | null = null;
+  if (campaign.flowPublished) {
+    const checked = normaliseAndValidateFlow(campaign.flow);
+    if (checked.graph) {
+      flow = toPublicFlow(checked.graph);
+      if (!flow) {
+        console.warn(
+          `[assess] ${client}/${slug}: funnel v${campaign.flowVersion} names a question that is no longer in the bank; using the adaptive funnel`,
+        );
+      }
+    } else {
+      console.warn(
+        `[assess] ${client}/${slug}: published funnel v${campaign.flowVersion} did not validate; using the adaptive funnel\n${describeFlowFailures(checked.result.failures)}`,
+      );
+    }
+  }
 
   // ?style=guided opts into the premium Guided quiz; anything else (including
   // absent) stays Classic. ?preview=1 is the internal admin live-preview flag:
@@ -95,6 +140,7 @@ export default async function CampaignAssessmentPage({
       practiceName={clientRecord.name}
       style={style}
       previewMode={previewMode}
+      flow={flow}
     />
   );
 }

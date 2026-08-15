@@ -297,7 +297,7 @@ async function extractPdf(PdfParse: PdfParseCtor, absPath: string): Promise<stri
   const parser = new PdfParse({ data: new Uint8Array(buf) });
   try {
     const r = await parser.getText();
-    return (r.text ?? "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").trim();
+    return (r.text ?? "").replace(/\u0000/g, " ").replace(/[ \t]+\n/g, "\n").trim();
   } finally {
     await parser.destroy();
   }
