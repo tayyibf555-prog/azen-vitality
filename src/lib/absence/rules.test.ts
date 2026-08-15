@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   APPROVER_ROLES,
   MAX_ABSENCE_SPAN_DAYS,
+  absenceFormCopy,
   SELF_REQUEST_ROLES,
   absenceBlocksShift,
   addDayKey,
@@ -615,5 +616,31 @@ describe("partitionAbsences", () => {
 
   it("handles an empty list", () => {
     expect(partitionAbsences([])).toEqual({ awaiting: [], upcoming: [], past: [] });
+  });
+});
+
+describe("absenceFormCopy: one form, two voices", () => {
+  const manager = absenceFormCopy(false);
+  const self = absenceFormCopy(true);
+
+  it("asks the manager to ADD a request and the staff member to SEND one", () => {
+    expect(manager.submitLabel).toBe("Add the request");
+    expect(self.submitLabel).toBe("Send the request");
+  });
+
+  it("addresses the note to whoever will read it", () => {
+    expect(manager.notePlaceholder).toMatch(/person deciding/i);
+    expect(self.notePlaceholder).toMatch(/your manager/i);
+  });
+
+  it("gives the two forms DIFFERENT element ids, so both can sit on one page", () => {
+    // A shared `id="absence-start"` would make one form's label focus the other's
+    // input, which is the silent kind of broken.
+    expect(manager.idPrefix).not.toBe(self.idPrefix);
+  });
+
+  it("differs in NOTHING else: every other field is the same form", () => {
+    const keys = Object.keys(manager).sort();
+    expect(keys).toEqual(["idPrefix", "notePlaceholder", "submitLabel"]);
   });
 });

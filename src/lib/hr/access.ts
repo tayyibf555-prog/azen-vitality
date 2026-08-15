@@ -1,4 +1,3 @@
-import type { AuthedUser } from "@/lib/auth/session";
 import type { Role } from "@/lib/types";
 
 // ===========================================================================
@@ -38,11 +37,15 @@ import type { Role } from "@/lib/types";
 // from this constant rather than restating them. Change this list and the
 // capability's defaults change with it, in one place, provably.
 //
-// `canSeePay` / `requirePayAccess` have no callers left in the app. They are kept,
-// with their tests, as the pure statement of the rule the capability layer now
-// carries — and as the answer for any surface that needs it without a session
-// (there is none today). Nothing should call them again in preference to the
-// capability: a per-person grant is invisible to a role list.
+// `canSeePay` / `roleCanSeePay` / `requirePayAccess` USED TO LIVE HERE and are
+// gone. They had no callers left, and a superseded guard sitting next to its
+// replacement is an invitation to reach for the role check instead of the
+// capability — which would be wrong in the one way that matters: a per-person
+// grant is invisible to a role list, so `hr.view-pay` granted to a named
+// coordinator would be silently ignored. Ask `requireCapability(auth,
+// "hr.view-pay")` on a write and `hasCapability` when deciding whether to build
+// pay fields at all. `destructive-route-capability-coverage.test.ts` asserts no
+// route reaches for the role helper again.
 //
 // ---------------------------------------------------------------------------
 // THE RULE THIS FILE EXISTS TO ENFORCE: OMIT, DO NOT HIDE.
@@ -65,38 +68,3 @@ import type { Role } from "@/lib/types";
  */
 export const PAY_ACCESS_ROLES: readonly Role[] = ["agency_admin", "client_owner"] as const;
 
-/**
- * Whether this session may see pay.
- *
- * A NULL user means auth enforcement is off (no SUPABASE_SERVICE_ROLE_KEY, the
- * un-enforced pilot), and every other guard in this codebase passes through in
- * that state. This one does the same, so the demo keeps showing the whole
- * feature; the moment enforcement is on, a coordinator is refused.
- */
-export function canSeePay(user: AuthedUser | null): boolean {
-  if (!user) return true;
-  return PAY_ACCESS_ROLES.includes(user.role);
-}
-
-/** Whether a bare role may see pay. The pure core `canSeePay` is built on. */
-export function roleCanSeePay(role: Role): boolean {
-  return PAY_ACCESS_ROLES.includes(role);
-}
-
-/**
- * 403 Response if this session may not see pay; else null.
- *
- * Same shape as every guard in `@/lib/auth/guard` (return the Response directly,
- * no-op on a null user) so it composes into the existing chain without a caller
- * having to think about it.
- *
- * NOTE FOR THE ROUTES: this helper is NOT one of the tokens the API coverage
- * sweeps recognise as authorisation, and it must never be a route's only guard.
- * Every route that calls it also carries `requireOwnerRole` /
- * `requireApproverRole`, which is both correct (pay access is narrower than the
- * module, not a substitute for it) and what keeps the sweeps honest.
- */
-export function requirePayAccess(user: AuthedUser | null): Response | null {
-  if (canSeePay(user)) return null;
-  return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
-}

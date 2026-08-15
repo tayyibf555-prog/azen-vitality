@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CheckCircle2, FileSignature, Loader2, ShieldCheck } from "lucide-react";
+import { CheckCircle2, ExternalLink, FileSignature, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SectionCard, StatusPill } from "@/components/primitives";
 import {
@@ -10,10 +10,23 @@ import {
   type StaffPolicy,
   type StaffPolicySignatureSummary,
 } from "@/lib/hr/esign";
-import { myPolicies, panelStateFor, type LoadFailure } from "@/lib/my-work/rules";
+import {
+  myPolicies,
+  panelStateFor,
+  policyOpenFailureCopy,
+  policyReadState,
+  type LoadFailure,
+} from "@/lib/my-work/rules";
 import { PanelShell } from "./panel-shell";
 import { useSelfServiceRead } from "./use-self-service";
-import { instantLabel, longDayLabel, myPoliciesUrl, signPolicyUrl } from "./shared";
+import {
+  instantLabel,
+  longDayLabel,
+  myDocumentUrlEndpoint,
+  myPoliciesUrl,
+  readJson,
+  signPolicyUrl,
+} from "./shared";
 
 // MY SIGNATURES — practice policies waiting for me, and the ones I have confirmed.
 //
@@ -30,10 +43,23 @@ import { instantLabel, longDayLabel, myPoliciesUrl, signPolicyUrl } from "./shar
 // covering v2; the policy comes back onto the outstanding list, carrying the old
 // signature so the screen can say when it was given.
 //
+// READING IS HALF THE ACT, so the document is openable from here. Each
+// outstanding policy carries a "Read the policy" control that mints a two-minute
+// signed URL for its `storagePath` through the same endpoint My documents uses,
+// on the `mine=1` branch (`isReadablePolicyPath` admits the practice's policy
+// prefix for staff; it is a second predicate, never a widening of "is it mine").
+// The confirm copy then STATES what was opened rather than instructing — see
+// `policyReadState`. It does not hard-block: a mint that fails must not make a
+// policy unsignable, and the person may have read it on paper.
+//
 // Typed name only for now. The drawn-signature canvas is the HR lane's
 // `signature-pad`; when it is wired here the form swaps its input for it and
 // posts `{ method: "drawn", value: <data-url> }` — the route and the stored
 // shape already accept both.
+
+interface SignedUrlResponse {
+  url?: string;
+}
 
 interface PoliciesResponse {
   ok?: boolean;
@@ -67,6 +93,11 @@ export function MySignaturesTab({
   const [submitting, setSubmitting] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  /** The policy whose signed URL is being minted right now, if any. */
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  /** Policy ids opened during this visit. Not persisted: it is not a permission. */
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [readError, setReadError] = useState<string | null>(null);
 
   const view = useMemo(
     () => myPolicies(data?.policies ?? [], data?.signatures ?? [], selfStaffId, today),
@@ -92,6 +123,31 @@ export function MySignaturesTab({
     failure: identityFailure ?? failure ?? unavailable,
     count: total,
   });
+
+  async function openPolicy(policy: StaffPolicy) {
+    if (openingId) return;
+    setOpeningId(policy.id);
+    setReadError(null);
+    // Opened BEFORE the await so the browser attributes the window to the click
+    // rather than to a promise, which is what stops a popup blocker eating it.
+    // Same shape as My documents.
+    const tab = window.open("", "_blank", "noopener,noreferrer");
+    try {
+      const { data: signed, failure: signFailure } = await readJson<SignedUrlResponse>(
+        myDocumentUrlEndpoint(clientSlug, policy.storagePath),
+      );
+      if (signFailure || !signed?.url) {
+        tab?.close();
+        setReadError(policyOpenFailureCopy(policy.title));
+        return;
+      }
+      if (tab) tab.location.href = signed.url;
+      else window.location.href = signed.url;
+      setReadIds((ids) => new Set(ids).add(policy.id));
+    } finally {
+      setOpeningId(null);
+    }
+  }
 
   async function sign(policy: StaffPolicy) {
     setSubmitting(true);
@@ -136,6 +192,13 @@ export function MySignaturesTab({
             {message}
           </p>
         ) : null}
+        {/* NOTHING WAS SHOWN. Said plainly, rather than leaving somebody to
+            confirm a document they never saw. */}
+        {readError ? (
+          <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
+            {readError}
+          </p>
+        ) : null}
 
         <PanelShell
           state={state}
@@ -155,7 +218,14 @@ export function MySignaturesTab({
                 <p className="mt-2 text-[13px] text-muted">Nothing is waiting for your signature.</p>
               ) : (
                 <ul className="mt-2 divide-y divide-line rounded-xl border border-line">
-                  {view.outstanding.map(({ policy, superseded }) => (
+                  {view.outstanding.map(({ policy, superseded }) => {
+                    const read = policyReadState({
+                      title: policy.title,
+                      version: policy.version,
+                      opening: openingId === policy.id,
+                      opened: readIds.has(policy.id),
+                    });
+                    return (
                     <li key={policy.id} className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                         <div className="min-w-0 flex-1">
@@ -170,6 +240,21 @@ export function MySignaturesTab({
                             </p>
                           ) : null}
                         </div>
+                        {/* READ, then CONFIRM: two controls, in that order, so the
+                            screen offers the half of the act it used to omit. */}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={read.busy}
+                          onClick={() => void openPolicy(policy)}
+                        >
+                          {read.busy ? (
+                            <Loader2 size={15} className="animate-spin" />
+                          ) : (
+                            <ExternalLink size={15} />
+                          )}
+                          {read.openLabel}
+                        </Button>
                         <Button
                           variant={openId === policy.id ? "secondary" : "primary"}
                           size="sm"
@@ -180,7 +265,7 @@ export function MySignaturesTab({
                           }}
                         >
                           <FileSignature size={15} />
-                          {openId === policy.id ? "Close" : "Read and confirm"}
+                          {openId === policy.id ? "Close" : "Confirm"}
                         </Button>
                       </div>
 
@@ -200,6 +285,12 @@ export function MySignaturesTab({
                               {ESIGN_COPY.whatThisIs} {ESIGN_COPY.whatThisIsNot}
                             </span>
                           </p>
+
+                          {/* The copy states what was OPENED once it has been,
+                              and asks for it first when it has not. Deliberately
+                              not a lock on the button: a mint that fails must
+                              never make a policy unsignable. */}
+                          <p className="mt-3 text-[12.5px] text-navy">{read.confirmPrompt}</p>
 
                           <label htmlFor={`sign-${policy.id}`} className="mt-3 block text-xs font-semibold text-navy">
                             Type your full name to confirm version {policy.version}{" "}
@@ -239,7 +330,8 @@ export function MySignaturesTab({
                         </form>
                       ) : null}
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </div>

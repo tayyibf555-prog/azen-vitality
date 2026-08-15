@@ -1,5 +1,6 @@
 import { londonDayKey } from "@/lib/time/london";
 import { londonInstantMs } from "@/lib/calendar/availability";
+import { LIVE_SHIFT_STATUSES } from "@/lib/rota/types";
 import type {
   ClockAnomalyNote,
   ClockEvent,
@@ -93,9 +94,18 @@ function shiftStartMs(shift: RosteredShift): number {
   return londonInstantMs(shift.shiftDate, t.hour, t.minute);
 }
 
-/** A shift that expects somebody. Cancelled shifts roster nobody. */
+/**
+ * A shift that expects somebody.
+ *
+ * Both terminal statuses roster nobody, for different reasons: `cancelled`
+ * frees the slot, `removed` is the tombstone a person leaves by deleting the
+ * shift. Either way nobody is due in, so neither can be missed nor make a
+ * session rostered. LIVE_SHIFT_STATUSES is the ONE list — an allowlist, not a
+ * denylist, so a status added later cannot silently become "expected here"
+ * while the rota lane treats it as dead.
+ */
 function isRostered(shift: RosteredShift): boolean {
-  return shift.status !== "cancelled";
+  return (LIVE_SHIFT_STATUSES as readonly string[]).includes(shift.status ?? "scheduled");
 }
 
 /** Whole minutes between two instants, floored at 0 so a skewed clock cannot go negative. */
@@ -277,8 +287,8 @@ export interface RotaComparison {
  * which disagreements are worth raising yet, so a 14:00 shift is not a missed
  * clock-in at nine in the morning.
  *
- * Cancelled shifts are ignored on both sides: they expect nobody, so they can
- * neither be missed nor make a session rostered.
+ * Cancelled AND removed shifts are ignored on both sides: they expect nobody,
+ * so they can neither be missed nor make a session rostered.
  */
 export function compareToRota(sessions: ClockSession[], shifts: RosteredShift[]): RotaComparison {
   const rostered = shifts.filter(isRostered);

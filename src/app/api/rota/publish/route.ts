@@ -9,9 +9,11 @@ import { sendMessage } from "@/lib/messaging/send";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { isDryRun } from "@/lib/messaging/types";
 import { practiceName } from "@/lib/rota/config";
-import { draftShiftMessage, type ShiftLine } from "@/lib/rota/draft";
+import { draftClearedWeekMessage, draftShiftMessage, type ShiftLine } from "@/lib/rota/draft";
 import {
   buildPublication,
+  clearedStaff,
+  publishRecordFailureCopy,
   summarisePrePublish,
   weekRange,
   type PublishedShift,
@@ -298,20 +300,18 @@ export async function POST(request: Request): Promise<Response> {
   const notifiedShiftIds: string[] = [];
   const providers = new Set<string>();
 
-  for (const [staffId, staffShifts] of byStaff) {
-    if (!tellEveryone && !changedStaff.has(staffId)) continue;
-    const person = staffById.get(staffId);
-    if (!person) {
-      notReached += 1;
-      continue;
-    }
-
-    // NOT `body`: the request body is already in scope, and shadowing it here is
-    // exactly how a route ends up texting somebody a JSON blob.
-    const messageBody = draftShiftMessage(person.name, name, toLines(staffShifts));
-    const subject = `Your shifts at ${name}, week beginning ${weekStart}`;
-    const siteForSuppression = staffShifts[0]?.siteId ?? "";
-
+  /**
+   * Tell ONE person, on both channels, under all three gates. Extracted so the
+   * people whose week was EMPTIED go through exactly the same suppression,
+   * dry-run and failure handling as everybody else — a second hand-written copy
+   * of this block is how one of the two loops ends up missing a gate.
+   */
+  async function notifyPerson(
+    person: RotaStaff,
+    messageBody: string,
+    subject: string,
+    siteForSuppression: string,
+  ): Promise<{ reached: boolean; simulated: boolean }> {
     let reached = false;
     let simulated = false;
 
@@ -359,6 +359,28 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
 
+    return { reached, simulated };
+  }
+
+  for (const [staffId, staffShifts] of byStaff) {
+    if (!tellEveryone && !changedStaff.has(staffId)) continue;
+    const person = staffById.get(staffId);
+    if (!person) {
+      notReached += 1;
+      continue;
+    }
+
+    // NOT `body`: the request body is already in scope, and shadowing it here is
+    // exactly how a route ends up texting somebody a JSON blob.
+    const messageBody = draftShiftMessage(person.name, name, toLines(staffShifts));
+    const subject = `Your shifts at ${name}, week beginning ${weekStart}`;
+    const { reached, simulated } = await notifyPerson(
+      person,
+      messageBody,
+      subject,
+      staffShifts[0]?.siteId ?? "",
+    );
+
     if (reached) {
       notifiedStaff += 1;
       // GATE 2, the half that matters: only shifts REALLY sent consume their
@@ -369,6 +391,33 @@ export async function POST(request: Request): Promise<Response> {
     } else {
       notReached += 1;
     }
+  }
+
+  // THE PEOPLE WHO ARE NOT IN THE NEW SNAPSHOT AT ALL.
+  //
+  // `byStaff` is built from the new publication, so somebody whose every shift was
+  // deleted, cancelled or reassigned has no entry in it and the loop above never
+  // runs for them. They were the one group a publish could silently skip: not
+  // messaged, not counted as told, not counted as unreachable, while the response
+  // and the publication row both looked clean. Nothing else covers it either — the
+  // 24/7 sweep reads `status = 'scheduled'` and a tombstone is `'removed'`.
+  //
+  // No shift ids are consumed here: they have none left to consume.
+  for (const { staffId, siteId: lostSiteId } of clearedStaff(summary.diff, snapshot)) {
+    const person = staffById.get(staffId);
+    if (!person) {
+      notReached += 1;
+      continue;
+    }
+    const { reached, simulated } = await notifyPerson(
+      person,
+      draftClearedWeekMessage(person.name, name, weekStart),
+      `Your shifts at ${name}, week beginning ${weekStart}`,
+      lostSiteId,
+    );
+    if (reached) notifiedStaff += 1;
+    else if (simulated) simulatedStaff += 1;
+    else notReached += 1;
   }
 
   // The record of the act, written whether or not anybody could be reached: the
@@ -390,14 +439,23 @@ export async function POST(request: Request): Promise<Response> {
     // LOUD. A publication that could not be recorded is not a publication, and a
     // cheerful {ok:true} here would leave the manager believing a version exists
     // that nobody can ever produce as evidence.
+    //
+    // But NOT "nothing has been changed": the sends happen above this line, so by
+    // now real phones may already carry this rota. The copy says how many, so the
+    // manager does not press Publish again and text the team twice.
+    const collision =
+      typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
     return Response.json(
       {
         ok: false,
         error:
-          "The rota was not published: the publication record could not be saved. Nothing has been changed. " +
+          publishRecordFailureCopy({ contacted: notifiedStaff, collision }) +
+          " " +
           (err instanceof Error ? err.message : String(err)),
+        contacted: notifiedStaff,
+        collision,
       },
-      { status: 500 },
+      { status: collision ? 409 : 500 },
     );
   }
 

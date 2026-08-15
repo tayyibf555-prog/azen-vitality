@@ -9,12 +9,12 @@ import {
   STAFF_DOCS_BUCKET,
   daysBetween,
   documentsMissing,
-  documentsNeedingAttention,
   expiryState,
   extensionForMime,
   formatBytes,
   isDocumentKind,
   isPastRetention,
+  isReadablePolicyPath,
   isWithinOwnDocPrefix,
   isWithinStaffDocPrefix,
   safeDocLeafName,
@@ -253,6 +253,68 @@ describe("isWithinOwnDocPrefix is the SELF-SERVICE guard: my file, not my practi
   });
 });
 
+describe("isReadablePolicyPath: a policy is the practice's, not a person's", () => {
+  // The second self-service predicate. It exists because the FIRST one, correctly,
+  // says no to a policy — and a member of staff who is being asked to read and
+  // affirm a policy must be able to open it. Every refusal below is a segment this
+  // must never be relaxed by.
+  const MINE = "00000000-0000-0000-0000-0000000000f1";
+  const THEIRS = "00000000-0000-0000-0000-0000000000f2";
+  const POLICY = "staff-docs/vitality/policies/tok/infection-control.pdf";
+
+  it("admits this practice's policy PDF, which the own-doc guard refuses", () => {
+    // Both halves stated: the ability is NEW, and it did not come from loosening
+    // the guard that protects a colleague's file.
+    expect(isWithinOwnDocPrefix(POLICY, "vitality", MINE)).toBe(false);
+    expect(isReadablePolicyPath(POLICY, "vitality")).toBe(true);
+  });
+
+  it("REFUSES A COLLEAGUE'S PERSONAL DOCUMENT — the exposure a practice-wide check would open", () => {
+    // If this predicate were `isWithinStaffDocPrefix`, this path would pass and the
+    // self-service branch would mint a signed URL for somebody else's passport.
+    expect(isWithinStaffDocPrefix(`staff-docs/vitality/${THEIRS}/tok/passport.pdf`, "vitality")).toBe(true);
+    expect(isReadablePolicyPath(`staff-docs/vitality/${THEIRS}/tok/passport.pdf`, "vitality")).toBe(false);
+    // Not even the caller's OWN document: this predicate answers one question only.
+    expect(isReadablePolicyPath(`staff-docs/vitality/${MINE}/tok/dbs.pdf`, "vitality")).toBe(false);
+  });
+
+  it("REFUSES ANOTHER PRACTICE'S POLICY PATH", () => {
+    expect(isReadablePolicyPath("staff-docs/other-practice/policies/tok/hs.pdf", "vitality")).toBe(false);
+    // ...including a sibling slug that merely starts the same way.
+    expect(isReadablePolicyPath("staff-docs/vitality-two/policies/tok/hs.pdf", "vitality")).toBe(false);
+  });
+
+  it("inherits every refusal of the tenancy guard: traversal and the patient bucket", () => {
+    expect(isReadablePolicyPath("staff-docs/vitality/policies/../../other/policies/hs.pdf", "vitality")).toBe(false);
+    expect(isReadablePolicyPath("onboarding/vitality/policies/tok/hs.pdf", "vitality")).toBe(false);
+  });
+
+  it("'policies' is a literal segment, not a prefix a lookalike can borrow", () => {
+    expect(isReadablePolicyPath("staff-docs/vitality/policies-draft/tok/hs.pdf", "vitality")).toBe(false);
+    expect(isReadablePolicyPath("staff-docs/vitality/policiesf1/tok/hs.pdf", "vitality")).toBe(false);
+    // The bare prefix with nothing under it is not a document either.
+    expect(isReadablePolicyPath("staff-docs/vitality/policies", "vitality")).toBe(false);
+  });
+
+  it("refuses an empty, missing or non-string path, and an unsafe client slug", () => {
+    expect(isReadablePolicyPath("", "vitality")).toBe(false);
+    expect(isReadablePolicyPath(undefined, "vitality")).toBe(false);
+    expect(isReadablePolicyPath(123, "vitality")).toBe(false);
+    expect(isReadablePolicyPath("staff-docs/../policies/tok/hs.pdf", "..")).toBe(false);
+  });
+
+  it("is exactly what safePolicyPath writes, so the two cannot drift apart", () => {
+    const written = safePolicyPath({
+      clientSlug: "vitality",
+      token: "11111111-2222-3333-4444-555555555555",
+      filename: "Infection control.pdf",
+      mime: "application/pdf",
+    });
+    expect(written).not.toBeNull();
+    expect(isReadablePolicyPath(written, "vitality")).toBe(true);
+  });
+});
+
 describe("expiryState answers four questions, not three", () => {
   it("a document with no expiry is 'no-expiry', NOT 'valid'", () => {
     // Calling it valid would be a confident claim the data does not support.
@@ -336,17 +398,6 @@ describe("documentsMissing does not count an expired document as held", () => {
   });
 });
 
-describe("documentsNeedingAttention is the practice's worklist", () => {
-  it("lists expired and expiring, soonest first, and leaves valid ones out", () => {
-    const docs = [
-      doc({ id: "valid", expiresOn: "2027-01-01" }),
-      doc({ id: "soon", expiresOn: "2026-09-01" }),
-      doc({ id: "gone", expiresOn: "2026-06-01" }),
-      doc({ id: "undated", expiresOn: null }),
-    ];
-    expect(documentsNeedingAttention(docs, TODAY).map((d) => d.id)).toEqual(["gone", "soon"]);
-  });
-});
 
 describe("retention is recorded and displayed, never enforced", () => {
   it("is past retention when the date has gone", () => {

@@ -455,11 +455,6 @@ export function isCapability(value: unknown): value is Capability {
   return typeof value === "string" && BY_KEY.has(value);
 }
 
-/** The catalog entry for a key, or null. */
-export function capabilityDef(key: string): CapabilityDef | null {
-  return BY_KEY.get(key) ?? null;
-}
-
 /** True when the act behind this key cannot be undone. Unknown keys are treated as destructive. */
 export function isDestructive(key: string): boolean {
   const def = BY_KEY.get(key);

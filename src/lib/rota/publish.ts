@@ -184,6 +184,75 @@ export function diffAgainstPublished(
   return { added, removed, changed, unchanged, changeCount: added.length + removed.length + changed.length };
 }
 
+/** Somebody whose week is now empty, and the site whose rules govern telling them. */
+export interface ClearedStaff {
+  staffId: string;
+  /**
+   * The site of the shift they LOST. Used for the suppression read, because there
+   * is no shift left in the new snapshot to take a site from.
+   */
+  siteId: string;
+}
+
+/**
+ * The people who were working this week and now are NOT working it at all.
+ *
+ * They are the one group a publish can silently skip. Every notify loop is driven
+ * by the NEW snapshot, and somebody whose every shift was tombstoned, cancelled or
+ * reassigned has no entry in it — so they get no message, and are not counted in
+ * "told" or "could not reach" either. The 24/7 sweep cannot cover for it: it reads
+ * `status = 'scheduled'` and a tombstone is `'removed'`, so nothing else in the
+ * system will ever tell that person the week is off.
+ *
+ * `changed` counts too, not just `removed`: a shift REASSIGNED away from someone
+ * is a change from their point of view, and if it was their only one they are just
+ * as clear of the week as if it had been deleted.
+ */
+export function clearedStaff(
+  diff: PublicationDiff | null,
+  snapshot: PublicationSnapshot,
+): ClearedStaff[] {
+  if (!diff) return [];
+  const stillWorking = new Set(snapshot.shifts.map((s) => s.staffId));
+  const lost = new Map<string, string>();
+  for (const s of diff.removed) if (!lost.has(s.staffId)) lost.set(s.staffId, s.siteId);
+  for (const c of diff.changed) if (!lost.has(c.before.staffId)) lost.set(c.before.staffId, c.before.siteId);
+  return [...lost.entries()]
+    .filter(([staffId]) => !stillWorking.has(staffId))
+    .map(([staffId, siteId]) => ({ staffId, siteId }))
+    .sort((a, b) => a.staffId.localeCompare(b.staffId));
+}
+
+/**
+ * What to tell the manager when the publication ROW could not be written.
+ *
+ * The messages go out BEFORE the row is inserted, so by the time this is reached
+ * real phones may already have been texted. The sentence this used to carry —
+ * "Nothing has been changed." — was then simply false, and it invited the one
+ * action that makes it worse: pressing Publish again and texting everybody twice.
+ *
+ * A collision on the unique (client, site, week, version) key is its own case: it
+ * means somebody else published this week in the meantime, and the fix is to
+ * reload rather than to retry blindly.
+ *
+ * Pure, and here rather than inline in the route, because it is the copy a manager
+ * acts on in the one state where acting wrongly costs real messages.
+ */
+export function publishRecordFailureCopy(input: {
+  /** People this attempt REALLY reached. Simulations do not count: nobody was texted. */
+  contacted: number;
+  /** True when the insert failed on the unique key, i.e. a concurrent publish won. */
+  collision: boolean;
+}): string {
+  const already =
+    input.contacted > 0
+      ? ` ${input.contacted} ${input.contacted === 1 ? "person has" : "people have"} already been sent this rota, and publishing again will contact them again.`
+      : " Nothing has been sent.";
+  return input.collision
+    ? `Somebody else published this week while you were publishing, so this version was not saved. Reload and check what they published before publishing again.${already}`
+    : `The rota was not published: the publication record could not be saved.${already}`;
+}
+
 /** A published shift that clashes with agreed time off. */
 export interface AbsenceConflict {
   shiftId: string;

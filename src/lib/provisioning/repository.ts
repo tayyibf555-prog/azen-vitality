@@ -2,7 +2,7 @@ import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { serviceClient } from "@/lib/supabase/server";
 import type { Role } from "@/lib/types";
-import { authStatusFrom, type AuthUserFacts, type SetPasswordType } from "./rules";
+import { authStatusFrom, countActiveOwners, type AuthUserFacts, type SetPasswordType } from "./rules";
 import type { AuthStatus, InvitableRole, LinkableStaff, LinkedStaff, Person } from "./types";
 
 // ===========================================================================
@@ -76,19 +76,6 @@ async function readAppUsers(clientId: string): Promise<AppUserRow[]> {
     .order("name", { ascending: true });
   if (error) throw error;
   return (data ?? []) as AppUserRow[];
-}
-
-/** One profile row, scoped to the practice so an id from another tenant resolves to null. */
-export async function getPersonRow(clientId: string, id: string): Promise<AppUserRow | null> {
-  const db = serviceClient();
-  const { data, error } = await db
-    .from("app_user")
-    .select(APP_USER_COLUMNS)
-    .eq("client_id", clientId)
-    .eq("id", id)
-    .maybeSingle();
-  if (error) throw error;
-  return (data as AppUserRow | null) ?? null;
 }
 
 /**
@@ -450,11 +437,10 @@ export async function readPeople(clientId: string, nowMs: number): Promise<Peopl
     };
   });
 
-  // "Active" means CAN SIGN IN: an invited-but-never-used owner login counts, a
-  // deactivated one does not, and a profile with no Auth account behind it does not.
-  const activeOwnerCount = people.filter(
-    (p) => p.role === "client_owner" && (p.authStatus === "active" || p.authStatus === "invited"),
-  ).length;
+  // "Active" means CAN SIGN IN. The predicate lives in `countActiveOwners` with
+  // its own test rather than inline here, because this number is what the
+  // last-owner lockout guard rests on and this file has no test file at all.
+  const activeOwnerCount = countActiveOwners(people);
 
   return {
     people,

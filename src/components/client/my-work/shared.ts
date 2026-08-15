@@ -1,4 +1,5 @@
 import type { LoadFailure } from "@/lib/my-work/rules";
+import { formatBytes } from "@/lib/hr/documents";
 
 // ---------------------------------------------------------------------------
 // My work: display helpers and the ENDPOINT CONTRACTS this surface consumes.
@@ -129,15 +130,20 @@ export function timeRangeLabel(startTime: string, endTime: string): string {
   return `${startTime} to ${endTime}`;
 }
 
-/** "1.4 MB" / "812 KB" / "—". */
+/**
+ * "1.4 MB" / "812 KB" / "—".
+ *
+ * The thresholds are NOT restated here: `formatBytes` in @/lib/hr/documents is
+ * the one formatter, and the manager's vault renders the same file with it. All
+ * this adds is the missing-value dash, because a list of my documents shows "—"
+ * where a size is unknown rather than the words "unknown size".
+ */
 export function sizeLabel(bytes: number | null | undefined): string {
   if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "—";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return formatBytes(bytes);
 }
 
-// Document kind labels are NOT restated here: `DOCUMENT_KIND_LABELS` in
+// Document kind labels are NOT restated here either: `DOCUMENT_KIND_LABELS` in
 // @/lib/hr/documents is the one list, so the manager's vault and this page name
 // the same certificate the same way.
 

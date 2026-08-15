@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPublication,
+  clearedStaff,
   diffAgainstPublished,
   nextVersion,
+  publishRecordFailureCopy,
   summarisePrePublish,
   weekRange,
 } from "./publish";
@@ -268,5 +270,95 @@ describe("summarisePrePublish", () => {
 
   it("is stable: the same inputs always produce the same summary", () => {
     expect(summarisePrePublish(base)).toEqual(summarisePrePublish(base));
+  });
+});
+
+describe("clearedStaff: the people a publish would otherwise skip", () => {
+  const snapshotOf = (shifts: RotaShift[], version = 1) =>
+    buildPublication(shifts, WEEK_START, version, "site-a");
+
+  const AMINA = shift({ id: "s1", staffId: "d1", shiftDate: "2026-07-06" });
+  const BEA = shift({ id: "s2", staffId: "d2", shiftDate: "2026-07-07" });
+
+  it("is empty on a first publish, where there is nothing to have been cleared from", () => {
+    expect(clearedStaff(null, snapshotOf([AMINA, BEA]))).toEqual([]);
+  });
+
+  it("names somebody whose only shift was DELETED, with the site it was at", () => {
+    const previous = snapshotOf([AMINA, BEA]);
+    const now = [AMINA, { ...BEA, status: "removed" as const }];
+    const diff = diffAgainstPublished(now, previous);
+
+    expect(clearedStaff(diff, snapshotOf(now, 2))).toEqual([{ staffId: "d2", siteId: "site-a" }]);
+  });
+
+  it("names somebody whose only shift was REASSIGNED away from them", () => {
+    const previous = snapshotOf([AMINA, BEA]);
+    const now = [AMINA, { ...BEA, staffId: "d1" }];
+    const diff = diffAgainstPublished(now, previous);
+
+    // Nothing was deleted: d2 simply is not on the week any more.
+    expect(diff.removed).toEqual([]);
+    expect(clearedStaff(diff, snapshotOf(now, 2))).toEqual([{ staffId: "d2", siteId: "site-a" }]);
+  });
+
+  it("does NOT name somebody who still has a shift, however much it moved", () => {
+    const previous = snapshotOf([AMINA, BEA]);
+    const now = [AMINA, { ...BEA, id: "s2", startTime: "12:00" }];
+    const diff = diffAgainstPublished(now, previous);
+
+    expect(clearedStaff(diff, snapshotOf(now, 2))).toEqual([]);
+  });
+
+  it("does not name somebody who lost one of two shifts", () => {
+    const second = shift({ id: "s3", staffId: "d2", shiftDate: "2026-07-08" });
+    const previous = snapshotOf([AMINA, BEA, second]);
+    const now = [AMINA, { ...BEA, status: "removed" as const }, second];
+    const diff = diffAgainstPublished(now, previous);
+
+    expect(clearedStaff(diff, snapshotOf(now, 2))).toEqual([]);
+  });
+
+  it("lists each person once, in a stable order, when a whole week is emptied", () => {
+    const previous = snapshotOf([AMINA, BEA]);
+    const now = [
+      { ...AMINA, status: "removed" as const },
+      { ...BEA, status: "removed" as const },
+    ];
+    const diff = diffAgainstPublished(now, previous);
+
+    expect(clearedStaff(diff, snapshotOf(now, 2))).toEqual([
+      { staffId: "d1", siteId: "site-a" },
+      { staffId: "d2", siteId: "site-a" },
+    ]);
+  });
+});
+
+describe("publishRecordFailureCopy: what the manager is told when the row will not save", () => {
+  it("NEVER says nothing changed once people have really been contacted", () => {
+    const copy = publishRecordFailureCopy({ contacted: 3, collision: false });
+    expect(copy).not.toMatch(/nothing/i);
+    expect(copy).toContain("3 people have already been sent this rota");
+    expect(copy).toMatch(/publishing again will contact them again/);
+  });
+
+  it("says nothing was sent when nothing was", () => {
+    expect(publishRecordFailureCopy({ contacted: 0, collision: false })).toMatch(
+      /Nothing has been sent\./,
+    );
+  });
+
+  it("reads as English for one person", () => {
+    expect(publishRecordFailureCopy({ contacted: 1, collision: false })).toContain(
+      "1 person has already been sent",
+    );
+  });
+
+  it("names a concurrent publish, and tells the manager to reload rather than retry", () => {
+    const copy = publishRecordFailureCopy({ contacted: 2, collision: true });
+    expect(copy).toMatch(/Somebody else published this week/);
+    expect(copy).toMatch(/Reload/);
+    // ...and still carries the count, because a reload does not un-send a text.
+    expect(copy).toContain("2 people have already been sent");
   });
 });

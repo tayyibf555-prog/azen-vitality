@@ -74,6 +74,22 @@ describe("collectPages", () => {
     expect(out.truncated).toBe(true);
   });
 
+  // THE OVERSHOOT TRIM. Every other ceiling test uses a maxRows that is an exact
+  // multiple of pageSize (and so do the production defaults, 1000 into 10000), so
+  // the `rows.length > maxRows` branch — the one that actually SLICES — was never
+  // executed anywhere. A ceiling that is not a round number of pages is the only
+  // way to reach it.
+  it("trims to the ceiling exactly when a page overshoots it", async () => {
+    const s = source(5000);
+    const out = await collectPages(s.fetchPage, { pageSize: 100, maxRows: 250 });
+    expect(out.rows).toHaveLength(250);
+    expect(out.rows[249]).toBe(249); // trimmed from the END, not the start
+    expect(out.truncated).toBe(true);
+    // Three reads of 100 to overshoot 250, and no probe: overshooting is proof.
+    expect(out.pages).toBe(3);
+    expect(s.calls).toHaveLength(3);
+  });
+
   it("reaching the ceiling on a SHORT page is not truncation, because there is no more", async () => {
     const s = source(300);
     const out = await collectPages(s.fetchPage, { pageSize: 100, maxRows: 300 });

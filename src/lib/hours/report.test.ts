@@ -202,6 +202,31 @@ describe("buildMonthReport: when the month may be called final", () => {
     expect(report.blockers.join(" ")).toContain("not finished");
   });
 
+  // THE BOUNDARY ITSELF: `today <= to`. The tests above sit strictly inside the
+  // month (21 June) and strictly after it (2 July), so both survive `today < to`.
+  // On the last day people are still clocked in, and their open sessions
+  // contribute 0 minutes by design — calling the month final there would pay
+  // somebody for a day they had half-worked.
+  it("is NOT finalisable on the last day of the month, when people are still clocked in", () => {
+    const report = buildMonthReport({
+      ...base,
+      events: [...CLEAN_EVENTS, tap("in", "2026-06-30T08:00:00Z")],
+      shifts: [...CLEAN_SHIFTS, shift("2026-06-30")],
+      now: new Date("2026-06-30T09:00:00Z"),
+    });
+    expect(report.finalisable).toBe(false);
+    expect(report.blockers.join(" ")).toContain("not finished");
+    // The open session contributes NOTHING yet: only the two closed days count.
+    expect(report.rows[0].closedMinutes).toBe(960);
+    expect(report.totals.openOrUnresolvedCount).toBe(1);
+  });
+
+  it("becomes finalisable the very next day, once the month is behind us", () => {
+    const report = buildMonthReport({ ...base, now: new Date("2026-07-01T09:00:00Z") });
+    expect(report.finalisable).toBe(true);
+    expect(report.blockers).toEqual([]);
+  });
+
   it("A TRUNCATED READ BLOCKS FINALISATION AND SAYS SO", () => {
     // The 500-cap defect: if the read may be short, the figures may be short.
     const report = buildMonthReport({ ...base, truncated: true });

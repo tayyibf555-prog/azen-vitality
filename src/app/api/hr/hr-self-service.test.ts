@@ -105,6 +105,8 @@ const MY_STAFF = { id: MINE, name: "Amina", role: "nurse", siteId: "site-n15" };
 
 const MY_PATH = `staff-docs/vitality/${MINE}/tok/dbs.pdf`;
 const THEIR_PATH = `staff-docs/vitality/${THEIRS}/tok/dbs.pdf`;
+/** The same path `policy()` below carries, and the same shape `safePolicyPath` writes. */
+const POLICY_PATH = "staff-docs/vitality/policies/tok/hs.pdf";
 
 function doc(over: Record<string, unknown> = {}) {
   return {
@@ -131,7 +133,7 @@ function policy(over: Record<string, unknown> = {}) {
     slug: "health-and-safety",
     title: "Health and safety",
     version: 2,
-    storagePath: "staff-docs/vitality/policies/tok/hs.pdf",
+    storagePath: POLICY_PATH,
     mime: "application/pdf",
     sizeBytes: 2048,
     effectiveFrom: "2026-01-01",
@@ -239,7 +241,7 @@ describe("GET /api/hr/document?mine=1 — my own vault", () => {
   });
 });
 
-describe("GET /api/hr/document/url?mine=1 — a link to MY document and no other", () => {
+describe("GET /api/hr/document/url?mine=1 — a link to MY document, the practice's policies, and nothing else", () => {
   const url = (q: string) => documentUrlGet(new Request(`http://localhost/api/hr/document/url?${q}`));
 
   it("signs my own document", async () => {
@@ -261,11 +263,51 @@ describe("GET /api/hr/document/url?mine=1 — a link to MY document and no other
     for (const path of [
       `staff-docs/vitality/${MINE}/../${THEIRS}/dbs.pdf`,
       `onboarding/vitality/${MINE}/passport.pdf`,
-      "staff-docs/vitality/policies/tok/handbook.pdf",
     ]) {
       const res = await url(`client=vitality&mine=1&path=${encodeURIComponent(path)}`);
       expect(res.status, `${path} must be refused`).toBe(403);
     }
+    expect(h.signStaffDocUrl).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // THE POLICY PDF. My signatures asks this person to read a named version and
+  // affirm it; the branch used to refuse the document, so the flow asked for a
+  // signature on something it would not show. A policy is practice-wide, not a
+  // per-person record, so it is admitted by a SECOND predicate — never by
+  // relaxing the one that protects a colleague's file.
+  // -------------------------------------------------------------------------
+  it("SIGNS THE PRACTICE'S POLICY PDF, so the person can read what they are signing", async () => {
+    const res = await url(`client=vitality&mine=1&path=${encodeURIComponent(POLICY_PATH)}`);
+    expect(res.status).toBe(200);
+    expect(h.signStaffDocUrl).toHaveBeenCalledWith(POLICY_PATH, 120);
+    // Short-lived, exactly as a personal document: a view, not a shareable link.
+    expect((await res.json()).expiresIn).toBe(120);
+  });
+
+  it("still REFUSES a colleague's personal document, which the policy allowance must not reach", async () => {
+    // The mutation guard for the new predicate: widen it to the practice prefix
+    // and this is what a nurse gets a signed URL for.
+    const res = await url(`client=vitality&mine=1&path=${encodeURIComponent(THEIR_PATH)}`);
+    expect(res.status).toBe(403);
+    expect(h.signStaffDocUrl).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES ANOTHER PRACTICE'S POLICY PATH", async () => {
+    for (const path of [
+      "staff-docs/other-practice/policies/tok/hs.pdf",
+      "staff-docs/vitality-two/policies/tok/hs.pdf",
+      "staff-docs/vitality/policies/../../other-practice/policies/hs.pdf",
+    ]) {
+      const res = await url(`client=vitality&mine=1&path=${encodeURIComponent(path)}`);
+      expect(res.status, `${path} must be refused`).toBe(403);
+    }
+    expect(h.signStaffDocUrl).not.toHaveBeenCalled();
+  });
+
+  it("a nurse WITHOUT mine=1 still cannot reach the policy: the branch is the only way in", async () => {
+    const res = await url(`client=vitality&path=${encodeURIComponent(POLICY_PATH)}`);
+    expect(res.status).toBe(403);
     expect(h.signStaffDocUrl).not.toHaveBeenCalled();
   });
 

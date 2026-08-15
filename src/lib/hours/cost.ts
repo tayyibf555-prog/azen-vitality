@@ -136,17 +136,11 @@ export function poundsToPence(value: string): number | null {
   return sign * (whole * 100 + fraction);
 }
 
-/**
- * Pence as "£1,234.56", built with integer arithmetic.
- *
- * `(pence / 100).toFixed(2)` is the obvious form and it goes through a float on
- * the way, which is precisely the thing this module refuses to do with money.
- */
-export function poundsLabel(pence: number): string {
-  const negative = pence < 0;
-  const abs = Math.abs(Math.round(pence));
-  const whole = Math.floor(abs / 100);
-  const part = String(abs % 100).padStart(2, "0");
-  const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${negative ? "-" : ""}£${grouped}.${part}`;
-}
+// PENCE ARE FORMATTED BY `formatPenceGbp` in @/lib/dashboard/money, which exists
+// with the note "Kept here so no panel has to invent its own formatting" and is
+// what every dashboard panel already renders money with. A `poundsLabel` lived
+// here and produced byte-identical output for every value this lane can hold
+// (integer pence, capped well below the safe-integer range); a second money
+// formatter in a codebase that centralises money is how two screens end up
+// disagreeing about a figure. Parsing is the other direction and stays here:
+// `poundsToPence` reads a manager's typed "12.50" without touching a float.

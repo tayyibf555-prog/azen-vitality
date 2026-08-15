@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { costPence, poundsLabel, poundsToPence, priceDays, rateOnDay } from "./cost";
+import { costPence, poundsToPence, priceDays, rateOnDay } from "./cost";
+import { formatPenceGbp } from "@/lib/dashboard/money";
 import type { PayRate } from "./types";
 
 const rate = (from: string, pence: number, to: string | null = null): PayRate => ({
@@ -133,27 +134,27 @@ describe("poundsToPence", () => {
     expect(poundsToPence("1e3")).toBeNull();
   });
 
-  it("round-trips against poundsLabel", () => {
+  it("round-trips against formatPenceGbp", () => {
     for (const pence of [0, 5, 1250, 123_456]) {
-      expect(poundsToPence(poundsLabel(pence))).toBe(pence);
+      expect(poundsToPence(formatPenceGbp(pence))).toBe(pence);
     }
   });
 });
 
-describe("poundsLabel", () => {
+describe("formatPenceGbp, the ONE money formatter this lane renders with", () => {
   it("formats pence without ever going through a float", () => {
-    expect(poundsLabel(1250)).toBe("£12.50");
-    expect(poundsLabel(5)).toBe("£0.05");
-    expect(poundsLabel(0)).toBe("£0.00");
-    expect(poundsLabel(123_456)).toBe("£1,234.56");
+    expect(formatPenceGbp(1250)).toBe("£12.50");
+    expect(formatPenceGbp(5)).toBe("£0.05");
+    expect(formatPenceGbp(0)).toBe("£0.00");
+    expect(formatPenceGbp(123_456)).toBe("£1,234.56");
   });
 
   it("keeps the trailing zero a money column needs", () => {
-    expect(poundsLabel(1200)).toBe("£12.00");
-    expect(poundsLabel(1210)).toBe("£12.10");
+    expect(formatPenceGbp(1200)).toBe("£12.00");
+    expect(formatPenceGbp(1210)).toBe("£12.10");
   });
 
   it("handles a negative without losing the sign", () => {
-    expect(poundsLabel(-1250)).toBe("-£12.50");
+    expect(formatPenceGbp(-1250)).toBe("-£12.50");
   });
 });

@@ -25,10 +25,13 @@ import type { Availability, Weekday } from "@/lib/rota/types";
 // UTC midnight where an hour of DST cannot move a day.
 // ===========================================================================
 
-/** The statutory minimum, in weeks. 5.6 weeks is 28 days for a five-day week. */
-export const STATUTORY_WEEKS = 5.6;
-
-/** The statutory cap, in days. Six and seven day weeks do not earn more. */
+/**
+ * The statutory cap, in days. The statutory minimum is 5.6 WEEKS, which is 28 days
+ * for a five-day week; six and seven day weeks do not earn more. The weeks figure
+ * is not a constant here because `statutoryDays` computes with 56/10 rather than
+ * 5.6 to stay off binary floating point (see below), so a `5.6` constant would be
+ * a number nothing is allowed to multiply by.
+ */
 export const STATUTORY_CAP_DAYS = 28;
 
 /** The default leave year start month. April is the common UK default. */
@@ -151,25 +154,6 @@ export function proRataForWindow(
   return round1((entitlementDays * covered) / total);
 }
 
-/**
- * The brief's named form: a mid-year JOINER, employed from `startDate` to the
- * end of the leave year.
- *
- * Delegates to `proRataForWindow` so there is exactly one pro-rata calculation
- * in this module and the two cannot drift.
- */
-export function proRataForPartYear(
-  entitlementDays: number,
-  startDate: string,
-  leaveYearStart: string,
-  leaveYearEnd: string,
-): number {
-  return proRataForWindow(entitlementDays, startDate, leaveYearEnd, {
-    start: leaveYearStart,
-    end: leaveYearEnd,
-  });
-}
-
 export interface EntitlementInput {
   /** The rota availability map; the default source of "days a week". */
   availability?: Availability | null;
@@ -224,10 +208,16 @@ export function resolveEntitlement(input: EntitlementInput): EntitlementResult {
     input.onDay,
   );
 
+  // A STORED ZERO IS AN ANSWER, NOT AN ABSENCE. The profile route accepts 0..7
+  // (bank and zero-hours staff have no contracted days), so treating 0 as "not
+  // set" would silently discard what the manager typed and quietly hand that
+  // person a full statutory entitlement derived from their rota availability —
+  // labelled "statutory", with nothing on screen saying the override was thrown
+  // away. `>= 0`, so the profile is authoritative whenever it holds a number.
   const fromProfile =
     typeof input.contractedDaysPerWeek === "number" &&
     Number.isFinite(input.contractedDaysPerWeek) &&
-    input.contractedDaysPerWeek > 0;
+    input.contractedDaysPerWeek >= 0;
   const daysPerWeek = fromProfile
     ? Math.min(round1(input.contractedDaysPerWeek as number), 7)
     : daysPerWeekFromAvailability(input.availability);
@@ -284,7 +274,9 @@ export function resolveEntitlement(input: EntitlementInput): EntitlementResult {
       note:
         daysPerWeek > 0
           ? `${daysPerWeek} days a week at the statutory 5.6 weeks${capped ? ", capped at 28 days" : ""}.`
-          : "No working days recorded, so no statutory entitlement is computed.",
+          : fromProfile
+            ? "Recorded as no contracted days a week, so no statutory entitlement is computed."
+            : "No working days recorded, so no statutory entitlement is computed.",
     };
   }
 

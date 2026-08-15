@@ -29,6 +29,7 @@
 // patient-facing and staff-facing capture surfaces cannot drift apart.
 
 import { MAX_IMAGE_SIGNATURE, MAX_TYPED_SIGNATURE } from "@/lib/fp17/validate";
+import { londonDayKey } from "@/lib/time/london";
 
 // ---------------------------------------------------------------------------
 // Types.
@@ -224,6 +225,34 @@ export function nextPolicyVersion(
 }
 
 /**
+ * Whether a version has been WITHDRAWN as of a given London day.
+ *
+ * `retiredAt` CAN BE IN THE FUTURE, and treating it as a plain boolean is the
+ * bug this exists to stop. Publishing v2 "effective 1 September" retires v1 on
+ * 1 September — not on the afternoon the manager uploaded the file. If v1 were
+ * read as withdrawn the moment v2 was created, the slug would have NO version
+ * in force for the whole gap: it vanishes from the signatures tab,
+ * `outstandingPolicies` stops asking anyone to sign, and somebody who owed a
+ * signature on v1 shows as owing nothing.
+ *
+ * One rule, used by `currentPolicies` AND by the sign route, so the screen that
+ * offers a version and the route that accepts the signature can never disagree
+ * about whether it is still live.
+ *
+ * An unreadable stamp is treated as withdrawn: fail closed, because the only
+ * other option is offering a document whose status we cannot establish.
+ */
+export function policyWithdrawn(
+  policy: Pick<StaffPolicy, "retiredAt">,
+  todayKey: string,
+): boolean {
+  if (!policy.retiredAt) return false;
+  const ms = Date.parse(policy.retiredAt);
+  if (Number.isNaN(ms)) return true;
+  return londonDayKey(new Date(ms)) <= todayKey;
+}
+
+/**
  * The version of each policy that is IN FORCE on a given day: the highest version
  * that is not retired and whose effective_from has arrived.
  *
@@ -237,7 +266,7 @@ export function currentPolicies(
 ): StaffPolicy[] {
   const bySlug = new Map<string, StaffPolicy>();
   for (const p of policies) {
-    if (p.retiredAt) continue;
+    if (policyWithdrawn(p, todayKey)) continue;
     if (p.effectiveFrom > todayKey) continue; // ISO date keys compare lexicographically
     const held = bySlug.get(p.slug);
     if (!held || p.version > held.version) bySlug.set(p.slug, p);

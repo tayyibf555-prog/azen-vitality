@@ -23,6 +23,7 @@ const listUnnotifiedUpcoming = vi.fn<(...a: unknown[]) => unknown>();
 const markNotified = vi.fn<(...a: unknown[]) => unknown>();
 const sendMessage = vi.fn<(...a: unknown[]) => unknown>();
 const generateShifts = vi.fn<(...a: unknown[]) => unknown>();
+const listShifts = vi.fn<(...a: unknown[]) => unknown>();
 
 // The routes under test consult the kill switch on every send path (fail-closed
 // once messaging is live); these tests exercise behaviour with everything ON.
@@ -42,6 +43,10 @@ vi.mock("@/lib/rota/repository", () => ({
   insertShifts: (...a: unknown[]) => insertShifts(...a),
   listUnnotifiedUpcoming: (...a: unknown[]) => listUnnotifiedUpcoming(...a),
   markNotified: (...a: unknown[]) => markNotified(...a),
+  // WITHOUT THIS the sweep's read of the stored week throws every time and the
+  // silent `catch { existingShifts = [] }` is the only path the suite exercises
+  // — i.e. the pre-fix behaviour, with the fix itself untested.
+  listShifts: (...a: unknown[]) => listShifts(...a),
 }));
 vi.mock("@/lib/messaging/send", () => ({
   sendMessage: (...a: unknown[]) => sendMessage(...a),
@@ -121,6 +126,7 @@ beforeEach(() => {
   });
   generateShifts.mockReturnValue([]); // insert path is irrelevant here
   insertShifts.mockResolvedValue(0);
+  listShifts.mockResolvedValue([]);
   markNotified.mockResolvedValue(undefined);
 });
 
@@ -236,5 +242,62 @@ describe("rota sweep — no phone / send failure never mark", () => {
     // The second, healthy staff member is still notified.
     expect(json.notifiedStaff).toBe(1);
     expect(markNotified).toHaveBeenCalledWith(["s2"]);
+  });
+});
+
+// ===========================================================================
+// GENERATE MUST NOT FIGHT THE MANAGER.
+//
+// The sweep runs 24/7, so it is the worst offender for the generate-fights-editing
+// class: it reads the stored week and passes it to `generateShifts` as `existing`,
+// which is what stops a regenerated rota from stepping on a manual shift or
+// re-filling a slot the manager deliberately emptied. None of that wiring was
+// tested — `generateShifts` was a mock whose arguments were never inspected, and
+// the repository mock had no `listShifts` at all, so the read could only ever
+// throw into its own fallback.
+// ===========================================================================
+describe("rota sweep — the stored week is handed to the generator", () => {
+  const tombstone = shift({ id: "gone", staffId: "d1", status: "removed" });
+  const manual = shift({ id: "kept", staffId: "d1", shiftDate: "2026-07-07" });
+
+  beforeEach(() => {
+    listStaff.mockResolvedValue([PERSON]);
+    listUnnotifiedUpcoming.mockResolvedValue([]);
+  });
+
+  it("reads the whole generated window and passes every stored row through as `existing`", async () => {
+    listShifts.mockResolvedValue([tombstone, manual]);
+
+    await POST(sweepRequest());
+
+    // The window: the first generated week's Monday to the last week's Sunday.
+    expect(listShifts).toHaveBeenCalledWith("vitality", "2026-07-06", "2026-07-12");
+
+    const args = generateShifts.mock.calls[0][0] as { existing: unknown[] };
+    expect(args.existing).toEqual([tombstone, manual]);
+  });
+
+  it("the TOMBSTONE reaches the generator, which is the whole point", async () => {
+    // If `existing` arrived empty, the generator would see an empty slot and fill
+    // the shift the manager deleted at 5pm straight back in.
+    listShifts.mockResolvedValue([tombstone]);
+    await POST(sweepRequest());
+
+    const args = generateShifts.mock.calls[0][0] as { existing: { id: string; status: string }[] };
+    expect(args.existing.map((s) => s.id)).toContain("gone");
+    expect(args.existing[0].status).toBe("removed");
+  });
+
+  it("a FAILED read is a tested decision, not an accident: the sweep completes on an empty existing set", async () => {
+    listShifts.mockRejectedValue(new Error("statement timeout"));
+
+    const res = await POST(sweepRequest());
+    expect(res.status).toBe(200);
+
+    // It degrades rather than aborting — the notify half of the sweep still runs —
+    // and it degrades to "nothing is stored", which is the conservative direction
+    // for a generator that only ever inserts.
+    const args = generateShifts.mock.calls[0][0] as { existing: unknown[] };
+    expect(args.existing).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Lock, Plus, ShieldAlert, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataTable, EmptyState, SectionCard, StatCard, StatusPill, type Column } from "@/components/primitives";
-import { poundsLabel } from "@/lib/hours/cost";
+import { formatPenceGbp } from "@/lib/dashboard/money";
 import type { HrPerson, HrProfileResponse } from "@/lib/hr/types";
 
 // The Staff HR screen.
@@ -259,7 +259,7 @@ export function HrWorkspace({ clientSlug }: { clientSlug: string }) {
           p.pay?.currentPence === null || p.pay?.currentPence === undefined ? (
             <span className="text-muted">No rate</span>
           ) : (
-            poundsLabel(p.pay.currentPence)
+            formatPenceGbp(p.pay.currentPence)
           ),
       });
     }
@@ -438,7 +438,7 @@ export function HrWorkspace({ clientSlug }: { clientSlug: string }) {
                 <ul className="mt-3 space-y-1.5 text-[13px]">
                   {selected.pay.history.map((rate) => (
                     <li key={rate.id} className="flex flex-wrap items-baseline gap-x-3">
-                      <span className="font-medium text-navy">{poundsLabel(rate.hourlyPence)} an hour</span>
+                      <span className="font-medium text-navy">{formatPenceGbp(rate.hourlyPence)} an hour</span>
                       <span className="text-muted">
                         from {rate.effectiveFrom}
                         {rate.effectiveTo ? ` to ${rate.effectiveTo}` : ""}

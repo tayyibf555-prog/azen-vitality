@@ -514,6 +514,21 @@ describe("who may publish, and what may be published", () => {
     expect(h.requireCapability).not.toHaveBeenCalledWith(MANAGER, "rota.publish");
   });
 
+  // ONE ASSERTION SHORT OF NOTHING. Asserting that `requireCapability` was CALLED
+  // proves the line exists, not that its answer is honoured; deleting
+  // `if (capDenied) return capDenied;` left every test above green. These give the
+  // mocked guard a real 403 and check the route stops.
+  it("HONOURS a refusal from rota.publish: nobody is texted and nothing is recorded", async () => {
+    h.requireCapability.mockResolvedValue(
+      Response.json({ ok: false, error: "forbidden" }, { status: 403 }),
+    );
+    const res = await publish();
+    expect(res.status).toBe(403);
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(h.recordPublication).not.toHaveBeenCalled();
+    expect(h.markPublished).not.toHaveBeenCalled();
+  });
+
   it("refuses a week that does not start on a Monday", async () => {
     const res = await publish({ weekStart: "2026-08-12" });
     expect(res.status).toBe(400);
@@ -544,6 +559,136 @@ describe("a publication that cannot be recorded is not a publication", () => {
     expect((await res.json()).error).toContain("was not published");
     expect(h.markPublished).not.toHaveBeenCalled();
     expect(h.markNotified).not.toHaveBeenCalled();
+  });
+
+  // THE SENDS HAPPEN FIRST. This branch used to say "Nothing has been changed."
+  // after both people had been texted, which is false, and which invites the one
+  // action that makes it worse: pressing Publish again.
+  it("does NOT claim nothing changed once real messages have gone out", async () => {
+    h.recordPublication.mockRejectedValue(new Error("statement timeout"));
+    const body = await (await publish()).json();
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(2);
+    expect(body.contacted).toBe(2);
+    expect(body.error).not.toMatch(/nothing has been changed/i);
+    expect(body.error).toMatch(/already been sent/i);
+    expect(body.error).toMatch(/contact them again/i);
+  });
+
+  it("says nothing was sent when nothing was", async () => {
+    h.isSuppressed.mockResolvedValue(true); // nobody is reachable
+    h.recordPublication.mockRejectedValue(new Error("statement timeout"));
+    const body = await (await publish()).json();
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(body.contacted).toBe(0);
+    expect(body.error).toMatch(/nothing has been sent/i);
+  });
+
+  it("names the concurrent publish for what it is, and answers 409 rather than 500", async () => {
+    // The unique (client, site, week, version) key: another manager won the race.
+    h.recordPublication.mockRejectedValue(Object.assign(new Error("duplicate key"), { code: "23505" }));
+    const res = await publish();
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.collision).toBe(true);
+    expect(body.error).toMatch(/somebody else published this week/i);
+    expect(body.error).toMatch(/reload/i);
+    expect(h.markPublished).not.toHaveBeenCalled();
+  });
+});
+
+describe("the people whose week was EMPTIED are told, not skipped", () => {
+  // Amina and Bea were both published in v1. In the new rota Bea's shift is gone
+  // (a tombstone, which never reaches the snapshot) and Amina's is unchanged.
+  // The notify loop is driven by the NEW snapshot, so Bea has no entry in it.
+  const v1 = {
+    weekStart: WEEK_START,
+    siteId: "site-n15",
+    version: 1,
+    shifts: [
+      {
+        id: "shift-1",
+        staffId: "staff-1",
+        siteId: "site-n15",
+        shiftDate: WEEK_START,
+        startTime: "09:00",
+        endTime: "17:00",
+        role: "nurse",
+        pairedStaffId: null,
+        note: null,
+      },
+      {
+        id: "shift-2",
+        staffId: "staff-2",
+        siteId: "site-n15",
+        shiftDate: WEEK_START,
+        startTime: "09:00",
+        endTime: "17:00",
+        role: "nurse",
+        pairedStaffId: null,
+        note: null,
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    h.listPublications.mockResolvedValue([
+      { version: 1, snapshot: v1, publishedAt: "2026-08-01T09:00:00.000Z" },
+    ]);
+    // Bea's row is a tombstone: still present, no longer live.
+    h.listShifts.mockResolvedValue([shift(), shift({ id: "shift-2", staffId: "staff-2", status: "removed" })]);
+  });
+
+  it("texts the person who is no longer working, and says so", async () => {
+    const body = await (await publish()).json();
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+    const sent = h.sendMessage.mock.calls[0][0];
+    expect(sent.to).toBe(BEA.phone);
+    expect(sent.body).toMatch(/no longer down to work that week/i);
+    // ...and she is counted, so the response stops implying everybody was told.
+    expect(body.notifiedStaff).toBe(1);
+    expect(body.notReached).toBe(0);
+  });
+
+  it("counts her as unreachable rather than silently dropping her", async () => {
+    h.isSuppressed.mockResolvedValue(true);
+    const body = await (await publish()).json();
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(body.notifiedStaff).toBe(0);
+    expect(body.notReached).toBe(1);
+  });
+
+  it("consumes no shift ids for her: she has none left to consume", async () => {
+    await publish();
+    expect(h.markNotified).not.toHaveBeenCalled();
+  });
+
+  it("also covers a shift REASSIGNED away from somebody who then has nothing", async () => {
+    // shift-2 is now Amina's second shift, so Bea is clear of the week without
+    // anything being deleted at all.
+    h.listShifts.mockResolvedValue([shift(), shift({ id: "shift-2", staffId: "staff-1" })]);
+    await publish();
+
+    const recipients = h.sendMessage.mock.calls.map((c) => c[0].to);
+    expect(recipients).toContain(BEA.phone);
+    expect(h.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ to: BEA.phone, body: expect.stringMatching(/no longer down to work/i) }),
+    );
+  });
+
+  it("says nothing to somebody who is still working, however much their week moved", async () => {
+    h.listShifts.mockResolvedValue([
+      shift(),
+      shift({ id: "shift-2", staffId: "staff-2", startTime: "10:00" }),
+    ]);
+    await publish();
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.sendMessage.mock.calls[0][0].body).not.toMatch(/no longer down to work/i);
   });
 });
 

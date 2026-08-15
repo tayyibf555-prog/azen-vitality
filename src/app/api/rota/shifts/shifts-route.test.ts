@@ -294,6 +294,22 @@ describe("POST: creating one shift by hand stays the approver's act", () => {
     expect(h.createManualShift).not.toHaveBeenCalled();
   });
 
+  // ONE ASSERTION SHORT OF NOTHING. Asserting that `requireCapability` was CALLED
+  // proves the line exists, not that its answer is honoured; deleting
+  // `if (capDenied) return capDenied;` left every test above green. These give the
+  // mocked guard a real 403 and check the route stops.
+  it("HONOURS a refusal from rota.edit, and creates nothing", async () => {
+    h.requireUser.mockResolvedValue(MANAGER);
+    h.requireCapability.mockResolvedValue(
+      Response.json({ ok: false, error: "forbidden" }, { status: 403 }),
+    );
+    const res = await post(valid);
+    expect(res.status).toBe(403);
+    expect(h.createManualShift).not.toHaveBeenCalled();
+    // ...and it stops BEFORE the reads, not after them.
+    expect(h.listStaff).not.toHaveBeenCalled();
+  });
+
   it("PROVES TENANCY before it believes a staff id", async () => {
     h.requireUser.mockResolvedValue(MANAGER);
     const res = await post({ ...valid, staffId: "staff-from-another-practice" });
@@ -316,7 +332,66 @@ describe("POST: creating one shift by hand stays the approver's act", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.ok).toBe(true);
-    expect(Array.isArray(body.warnings)).toBe(true);
+    // An EMPTY array satisfies `Array.isArray`, and the case above deliberately
+    // gives the rules nothing to fire on — so the two cases below are what
+    // actually prove the route consults `validateShiftEdit` at all.
+    expect(body.warnings).toEqual([]);
     expect(h.createManualShift).toHaveBeenCalledWith(expect.objectContaining({ staffId: "staff-1" }));
+  });
+
+  // THE REFUSAL. The route's only use of the rules is a 400 branch and a warnings
+  // array, and neither was executed: the happy path above sets `listShifts` to []
+  // so no rule can fire. Deleting the whole `if (!validation.ok)` block kept the
+  // suite green. The sibling PATCH route has had this since day one
+  // (shift-route.test.ts: "returns the rules' own message when the edit is
+  // invalid, and writes nothing").
+  it("REFUSES an edit the rules reject, in the rules' own words, and writes nothing", async () => {
+    h.requireUser.mockResolvedValue(MANAGER);
+    // Amina is already working 09:00-17:00 that day.
+    h.listShifts.mockResolvedValue([
+      shift({ id: "existing", staffId: "staff-1", shiftDate: valid.shiftDate }),
+    ]);
+
+    const res = await post(valid);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.issues.map((i: { code: string }) => i.code)).toContain("double-booked");
+    // The message is the RULES' message, not one the route invented.
+    expect(body.error).toBe(
+      "That person is already working at that time, so they cannot take this shift too.",
+    );
+    expect(h.createManualShift).not.toHaveBeenCalled();
+  });
+
+  it("still CREATES on a warning, and hands the warning back with the shift", async () => {
+    h.requireUser.mockResolvedValue(MANAGER);
+    h.listShifts.mockResolvedValue([]);
+    h.listApprovedAbsence.mockResolvedValue([
+      {
+        id: "abs-1",
+        clientId: "vitality",
+        siteId: null,
+        staffId: "staff-1",
+        kind: "holiday",
+        status: "approved",
+        startDate: valid.shiftDate,
+        endDate: valid.shiftDate,
+        note: null,
+        requestedBy: null,
+        decidedBy: null,
+        decidedAt: null,
+        decisionNote: null,
+      },
+    ]);
+    h.createManualShift.mockImplementation(async (input: Record<string, unknown>) => ({ id: "new-1", ...input }));
+
+    const res = await post(valid);
+    // Somebody being off is a thing to SAY, not a thing to refuse: the practice is
+    // short and the manager is asking them in anyway.
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.warnings.map((w: { code: string }) => w.code)).toEqual(["on-approved-absence"]);
+    expect(h.createManualShift).toHaveBeenCalledTimes(1);
   });
 });

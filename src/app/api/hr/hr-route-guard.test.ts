@@ -225,8 +225,13 @@ describe("the signer of a policy comes from the SESSION, and nowhere else", () =
     expect(src).toContain("503");
   });
 
-  it("refuses to sign a withdrawn version", () => {
-    expect(src).toContain("policy.retiredAt");
+  it("refuses to sign a withdrawn version, using the SAME rule that decides what to offer", () => {
+    // Not `if (policy.retiredAt)`: retiredAt can be a FUTURE instant (publishing a
+    // version effective next month retires its predecessor next month), and a
+    // truthiness check here would refuse a signature on the only version the
+    // signatures tab is showing. The behavioural proof is in sign-route.test.ts.
+    expect(src).toContain("policyWithdrawn(policy,");
+    expect(src).not.toMatch(/if\s*\(\s*policy\.retiredAt\s*\)/);
   });
 
   it("stores the IP hashed, never raw", () => {

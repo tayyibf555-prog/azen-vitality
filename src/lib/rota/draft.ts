@@ -54,3 +54,21 @@ export function draftShiftMessage(
     .join("; ");
   return `Hi ${first}, your upcoming shifts at ${practiceName}: ${lines}. Please let us know if you cannot make any of these. Thanks.`;
 }
+
+/**
+ * The message for somebody whose week has been EMPTIED since the last publication:
+ * every shift they had that week was deleted, cancelled or given to someone else.
+ *
+ * Deliberately NOT `draftShiftMessage(..., [])`. That copy says "no shifts at the
+ * moment", which reads as a general state of affairs; this person had a specific
+ * week and needs to be told about that week, by name, so they do not turn up.
+ * It says what changed and it names the week, and it does not speculate about why.
+ */
+export function draftClearedWeekMessage(
+  staffName: string,
+  practiceName: string,
+  weekStart: string,
+): string {
+  const first = firstName(staffName);
+  return `Hi ${first}, your rota at ${practiceName} for the week beginning ${dayLabel(weekStart)} has changed and you are no longer down to work that week. Please check with the practice if you were expecting to be in. Thanks.`;
+}

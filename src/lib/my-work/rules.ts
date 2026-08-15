@@ -459,3 +459,68 @@ export function myPolicies(
       ),
   };
 }
+
+// ---------------------------------------------------------------------------
+// READ IT, THEN CONFIRM IT.
+// ---------------------------------------------------------------------------
+// The evidential claim this whole lane produces is that a named login WAS SHOWN
+// version N of a named document and affirmed it. For a while the screen had no
+// way to open the document at all: it said "Read and confirm" and offered only
+// the confirming half, which made the claim untrue on its face.
+//
+// The document is now opened through a short-lived signed URL. What is decided
+// HERE is what the two controls say, because that copy is the difference between
+// "I ticked a box" and "I was shown this and said yes".
+//
+// IT DOES NOT HARD-BLOCK. Refusing to enable the confirm button until an open
+// succeeded would be a lock that lies: the person may have read the policy on
+// paper, in an induction, or in a browser tab this app cannot observe, and a
+// failed signed-URL mint (storage down, bucket missing) would then make the
+// policy unsignable by anybody. So the copy CHANGES rather than the button
+// disabling — before opening it asks them to open it, after opening it states
+// what they were shown, and the record stores the affirmation either way.
+// ---------------------------------------------------------------------------
+
+export interface PolicyReadState {
+  /** What the open control says. */
+  openLabel: string;
+  /** Whether the open control is mid-flight (spinner + disabled). */
+  busy: boolean;
+  /** The sentence above the name field, naming what is being affirmed. */
+  confirmPrompt: string;
+  /** True once this person has opened this version during this visit. */
+  opened: boolean;
+}
+
+export function policyReadState(input: {
+  title: string;
+  version: number;
+  /** True while the signed URL for THIS policy is being minted. */
+  opening: boolean;
+  /** True once the document has been opened in this session. */
+  opened: boolean;
+}): PolicyReadState {
+  const opened = input.opened && !input.opening;
+  return {
+    openLabel: input.opening ? "Opening..." : opened ? "Open it again" : "Read the policy",
+    busy: input.opening,
+    // Before: an instruction. After: a STATEMENT OF WHAT THEY WERE SHOWN, which
+    // is the sentence the record is actually about.
+    confirmPrompt: opened
+      ? `You opened version ${input.version} of ${input.title}. Type your full name to confirm you have read it.`
+      : `Open version ${input.version} of ${input.title} above and read it, then type your full name to confirm.`,
+    opened,
+  };
+}
+
+/**
+ * What to say when the document could not be opened.
+ *
+ * HONEST ABOUT WHAT DID NOT HAPPEN. The link is minted server-side and lasts two
+ * minutes; when that fails, nothing was shown, and the message says so rather
+ * than leaving somebody to confirm a document they never saw. It does not
+ * speculate about the cause, and it does not tell them to sign anyway.
+ */
+export function policyOpenFailureCopy(title: string): string {
+  return `We could not open ${title}, so nothing was shown to you. Try again in a moment, or ask the practice for a copy before you confirm it.`;
+}

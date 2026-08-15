@@ -390,3 +390,42 @@ export function summariseAbsences(rows: AbsenceRow[]): AbsenceSummary {
   }
   return { pending, upcoming, awayToday, total: rows.length };
 }
+
+// ---------------------------------------------------------------------------
+// The request form's two voices.
+// ---------------------------------------------------------------------------
+
+/** The copy and element-id prefix a request form uses, per audience. */
+export interface AbsenceFormCopy {
+  /** Prefixes every label `htmlFor` / input `id`, so two forms on one page cannot collide. */
+  idPrefix: string;
+  submitLabel: string;
+  notePlaceholder: string;
+}
+
+/**
+ * ONE form component, two audiences, and these are the ONLY differences between
+ * them.
+ *
+ * A manager RAISES a request on somebody's behalf ("Add the request", a note for
+ * whoever decides); a member of staff ASKS for time off ("Send the request", a
+ * note for their manager). Everything else — the fields, their order, which are
+ * required, the validation the server does — is deliberately identical, because
+ * the person asking and the person deciding should be looking at the same form.
+ *
+ * Here rather than inside the component so the difference is a rule with a test
+ * rather than a pair of ternaries nobody can assert on.
+ */
+export function absenceFormCopy(selfService: boolean): AbsenceFormCopy {
+  return selfService
+    ? {
+        idPrefix: "my-absence",
+        submitLabel: "Send the request",
+        notePlaceholder: "Anything your manager should know",
+      }
+    : {
+        idPrefix: "absence",
+        submitLabel: "Add the request",
+        notePlaceholder: "Anything the person deciding should know",
+      };
+}

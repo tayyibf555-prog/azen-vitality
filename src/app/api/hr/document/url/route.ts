@@ -8,7 +8,11 @@ import {
 import { requireCapability } from "@/lib/auth/capability-guard";
 import { resolveSelfStaff, selfServiceRequested } from "@/lib/self-service/read";
 import type { AuthedUser } from "@/lib/auth/session";
-import { isWithinOwnDocPrefix, isWithinStaffDocPrefix } from "@/lib/hr/documents";
+import {
+  isReadablePolicyPath,
+  isWithinOwnDocPrefix,
+  isWithinStaffDocPrefix,
+} from "@/lib/hr/documents";
 import { signStaffDocUrl } from "@/lib/hr/document-repository";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +50,13 @@ export const dynamic = "force-dynamic";
 // must satisfy `isWithinOwnDocPrefix` — one segment stricter than the practice
 // prefix, because a manager may open anybody's document and a nurse may not. A
 // colleague's path is refused even though it is unquestionably this practice's.
+//
+// PLUS THE PRACTICE'S POLICY PDFs, via `isReadablePolicyPath`. My signatures asks
+// this person to read a named version of a policy and affirm it; a policy is a
+// practice-wide document staff are required to read, not a per-person record, and
+// refusing it did not protect anybody — it left the signing flow unable to show
+// the thing being signed. It is a SECOND predicate rather than a relaxation of
+// the first: "is it mine" must keep answering no for everything that is not.
 // ===========================================================================
 
 const SIGNED_URL_TTL_SECONDS = 120; // short-lived: a view, not a shareable link
@@ -69,10 +80,21 @@ export async function GET(request: Request): Promise<Response> {
   if (selfServiceRequested(url)) {
     const self = await resolveSelfStaff(client.id, auth, "there are no documents to show");
     if (!self.ok) return self.response;
-    // BOTH guards, in order: the practice prefix (traversal, other bucket, other
-    // client) and then this person's own sub-prefix. A path from a browser is a
-    // request, not a fact, however it was obtained.
-    if (!isWithinOwnDocPrefix(path, client.slug, self.staff.id)) {
+    // TWO NARROW QUESTIONS, NOT ONE BROAD ONE. Both predicates begin with the
+    // practice prefix check (traversal, other bucket, other client) and then
+    // narrow: to this person's own sub-prefix, or to the practice's policy
+    // prefix. A path from a browser is a request, not a fact, however it was
+    // obtained, and neither question is ever relaxed into "is it this practice's",
+    // which would admit a colleague's passport.
+    const isOwnDocument = isWithinOwnDocPrefix(path, client.slug, self.staff.id);
+    // A POLICY IS NOT A PERSONAL SECRET, AND REFUSING IT BROKE THE SIGNING FLOW.
+    // My work asks this person to read a policy PDF and affirm it, and the
+    // evidence the e-sign lane produces ("was shown version N and confirmed it")
+    // is worth nothing if the platform will not show them the document. So an
+    // ACTIVE practice policy is readable by any member of staff of that practice,
+    // and nothing else here widens by a single segment.
+    const isPracticePolicy = isReadablePolicyPath(path, client.slug);
+    if (!isOwnDocument && !isPracticePolicy) {
       return Response.json({ error: "forbidden" }, { status: 403 });
     }
     const ownUrl = await signStaffDocUrl(path, SIGNED_URL_TTL_SECONDS);

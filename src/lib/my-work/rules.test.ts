@@ -12,6 +12,8 @@ import {
   myPolicies,
   myRota,
   panelStateFor,
+  policyOpenFailureCopy,
+  policyReadState,
   selfRequestStaffId,
   type PanelInput,
   type SelfClockRow,
@@ -520,5 +522,76 @@ describe("my clocking: which row is mine, and what the button says", () => {
     for (const state of ["in", "out", "expected", "off", "something-new"]) {
       expect(clockStateSentence(row({ state }), null).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("policyReadState: read it, then confirm it", () => {
+  const base = { title: "Infection control", version: 4, opening: false, opened: false };
+
+  it("invites the person to open the document before anything has been opened", () => {
+    const state = policyReadState(base);
+    expect(state.openLabel).toBe("Read the policy");
+    expect(state.busy).toBe(false);
+    expect(state.opened).toBe(false);
+    // An INSTRUCTION, naming the version they are being asked to read.
+    expect(state.confirmPrompt).toContain("Open version 4 of Infection control");
+    expect(state.confirmPrompt).toContain("read it");
+  });
+
+  it("says it is opening while the signed URL is being minted, and blocks a second click", () => {
+    const state = policyReadState({ ...base, opening: true });
+    expect(state.openLabel).toBe("Opening...");
+    expect(state.busy).toBe(true);
+  });
+
+  // THE SENTENCE THE RECORD IS ABOUT. The evidential claim is "was shown version
+  // N and affirmed it", so once the document has been opened the copy states
+  // that rather than continuing to ask for it.
+  it("STATES what was opened once it has been, naming the title and the version", () => {
+    const state = policyReadState({ ...base, opened: true });
+    expect(state.openLabel).toBe("Open it again");
+    expect(state.opened).toBe(true);
+    expect(state.confirmPrompt).toBe(
+      "You opened version 4 of Infection control. Type your full name to confirm you have read it.",
+    );
+    expect(state.confirmPrompt).not.toMatch(/^Open version/);
+  });
+
+  it("an in-flight re-open reverts to the busy state rather than claiming it is open", () => {
+    const state = policyReadState({ ...base, opened: true, opening: true });
+    expect(state.busy).toBe(true);
+    expect(state.opened).toBe(false);
+    expect(state.openLabel).toBe("Opening...");
+  });
+
+  it("carries the version through, so two versions of one policy never share a sentence", () => {
+    const v1 = policyReadState({ ...base, version: 1, opened: true });
+    const v2 = policyReadState({ ...base, version: 2, opened: true });
+    expect(v1.confirmPrompt).not.toBe(v2.confirmPrompt);
+    expect(v2.confirmPrompt).toContain("version 2");
+  });
+
+  // NOT A LOCK. Refusing to let somebody confirm until an open succeeded would
+  // make a policy unsignable whenever storage is down, and would be false anyway:
+  // they may have read it on paper or in an induction. The COPY changes; the
+  // state carries no "may confirm" flag for a component to disable a button on.
+  it("exposes no permission: it decides copy, never whether confirming is allowed", () => {
+    expect(Object.keys(policyReadState(base)).sort()).toEqual([
+      "busy",
+      "confirmPrompt",
+      "openLabel",
+      "opened",
+    ]);
+  });
+});
+
+describe("policyOpenFailureCopy: honest about what did not happen", () => {
+  it("says nothing was shown, names the document, and does not invite a blind signature", () => {
+    const copy = policyOpenFailureCopy("Infection control");
+    expect(copy).toContain("Infection control");
+    expect(copy).toMatch(/nothing was shown/i);
+    expect(copy).toMatch(/try again/i);
+    // It must never tell somebody to confirm a document they were not shown.
+    expect(copy).not.toMatch(/confirm it anyway|sign anyway|you can still confirm/i);
   });
 });

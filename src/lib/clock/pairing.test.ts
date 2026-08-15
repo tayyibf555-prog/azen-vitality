@@ -237,6 +237,19 @@ describe("compareToRota", () => {
     // ...and the cancelled shift itself is not a miss.
     expect(result.missed).toEqual([]);
   });
+
+  // A shift a manager DELETED is a tombstone (status 'removed'), not an absent
+  // row. It must behave exactly like a cancelled one on both sides: if it still
+  // counted as rostered it would raise a missing-clock-in nobody can ever
+  // correct, and it would also silently explain away a session worked on a day
+  // whose rota row was deleted.
+  it("ignores removed (tombstoned) shifts on both sides, exactly like cancelled ones", () => {
+    const sessions = pairEvents([ev("in", "2026-08-03T08:00:00Z")], EVENING);
+    const result = compareToRota(sessions, [shift({ status: "removed" })]);
+
+    expect(result.unrostered).toHaveLength(1);
+    expect(result.missed).toEqual([]);
+  });
 });
 
 describe("detectAnomalies", () => {
@@ -276,6 +289,17 @@ describe("detectAnomalies", () => {
     );
 
     expect(note?.label).toBe("Clocked in at 08:00 but never clocked out.");
+  });
+
+  // The production consequence of getting this wrong: a missing-clock-in on a
+  // deleted shift lands in the month report's `unresolved`, blocks
+  // `finalisable`, and has no remedy — the only correction path would be
+  // writing a fake clock-in for a shift that does not exist.
+  it("raises no missing-clock-in for a shift that was deleted", () => {
+    const deleted = [shift({ startTime: "14:00", endTime: "18:00", status: "removed" })];
+
+    const afternoon = detectAnomalies([], deleted, new Date("2026-08-03T16:00:00Z"));
+    expect(afternoon.map((n) => n.kind)).not.toContain("missing-clock-in");
   });
 });
 

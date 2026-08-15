@@ -81,8 +81,30 @@ const ROLE_TOKENS = [
   "requireClinicalWriteRole(",
 ];
 
+/**
+ * The awaited result must be RETURNED, not merely computed.
+ *
+ * `src.includes("requireCapability(")` was the whole test, and a guard whose
+ * answer is thrown away compiles, reads as a lock, and does nothing:
+ *
+ *     const capDenied = await requireCapability(auth, "rota.edit");   // ...and no
+ *     // if (capDenied) return capDenied;                                 return
+ *
+ * The sibling sweep already learned this for role guards (ROLE_GUARD_CALL in
+ * client-api-module-guard-coverage.test.ts excludes the `=== null` shape for
+ * exactly the same reason). Every call site in the codebase uses the assign-then-
+ * return form, so requiring it costs nothing and closes the class.
+ */
+const CAPABILITY_ASSIGNMENT = /(?:const|let)\s+(\w+)\s*=\s*await\s+requireCapability\(/g;
+
 function hasCapabilityCall(src: string): boolean {
-  return src.includes(CAPABILITY_TOKEN);
+  if (!src.includes(CAPABILITY_TOKEN)) return false;
+  const names = [...src.matchAll(CAPABILITY_ASSIGNMENT)].map((m) => m[1]);
+  if (names.length === 0) return false;
+  return names.every((n) =>
+    new RegExp(`\\bif\\s*\\(\\s*${n}\\s*\\)\\s*return\\s+${n}\\s*;`).test(src) ||
+    new RegExp(`\\breturn\\s+${n}\\s*;`).test(src),
+  );
 }
 function hasRoleGuard(src: string): boolean {
   return ROLE_TOKENS.some((t) => src.includes(t));
@@ -315,6 +337,30 @@ describe("3. every call is awaited", () => {
   it("there are callers to check", () => {
     expect(callers.length).toBeGreaterThanOrEqual(15);
   });
+
+  /**
+   * THE OTHER SHAPE HAZARD, and the one a presence check cannot see: a route that
+   * calls the guard and does not RETURN its answer.
+   *
+   *     const capDenied = await requireCapability(auth, "rota.edit");
+   *     // if (capDenied) return capDenied;      <- deleted
+   *
+   * `hasCapabilityCall` demands the returning form, so such a route stops counting
+   * as guarded — but it would then simply DROP OUT of the `callers` list above and
+   * out of `onCapability`, and every remaining assertion would still pass. This
+   * makes the drop-out loud: any route mentioning the token at all must satisfy
+   * the strict form.
+   */
+  it.each(ROUTES.filter((r) => routeSource(r).includes(CAPABILITY_TOKEN)))(
+    "/api/%s returns the capability refusal rather than computing it",
+    (route) => {
+      expect(
+        hasCapabilityCall(routeSource(route)),
+        `/api/${route} calls requireCapability but never returns its Response. ` +
+          `A guard whose answer is discarded compiles, reads as a lock and does nothing.`,
+      ).toBe(true);
+    },
+  );
 
   it.each([...new Set(callers)])("%s awaits every requireCapability call", (id) => {
     const [kind, path] = id.split("::");

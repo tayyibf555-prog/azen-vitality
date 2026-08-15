@@ -35,6 +35,7 @@ import {
   retireEarlierVersions,
 } from "@/lib/hr/policy-repository";
 import { resolveSelfStaff, selfServiceRequested } from "@/lib/self-service/read";
+import { londonDayStartIso } from "@/lib/calendar/availability";
 
 export const dynamic = "force-dynamic";
 
@@ -343,14 +344,20 @@ export async function POST(request: Request): Promise<Response> {
         effectiveFrom: effectiveFromRaw,
         createdBy: auth?.id ?? null,
       });
-      // Retire the earlier versions of this slug. Retired, never deleted: people
-      // signed them. Best effort, and reported rather than thrown, because the new
-      // version is already correct.
+      // Retire the earlier versions of this slug AT THE MOMENT THIS ONE TAKES
+      // EFFECT, never at `now`. A version published today "effective 1
+      // September" must not retire its predecessor in August: `currentPolicies`
+      // skips both a retired version and a not-yet-effective one, so retiring
+      // early would leave the slug with NOTHING in force for the gap and
+      // silently stop asking anybody to sign.
+      //
+      // Retired, never deleted: people signed them. Best effort, and reported
+      // rather than thrown, because the new version is already correct.
       const retired = await retireEarlierVersions(
         client.id,
         slug,
         version,
-        new Date().toISOString(),
+        londonDayStartIso(effectiveFromRaw),
       );
       return Response.json({ ok: true, policy, earlierVersionsRetired: retired });
     } catch {

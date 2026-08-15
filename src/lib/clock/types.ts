@@ -84,7 +84,11 @@ export interface RosteredShift {
   /** Wall-clock `HH:MM` (seconds tolerated). */
   startTime: string;
   endTime: string;
-  /** 'cancelled' shifts expect nobody, so they neither miss nor roster. */
+  /**
+   * 'cancelled' (slot freed) and 'removed' (deletion tombstone) both expect
+   * nobody, so they neither miss nor roster. Anything outside
+   * LIVE_SHIFT_STATUSES is treated the same way.
+   */
   status?: string;
 }
 

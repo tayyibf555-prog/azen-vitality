@@ -146,6 +146,31 @@ describe("who may edit one shift", () => {
     await del();
     expect(h.requireCapability).toHaveBeenCalledWith(MANAGER, "rota.edit");
   });
+
+  // ONE ASSERTION SHORT OF NOTHING. Asserting that `requireCapability` was CALLED
+  // proves the line exists, not that its answer is honoured; deleting
+  // `if (capDenied) return capDenied;` left every test above green. These give the
+  // mocked guard a real 403 and check the route stops.
+  it("HONOURS a refusal from rota.edit on both methods, and writes nothing", async () => {
+    h.requireCapability.mockResolvedValue(
+      Response.json({ ok: false, error: "forbidden" }, { status: 403 }),
+    );
+
+    expect((await patch({ startTime: "10:00" })).status).toBe(403);
+    expect((await del()).status).toBe(403);
+    expect(h.updateShift).not.toHaveBeenCalled();
+    expect(h.tombstoneShift).not.toHaveBeenCalled();
+  });
+
+  it("honours a 503 too, which is what an un-enforced environment answers", async () => {
+    // `rota.edit` is destructive, so `requireCapability` refuses outright rather
+    // than passing through when sign-in is not configured.
+    h.requireCapability.mockResolvedValue(
+      Response.json({ ok: false, error: "unavailable" }, { status: 503 }),
+    );
+    expect((await patch({ startTime: "10:00" })).status).toBe(503);
+    expect(h.updateShift).not.toHaveBeenCalled();
+  });
 });
 
 describe("a shift belonging to another practice reads as absent", () => {

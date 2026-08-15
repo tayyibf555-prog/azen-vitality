@@ -11,10 +11,12 @@ import { findStaffByAppUser } from "@/lib/clock/repository";
 import {
   ESIGN_COPY,
   hashIp,
+  policyWithdrawn,
   trimUserAgent,
   validateSignatureInput,
 } from "@/lib/hr/esign";
 import { getPolicy, recordSignature } from "@/lib/hr/policy-repository";
+import { londonDayKey } from "@/lib/time/london";
 
 export const dynamic = "force-dynamic";
 
@@ -146,12 +148,18 @@ export async function POST(
     // (2) THE VERSION, FROM THE POLICY ROW.
     const policy = await getPolicy(client.id, policyId);
     if (!policy) return Response.json({ ok: false, error: "not found" }, { status: 404 });
-    if (policy.retiredAt) {
-      return bad("That version of the policy has been withdrawn. Please reload and sign the current one.");
-    }
 
     // (3) THE TIME, FROM THE SERVER CLOCK.
     const nowIso = new Date().toISOString();
+
+    // `retiredAt` may be a FUTURE instant: publishing a version effective next
+    // month retires its predecessor next month. `policyWithdrawn` is the same
+    // rule `currentPolicies` uses to decide what to OFFER, so this route can
+    // never refuse a signature on the only version the screen shows.
+    if (policyWithdrawn(policy, londonDayKey(new Date(nowIso)))) {
+      return bad("That version of the policy has been withdrawn. Please reload and sign the current one.");
+    }
+
     const signature = validateSignatureInput({ method: body.method, value: body.value }, nowIso);
     if (!signature.ok) return bad(signature.error);
 

@@ -470,26 +470,15 @@ export async function tombstoneShift(id: string, clientId: string): Promise<bool
   return (data?.length ?? 0) > 0;
 }
 
-/** Apply a set of pairings (both halves of each pair), scoped to one client. */
-export async function setPairings(
-  clientId: string,
-  assignments: { shiftId: string; pairedStaffId: string | null }[],
-): Promise<number> {
-  if (assignments.length === 0) return 0;
-  const db = serviceClient();
-  let applied = 0;
-  for (const a of assignments) {
-    const { data, error } = await db
-      .from("rota_shift")
-      .update({ paired_staff_id: a.pairedStaffId })
-      .eq("id", a.shiftId)
-      .eq("client_id", clientId)
-      .select("id");
-    if (error) throw error;
-    applied += data?.length ?? 0;
-  }
-  return applied;
-}
+// PAIRING IS MANUAL, and there is no bulk writer for it on purpose.
+//
+// A `pairedStaffId` is set by a person in the shift dialog and written by
+// `createManualShift` / `updateShift`, which validate it through
+// `validateShiftEdit`. An `autoPair` engine and a `setPairings` bulk writer were
+// built alongside those and never wired to anything; they are gone rather than
+// left in the tree, because a reader who finds them cannot tell whether pairing
+// is automatic or manual. `pairingViolations` in lib/rota/edit.ts is what
+// actually tells the manager an unpaired clinician is on the day.
 
 /**
  * Insert generated shifts, idempotently on the unique (staff_id, shift_date,

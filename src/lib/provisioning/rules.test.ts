@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { Role } from "@/lib/types";
-import type { LinkableStaff } from "./types";
+import type { AuthStatus, LinkableStaff } from "./types";
 import {
   INVITABLE_ROLES,
   ROLE_BLURBS,
+  SIGN_IN_CAPABLE_STATUSES,
   ROLE_LABELS,
   MIN_PASSWORD_LENGTH,
   MAX_PASSWORD_LENGTH,
@@ -13,6 +14,7 @@ import {
   canDeactivate,
   canLinkStaff,
   canReactivate,
+  countActiveOwners,
   friendlyLinkError,
   inviteDeliveryMode,
   isInvitableRole,
@@ -497,5 +499,57 @@ describe("validateNewPassword", () => {
     const decision = validateNewPassword(GOOD, `${GOOD}x`);
     expect(decision.ok).toBe(false);
     expect(decision.ok === false && decision.error).toMatch(/do not match/i);
+  });
+});
+
+describe("countActiveOwners: the number the lockout guard rests on", () => {
+  const person = (role: string, authStatus: AuthStatus) => ({ role, authStatus });
+
+  it("counts an owner who has signed in and one who has only been invited", () => {
+    expect(
+      countActiveOwners([person("client_owner", "active"), person("client_owner", "invited")]),
+    ).toBe(2);
+  });
+
+  it("does NOT count an owner who cannot sign in", () => {
+    // Each on its own line so a mutation to one status kills exactly this test.
+    expect(countActiveOwners([person("client_owner", "deactivated")])).toBe(0);
+    expect(countActiveOwners([person("client_owner", "missing")])).toBe(0);
+    expect(countActiveOwners([person("client_owner", "unknown")])).toBe(0);
+  });
+
+  it("counts OWNERS only, however able to sign in everybody else is", () => {
+    expect(
+      countActiveOwners([
+        person("client_coordinator", "active"),
+        person("client_clinician", "active"),
+        person("client_staff", "active"),
+        person("agency_admin", "active"),
+      ]),
+    ).toBe(0);
+  });
+
+  // THE COUPLING WORTH STATING: when the Auth directory cannot be read, every
+  // status becomes "unknown", so the count is 0 and `canDeactivate` refuses the
+  // last-owner check for everybody. Fail closed: "we cannot see who else can sign
+  // in" is not a reason to remove the person who can.
+  it("returns 0 when the Auth directory is unreadable, so owner changes refuse", () => {
+    const blind = [person("client_owner", "unknown"), person("client_owner", "unknown")];
+    expect(countActiveOwners(blind)).toBe(0);
+
+    const decision = canDeactivate({
+      actor: { id: "a", role: "client_owner" },
+      target: { id: "b", role: "client_owner", authStatus: "unknown" },
+      activeOwnerCount: countActiveOwners(blind),
+    });
+    expect(decision.ok).toBe(false);
+  });
+
+  it("is exactly what SIGN_IN_CAPABLE_STATUSES says, and that list is two long", () => {
+    expect([...SIGN_IN_CAPABLE_STATUSES].sort()).toEqual(["active", "invited"]);
+  });
+
+  it("is empty-safe", () => {
+    expect(countActiveOwners([])).toBe(0);
   });
 });

@@ -95,30 +95,6 @@ export async function listStaffDocuments(
   return { ready: true, documents: (data ?? []).map((r) => rowToDocument(r as DocumentRow)) };
 }
 
-/**
- * Every document across the practice, for the expiry worklist.
- *
- * Bounded, and ordered by expiry so the cap bites on the least urgent rows rather
- * than an arbitrary set. Rows with no expiry sort last (nullsFirst: false).
- */
-export async function listExpiringDocuments(
-  clientId: string,
-  limit = 300,
-): Promise<DocumentReadResult> {
-  const { data, error } = await serviceClient()
-    .from(TABLE)
-    .select("*")
-    .eq("client_id", clientId)
-    .not("expires_on", "is", null)
-    .order("expires_on", { ascending: true, nullsFirst: false })
-    .limit(limit);
-  if (error) {
-    if (isMissingRelation(error)) return { ready: false, documents: [] };
-    throw error;
-  }
-  return { ready: true, documents: (data ?? []).map((r) => rowToDocument(r as DocumentRow)) };
-}
-
 export interface CreateDocumentInput {
   clientId: string;
   staffId: string;
@@ -156,24 +132,6 @@ export async function createStaffDocument(input: CreateDocumentInput): Promise<S
     .single();
   if (error) throw error;
   return rowToDocument(data as DocumentRow);
-}
-
-/** One document by id, client-scoped. Null when it is not this practice's. */
-export async function getStaffDocument(
-  clientId: string,
-  id: string,
-): Promise<StaffDocument | null> {
-  const { data, error } = await serviceClient()
-    .from(TABLE)
-    .select("*")
-    .eq("client_id", clientId)
-    .eq("id", id)
-    .maybeSingle();
-  if (error) {
-    if (isMissingRelation(error)) return null;
-    throw error;
-  }
-  return data ? rowToDocument(data as DocumentRow) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,19 +200,3 @@ export async function removeStaffDocObject(path: string): Promise<void> {
   }
 }
 
-/**
- * Is the staff-docs bucket reachable at all?
- *
- * THE DEPLOYMENT FOOTGUN THIS EXISTS FOR: the `onboarding` bucket was created out of
- * band with no record anywhere, so a fresh environment fails at first upload with an
- * opaque "We could not store that file" and no clue why. This answers the question
- * BEFORE anybody tries, and the settings integration-status panel renders it.
- */
-export async function staffDocsBucketReachable(): Promise<boolean> {
-  try {
-    const { error } = await serviceClient().storage.from(STAFF_DOCS_BUCKET).list("", { limit: 1 });
-    return !error;
-  } catch {
-    return false;
-  }
-}

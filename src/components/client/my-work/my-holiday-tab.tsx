@@ -5,9 +5,9 @@ import { CalendarOff, CheckCircle2, Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SectionCard, StatCard, StatusPill } from "@/components/primitives";
 import { partitionAbsences } from "@/lib/absence/rules";
-import type { AbsenceKind, AbsenceRow } from "@/lib/absence/types";
-import { ABSENCE_KINDS } from "@/lib/absence/types";
+import type { AbsenceRow } from "@/lib/absence/types";
 import { mineOnly, panelStateFor, type LoadFailure } from "@/lib/my-work/rules";
+import { AbsenceRequestForm, type AbsenceFormValues } from "../absence/absence-request-form";
 import { KIND_LABEL, STATUS_LABEL, STATUS_TONE, daysLabel, rangeLabel } from "../absence/shared";
 import { PanelShell } from "./panel-shell";
 
@@ -22,21 +22,12 @@ import { PanelShell } from "./panel-shell";
 // Nothing on this tab decides anything. `canCancel` arrives already computed on
 // each row by @/lib/absence/rules, and validation is the server's `validateRequest`,
 // whose refusal is shown here verbatim.
-
-const inputClass =
-  "mt-1 w-full rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30";
-const labelClass = "block text-xs font-semibold text-navy";
-
-interface FormValues {
-  kind: AbsenceKind;
-  startDate: string;
-  endDate: string;
-  note: string;
-}
-
-function emptyForm(): FormValues {
-  return { kind: "holiday", startDate: "", endDate: "", note: "" };
-}
+//
+// THE FORM IS `AbsenceRequestForm` IN SELF-SERVICE MODE (no `staff` prop), not a
+// second copy of the same five fields. Two hand-built forms posting to one
+// endpoint drift in wording and field order, and the person asking then sees a
+// different form from the person deciding. `absenceFormCopy` in
+// @/lib/absence/rules holds the only differences, with a test.
 
 export function MyHolidayTab({
   clientSlug,
@@ -56,7 +47,6 @@ export function MyHolidayTab({
   onChanged: () => Promise<void>;
 }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<FormValues>(emptyForm());
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -78,11 +68,7 @@ export function MyHolidayTab({
   const pending = mine.filter((r) => r.status === "pending").length;
   const booked = mine.filter((r) => r.status === "approved" && !r.past).length;
 
-  function set<K extends keyof FormValues>(key: K, value: FormValues[K]) {
-    setForm((f) => ({ ...f, [key]: value }));
-  }
-
-  async function submit() {
+  async function submit(values: AbsenceFormValues) {
     setSubmitting(true);
     setFormError(null);
     setMessage(null);
@@ -95,16 +81,15 @@ export function MyHolidayTab({
           // NO staffId. The server resolves it from the session for a
           // non-approver and ignores anything sent here, so sending one would
           // be theatre at best and misleading at worst.
-          kind: form.kind,
-          startDate: form.startDate,
-          endDate: form.endDate,
-          note: form.note.trim() || null,
+          kind: values.kind,
+          startDate: values.startDate,
+          endDate: values.endDate,
+          note: values.note.trim() || null,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) throw new Error(data.error || `Could not send the request (${res.status}).`);
       setShowForm(false);
-      setForm(emptyForm());
       setMessage("Request sent. Your practice manager will approve or refuse it.");
       await onChanged();
     } catch (err) {
@@ -179,97 +164,15 @@ export function MyHolidayTab({
         ) : null}
 
         {showForm && selfStaffId ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!submitting) void submit();
+          <AbsenceRequestForm
+            submitting={submitting}
+            error={formError}
+            onSubmit={(values) => void submit(values)}
+            onCancel={() => {
+              setShowForm(false);
+              setFormError(null);
             }}
-            className="rounded-xl border border-line-strong bg-card-muted/40 p-4"
-          >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label htmlFor="my-absence-kind" className={labelClass}>
-                  Type <span className="text-danger">*</span>
-                </label>
-                <select
-                  id="my-absence-kind"
-                  value={form.kind}
-                  onChange={(e) => set("kind", e.target.value as AbsenceKind)}
-                  className={inputClass}
-                >
-                  {ABSENCE_KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {KIND_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="my-absence-note" className={labelClass}>
-                  Note
-                </label>
-                <input
-                  id="my-absence-note"
-                  type="text"
-                  value={form.note}
-                  onChange={(e) => set("note", e.target.value)}
-                  placeholder="Anything your manager should know"
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label htmlFor="my-absence-start" className={labelClass}>
-                  First day away <span className="text-danger">*</span>
-                </label>
-                <input
-                  id="my-absence-start"
-                  type="date"
-                  required
-                  value={form.startDate}
-                  onChange={(e) => set("startDate", e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label htmlFor="my-absence-end" className={labelClass}>
-                  Last day away <span className="text-danger">*</span>
-                </label>
-                <input
-                  id="my-absence-end"
-                  type="date"
-                  required
-                  value={form.endDate}
-                  onChange={(e) => set("endDate", e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-            </div>
-
-            {formError ? (
-              <p className="mt-4 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
-                {formError}
-              </p>
-            ) : null}
-
-            <div className="mt-4 flex items-center gap-2">
-              <Button type="submit" variant="primary" size="sm" disabled={submitting}>
-                {submitting ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                Send the request
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={submitting}
-                onClick={() => {
-                  setShowForm(false);
-                  setFormError(null);
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </form>
+          />
         ) : null}
 
         <PanelShell

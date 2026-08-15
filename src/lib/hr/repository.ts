@@ -9,7 +9,9 @@ import type { HrAddress, HrEmergencyContact, StaffHrProfile, StaffPayRate } from
 //
 //   1. PAY IS ONLY EVER READ BY A FUNCTION THAT SAYS SO. There is no
 //      `listStaffWithEverything`. A caller that wants rates asks `listPayRates`,
-//      and every call site of that is guarded by `requirePayAccess`. That is why
+//      and every call site of that is behind the `hr.view-pay` capability
+//      (`requireCapability` on a write, `hasCapability` when deciding whether to
+//      build the pay fields at all). That is why
 //      pay is a separate table: `listStaff` does `select("*")` on rota_staff and
 //      two endpoints return the result wholesale to the browser, so a rate
 //      COLUMN would have shipped itself.
@@ -206,7 +208,10 @@ function rowToRate(r: RateRow): StaffPayRate {
 /**
  * Pay rates for a client's staff, newest effective date first.
  *
- * EVERY CALL SITE OF THIS IS BEHIND `requirePayAccess`. There is deliberately no
+ * EVERY CALL SITE OF THIS IS BEHIND THE `hr.view-pay` CAPABILITY — `requireCapability`
+ * on /api/hr/profile/pay-rate, `hasCapability` on /api/hr/profile and
+ * /api/hours/month, which do not read this at all without it. NOT a role check:
+ * a per-person grant is invisible to a role list. There is deliberately no
  * convenience wrapper that folds rates into a staff list, because that wrapper
  * is how pay ends up in a response nobody re-read.
  */

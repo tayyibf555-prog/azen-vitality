@@ -229,12 +229,52 @@ export function isWithinStaffDocPrefix(path: unknown, clientSlug: string): boole
  * guess a staff id. NOTE this deliberately excludes the policy prefix
  * (`.../policies/...`, `safePolicyPath`): a policy is not somebody's document,
  * and a staff id can never equal the literal segment "policies" because ids are
- * uuids.
+ * uuids. That exclusion must STAY — a member of staff who may read the practice's
+ * policies is served by `isReadablePolicyPath` below, asked as a SECOND question,
+ * so widening this one is never the way to reach a policy.
  */
 export function isWithinOwnDocPrefix(path: unknown, clientSlug: string, staffId: string): boolean {
   if (!isWithinStaffDocPrefix(path, clientSlug)) return false;
   if (!isSafeSegment(staffId)) return false;
   return (path as string).startsWith(`${STAFF_DOCS_BUCKET}/${clientSlug}/${staffId}/`);
+}
+
+/**
+ * THE OTHER HALF OF THE SELF-SERVICE READ: is this THE PRACTICE's OWN POLICY PDF?
+ *
+ * A SEPARATE PREDICATE, NOT A WIDENING OF `isWithinOwnDocPrefix`. That function
+ * answers "is this mine", and the answer must stay no for everything that is not,
+ * because a colleague's passport lives one segment along from your own. So the
+ * self-service branch asks two narrow questions instead of one broad one.
+ *
+ * WHY A POLICY IS READABLE AT ALL BY SOMEBODY WHO IS NOT A MANAGER: the e-sign
+ * flow asks a member of staff to read a document and then affirm it, and the
+ * whole evidential claim ("was shown version N and confirmed it") is a lie if the
+ * platform refuses to show it to them. A policy is a practice-wide document every
+ * member of staff is REQUIRED to read; it is not somebody's personal record.
+ * Refusing it was fail-closed in the wrong place — it did not protect anything,
+ * it broke the signing flow.
+ *
+ * The prefix asserted is exactly what `safePolicyPath` writes:
+ *
+ *     staff-docs/<clientSlug>/policies/<token>/<leaf>
+ *
+ * and it inherits every refusal of the tenancy guard: another practice's policy,
+ * a `..` traversal, and the patient-document bucket are all still refused. The
+ * `policies` segment is a literal, so `policies-draft/` or a staff id that merely
+ * begins "policies" does not satisfy it — and a staff id can never BE "policies"
+ * because ids are uuids.
+ *
+ * NOT NARROWED TO "in force today", deliberately. Whether a version is retired or
+ * future-dated is a database fact, not a path fact, and this module is pure. It
+ * would also refuse paths the `mine=1` policy list has just handed the browser
+ * (that read returns every version), so a person could be shown a policy in the
+ * list and then refused the document. The set this admits is bounded to what is
+ * actually stored under the prefix, and only policy PDFs are ever written there.
+ */
+export function isReadablePolicyPath(path: unknown, clientSlug: string): boolean {
+  if (!isWithinStaffDocPrefix(path, clientSlug)) return false;
+  return (path as string).startsWith(`${STAFF_DOCS_BUCKET}/${clientSlug}/policies/`);
 }
 
 // ---------------------------------------------------------------------------
@@ -340,22 +380,6 @@ export function documentsMissing(
     out.push(kind);
   }
   return out;
-}
-
-/**
- * Documents needing attention, worst first: expired before expiring, and within each
- * group the soonest date first. This is the practice's actual worklist.
- */
-export function documentsNeedingAttention<T extends Pick<StaffDocument, "expiresOn">>(
-  docs: readonly T[],
-  todayKey: string,
-  withinDays: number = EXPIRING_SOON_DAYS,
-): T[] {
-  const flagged = docs.filter((d) => {
-    const state = expiryState(d, todayKey, withinDays);
-    return state === "expired" || state === "expiring";
-  });
-  return [...flagged].sort((a, b) => String(a.expiresOn).localeCompare(String(b.expiresOn)));
 }
 
 /**

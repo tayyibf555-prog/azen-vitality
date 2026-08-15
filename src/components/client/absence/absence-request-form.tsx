@@ -5,12 +5,22 @@ import { Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { RotaStaff } from "@/lib/rota/types";
 import type { AbsenceKind } from "@/lib/absence/types";
+import { absenceFormCopy } from "@/lib/absence/rules";
 import { ABSENCE_KINDS, KIND_LABEL } from "./shared";
 
 // The request form. It collects the fields and hands them up; it does NOT decide
 // whether the request is valid. `validateRequest` in @/lib/absence/rules is the one
 // judge of that, on the server, so a rule can never be enforced in the browser and
 // forgotten at the API (or vice versa). The server's refusal is shown here verbatim.
+//
+// ONE FORM, TWO AUDIENCES. Omitting `staff` puts it in SELF-SERVICE mode, which is
+// what My work renders: no "who is away" picker, because the server resolves the
+// signer from the session (findStaffByAppUser) and ignores a body-supplied
+// staffId for a non-approver — so a picker there would be theatre. Everything
+// else is identical, deliberately: two hand-built copies of the same five fields
+// drift in wording, in field order and in which ones are marked required, and the
+// person raising the request and the person deciding it then see different forms
+// for the same act. The only differences are the ones `absenceFormCopy` names.
 
 const inputClass =
   "mt-1 w-full rounded-lg border border-line bg-card-muted px-3 py-2 text-sm text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30";
@@ -35,13 +45,15 @@ export function AbsenceRequestForm({
   onSubmit,
   onCancel,
 }: {
-  staff: RotaStaff[];
+  /** Omit for SELF-SERVICE: no picker, and `staffId` is emitted empty. */
+  staff?: RotaStaff[];
   submitting: boolean;
   error: string | null;
   onSubmit: (values: AbsenceFormValues) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<AbsenceFormValues>(emptyForm());
+  const copy = absenceFormCopy(staff === undefined);
 
   function set<K extends keyof AbsenceFormValues>(key: K, value: AbsenceFormValues[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -56,32 +68,34 @@ export function AbsenceRequestForm({
       className="rounded-xl border border-line-strong bg-card-muted/40 p-4"
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <label htmlFor="absence-staff" className={labelClass}>
-            Who is away <span className="text-danger">*</span>
-          </label>
-          <select
-            id="absence-staff"
-            required
-            value={form.staffId}
-            onChange={(e) => set("staffId", e.target.value)}
-            className={inputClass}
-          >
-            <option value="">Choose a staff member</option>
-            {staff.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {staff ? (
+          <div>
+            <label htmlFor={`${copy.idPrefix}-staff`} className={labelClass}>
+              Who is away <span className="text-danger">*</span>
+            </label>
+            <select
+              id={`${copy.idPrefix}-staff`}
+              required
+              value={form.staffId}
+              onChange={(e) => set("staffId", e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Choose a staff member</option>
+              {staff.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
         <div>
-          <label htmlFor="absence-kind" className={labelClass}>
+          <label htmlFor={`${copy.idPrefix}-kind`} className={labelClass}>
             Type <span className="text-danger">*</span>
           </label>
           <select
-            id="absence-kind"
+            id={`${copy.idPrefix}-kind`}
             value={form.kind}
             onChange={(e) => set("kind", e.target.value as AbsenceKind)}
             className={inputClass}
@@ -95,11 +109,11 @@ export function AbsenceRequestForm({
         </div>
 
         <div>
-          <label htmlFor="absence-start" className={labelClass}>
+          <label htmlFor={`${copy.idPrefix}-start`} className={labelClass}>
             First day away <span className="text-danger">*</span>
           </label>
           <input
-            id="absence-start"
+            id={`${copy.idPrefix}-start`}
             type="date"
             required
             value={form.startDate}
@@ -109,11 +123,11 @@ export function AbsenceRequestForm({
         </div>
 
         <div>
-          <label htmlFor="absence-end" className={labelClass}>
+          <label htmlFor={`${copy.idPrefix}-end`} className={labelClass}>
             Last day away <span className="text-danger">*</span>
           </label>
           <input
-            id="absence-end"
+            id={`${copy.idPrefix}-end`}
             type="date"
             required
             value={form.endDate}
@@ -123,15 +137,15 @@ export function AbsenceRequestForm({
         </div>
 
         <div className="sm:col-span-2">
-          <label htmlFor="absence-note" className={labelClass}>
+          <label htmlFor={`${copy.idPrefix}-note`} className={labelClass}>
             Note
           </label>
           <input
-            id="absence-note"
+            id={`${copy.idPrefix}-note`}
             type="text"
             value={form.note}
             onChange={(e) => set("note", e.target.value)}
-            placeholder="Anything the person deciding should know"
+            placeholder={copy.notePlaceholder}
             className={inputClass}
           />
         </div>
@@ -144,7 +158,7 @@ export function AbsenceRequestForm({
       <div className="mt-4 flex items-center gap-2">
         <Button type="submit" variant="primary" size="sm" disabled={submitting}>
           {submitting ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-          Add the request
+          {copy.submitLabel}
         </Button>
         <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
           Cancel

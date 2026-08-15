@@ -82,6 +82,76 @@ describe("1. a null user with auth NOT enforced", () => {
   });
 });
 
+describe("1b. a null user with auth ENFORCED is REFUSED, destructive or not", () => {
+  // Defence in depth, and a default rather than a behaviour anybody depends on.
+  // Enforcement being on means the environment CAN tell who is asking, so "no
+  // user" is not a pilot with no sign-in configured — it is nobody. Every route
+  // reaching a capability check has already run `requireUser`, which answers 401
+  // on this combination, so nothing in the app can observe these branches today.
+  // That is the reason to pin them: an unreachable branch that says "allow" is
+  // where a hole waits for the one refactor that makes it reachable.
+  beforeEach(() => {
+    env.enforced = true;
+  });
+
+  it("refuses a NON-destructive capability with 403, where it used to pass through", () => {
+    // The sharper of the two. A destructive key was already refused (503) on the
+    // un-enforced path; a read was allowed on BOTH paths, so this is the branch
+    // that actually changed posture.
+    return requireCapability(null, VIEW).then(async (res) => {
+      expect(res).toBeInstanceOf(Response);
+      expect(res!.status).toBe(403);
+      await expect(res!.json()).resolves.toEqual({ ok: false, error: "forbidden" });
+    });
+  });
+
+  it("refuses a destructive capability too, and as 403 rather than the 503", async () => {
+    // 403, not 503: 503 means "this environment has no sign-in", which is a claim
+    // about the environment. Enforcement is ON here, so the honest answer is a
+    // refusal of the caller, not an apology about the deployment.
+    const res = await requireCapability(null, DESTRUCTIVE);
+    expect(res!.status).toBe(403);
+    const body = (await res!.json()) as { error: string };
+    expect(body.error).toBe("forbidden");
+    expect(body.error).not.toContain("sign-in is not configured");
+  });
+
+  it("refuses EVERY capability in the catalog, so no key is quietly exempt", async () => {
+    for (const c of CAPABILITIES) {
+      // `CapabilityDef.key` is a plain string in the catalog; the guard takes the
+      // union, so the cast is the catalog-to-union hop the file already makes.
+      const key = c.key as Capability;
+      expect((await requireCapability(null, key))?.status, key).toBe(403);
+      await expect(hasCapability(null, key), key).resolves.toBe(false);
+    }
+    expect(CAPABILITIES.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it("hasCapability answers false in both directions, so a UI cannot draw what the route refuses", async () => {
+    await expect(hasCapability(null, VIEW)).resolves.toBe(false);
+    await expect(hasCapability(null, DESTRUCTIVE)).resolves.toBe(false);
+  });
+
+  it("the capability overlay is never even read for a caller who is nobody", async () => {
+    // A refusal decided before any lookup: there is no user to look anything up
+    // for, and reaching the repository would be the shape of a check that could
+    // fail open on a read error.
+    overlay.held = new Set([VIEW, DESTRUCTIVE]);
+    expect((await requireCapability(null, VIEW))?.status).toBe(403);
+    await expect(hasCapability(null, DESTRUCTIVE)).resolves.toBe(false);
+  });
+
+  it("THE PILOT PASSTHROUGH SURVIVES, and is conditional on enforcement being off", async () => {
+    // The other direction, stated here rather than only in block 1, because the
+    // pair is the actual contract: enforcement off keeps the un-enforced pilot
+    // demo working, enforcement on refuses. Flipping either half must fail.
+    env.enforced = false;
+    await expect(requireCapability(null, VIEW)).resolves.toBeNull();
+    await expect(hasCapability(null, VIEW)).resolves.toBe(true);
+    expect((await requireCapability(null, DESTRUCTIVE))?.status).toBe(503);
+  });
+});
+
 describe("2. a signed-in user", () => {
   it("passes when they hold the key", async () => {
     overlay.held = new Set([DESTRUCTIVE]);

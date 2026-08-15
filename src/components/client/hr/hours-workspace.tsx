@@ -5,7 +5,7 @@ import { AlertTriangle, Download, Loader2, Lock, ShieldAlert } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { DataTable, EmptyState, SectionCard, StatCard, type Column } from "@/components/primitives";
 import { durationLabel } from "@/lib/clock/pairing";
-import { poundsLabel } from "@/lib/hours/cost";
+import { formatPenceGbp } from "@/lib/dashboard/money";
 import { hoursExportFilename, toHoursCsv } from "@/lib/hours/csv";
 import type { MonthReport, StaffMonthRow } from "@/lib/hours/types";
 
@@ -168,7 +168,7 @@ export function HoursWorkspace({ clientSlug }: { clientSlug: string }) {
           key: "rate",
           header: "Rate",
           align: "right",
-          cell: (r) => (r.ratePence === null || r.ratePence === undefined ? <span className="text-muted">No rate</span> : poundsLabel(r.ratePence)),
+          cell: (r) => (r.ratePence === null || r.ratePence === undefined ? <span className="text-muted">No rate</span> : formatPenceGbp(r.ratePence)),
         },
         {
           key: "cost",
@@ -180,7 +180,7 @@ export function HoursWorkspace({ clientSlug }: { clientSlug: string }) {
             r.costPence === null || r.costPence === undefined ? (
               <span className="text-muted">No rate recorded</span>
             ) : (
-              <span className="font-medium text-navy">{poundsLabel(r.costPence)}</span>
+              <span className="font-medium text-navy">{formatPenceGbp(r.costPence)}</span>
             ),
         },
       );
@@ -238,7 +238,7 @@ export function HoursWorkspace({ clientSlug }: { clientSlug: string }) {
                 value={
                   report.totals.costPence === null || report.totals.costPence === undefined
                     ? "Not priced"
-                    : poundsLabel(report.totals.costPence)
+                    : formatPenceGbp(report.totals.costPence)
                 }
                 hint={report.totals.costPence === null ? "Somebody has no rate recorded." : undefined}
               />

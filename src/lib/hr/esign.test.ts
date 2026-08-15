@@ -10,6 +10,7 @@ import {
   nextPolicyVersion,
   outstandingPolicies,
   policySlugFromTitle,
+  policyWithdrawn,
   signatureBindsToVersion,
   signatureIsValid,
   signingProgress,
@@ -223,6 +224,43 @@ describe("currentPolicies: what is in force today", () => {
   it("excludes a retired version and falls back to nothing rather than an older one", () => {
     const rows = [policy({ id: "gone", retiredAt: "2026-07-01T00:00:00.000Z" })];
     expect(currentPolicies(rows, TODAY)).toEqual([]);
+  });
+
+  // THE GAP BETWEEN PUBLICATION AND EFFECT. Publishing v2 today "effective 1
+  // September" retires v1 on 1 September. If v1 were read as withdrawn from the
+  // moment v2 was created, the slug would have NO version in force for the rest
+  // of August: it disappears from the signatures tab and `outstandingPolicies`
+  // stops asking anybody to sign.
+  it("keeps the OLD version in force until the new one's effective date arrives", () => {
+    const rows = [
+      policy({ id: "v1", version: 1, effectiveFrom: "2026-01-01", retiredAt: "2026-09-01T00:00:00.000Z" }),
+      policy({ id: "v2", version: 2, effectiveFrom: "2026-09-01" }),
+    ];
+    // Today (14 Aug) v1 is still the policy in force...
+    expect(currentPolicies(rows, TODAY).map((p) => p.id)).toEqual(["v1"]);
+    // ...on the day itself the handover happens, and neither version is lost.
+    expect(currentPolicies(rows, "2026-09-01").map((p) => p.id)).toEqual(["v2"]);
+  });
+});
+
+describe("policyWithdrawn: retiredAt is an instant, not a flag", () => {
+  it("is false when nothing has been retired", () => {
+    expect(policyWithdrawn({ retiredAt: null }, TODAY)).toBe(false);
+  });
+
+  it("is false while the retirement is still in the future", () => {
+    expect(policyWithdrawn({ retiredAt: "2026-09-01T00:00:00.000Z" }, TODAY)).toBe(false);
+  });
+
+  it("is true from the London DAY the retirement lands, not the UTC one", () => {
+    // London midnight opening 1 September 2026 is 2026-08-31T23:00:00Z (BST).
+    // Slicing the ISO string would read that as 31 August and withdraw a day early.
+    expect(policyWithdrawn({ retiredAt: "2026-08-31T23:00:00.000Z" }, "2026-08-31")).toBe(false);
+    expect(policyWithdrawn({ retiredAt: "2026-08-31T23:00:00.000Z" }, "2026-09-01")).toBe(true);
+  });
+
+  it("treats an unreadable stamp as withdrawn, rather than offering a document whose status is unknown", () => {
+    expect(policyWithdrawn({ retiredAt: "not a date" }, TODAY)).toBe(true);
   });
 
   it("returns one entry per slug, sorted by title so the list is stable", () => {

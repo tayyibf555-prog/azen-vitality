@@ -157,6 +157,35 @@ export interface DeactivateContext {
 }
 
 /**
+ * Which auth statuses mean a login CAN SIGN IN.
+ *
+ * An invited-but-never-used owner counts (they hold the keys, they just have not
+ * turned them yet); a deactivated one does not; a profile with no Auth account
+ * behind it does not; and `unknown` — the Auth directory could not be read — does
+ * not, which is what makes an unreadable directory produce a count of 0 and every
+ * owner-affecting change refuse. FAIL CLOSED, deliberately: "we cannot see who
+ * else can sign in" is not a reason to remove the last person who can.
+ */
+export const SIGN_IN_CAPABLE_STATUSES: readonly AuthStatus[] = ["active", "invited"] as const;
+
+/**
+ * How many owner logins in a practice can currently sign in.
+ *
+ * THE INPUT TO THE LOCKOUT GUARD. `canDeactivate` and `canChangeRole` refuse the
+ * last one, and both are only as good as this number — which was derived inline
+ * in an untested repository and then RE-IMPLEMENTED inside the route test's own
+ * mock, so the test asserted the rule against a copy of the expression rather
+ * than against the expression. One function, one test, both callers.
+ */
+export function countActiveOwners(
+  people: readonly { role: string; authStatus: AuthStatus }[],
+): number {
+  return people.filter(
+    (p) => p.role === "client_owner" && SIGN_IN_CAPABLE_STATUSES.includes(p.authStatus),
+  ).length;
+}
+
+/**
  * May `actor` deactivate `target`?
  *
  * The order of the checks is the order the owner would want to be told about them:

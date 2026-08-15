@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Loader2, Lock, RotateCcw } from "lucide-react";
 import { PageHeader, SectionCard, StatCard, StatusPill, Toggle } from "@/components/primitives";
+import { ROLE_LABELS } from "@/lib/provisioning/rules";
 import { cn } from "@/lib/utils";
 
 // ===========================================================================
@@ -80,14 +81,6 @@ const GROUP_LABEL: Record<string, string> = {
   reports: "Reports",
   system: "The platform",
   security: "Permissions themselves",
-};
-
-const ROLE_LABEL: Record<string, string> = {
-  agency_admin: "Platform admin",
-  client_owner: "Owner",
-  client_coordinator: "Practice manager",
-  client_clinician: "Clinician",
-  client_staff: "Staff",
 };
 
 const ROW_LABEL_WIDTH = 240;
@@ -407,7 +400,15 @@ function PersonCells({
       >
         <p className="truncate text-sm font-semibold text-navy">{person.name}</p>
         <p className="mt-0.5 flex items-center gap-1.5">
-          <StatusPill tone="neutral">{ROLE_LABEL[person.role] ?? person.role}</StatusPill>
+          {/* ROLE_LABELS, not a private copy: the invite panel on THIS SAME PAGE
+              takes its names from it through /api/people, and one screen naming
+              a role two ways is how "Practice manager" and "Coordinator" end up
+              side by side. An agency_admin cannot appear here — listClientPeople
+              filters on client_id and agency rows carry none — so the raw role
+              is the honest fallback rather than a fifth label. */}
+          <StatusPill tone="neutral">
+            {(ROLE_LABELS as Record<string, string | undefined>)[person.role] ?? person.role}
+          </StatusPill>
         </p>
       </div>
       {columns.map((column) => {

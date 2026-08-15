@@ -69,16 +69,31 @@ function unavailable(): Response {
  * Which of the two a key is comes from the CATALOG (`destructive: true`), so it
  * is data reviewed once, not a judgement each route makes and one route forgets.
  * An unrecognised key counts as destructive.
+ *
+ * A NULL USER WHILE ENFORCEMENT IS ON IS A THIRD CASE, AND IT IS A REFUSAL. It
+ * cannot happen today (`requireUser` answers 401 first on every route that calls
+ * this) and that is the argument FOR refusing rather than against bothering: an
+ * unreachable branch is where a permissive default hides until something moves.
+ * The un-enforced passthrough is a deliberate pilot concession, so it is spelled
+ * out as one — conditional on `!authEnforced()`, never inherited by accident.
  */
 export async function requireCapability(
   user: AuthedUser | null,
   capability: Capability,
 ): Promise<Response | null> {
   if (!user) {
-    if (!authEnforced() && isDestructive(capability)) return unavailable();
-    // Enforcement is on and the caller is still null: requireUser already
-    // answered 401 in that case, so this is the un-enforced pilot reading
-    // something harmless. Pass through, exactly like requireClientAccess.
+    // ENFORCEMENT ON AND NOBODY THERE: REFUSE. `requireUser` answers 401 before
+    // this is reached on every route today, so this branch is unreachable — which
+    // is exactly why it must not be the permissive one. The day a caller reaches a
+    // capability check with enforcement on and no session, the honest answer is
+    // "no", not "yes because nothing else stopped you". A guard whose default is
+    // allow is one refactor away from being the hole.
+    if (authEnforced()) return forbidden();
+    // Un-enforced pilot from here down: there is no session to check anywhere on
+    // this environment, so a destructive act is refused outright (an owner
+    // ticking boxes that enforce nothing is worse than no screen) and a harmless
+    // read passes through, exactly like requireClientAccess.
+    if (isDestructive(capability)) return unavailable();
     return null;
   }
   const held = await getCapabilities(user);
@@ -90,15 +105,16 @@ export async function requireCapability(
  * The same question without the Response — for a page or a service that wants to
  * branch rather than return an HTTP answer.
  *
- * Same fail-closed posture: a destructive capability is NOT held when auth is not
- * enforced, so a UI built on this hides the control rather than showing one that
- * 503s.
+ * A PROJECTION OF THE GUARD, not a second copy of it. Every branch above maps
+ * cleanly: 403 -> false, 503 -> false, null -> true. Written this way the
+ * fail-closed policy (destructive keys refuse on an un-enforced environment, a
+ * null user with enforcement on is a refusal) exists in exactly ONE function and
+ * cannot desynchronise, so the screen and the route can never disagree about who
+ * may do what — structurally, rather than because two comments say they must.
  */
 export async function hasCapability(
   user: AuthedUser | null,
   capability: Capability,
 ): Promise<boolean> {
-  if (!user) return !(!authEnforced() && isDestructive(capability));
-  const held = await getCapabilities(user);
-  return held.has(capability);
+  return (await requireCapability(user, capability)) === null;
 }

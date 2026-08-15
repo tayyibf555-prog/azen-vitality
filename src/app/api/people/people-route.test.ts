@@ -4,6 +4,7 @@
 // tested ones, because mocking those away would leave nothing worth asserting.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Person, LinkableStaff } from "@/lib/provisioning/types";
+import { countActiveOwners } from "@/lib/provisioning/rules";
 
 type User = { id: string; name: string; email: string; role: string; clientId: string | null; siteIds: string[] };
 
@@ -49,9 +50,10 @@ vi.mock("@/lib/provisioning/repository", () => ({
     authError: store.authReadable ? null : "auth down",
     staffReadable: store.staffReadable,
     staff: store.staff,
-    activeOwnerCount: store.people.filter(
-      (p) => p.role === "client_owner" && (p.authStatus === "active" || p.authStatus === "invited"),
-    ).length,
+    // The REAL derivation, not a copy of it: a mock that restated the filter
+    // asserted the lockout rule against its own expression rather than the
+    // production one.
+    activeOwnerCount: countActiveOwners(store.people),
   }),
   readAuthDirectory: async () => ({
     byEmail: new Map(Object.entries(store.authIds).map(([email, id]) => [email, { id, facts: {} }])),
