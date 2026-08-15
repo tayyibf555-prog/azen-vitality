@@ -5,8 +5,11 @@ import {
   getActiveCampaignBySlug,
   getCampaignBySlug,
   setCampaignStatus,
+  setCampaignTheme,
+  ThemeColumnMissingError,
 } from "@/lib/smile-assessment/campaign-repository";
 import { toPublicCampaign, type CampaignStatus } from "@/lib/smile-assessment/campaign";
+import { PALETTE_KEYS, isPaletteKey } from "@/lib/assess/palette";
 
 export const dynamic = "force-dynamic";
 
@@ -66,12 +69,48 @@ export async function PATCH(
   const moduleDenied = requireModuleApiAccess(auth, "smile-assessment");
   if (moduleDenied) return moduleDenied;
 
+  // TWO INDEPENDENT FIELDS, EACH OPTIONAL, AT LEAST ONE REQUIRED.
+  //
+  // Pausing an assessment and re-colouring it are unrelated acts, and the caller
+  // must be able to do either without restating the other: an absent `status`
+  // has to mean "leave it running", not "default it to active". So presence is
+  // read off the body, not off the value — which is also why `theme: null` (the
+  // deliberate "put it back to the default look") is distinguishable from a
+  // theme that was never mentioned.
+  const hasStatus = Object.prototype.hasOwnProperty.call(body, "status");
+  const hasTheme = Object.prototype.hasOwnProperty.call(body, "theme");
+  if (!hasStatus && !hasTheme) return bad("status or theme is required");
+
   const status = body.status;
-  if (status !== "active" && status !== "paused") return bad("status must be active or paused");
+  if (hasStatus && status !== "active" && status !== "paused") {
+    return bad("status must be active or paused");
+  }
+
+  // Same closed-list check as the create route, for the same reason: an
+  // unrecognised key must not reach a public page's style attribute.
+  const theme = body.theme;
+  if (hasTheme && theme !== null && !isPaletteKey(theme)) {
+    return bad(`theme must be null or one of: ${PALETTE_KEYS.join(", ")}`);
+  }
 
   const campaign = await getCampaignBySlug(client.id, slug);
   if (!campaign) return bad("Assessment not found", 404);
 
-  await setCampaignStatus(campaign.id, client.id, status as CampaignStatus);
-  return Response.json({ ok: true, status });
+  if (hasStatus) await setCampaignStatus(campaign.id, client.id, status as CampaignStatus);
+  if (hasTheme) {
+    try {
+      await setCampaignTheme(campaign.id, client.id, theme as string | null);
+    } catch (e) {
+      // 0079 not applied on this deployment. Named, not swallowed: here the
+      // colour IS the request (campaign-repository.ts, setCampaignTheme).
+      if (e instanceof ThemeColumnMissingError) return bad(e.message, 503);
+      throw e;
+    }
+  }
+
+  return Response.json({
+    ok: true,
+    status: hasStatus ? status : campaign.status,
+    theme: hasTheme ? theme : campaign.theme,
+  });
 }

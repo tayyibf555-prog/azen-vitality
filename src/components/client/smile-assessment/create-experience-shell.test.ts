@@ -360,6 +360,31 @@ describe("the panel stages the create without forking it", () => {
     expect(panelSource).toContain("{!isListVisible(wizard) ? null :");
   });
 
+  // MUTATION: put the phone mockup back and stage 2 spends a third of its width
+  // on a drawing of a screen that does not exist yet - it previewed the headline
+  // and intro fields, which the owner is typing three inches to its left - while
+  // the funnel being attached showed as a 20px smudge.
+  it("previews the chosen funnel with the real canvas, not a phone mockup", () => {
+    expect(panelSource).toContain("<FlowCanvas");
+    expect(panelSource).toContain(
+      "layoutFlow(choice.graph, { content: describeNode, edgeLabel: describeEdge })",
+    );
+    // Gone, not merely unrendered.
+    expect(panelSource).not.toContain("AssessmentPreview");
+    expect(panelSource).not.toContain("FlowShapeThumbnail");
+    // ...and stage 2 is one column now: no second track for it to sit in.
+    expect(codeOnly(panelSource)).not.toContain("lg:grid-cols-[minmax(0,1fr)_300px]");
+  });
+
+  // MUTATION: hand the preview a select callback and the wizard grows a second,
+  // half-built editor - on a funnel that has no campaign to be saved against yet.
+  it("keeps that preview read-only, with its scrolling to itself", () => {
+    const at = panelSource.indexOf("<FlowCanvas");
+    const tag = panelSource.slice(at, panelSource.indexOf("/>", at));
+    expect(tag).not.toContain("onSelect");
+    expect(tag).toContain("viewportClassName");
+  });
+
   it("keeps the panel free of colour literals too", () => {
     expect(panelSource).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });

@@ -37,6 +37,9 @@ interface CampaignRow {
   flow?: unknown;
   flow_version?: number | null;
   flow_published?: boolean | null;
+  // 0079, optional for exactly the reason the three above are: the migration is
+  // written and not applied, so select("*") does not return this key today.
+  theme?: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -63,6 +66,12 @@ function rowToCampaign(r: CampaignRow): Campaign {
     flow: r.flow ?? null,
     flowVersion: typeof r.flow_version === "number" ? r.flow_version : 0,
     flowPublished: r.flow_published === true,
+    // The pre-0079 default, decided once, here. null is "the default look", and
+    // it is what an un-migrated row, an un-migrated database and an owner who
+    // never opened the picker all produce — three roads to the same pixels.
+    // Empty string normalises to null too: "" is not a palette key, and letting
+    // it through would make paletteFor do the same work again downstream.
+    theme: typeof r.theme === "string" && r.theme.trim() !== "" ? r.theme : null,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -80,28 +89,52 @@ export interface InsertCampaignInput {
   targetBudget: string;
   headline?: string | null;
   intro?: string | null;
+  /**
+   * A PALETTES key (0079), or null for the default look. Validated at the route
+   * against the closed list, exactly as `goal` is against GOAL_KEYS.
+   */
+  theme?: string | null;
   createdBy?: string | null;
 }
 
 export async function insertCampaign(input: InsertCampaignInput): Promise<Campaign> {
   const db = serviceClient();
-  const { data, error } = await db
-    .from("smile_assessment_campaign")
-    .insert({
-      client_id: input.clientId,
-      site_id: input.siteId,
-      slug: input.slug,
-      name: input.name,
-      goal: input.goal,
-      goal_note: input.goalNote ?? null,
-      ideal_customer: input.idealCustomer ?? null,
-      target_budget: input.targetBudget,
-      headline: input.headline ?? null,
-      intro: input.intro ?? null,
-      created_by: input.createdBy ?? null,
-    })
-    .select("*")
-    .single();
+  const base = {
+    client_id: input.clientId,
+    site_id: input.siteId,
+    slug: input.slug,
+    name: input.name,
+    goal: input.goal,
+    goal_note: input.goalNote ?? null,
+    ideal_customer: input.idealCustomer ?? null,
+    target_budget: input.targetBudget,
+    headline: input.headline ?? null,
+    intro: input.intro ?? null,
+    created_by: input.createdBy ?? null,
+  };
+
+  const create = (row: Record<string, unknown>) =>
+    db.from("smile_assessment_campaign").insert(row).select("*").single();
+
+  let { data, error } = await create({ ...base, theme: input.theme ?? null });
+
+  // 0079 IS WRITTEN AND NOT APPLIED, AND THIS IS WHAT MAKES THAT SAFE.
+  //
+  // Creating an assessment is the practice's live front door. If this code
+  // deploys before someone runs 0079, an insert naming a column the table does
+  // not have would 500 EVERY create — a colour picker taking the create path
+  // down with it. So on exactly that error, and no other, the same insert is
+  // retried without the column. The campaign is created unthemed, which is the
+  // honest thing an un-migrated database can store, and it starts rendering its
+  // scheme the moment the migration lands and the owner re-picks.
+  //
+  // Note this cannot mask a real failure: a duplicate slug is 23505 and falls
+  // straight through to SlugTakenError below, and the retry runs the identical
+  // row minus one key.
+  if (error && isMissingColumn(error, THEME_COLUMNS)) {
+    ({ data, error } = await create(base));
+  }
+
   if (error) {
     if (error.code === "23505") throw new SlugTakenError(input.slug); // unique (client_id, slug)
     throw error;
@@ -147,6 +180,43 @@ export async function setCampaignStatus(id: string, clientId: string, status: Ca
     .eq("id", id)
     .eq("client_id", clientId); // scope the write to the caller's client
   if (error) throw error;
+}
+
+/** Migration 0079 has not been applied to this database yet. */
+export class ThemeColumnMissingError extends Error {
+  constructor() {
+    super("Colour schemes need migration 0079_assessment_theme.sql to be applied.");
+    this.name = "ThemeColumnMissingError";
+  }
+}
+
+/**
+ * Re-colour an existing assessment. `theme` is a PALETTES key, or null for the
+ * default look.
+ *
+ * WHY THIS ONE REPORTS THE MISSING COLUMN AND insertCampaign SWALLOWS IT. There,
+ * the theme is a garnish on a request whose real subject is "create this
+ * assessment", and failing the whole create over a colour would be absurd. Here
+ * the theme IS the request: quietly succeeding at nothing would leave an owner
+ * clicking a swatch that never takes, with no way to find out why. The route
+ * turns this into a 503 naming the migration, the same shape the funnel PUT uses
+ * for 0078 (flow/route.ts:151).
+ */
+export async function setCampaignTheme(
+  id: string,
+  clientId: string,
+  theme: string | null,
+): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("smile_assessment_campaign")
+    .update({ theme, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("client_id", clientId); // scope the write to the caller's client
+  if (error) {
+    if (isMissingColumn(error, THEME_COLUMNS)) throw new ThemeColumnMissingError();
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,12 +269,25 @@ export class FlowColumnsMissingError extends Error {
   }
 }
 
-/** Postgres/PostgREST both have a way of saying "no such column". Catch either. */
-function isMissingColumn(error: { code?: string | null; message?: string | null } | null): boolean {
+/**
+ * Postgres/PostgREST both have a way of saying "no such column". Catch either.
+ *
+ * `columns` narrows the message-text fallback so this cannot swallow a genuine
+ * typo somewhere else in the same query. 0078's three flow columns were the
+ * original caller; 0079's `theme` is the second.
+ */
+function isMissingColumn(
+  error: { code?: string | null; message?: string | null } | null,
+  columns: string[],
+): boolean {
   if (!error) return false;
   if (error.code === "42703" || error.code === "PGRST204") return true;
-  return /column .*(flow|flow_version|flow_published).* does not exist/i.test(error.message ?? "");
+  const named = columns.join("|");
+  return new RegExp(`column .*(${named}).* does not exist`, "i").test(error.message ?? "");
 }
+
+const FLOW_COLUMNS = ["flow", "flow_version", "flow_published"];
+const THEME_COLUMNS = ["theme"];
 
 export interface UpdateCampaignFlowInput {
   id: string;
@@ -251,7 +334,7 @@ export async function updateCampaignFlow(input: UpdateCampaignFlowInput): Promis
     .eq("client_id", input.clientId)
     .maybeSingle();
   if (readError) {
-    if (isMissingColumn(readError)) throw new FlowColumnsMissingError();
+    if (isMissingColumn(readError, FLOW_COLUMNS)) throw new FlowColumnsMissingError();
     throw readError;
   }
   if (!current) throw new FlowVersionConflictError(0); // gone, or not this client's
@@ -284,7 +367,7 @@ export async function updateCampaignFlow(input: UpdateCampaignFlowInput): Promis
     .select("flow_version, flow_published")
     .maybeSingle();
   if (writeError) {
-    if (isMissingColumn(writeError)) throw new FlowColumnsMissingError();
+    if (isMissingColumn(writeError, FLOW_COLUMNS)) throw new FlowColumnsMissingError();
     throw writeError;
   }
   if (!written) throw new FlowVersionConflictError(storedVersion);

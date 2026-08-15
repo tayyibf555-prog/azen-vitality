@@ -397,10 +397,17 @@ function ClassicAssessmentQuiz({ clientSlug, campaignSlug, headline, intro, prac
     <main className="relative mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-4 py-4 sm:px-5 sm:py-8">
       <style>{ENTER_KEYFRAMES}</style>
 
-      {/* Soft brand glow behind the card. */}
+      {/* Soft brand glow behind the card. The colour is the ONE brand value on
+          this page that no Tailwind token could reach, so it is promoted to
+          --assess-glow (src/lib/assess/palette.ts) and a campaign's chosen
+          scheme re-tints it with everything else. The literal stays as the
+          fallback because this component also renders with no themed wrapper
+          above it (the generic /assess/<client> quiz, the internal live
+          preview), and a bare var() would resolve to nothing there — which
+          invalidates the whole gradient and drops the glow entirely. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,rgba(91,196,247,0.20),transparent_72%)]"
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,var(--assess-glow,rgba(91,196,247,0.20)),transparent_72%)]"
       />
 
       {/* Compact horizontal brand lockup: every vertical pixel saved here keeps

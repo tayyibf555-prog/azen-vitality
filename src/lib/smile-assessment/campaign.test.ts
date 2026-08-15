@@ -101,6 +101,7 @@ describe("toPublicCampaign", () => {
       flow: { schemaVersion: 1, entry: "w", nodes: [], edges: [] },
       flowVersion: 3,
       flowPublished: true,
+      theme: "landing-blue",
       createdBy: "owner@vitality.co",
       createdAt: "2026-06-27T00:00:00Z",
       updatedAt: "2026-06-27T00:00:00Z",
@@ -112,6 +113,10 @@ describe("toPublicCampaign", () => {
       goalLabel: "Invisalign / teeth straightening",
       headline: "Straighten your smile",
       intro: "Two minutes to your plan",
+      // The colour scheme's KEY, not its colours: a name from a closed list the
+      // page has to resolve anyway. It reveals nothing about targeting or
+      // scoring, and the renderer re-checks it before it reaches any style.
+      theme: "landing-blue",
     });
     // The sensitive/internal fields must not be present at all (name is the
     // internal worklist label and is deliberately omitted too).
@@ -124,6 +129,36 @@ describe("toPublicCampaign", () => {
     // it validates. It must never ride along on the campaign payload unchecked.
     expect("flow" in pub).toBe(false);
     expect("flowPublished" in pub).toBe(false);
+  });
+
+  // MUTATION: coerce a null theme to "default" on the way out and the public
+  // payload stops being able to say "this campaign predates colour schemes" -
+  // which is the state every campaign on an un-migrated database is in. The two
+  // render identically (palette.ts, paletteFor), and that is precisely why the
+  // raw value should travel rather than being helpfully filled in here.
+  it("carries a null theme through as null", () => {
+    const c: Campaign = {
+      id: "id-2",
+      clientId: "client-vitality",
+      siteId: "site-cc",
+      slug: "no-scheme",
+      name: "No scheme",
+      goal: "general",
+      goalNote: null,
+      idealCustomer: null,
+      targetBudget: "any",
+      headline: null,
+      intro: null,
+      status: "active",
+      flow: null,
+      flowVersion: 0,
+      flowPublished: false,
+      theme: null,
+      createdBy: null,
+      createdAt: "2026-06-27T00:00:00Z",
+      updatedAt: "2026-06-27T00:00:00Z",
+    };
+    expect(toPublicCampaign(c).theme).toBeNull();
   });
 });
 

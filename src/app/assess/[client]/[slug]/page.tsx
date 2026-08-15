@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { AssessmentQuiz } from "@/components/assess/assessment-quiz";
@@ -6,6 +7,7 @@ import { toPublicCampaign, toPublicFlow, type PublicFlow } from "@/lib/smile-ass
 import { normaliseAndValidateFlow, describeFlowFailures } from "@/lib/smile-assessment/flow-validate";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { getClient } from "@/lib/mock/clients";
+import { paletteVars } from "@/lib/assess/palette";
 
 // Public campaign landing page (/assess/<client>/<slug>). The ad destination for a
 // Smile Assessment CAMPAIGN: it reuses the generic quiz, but framed by the
@@ -131,16 +133,36 @@ export default async function CampaignAssessmentPage({
   const style = firstParam(sp.style) === "guided" ? "guided" : "classic";
   const previewMode = firstParam(sp.preview) === "1";
 
+  // THE COLOUR SCHEME, applied HERE and not inside the quiz.
+  //
+  // globals.css maps its brand tokens into Tailwind with `@theme inline`, so
+  // `text-navy` compiles to `color: var(--navy)` — the raw token. Re-declaring
+  // those tokens on a wrapper therefore re-themes every utility beneath it, and
+  // the three quiz components need no theming code at all. paletteVars falls
+  // back to the shipped values for null and for anything it does not recognise,
+  // so this wrapper is a no-op on a campaign that never chose a scheme.
+  //
+  // WHY THE WRAPPER IS HERE AND CARRIES ITS OWN min-h-screen AND BACKGROUND.
+  // The page background is painted by the assess LAYOUT (`min-h-screen bg-cream`),
+  // which is above this page and shared with the un-campaigned /assess/<client>
+  // quiz — so it cannot be themed per campaign. The quiz roots below are centred
+  // and width-capped, so vars set there would leave the page's gutters in the old
+  // colour: a teal card floating on a blue-grey page. This element sits between
+  // the two, tall enough and wide enough to be the background the patient sees.
+  // (The cast is because paletteVars is React-free by design and returns a plain
+  // string map; CSS custom properties are not in React's CSSProperties.)
   return (
-    <AssessmentQuiz
-      clientSlug={client}
-      campaignSlug={slug}
-      headline={pub.headline}
-      intro={pub.intro}
-      practiceName={clientRecord.name}
-      style={style}
-      previewMode={previewMode}
-      flow={flow}
-    />
+    <div className="min-h-screen w-full bg-cream" style={paletteVars(pub.theme) as CSSProperties}>
+      <AssessmentQuiz
+        clientSlug={client}
+        campaignSlug={slug}
+        headline={pub.headline}
+        intro={pub.intro}
+        practiceName={clientRecord.name}
+        style={style}
+        previewMode={previewMode}
+        flow={flow}
+      />
+    </div>
   );
 }

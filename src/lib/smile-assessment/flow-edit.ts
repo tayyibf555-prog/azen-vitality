@@ -396,6 +396,43 @@ const BAND_SHORT: Record<FlowBand, string> = {
   low: "Low",
 };
 
+/**
+ * WHAT HAPPENS TO AN ENQUIRY THAT LANDS IN THIS BAND. One line per result step,
+ * because "Early enquiry" on its own tells the owner what the score was and
+ * nothing about what the practice then does - which is the only reason there are
+ * three result steps rather than one.
+ *
+ * Read off the submit route, not invented: a HIGH band with a reachable contact
+ * becomes a Speed-to-lead lead and is messaged inside the request
+ * (api/smile-assessment/submit/route.ts:291), and the other two are recorded for
+ * the team to work (BAND_MESSAGE, :84-88).
+ */
+const BAND_NEXT: Record<FlowBand, string> = {
+  high: "Contacted straight away",
+  medium: "Followed up by the team",
+  low: "Kept on the list for later",
+};
+
+/**
+ * WHAT THE CONTACT STEP ACTUALLY ASKS FOR, in the order the public funnel asks
+ * it: a first name, how to reply, and then the one address that channel needs -
+ * a mobile number for a text, an email address for an email
+ * (deterministic-assessment-quiz.tsx:717-771). Listed on the card because "the
+ * enquiry is captured here" is not the same information as "these three things
+ * are what we end up holding".
+ */
+const CONTACT_FIELDS: readonly string[] = ["First name", "How to reach you", "Mobile or email"];
+
+/** Said on a welcome card that has no authored intro of its own. */
+const WELCOME_DEFAULT_INTRO = "Uses the assessment’s own intro";
+
+/**
+ * Where the welcome step lands a patient. It is an OVERRIDE of the assessment's
+ * hero copy rather than a screen of its own (deterministic-assessment-quiz.tsx
+ * :207-212), and a card that does not say so reads as a step nobody sees.
+ */
+const WELCOME_PLACE = "Sits above the first question";
+
 export const FLOW_BAND_TITLES = BAND_TITLE;
 export const FLOW_BAND_LABELS = BAND_SHORT;
 
@@ -405,18 +442,32 @@ export interface FlowCardText {
   options: string[];
 }
 
-/** The card for one step: what it is, what it asks, and what it offers. */
+/**
+ * The card for one step: what it is, what it asks, and what it offers.
+ *
+ * EVERY KIND CARRIES ROWS, not only questions. A question card has always listed
+ * its answers; the other three returned an empty list, so three quarters of a
+ * funnel drew as a title in an empty rectangle and the canvas could not be read
+ * without opening each step in the inspector. The rows below are FACTS about the
+ * step - what the contact form captures, where the welcome copy appears, what
+ * happens to an enquiry in this band - never restatements of the title.
+ */
 export function describeNode(node: FlowNode): FlowCardText {
   switch (node.kind) {
     case "welcome":
-      return { eyebrow: "Start", title: node.headline ?? "Welcome screen", options: [] };
+      return {
+        eyebrow: "Start",
+        title: node.headline ?? "Welcome screen",
+        options: [node.intro ?? WELCOME_DEFAULT_INTRO, WELCOME_PLACE],
+      };
     case "contact":
-      return { eyebrow: "Capture", title: "Contact details", options: [] };
+      // A copy, because a caller may hold and sort what it is handed.
+      return { eyebrow: "Capture", title: "Contact details", options: [...CONTACT_FIELDS] };
     case "outcome":
       return {
         eyebrow: `Result · ${BAND_SHORT[node.band]}`,
         title: node.headline ?? BAND_TITLE[node.band],
-        options: [],
+        options: [BAND_NEXT[node.band]],
       };
     case "question": {
       const q = questionById(node.questionId);

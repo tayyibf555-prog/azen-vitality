@@ -1,0 +1,72 @@
+-- 0079_assessment_theme.sql
+-- THE COLOUR SCHEME: which of the named palettes in src/lib/assess/palette.ts the
+-- public /assess/<client>/<slug> page wears.
+--
+-- ============================================================================
+-- WRITTEN BUT NOT APPLIED, AND THAT IS THE POINT OF THIS HEADER.
+--
+-- Same reason as 0078, and no other: this repo's convention is that a migration
+-- file is written by the build and applied by a human who has read it. Do not
+-- apply this file to demonstrate the feature. What makes that safe is the second
+-- half of this header.
+--
+-- RUNNING IT CHANGES NOTHING THAT IS LIVE. One nullable text column, no default,
+-- no new table, no RLS change (the parent table is already server-only under
+-- 0018), no backfill and no seed. Every existing campaign lands with theme = null,
+-- which paletteFor() reads as the FIRST catalogue entry — and that entry's values
+-- are lifted verbatim from globals.css, so a null-theme campaign renders the exact
+-- pixels it renders today. The four live campaigns (0060) keep working, byte for
+-- byte, either way. palette.test.ts re-reads globals.css and fails if that stops
+-- being true.
+--
+-- AND UNTIL IT IS APPLIED, THE CODE STILL WORKS — in both directions, which is
+-- more than 0078 needed:
+--
+--   READS   rowToCampaign (src/lib/smile-assessment/campaign-repository.ts)
+--           defaults theme for a row that predates this file, because select("*")
+--           on an un-migrated table simply does not return the key.
+--   WRITES  insertCampaign puts `theme` in the INSERT and, if Postgres/PostgREST
+--           answers "no such column", RETRIES the same insert without it. That
+--           retry is not politeness: creating an assessment is the practice's
+--           live front door, and shipping this code ahead of the migration must
+--           not be able to take it down. The campaign is created unthemed, which
+--           is what an un-migrated database can honestly store.
+--           setCampaignTheme (the re-theme path) instead reports the missing
+--           column as a 503 with this filename in it, because there the theme IS
+--           the request — silently succeeding at nothing would be a lie.
+--
+-- So the deploy order is free: the code can ship first and every assessment stays
+-- exactly as it looks until someone applies this and then picks a scheme.
+-- ============================================================================
+--
+-- WHY A TEXT KEY AND NOT THE COLOURS THEMSELVES.
+--
+-- The column stores 'landing-blue', not eighteen hex values. Three consequences,
+-- all wanted:
+--
+--   1. A brand tweak in globals.css reaches every campaign that never chose a
+--      scheme, which is the only behaviour an owner would expect from "default".
+--   2. A palette can be corrected — a contrast fix, a hue nudge — without a
+--      backfill over rows that pointed at it.
+--   3. Nothing arbitrary is ever read out of the database and injected into a
+--      style attribute on a public page. The stored value is matched against a
+--      closed list (isPaletteKey) at both write routes AND again at render
+--      (paletteFor falls back rather than trusting the row), so a hand-edited row
+--      cannot put a value of its choosing into the CSS the browser is handed.
+--
+-- WHY NOT A CHECK CONSTRAINT ON THE KEY. Same call 0059 made about `goal` and
+-- 0078 made about `flow`: the list lives in one place (PALETTE_KEYS), enforced at
+-- the door and again at render. A second, weaker copy of it expressed as a CHECK
+-- would only ever drift from the real one — and would turn retiring a palette
+-- into a migration.
+
+alter table smile_assessment_campaign
+  -- null = no scheme chosen, i.e. the default look. Deliberately NOT
+  -- `default 'default'`: a null and the string 'default' must render identically
+  -- (they do — paletteFor maps both to entry one), and leaving existing rows null
+  -- keeps "this campaign predates colour schemes" a fact the row still tells you.
+  add column if not exists theme text;
+
+-- NO SEED, and no update. Running this re-colours nothing. The first themed
+-- assessment is an act an owner performs on purpose, in the picker, on a campaign
+-- they chose.

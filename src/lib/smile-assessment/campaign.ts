@@ -168,6 +168,15 @@ export interface Campaign {
   flowVersion: number;
   /** Whether the public runtime may use `flow` at all. See migration 0078. */
   flowPublished: boolean;
+  /**
+   * The colour scheme the public page wears: a key from PALETTES
+   * (src/lib/assess/palette.ts), or null for "the default look", which is also
+   * every campaign created before 0079 and every campaign on a database where
+   * 0079 has not been applied. Never trusted on read — paletteFor() matches it
+   * against the closed list again and falls back rather than handing an
+   * unrecognised value to a style attribute on a public page.
+   */
+  theme: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -185,6 +194,14 @@ export interface PublicCampaign {
   goalLabel: string;
   headline: string | null;
   intro: string | null;
+  /**
+   * The chosen colour scheme's KEY — never the colours themselves. Safe to be
+   * public by construction: it is one of a closed list of names the page would
+   * have to resolve anyway, it reveals nothing about targeting or scoring, and
+   * whatever it says the renderer still matches it against PALETTES before a
+   * single character reaches a style attribute.
+   */
+  theme: string | null;
 }
 
 export function toPublicCampaign(c: Campaign): PublicCampaign {
@@ -194,6 +211,7 @@ export function toPublicCampaign(c: Campaign): PublicCampaign {
     goalLabel: goalLabel(c.goal),
     headline: c.headline,
     intro: c.intro,
+    theme: c.theme,
   };
 }
 

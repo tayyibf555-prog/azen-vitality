@@ -16,6 +16,7 @@ import {
   BUDGET_KEYS,
   type Campaign,
 } from "@/lib/smile-assessment/campaign";
+import { PALETTE_KEYS, isPaletteKey } from "@/lib/assess/palette";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +111,16 @@ export async function POST(request: Request): Promise<Response> {
   const targetBudget = str(body.targetBudget, 40) ?? "any";
   if (!BUDGET_KEYS.includes(targetBudget)) return bad(`targetBudget must be one of: ${BUDGET_KEYS.join(", ")}`);
 
+  // The colour scheme, checked against the closed catalogue the same way `goal`
+  // is checked against GOAL_KEYS — and rejected at the door rather than stored
+  // and discovered at render, because the render is a public ad destination.
+  // Absent is legitimate and means the default look (the pre-0079 state, and
+  // every campaign made before the picker existed).
+  const theme = str(body.theme, 40);
+  if (theme !== undefined && !isPaletteKey(theme)) {
+    return bad(`theme must be one of: ${PALETTE_KEYS.join(", ")}`);
+  }
+
   // Slug: an explicit one (slugified) wins, else derive from the name.
   const slug = slugify(str(body.slug, 60) ?? name);
   if (!isValidSlug(slug)) return bad("could not derive a valid URL from the name or slug");
@@ -132,6 +143,7 @@ export async function POST(request: Request): Promise<Response> {
       targetBudget,
       headline: str(body.headline, 120) ?? null,
       intro: str(body.intro, 240) ?? null,
+      theme: theme ?? null,
       createdBy: auth?.email ?? auth?.id ?? null,
     });
     const origin = new URL(request.url).origin;

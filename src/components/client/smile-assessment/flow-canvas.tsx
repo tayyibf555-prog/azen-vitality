@@ -6,10 +6,13 @@ import type { FlowNodeKind } from "@/lib/smile-assessment/flow";
  * THE FUNNEL CANVAS. Draws a laid-out funnel and computes NOTHING.
  *
  * Every coordinate, every wrapped line, every baseline and the viewBox itself
- * arrive from flow-layout.ts. That split is the charting idiom (tooth.tsx:49-57)
- * and it is the only way any of this is testable: vitest collects no .tsx, so a
- * rule written in here is a rule nothing can hold. If you find yourself adding
- * arithmetic below, it belongs in flow-layout.ts with a test beside it.
+ * arrive from flow-layout.ts - and so does the card's chrome: the header strip's
+ * path, the kind bar's rect and the hairline above each option row. That split is
+ * the charting idiom (tooth.tsx:49-57) and it is the only way any of this is
+ * testable: vitest collects no .tsx, so a rule written in here is a rule nothing
+ * can hold. Not one COORDINATE below is computed - the card's outline, its strip,
+ * its bar and its rules all arrive finished. If you find yourself adding
+ * arithmetic, it belongs in flow-layout.ts with a test beside it.
  *
  * NO COLOUR LITERALS. Fills and strokes are CSS custom properties from
  * globals.css, applied through `style` rather than through an interpolated
@@ -44,6 +47,22 @@ export const NODE_ACCENT: Record<FlowNodeKind, string> = {
   outcome: "var(--status-green)",
 };
 
+/**
+ * The header strip's fill: the pale tint that PAIRS with each kind's accent in
+ * the chip language (globals.css:56-70). Tokens rather than an opacity on the
+ * accent, so a header strip is the same colour as the chip for that kind
+ * everywhere else in the app, and no card invents a shade of its own.
+ *
+ * Not exported: the thumbnails draw no header, because a thumbnail card carries
+ * no text and therefore no header strip to put behind it.
+ */
+const NODE_TINT: Record<FlowNodeKind, string> = {
+  welcome: "var(--tint-blue)",
+  question: "var(--tint-royal)",
+  contact: "var(--tint-amber)",
+  outcome: "var(--tint-green)",
+};
+
 const KIND_NOTE: Record<FlowNodeKind, string> = {
   welcome: "Opening screen",
   question: "Question",
@@ -62,6 +81,12 @@ export interface FlowCanvasProps {
   /** Unique within the document: several canvases can be on one page. */
   idPrefix: string;
   className?: string;
+  /**
+   * The scrolling box's height cap. A canvas being READ (the wizard's preview of
+   * the funnel it is about to attach) wants a short window; a canvas being
+   * EDITED wants most of the screen, which is the default.
+   */
+  viewportClassName?: string;
 }
 
 export function FlowCanvas({
@@ -73,6 +98,7 @@ export function FlowCanvas({
   faultyNodeIds,
   idPrefix,
   className,
+  viewportClassName,
 }: FlowCanvasProps) {
   const arrow = `${idPrefix}-arrow`;
   const arrowOn = `${idPrefix}-arrow-on`;
@@ -81,7 +107,7 @@ export function FlowCanvas({
   return (
     <div className={cn("rounded-xl border border-line bg-card", className)}>
       {/* The canvas keeps its scrolling to itself. */}
-      <div className="hidden max-h-[70vh] overflow-auto p-1 sm:block">
+      <div className={cn("hidden overflow-auto p-1 sm:block", viewportClassName ?? "max-h-[70vh]")}>
         <svg
           width={layout.width}
           height={layout.height}
@@ -252,30 +278,33 @@ function Card({
     >
       <title>{`${KIND_NOTE[node.kind]}: ${node.titleLines.map((l) => l.text).join(" ")}`}</title>
 
+      {/* The card's body, opaque, so the wires drawn underneath stop at its edge.
+          Fill only: the outline goes on LAST, or the header strip and the rules
+          would paint over their own border. */}
       <rect
         x={node.x}
         y={node.y}
         width={node.w}
         height={node.h}
-        rx={10}
-        style={{ fill: "var(--card)", stroke: border }}
-        strokeWidth={selected || faulty ? 2 : 1}
-        vectorEffect="non-scaling-stroke"
+        rx={node.rx}
+        style={{ fill: "var(--card)" }}
       />
-      {/* The kind accent. A bar rather than a tinted card, so a step's KIND never
-          competes with the selected/faulty outline for the reader's attention. */}
+      {/* The kind, said twice and quietly: a tinted header strip behind the
+          eyebrow, and a bar down the left edge. Neither is the card's outline,
+          which stays free to mean selected / needs-a-fix and nothing else. */}
+      <path d={node.headerD} style={{ fill: NODE_TINT[node.kind] }} />
       <rect
-        x={node.x}
-        y={node.y + 4}
-        width={3}
-        height={Math.max(0, node.h - 8)}
-        rx={1.5}
+        x={node.accent.x}
+        y={node.accent.y}
+        width={node.accent.w}
+        height={node.accent.h}
+        rx={node.accent.rx}
         style={{ fill: NODE_ACCENT[node.kind] }}
       />
       <line
         x1={node.x}
         y1={node.dividerY}
-        x2={node.x + node.w}
+        x2={node.right}
         y2={node.dividerY}
         style={{ stroke: "var(--line)" }}
         strokeWidth={1}
@@ -301,13 +330,42 @@ function Card({
         ))}
       </text>
 
+      {/* One hairline per option row. A separated row per answer is what makes a
+          seven-answer question readable at a glance; the bullets it replaces
+          only marked where a line started. */}
+      {node.optionRuleY.map((y) => (
+        <line
+          key={y}
+          x1={node.x}
+          y1={y}
+          x2={node.right}
+          y2={y}
+          style={{ stroke: "var(--line)" }}
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+
       <text fontSize={10} style={{ fill: "var(--ink)" }}>
         {node.optionLines.map((line) => (
           <tspan key={line.y} x={node.textX} y={line.y}>
-            {`· ${line.text}`}
+            {line.text}
           </tspan>
         ))}
       </text>
+
+      {/* Last, over the strip and the rules, so the border is one unbroken line. */}
+      <rect
+        x={node.x}
+        y={node.y}
+        width={node.w}
+        height={node.h}
+        rx={node.rx}
+        fill="none"
+        style={{ stroke: border }}
+        strokeWidth={selected || faulty ? 2 : 1}
+        vectorEffect="non-scaling-stroke"
+      />
     </g>
   );
 }

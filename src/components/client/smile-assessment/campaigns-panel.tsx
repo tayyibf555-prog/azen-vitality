@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useReducer, useState } from "react";
 import {
   Plus,
   Loader2,
@@ -19,16 +19,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, Tabs, type TabItem } from "@/components/primitives";
 import { GOAL_CATALOG, BUDGET_CATALOG, goalLabel } from "@/lib/smile-assessment/campaign";
+import { DEFAULT_PALETTE_KEY, PALETTES } from "@/lib/assess/palette";
 import { groupCampaignsByGoal } from "@/lib/smile-assessment/grouping";
-import { getClient } from "@/lib/mock/clients";
-import { AssessmentPreview } from "@/components/assess/assessment-preview";
 import { normaliseFlow, type FlowGraph } from "@/lib/smile-assessment/flow";
+import { describeEdge, describeNode } from "@/lib/smile-assessment/flow-edit";
+import { layoutFlow } from "@/lib/smile-assessment/flow-layout";
 import {
   SCRATCH_FLOW_KEY,
   flowTemplate,
   templateForGoal,
 } from "@/lib/smile-assessment/flow-templates";
-import { flowThumbnail } from "@/lib/smile-assessment/flow-thumbnail";
 import {
   INITIAL_WIZARD,
   isDetailsOpen,
@@ -39,8 +39,9 @@ import {
   type TemplateChoice,
 } from "@/lib/smile-assessment/wizard-state";
 import { AssessmentLivePreview } from "./assessment-live-preview";
-import { TemplateGallery, FlowShapeThumbnail } from "./template-gallery";
+import { TemplateGallery } from "./template-gallery";
 import { FlowBuilder } from "./flow-builder";
+import { FlowCanvas } from "./flow-canvas";
 
 /**
  * THE ASSESSMENTS PANEL, and the staged create wizard inside it.
@@ -106,6 +107,8 @@ interface FormState {
   headline: string;
   intro: string;
   slug: string;
+  /** A key from PALETTES (src/lib/assess/palette.ts). Never a colour. */
+  theme: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -116,6 +119,9 @@ const EMPTY_FORM: FormState = {
   headline: "",
   intro: "",
   slug: "",
+  // Starts on the unchanged look, so an owner who never notices the picker gets
+  // exactly what every assessment before this one got.
+  theme: DEFAULT_PALETTE_KEY,
 };
 
 const inputClass =
@@ -316,6 +322,7 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
           headline: form.headline || undefined,
           intro: form.intro || undefined,
           slug: form.slug || undefined,
+          theme: form.theme,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; campaign?: AdminCampaign; error?: string };
@@ -382,7 +389,6 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
     }
   }
 
-  const practiceName = getClient(clientSlug)?.name ?? "";
   const gallery = isGalleryOpen(wizard);
   const details = isDetailsOpen(wizard);
   const creating = gallery || details;
@@ -434,7 +440,6 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
         {details && wizard.choice ? (
           <DetailsStage
             clientSlug={clientSlug}
-            practiceName={practiceName}
             choice={wizard.choice}
             lockedGoalKey={locked}
             form={form}
@@ -507,7 +512,6 @@ export function CampaignsPanel({ clientSlug }: { clientSlug: string }) {
 
 function DetailsStage({
   clientSlug,
-  practiceName,
   choice,
   lockedGoalKey,
   form,
@@ -520,7 +524,6 @@ function DetailsStage({
   onSubmit,
 }: {
   clientSlug: string;
-  practiceName: string;
   choice: TemplateChoice;
   lockedGoalKey: string | null;
   form: FormState;
@@ -532,216 +535,298 @@ function DetailsStage({
   onCancel: () => void;
   onSubmit: (e: React.FormEvent) => void;
 }) {
-  const thumb = useMemo(() => flowThumbnail(choice.graph), [choice.graph]);
+  // THE REAL DIAGRAM, at the size the builder draws it - not the gallery's
+  // abstract miniature. On the shelf a thumbnail is the right thing: it makes
+  // eight funnels COMPARABLE at a glance. Here there is only one funnel and one
+  // question about it ("is this the one I want attached?"), and that question is
+  // answered by the questions it asks, which a 30-unit-wide rect cannot show.
+  //
+  // READ-ONLY BY OMISSION. No onSelectNode/onSelectEdge, so FlowCanvas renders
+  // its cards and wires as plain graphics - no button roles, no tab stops, no
+  // click targets (flow-canvas.tsx:175,239-242). Editing happens on stage 3, on
+  // a funnel that exists.
+  const canvasId = useId().replace(/:/g, "");
+  const layout = useMemo(
+    () => layoutFlow(choice.graph, { content: describeNode, edgeLabel: describeEdge }),
+    [choice.graph],
+  );
   const questions = choice.graph.nodes.filter((n) => n.kind === "question").length;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <form onSubmit={onSubmit} className="rounded-2xl border border-line-strong bg-card p-4">
-        {/* The choice, still on screen and still changeable. A back-link rather
-            than a re-opened gallery inline: one screen at a time, both ways. */}
-        <div className="rounded-xl border border-line bg-card-muted/50 p-2.5">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-[12.5px] font-semibold text-navy">{choiceLabel(choice)}</p>
-              <p className="mt-0.5 text-[11px] text-muted">
-                {questions} {questions === 1 ? "question" : "questions"}. Saved as a draft when you
-                create this, so the public link keeps running the adaptive funnel until you switch
-                it on.
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-[11.5px]"
-              onClick={onBack}
-            >
-              <ChevronLeft size={13} /> Change template
-            </Button>
-          </div>
-          {/* The same miniature the card showed, full width so it is legible
-              rather than a 20px smudge - this is the confirmation that what was
-              picked is what is about to be attached. */}
-          <div className="mt-2 rounded-lg border border-line bg-card p-2">
-            <FlowShapeThumbnail thumb={thumb} />
-          </div>
-        </div>
-
-        {choice.note ? (
-          <p className={noteToneClass(choice.source)}>
-            {choice.source === "ai" ? (
-              <Sparkles size={13} className="mt-px shrink-0" />
-            ) : (
-              <AlertTriangle size={13} className="mt-px shrink-0" />
-            )}
-            <span>{choice.note}</span>
-          </p>
-        ) : null}
-
-        <div className="mb-4 mt-4 border-b border-line pb-2.5">
-          <h4 className="text-title text-navy">Details</h4>
-          <p className="mt-0.5 text-caption font-normal text-muted">
-            Where this link will live, and what a patient sees when they land on it.
-          </p>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label htmlFor="ca-name" className={labelClass}>
-              Name (where will this link be used?) <span className="text-danger">*</span>
-            </label>
-            <input
-              id="ca-name"
-              type="text"
-              required
-              autoFocus
-              value={form.name}
-              onChange={(e) => set("name", e.target.value)}
-              placeholder="Website, Instagram bio, Google profile, Spring Invisalign ads..."
-              className={inputClass}
-            />
-            <p className="mt-1 text-[11px] text-muted">
-              This becomes the source label on every lead it brings in, so name it after the
-              place the link or embed will live.
+    <form onSubmit={onSubmit} className="rounded-2xl border border-line-strong bg-card p-4">
+      {/* The choice, still on screen and still changeable. A back-link rather
+          than a re-opened gallery inline: one screen at a time, both ways. */}
+      <div className="rounded-xl border border-line bg-card-muted/50 p-2.5">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[12.5px] font-semibold text-navy">{choiceLabel(choice)}</p>
+            <p className="mt-0.5 text-[11px] text-muted">
+              {questions} {questions === 1 ? "question" : "questions"}. Saved as a draft when you
+              create this, so the public link keeps running the adaptive funnel until you switch
+              it on.
             </p>
           </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[11.5px]"
+            onClick={onBack}
+          >
+            <ChevronLeft size={13} /> Change template
+          </Button>
+        </div>
+        {/* The funnel itself, every step readable: this is the confirmation that
+            what was picked is what is about to be attached. Its own scroll box,
+            capped short, so a nine-step funnel never pushes the form it belongs
+            to off the bottom of the screen. */}
+        <FlowCanvas
+          idPrefix={canvasId}
+          layout={layout}
+          className="mt-2"
+          viewportClassName="max-h-[300px]"
+        />
+      </div>
 
-          <div>
-            <span className={labelClass}>Goal</span>
-            {lockedGoalKey ? (
-              // LOCKED, because the funnel branches on it. The way to change it is
-              // to change the template, which is what the back-link above is for.
-              <div className="mt-1 flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-2">
-                <span className="min-w-0 flex-1 truncate text-sm text-ink">
-                  {goalLabel(lockedGoalKey)}
-                </span>
-                <button
-                  type="button"
-                  onClick={onBack}
-                  className="shrink-0 text-[11.5px] font-semibold text-status-royal underline-offset-2 hover:underline"
-                >
-                  Change template
-                </button>
-              </div>
-            ) : (
-              <select
-                id="ca-goal"
-                aria-label="Goal"
-                value={form.goal}
-                onChange={(e) => set("goal", e.target.value)}
-                className={inputClass}
+      {choice.note ? (
+        <p className={noteToneClass(choice.source)}>
+          {choice.source === "ai" ? (
+            <Sparkles size={13} className="mt-px shrink-0" />
+          ) : (
+            <AlertTriangle size={13} className="mt-px shrink-0" />
+          )}
+          <span>{choice.note}</span>
+        </p>
+      ) : null}
+
+      <div className="mb-4 mt-4 border-b border-line pb-2.5">
+        <h4 className="text-title text-navy">Details</h4>
+        <p className="mt-0.5 text-caption font-normal text-muted">
+          Where this link will live, and what a patient sees when they land on it.
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <label htmlFor="ca-name" className={labelClass}>
+            Name (where will this link be used?) <span className="text-danger">*</span>
+          </label>
+          <input
+            id="ca-name"
+            type="text"
+            required
+            autoFocus
+            value={form.name}
+            onChange={(e) => set("name", e.target.value)}
+            placeholder="Website, Instagram bio, Google profile, Spring Invisalign ads..."
+            className={inputClass}
+          />
+          <p className="mt-1 text-[11px] text-muted">
+            This becomes the source label on every lead it brings in, so name it after the
+            place the link or embed will live.
+          </p>
+        </div>
+
+        <div>
+          <span className={labelClass}>Goal</span>
+          {lockedGoalKey ? (
+            // LOCKED, because the funnel branches on it. The way to change it is
+            // to change the template, which is what the back-link above is for.
+            <div className="mt-1 flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">
+                {goalLabel(lockedGoalKey)}
+              </span>
+              <button
+                type="button"
+                onClick={onBack}
+                className="shrink-0 text-[11.5px] font-semibold text-status-royal underline-offset-2 hover:underline"
               >
-                {GOAL_CATALOG.map((g) => (
-                  <option key={g.key} value={g.key}>
-                    {g.label}
-                  </option>
-                ))}
-              </select>
-            )}
-            <p className="mt-1 text-[11px] text-muted">
-              {lockedGoalKey
-                ? "Set by the template you picked, because its questions branch on it."
-                : "A funnel built from scratch asks about any treatment, so pick whichever this link is for."}
-            </p>
-          </div>
-
-          <div>
-            <label htmlFor="ca-budget" className={labelClass}>
-              Target budget
-            </label>
+                Change template
+              </button>
+            </div>
+          ) : (
             <select
-              id="ca-budget"
-              value={form.targetBudget}
-              onChange={(e) => set("targetBudget", e.target.value)}
+              id="ca-goal"
+              aria-label="Goal"
+              value={form.goal}
+              onChange={(e) => set("goal", e.target.value)}
               className={inputClass}
             >
-              {BUDGET_CATALOG.map((b) => (
-                <option key={b.key} value={b.key}>
-                  {b.label}
+              {GOAL_CATALOG.map((g) => (
+                <option key={g.key} value={g.key}>
+                  {g.label}
                 </option>
               ))}
             </select>
-          </div>
-
-          <div className="sm:col-span-2">
-            <label htmlFor="ca-ideal" className={labelClass}>
-              Ideal customer (internal, used to tailor the AI follow-up)
-            </label>
-            <textarea
-              id="ca-ideal"
-              rows={2}
-              value={form.idealCustomer}
-              onChange={(e) => set("idealCustomer", e.target.value)}
-              placeholder="Professionals in their 30s and 40s who want a straighter smile without braces."
-              className={inputClass}
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label htmlFor="ca-headline" className={labelClass}>
-              Public headline
-            </label>
-            <input
-              id="ca-headline"
-              type="text"
-              value={form.headline}
-              onChange={(e) => set("headline", e.target.value)}
-              placeholder="Is Invisalign right for you?"
-              className={inputClass}
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label htmlFor="ca-intro" className={labelClass}>
-              Public intro
-            </label>
-            <textarea
-              id="ca-intro"
-              rows={2}
-              value={form.intro}
-              onChange={(e) => set("intro", e.target.value)}
-              placeholder="Answer a few quick questions and we will tell you if you are a good fit."
-              className={inputClass}
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label htmlFor="ca-slug" className={labelClass}>
-              Custom URL (optional)
-            </label>
-            <input
-              id="ca-slug"
-              type="text"
-              value={form.slug}
-              onChange={(e) => set("slug", e.target.value)}
-              placeholder="spring-invisalign"
-              className={inputClass}
-            />
-            <p className="mt-1 text-xs text-muted">
-              Becomes <span className="font-semibold text-ink">/assess/{clientSlug}/{slugPreview || "your-slug"}</span>
-            </p>
-          </div>
-        </div>
-
-        {formError ? (
-          <p className="mt-4 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
-            {formError}
+          )}
+          <p className="mt-1 text-[11px] text-muted">
+            {lockedGoalKey
+              ? "Set by the template you picked, because its questions branch on it."
+              : "A funnel built from scratch asks about any treatment, so pick whichever this link is for."}
           </p>
-        ) : null}
-
-        <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
-          <Button type="submit" variant="primary" size="sm" disabled={submitting || form.name.trim().length === 0}>
-            {submitting ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-            Create assessment
-          </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
-            Cancel
-          </Button>
         </div>
-      </form>
 
-      <AssessmentPreview practiceName={practiceName} headline={form.headline} intro={form.intro} />
+        <div>
+          <label htmlFor="ca-budget" className={labelClass}>
+            Target budget
+          </label>
+          <select
+            id="ca-budget"
+            value={form.targetBudget}
+            onChange={(e) => set("targetBudget", e.target.value)}
+            className={inputClass}
+          >
+            {BUDGET_CATALOG.map((b) => (
+              <option key={b.key} value={b.key}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="sm:col-span-2">
+          <label htmlFor="ca-ideal" className={labelClass}>
+            Ideal customer (internal, used to tailor the AI follow-up)
+          </label>
+          <textarea
+            id="ca-ideal"
+            rows={2}
+            value={form.idealCustomer}
+            onChange={(e) => set("idealCustomer", e.target.value)}
+            placeholder="Professionals in their 30s and 40s who want a straighter smile without braces."
+            className={inputClass}
+          />
+        </div>
+
+        <div className="sm:col-span-2">
+          <label htmlFor="ca-headline" className={labelClass}>
+            Public headline
+          </label>
+          <input
+            id="ca-headline"
+            type="text"
+            value={form.headline}
+            onChange={(e) => set("headline", e.target.value)}
+            placeholder="Is Invisalign right for you?"
+            className={inputClass}
+          />
+        </div>
+
+        <div className="sm:col-span-2">
+          <label htmlFor="ca-intro" className={labelClass}>
+            Public intro
+          </label>
+          <textarea
+            id="ca-intro"
+            rows={2}
+            value={form.intro}
+            onChange={(e) => set("intro", e.target.value)}
+            placeholder="Answer a few quick questions and we will tell you if you are a good fit."
+            className={inputClass}
+          />
+        </div>
+
+        <div className="sm:col-span-2">
+          <span className={labelClass}>Colour scheme</span>
+          <ThemePicker value={form.theme} onChange={(key) => set("theme", key)} />
+          <p className="mt-1.5 text-[11px] text-muted">
+            Colour only — the questions, the wording and the layout are the same on every
+            scheme. Pick the one that matches wherever the link is going.
+          </p>
+        </div>
+
+        <div className="sm:col-span-2">
+          <label htmlFor="ca-slug" className={labelClass}>
+            Custom URL (optional)
+          </label>
+          <input
+            id="ca-slug"
+            type="text"
+            value={form.slug}
+            onChange={(e) => set("slug", e.target.value)}
+            placeholder="spring-invisalign"
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-muted">
+            Becomes <span className="font-semibold text-ink">/assess/{clientSlug}/{slugPreview || "your-slug"}</span>
+          </p>
+        </div>
+      </div>
+
+      {formError ? (
+        <p className="mt-4 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
+          {formError}
+        </p>
+      ) : null}
+
+      <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
+        <Button type="submit" variant="primary" size="sm" disabled={submitting || form.name.trim().length === 0}>
+          {submitting ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+          Create assessment
+        </Button>
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * The colour-scheme picker: one chip-stack per palette.
+ *
+ * EVERY COLOUR ON SCREEN HERE COMES OUT OF THE CATALOGUE MODULE. Not one hex
+ * literal in this file, which is a rule the shell suite enforces
+ * (create-experience-shell.test.ts:363) — and a rule with a point beyond tidiness:
+ * a swatch hand-typed here would be a SECOND copy of the palette, free to drift
+ * from the one the public page actually renders, so the owner would be choosing
+ * from colours that are no longer the colours. `palette.swatch` is derived from
+ * the same `vars` map the page wears (palette.ts, definePalette), so the chips
+ * cannot be wrong.
+ *
+ * A radiogroup, not a row of toggles: exactly one scheme is in force, and arrow
+ * keys should move between them.
+ */
+function ThemePicker({ value, onChange }: { value: string; onChange: (key: string) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Colour scheme" className="mt-1.5 flex flex-wrap gap-2">
+      {PALETTES.map((palette) => {
+        const selected = palette.key === value;
+        return (
+          <button
+            key={palette.key}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            title={palette.description}
+            onClick={() => onChange(palette.key)}
+            className={[
+              "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition",
+              selected
+                ? "border-blue-royal bg-tint-royal ring-2 ring-blue-royal/25"
+                : "border-line bg-card hover:border-line-strong",
+            ].join(" ")}
+          >
+            <span aria-hidden className="flex shrink-0 items-center -space-x-1">
+              {palette.swatch.map((colour, i) => (
+                <span
+                  key={colour + String(i)}
+                  className="h-4 w-4 rounded-full border border-line-strong"
+                  style={{ background: colour }}
+                />
+              ))}
+            </span>
+            <span
+              className={[
+                "text-[11.5px] font-semibold",
+                selected ? "text-status-royal" : "text-ink",
+              ].join(" ")}
+            >
+              {palette.label}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

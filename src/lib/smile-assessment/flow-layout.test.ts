@@ -11,6 +11,7 @@ import {
   outlineOrder,
   rankNodes,
   round3,
+  roundedTopPath,
   truncate,
   wrapText,
   type FlowLayout,
@@ -65,8 +66,9 @@ function parsePath(d: string): Cmd[] {
   let i = 0;
   while (i < tokens.length) {
     const op = tokens[i++]!;
-    const arity = op === "M" ? 2 : op === "C" ? 6 : op === "H" || op === "V" ? 1 : -1;
-    expect(arity, `unknown path command "${op}" in ${d}`).toBeGreaterThan(0);
+    const arity =
+      op === "M" ? 2 : op === "C" ? 6 : op === "H" || op === "V" ? 1 : op === "Z" ? 0 : -1;
+    expect(arity, `unknown path command "${op}" in ${d}`).toBeGreaterThanOrEqual(0);
     const args: number[] = [];
     for (let k = 0; k < arity; k++) args.push(Number(tokens[i++]));
     out.push({ op, args });
@@ -423,6 +425,134 @@ describe("card text positions", () => {
     expect(n.titleLines.length).toBeGreaterThan(1);
     const lastTitle = n.titleLines[n.titleLines.length - 1]!.y;
     for (const o of n.optionLines) expect(o.y).toBeGreaterThan(lastTitle);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * The card's chrome. Everything the canvas draws AROUND the text - the header
+ * strip, the kind bar, the rule above each option row - is derived here, because
+ * a position derived in JSX is a position no test can reach (flow-canvas.tsx:5-13).
+ * ------------------------------------------------------------------------- */
+
+describe("roundedTopPath", () => {
+  it("rounds the top corners only, and closes flat along the bottom", () => {
+    const cmds = parsePath(roundedTopPath(10, 20, 100, 30, 8));
+    expect(cmds.map((c) => c.op)).toEqual(["M", "V", "C", "H", "C", "V", "Z"]);
+    // Starts and ends on the bottom edge: the strip meets the divider square, so
+    // a tinted header cannot read as a smaller card floating inside the card.
+    expect(cmds[0]!.args).toEqual([10, 50]);
+    expect(cmds[5]!.args).toEqual([50]);
+    // The same fillet idiom as a wire: both control points sit ON the corner.
+    for (const c of cmds.filter((c) => c.op === "C")) {
+      expect([c.args[0], c.args[1]]).toEqual([c.args[2], c.args[3]]);
+    }
+  });
+
+  it("shrinks the corner to fit rather than curving past its own bottom edge", () => {
+    // Radius 10 asked for, but the strip is only 4 tall: the corner may be 4.
+    const cmds = parsePath(roundedTopPath(0, 0, 100, 4, 10));
+    expect(cmds[1]).toEqual({ op: "V", args: [4] });
+    expect(cmds[2]!.args).toEqual([0, 0, 0, 0, 4, 0]);
+  });
+
+  it("draws nothing at all for a strip with no height, which is the thumbnail case", () => {
+    expect(roundedTopPath(0, 0, 30, 0, 10)).toBe("");
+    expect(roundedTopPath(0, 0, 0, 14, 10)).toBe("");
+  });
+});
+
+describe("the card's chrome", () => {
+  it("gives every card a header strip and a right edge to draw a rule to", () => {
+    for (const { name, graph: g } of REAL_GRAPHS) {
+      for (const n of real(g).nodes) {
+        expect(n.right, `${name}/${n.id}`).toBe(round3(n.x + n.w));
+        expect(n.headerD.length, `${name}/${n.id} has no header strip`).toBeGreaterThan(0);
+        expect(n.rx).toBe(DEFAULT_LAYOUT_METRICS.cardRx);
+      }
+    }
+  });
+
+  // MUTATION: inset the bar by less than the corner radius (it used to be 4
+  // against a radius of 10) and it pokes out past the card's own rounded outline.
+  it("keeps the kind bar inside the card, clear of both rounded corners", () => {
+    for (const { name, graph: g } of REAL_GRAPHS) {
+      for (const n of real(g).nodes) {
+        expect(n.accent.x, `${name}/${n.id}`).toBe(n.x);
+        expect(n.accent.w).toBeLessThan(n.w);
+        expect(
+          n.accent.y - n.y,
+          `${name}/${n.id}: the bar starts inside the top corner`,
+        ).toBeGreaterThanOrEqual(n.rx);
+        expect(
+          n.y + n.h - (n.accent.y + n.accent.h),
+          `${name}/${n.id}: the bar runs into the bottom corner`,
+        ).toBeGreaterThanOrEqual(n.rx);
+        expect(n.accent.h).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("clamps the kind bar to nothing on a card too short to hold one", () => {
+    // A thumbnail card is 14 units tall, all text budgets zeroed, against a
+    // 10-unit inset at each end (flow-thumbnail.ts:70-92).
+    const layout = layoutFlow(graph([q("a")], []), {
+      metrics: {
+        minH: 14,
+        headH: 0,
+        titleLineH: 0,
+        optionLineH: 0,
+        bodyPadY: 0,
+        titleChars: 0,
+        maxTitleLines: 0,
+      },
+    });
+    const only = layout.nodes[0]!;
+    expect(only.h).toBe(14);
+    expect(only.accent.h).toBe(0);
+    // ...and a zero-tall header strip is no strip at all, rather than a sliver.
+    expect(only.headerD).toBe("");
+  });
+
+  // MUTATION: key the rules off anything but the option top and one drifts off
+  // the row it belongs to the moment a title wraps to a second line.
+  it("puts exactly one rule above each option row, and none anywhere else", () => {
+    for (const { name, graph: g } of REAL_GRAPHS) {
+      for (const n of real(g).nodes) {
+        expect(n.optionRuleY, `${name}/${n.id}`).toHaveLength(n.optionLines.length);
+        n.optionRuleY.forEach((y, i) => {
+          expect(y, `${name}/${n.id} rule ${i} is above the header divider`).toBeGreaterThanOrEqual(
+            n.dividerY,
+          );
+          expect(y, `${name}/${n.id} rule ${i} sits below its own row`).toBeLessThan(
+            n.optionLines[i]!.y,
+          );
+          expect(y, `${name}/${n.id} rule ${i} falls outside the card`).toBeLessThan(n.y + n.h);
+          if (i > 0) {
+            expect(y, `${name}/${n.id} rule ${i} sits on the row above`).toBeGreaterThan(
+              n.optionLines[i - 1]!.y,
+            );
+          }
+        });
+      }
+    }
+  });
+
+  // MUTATION: widen optionChars past what the card can hold and the answer rows
+  // run out through the card's right edge. The budget is the guard, so the budget
+  // is what is held - the drawn rows are checked too, in case one escapes it.
+  it("keeps an option row inside the card's own width", () => {
+    const m = DEFAULT_LAYOUT_METRICS;
+    expect(m.optionChars * m.labelCharW + m.textPad * 2).toBeLessThanOrEqual(m.nodeW);
+    for (const { name, graph: g } of REAL_GRAPHS) {
+      for (const n of real(g).nodes) {
+        for (const line of n.optionLines) {
+          expect(
+            line.text.length * m.labelCharW + m.textPad * 2,
+            `${name}/${n.id}: "${line.text}" runs off the card`,
+          ).toBeLessThanOrEqual(m.nodeW);
+        }
+      }
+    }
   });
 });
 

@@ -23,6 +23,12 @@
 // lines it produced. That ordering is deliberate: if the component wrapped the
 // text itself, a three-line prompt would overflow a card sized for two and
 // nothing would notice.
+//
+// AND SO DOES THE CARD'S CHROME. The header strip's path, the kind accent bar and
+// the hairline above each option row are all emitted from here for the same
+// reason as the baselines: they are positions derived from the card's height, and
+// a position derived in JSX is a position no test can check. The component picks
+// the COLOURS and draws what it is handed.
 
 import type { FlowEdge, FlowGraph, FlowNode, FlowNodeKind } from "./flow";
 
@@ -67,6 +73,17 @@ export interface LayoutMetrics {
   maxOptions: number;
   /** Left inset of every line of text in a card. */
   textPad: number;
+  /** Card corner radius. The header band is rounded to match at the top. */
+  cardRx: number;
+  /** Width of the kind accent bar down the card's left edge. */
+  accentW: number;
+  /**
+   * How far the accent bar starts below the card's top (and ends above its
+   * bottom). Defaults to the corner radius, which is exactly where the rounded
+   * corner has finished curving - any less and the bar pokes out past the card's
+   * own outline, which is what the first version of this card did.
+   */
+  accentInsetY: number;
   /**
    * Character budget for a WIRE LABEL. A wire label is centred over the gutter,
    * so it may run gutterX/2 either way before it is sitting on a card - and the
@@ -100,10 +117,16 @@ export const DEFAULT_LAYOUT_METRICS: LayoutMetrics = {
   labelLift: 7,
   stub: 18,
   titleChars: 32,
-  optionChars: 30,
+  // Two characters wider than it was: the canvas used to prefix every option row
+  // with "· ", and the rows are drawn as separated rows now, so the bullet's
+  // width went back to the text. Held under the card by the fitting test.
+  optionChars: 34,
   maxTitleLines: 3,
   maxOptions: 8,
   textPad: 12,
+  cardRx: 10,
+  accentW: 3,
+  accentInsetY: 10,
   edgeLabelChars: 22,
   labelCharW: 5,
   baseline: 11,
@@ -133,6 +156,15 @@ export interface LaidOutLine {
   y: number;
 }
 
+/** The kind accent bar down a card's left edge. */
+export interface LaidOutAccent {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rx: number;
+}
+
 export interface LaidOutNode {
   id: string;
   kind: FlowNodeKind;
@@ -144,16 +176,35 @@ export interface LaidOutNode {
   y: number;
   w: number;
   h: number;
+  /** x + w, so the canvas can draw a full-width rule without doing sums. */
+  right: number;
+  /** Corner radius of the card. */
+  rx: number;
   /** Left inset every line of text in this card is drawn at. */
   textX: number;
   eyebrow: string;
   eyebrowY: number;
   /** Where the hairline under the header strip sits. */
   dividerY: number;
+  /**
+   * The header strip as a path: rounded at the card's top corners, square where
+   * it meets the divider. A path rather than a rect because a rect's `rx` rounds
+   * all four corners, and a tinted strip with rounded bottom corners floating
+   * inside a card reads as a second, smaller card.
+   */
+  headerD: string;
+  accent: LaidOutAccent;
   /** The title, wrapped, each line with its own baseline. */
   titleLines: LaidOutLine[];
   /** The options, truncated, each line with its own baseline. */
   optionLines: LaidOutLine[];
+  /**
+   * A hairline ABOVE each option row, so the options read as rows of a list
+   * rather than a paragraph of bullets. One per option line, in the same order,
+   * and derived from the same option top - so a rule can never drift off the row
+   * it belongs to.
+   */
+  optionRuleY: number[];
 }
 
 export interface LaidOutEdge {
@@ -443,6 +494,44 @@ export function orthogonalPath(points: Pt[], radius: number): string {
   return d;
 }
 
+/**
+ * A panel with its TOP corners rounded and its bottom edge square: the card's
+ * header strip, which has to meet the card's rounded outline at the top and the
+ * divider hairline flat at the bottom.
+ *
+ * Same command vocabulary as orthogonalPath - M, H, V and quadratic corners
+ * written as cubics with both control points on the corner - so there is one
+ * path idiom in this module and one thing for a test to read back. Closed with
+ * Z, because this one is a filled shape rather than a wire.
+ *
+ * The radius shrinks to fit a short or shallow panel, and a panel with no height
+ * (a thumbnail's header strip is zero-tall by design - flow-thumbnail.ts:70)
+ * draws nothing at all rather than a sliver.
+ */
+export function roundedTopPath(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): string {
+  if (!(w > 0) || !(h > 0)) return "";
+  const r = Math.max(0, Math.min(radius, w / 2, h));
+  const bottom = y + h;
+
+  let d = `M ${round3(x)} ${round3(bottom)}`;
+  d += ` V ${round3(y + r)}`;
+  if (r > 0) {
+    d += ` C ${round3(x)} ${round3(y)} ${round3(x)} ${round3(y)} ${round3(x + r)} ${round3(y)}`;
+  }
+  d += ` H ${round3(x + w - r)}`;
+  if (r > 0) {
+    d += ` C ${round3(x + w)} ${round3(y)} ${round3(x + w)} ${round3(y)} ${round3(x + w)} ${round3(y + r)}`;
+  }
+  d += ` V ${round3(bottom)} Z`;
+  return d;
+}
+
 // ---------------------------------------------------------------------------
 // The layout.
 // ---------------------------------------------------------------------------
@@ -544,10 +633,22 @@ export function layoutFlow(graph: FlowGraph, opts: LayoutOptions = {}): FlowLayo
         y: round3(y),
         w: round3(m.nodeW),
         h: round3(s.h),
+        right: round3(x + m.nodeW),
+        rx: round3(m.cardRx),
         textX: round3(x + m.textPad),
         eyebrow: s.eyebrow,
         eyebrowY: round3(y + m.headH - (m.headH - m.baseline) / 2),
         dividerY: round3(titleTop),
+        headerD: roundedTopPath(x, y, m.nodeW, m.headH, m.cardRx),
+        accent: {
+          x: round3(x),
+          y: round3(y + m.accentInsetY),
+          w: round3(m.accentW),
+          // A card shorter than two insets has no room for a bar at all - the
+          // thumbnail case - so this clamps to nothing rather than to negative.
+          h: round3(Math.max(0, s.h - m.accentInsetY * 2)),
+          rx: round3(m.accentW / 2),
+        },
         titleLines: s.titleLines.map((text, i) => ({
           text,
           y: round3(titleTop + i * m.titleLineH + m.baseline),
@@ -556,6 +657,7 @@ export function layoutFlow(graph: FlowGraph, opts: LayoutOptions = {}): FlowLayo
           text,
           y: round3(optionTop + i * m.optionLineH + m.baseline),
         })),
+        optionRuleY: s.optionLines.map((_, i) => round3(optionTop + i * m.optionLineH)),
       };
     })
     .sort((a, b) => a.col - b.col || a.row - b.row);

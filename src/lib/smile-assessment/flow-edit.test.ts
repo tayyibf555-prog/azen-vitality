@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FLOW_LIMITS, type FlowGraph } from "./flow";
+import { FLOW_BANDS, FLOW_LIMITS, type FlowGraph } from "./flow";
 import { validateFlow } from "./flow-validate";
 import { FLOW_TEMPLATES, buildScratchFlow, templateForGoal } from "./flow-templates";
 import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
@@ -372,6 +372,71 @@ describe("what a card says", () => {
     const bare = describeNode({ id: "r", kind: "outcome", band: "low" });
     expect(bare.title).toBe("Early enquiry");
     expect(bare.eyebrow).toContain("Low");
+  });
+
+  // MUTATION: this is the defect the rows exist for. Every kind but "question"
+  // used to return no rows at all, so three quarters of a funnel drew as a title
+  // in an empty rectangle and the canvas could not be read without opening each
+  // step in turn. Held over every real template, so a new template kind cannot
+  // reintroduce a blank card.
+  it("gives EVERY step something to read, not only the questions", () => {
+    for (const template of [...FLOW_TEMPLATES, { key: "scratch", build: buildScratchFlow }]) {
+      for (const node of template.build().nodes) {
+        const card = describeNode(node);
+        expect(card.title.length, `${template.key}/${node.id} has no title`).toBeGreaterThan(0);
+        expect(card.options.length, `${template.key}/${node.id} draws as an empty box`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  // MUTATION: transpose or drop one of these and the card promises the practice a
+  // field the funnel never asks for. They are the three the public funnel really
+  // captures (deterministic-assessment-quiz.tsx:717-771).
+  it("lists what the contact step captures, in the order it is asked for", () => {
+    const card = describeNode({ id: "c", kind: "contact" });
+    expect(card.eyebrow).toBe("Capture");
+    expect(card.title).toBe("Contact details");
+    expect(card.options).toEqual(["First name", "How to reach you", "Mobile or email"]);
+  });
+
+  it("hands out a fresh row list, so a caller cannot edit the next card's rows", () => {
+    const first = describeNode({ id: "c", kind: "contact" });
+    first.options.push("National Insurance number");
+    expect(describeNode({ id: "c2", kind: "contact" }).options).toEqual([
+      "First name",
+      "How to reach you",
+      "Mobile or email",
+    ]);
+  });
+
+  // MUTATION: drop the intro row and the opening line an owner authored is
+  // invisible on the canvas - the one screen it is supposed to be reviewed on.
+  it("shows the welcome step's own opening line, and says where it lands", () => {
+    const authored = describeNode({
+      id: "w",
+      kind: "welcome",
+      headline: "Is Invisalign right for you?",
+      intro: "Answer a few quick questions.",
+    });
+    expect(authored.title).toBe("Is Invisalign right for you?");
+    expect(authored.options[0]).toBe("Answer a few quick questions.");
+    expect(authored.options[1]).toBe("Sits above the first question");
+
+    // Nothing authored: the card says which copy is actually running, rather
+    // than leaving a blank row where the intro would have been.
+    const bare = describeNode({ id: "w", kind: "welcome" });
+    expect(bare.title).toBe("Welcome screen");
+    expect(bare.options[0]).toBe("Uses the assessment’s own intro");
+    expect(bare.options).toHaveLength(authored.options.length);
+  });
+
+  // MUTATION: copy one band's line onto another and the three result steps stop
+  // being distinguishable at a glance, which is the whole reason there are three.
+  it("says what happens next on a result step, differently for each band", () => {
+    const lines = FLOW_BANDS.map((band) => describeNode({ id: `r-${band}`, kind: "outcome", band }));
+    for (const card of lines) expect(card.options).toHaveLength(1);
+    expect(lines[0]!.options[0]).toBe("Contacted straight away");
+    expect(new Set(lines.map((c) => c.options[0])).size).toBe(FLOW_BANDS.length);
   });
 
   it("labels a wire by its OPTION LABEL, never by the raw stored value", () => {

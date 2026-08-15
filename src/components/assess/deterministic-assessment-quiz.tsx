@@ -402,9 +402,11 @@ export function DeterministicAssessmentQuiz({
     <main className="relative mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-4 py-4 sm:px-5 sm:py-8">
       <style>{ENTER_KEYFRAMES}</style>
 
+      {/* The same promoted glow as the classic quiz, with the same load-bearing
+          fallback — see assessment-quiz.tsx and src/lib/assess/palette.ts. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,rgba(91,196,247,0.20),transparent_72%)]"
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(58%_70%_at_50%_0%,var(--assess-glow,rgba(91,196,247,0.20)),transparent_72%)]"
       />
 
       <header className="mb-3 flex items-center justify-center gap-2.5">
