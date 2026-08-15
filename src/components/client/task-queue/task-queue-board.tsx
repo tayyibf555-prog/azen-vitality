@@ -177,6 +177,11 @@ export function TaskQueueBoard({
   // so the cap keeps the highest-priority work visible and links to the rest.
   const shown = maxRows !== undefined ? visible.slice(0, maxRows) : visible;
   const truncated = visible.length - shown.length;
+  // EMBEDDED, i.e. sitting under the practice dashboard on Home rather than being
+  // the whole of /task-queue. A cap is only ever set by an embed, and the two
+  // things that differ are both about being a section of a page rather than a page:
+  // no filter row over nothing, and an empty state a third of the height.
+  const embedded = maxRows !== undefined;
 
   return (
     <SectionCard
@@ -199,36 +204,46 @@ export function TaskQueueBoard({
       }
     >
       <div className="space-y-4">
-        {/* Counts header + per-kind filter chips */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setKindFilter(null)}
-            className={cn(
-              "pressable rounded-md border px-3 py-1 text-xs font-medium transition-colors",
-              kindFilter === null
-                ? "border-navy bg-navy font-semibold text-white"
-                : "border-line-strong bg-card text-muted hover:text-navy",
-            )}
-          >
-            All <span className="tabular-nums">{total}</span>
-          </button>
-          {kindCounts.map(({ kind, count }) => (
+        {/* Counts header + per-kind filter chips.
+
+            NOTHING TO FILTER, SO NO FILTERS. With an empty queue this row used to
+            render a single navy-filled chip reading "All 0" - the selected state of
+            a control with no alternatives, sitting above the words "All clear". A
+            filled chip is the loudest mark on the section and it was being spent on
+            the number zero, which is why an empty worklist read as a fault rather
+            than as the good news it is. It is also hidden while the first load is
+            in flight, where the count is only zero because nothing has arrived. */}
+        {total === 0 ? null : (
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              key={kind}
               type="button"
-              onClick={() => setKindFilter((k) => (k === kind ? null : kind))}
+              onClick={() => setKindFilter(null)}
               className={cn(
                 "pressable rounded-md border px-3 py-1 text-xs font-medium transition-colors",
-                kindFilter === kind
+                kindFilter === null
                   ? "border-navy bg-navy font-semibold text-white"
                   : "border-line-strong bg-card text-muted hover:text-navy",
               )}
             >
-              {TASK_KIND_LABEL[kind]} <span className="tabular-nums">{count}</span>
+              All <span className="tabular-nums">{total}</span>
             </button>
-          ))}
-        </div>
+            {kindCounts.map(({ kind, count }) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => setKindFilter((k) => (k === kind ? null : kind))}
+                className={cn(
+                  "pressable rounded-md border px-3 py-1 text-xs font-medium transition-colors",
+                  kindFilter === kind
+                    ? "border-navy bg-navy font-semibold text-white"
+                    : "border-line-strong bg-card text-muted hover:text-navy",
+                )}
+              >
+                {TASK_KIND_LABEL[kind]} <span className="tabular-nums">{count}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {actionError ? (
           <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
@@ -245,7 +260,11 @@ export function TaskQueueBoard({
             Loading tasks...
           </div>
         ) : visible.length === 0 ? (
+          // The WORDS are unchanged, deliberately: "All clear" / "Nothing needs your
+          // attention right now" is already honest and quiet, and it is the box
+          // around them that read as broken. Embedded, that box is compact.
           <EmptyState
+            compact={embedded}
             icon={ListChecks}
             title={total === 0 ? "All clear" : "Nothing matches this filter"}
             description={
@@ -286,7 +305,7 @@ export function TaskQueueBoard({
                     <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                       <a
                         href={task.href}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-line-strong bg-card px-2.5 py-1 text-xs font-medium text-navy transition-colors hover:bg-[#f7f9fc]"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-line-strong bg-card px-2.5 py-1 text-xs font-medium text-navy transition-colors hover:bg-row-hover"
                       >
                         <ExternalLink size={13} /> Open
                       </a>
@@ -343,7 +362,7 @@ export function TaskQueueBoard({
                                 key={o.minutes}
                                 type="button"
                                 onClick={() => act(task, "snooze", o.minutes)}
-                                className="block w-full px-3 py-1.5 text-left text-xs font-medium text-navy transition-colors hover:bg-[#f7f9fc]"
+                                className="block w-full px-3 py-1.5 text-left text-xs font-medium text-navy transition-colors hover:bg-row-hover"
                               >
                                 {o.label}
                               </button>

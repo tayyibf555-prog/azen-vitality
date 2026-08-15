@@ -18,6 +18,15 @@
   --blue-royal: #16559a; /* the lead blue: hero bands, emphasis surfaces, chrome mid-stop */
   --ink: #33405c;
   --whatsapp: #25d366;
+  /* Ink drawn ON TOP OF a saturated fill: the highlight cut into the donut's
+     cancelled hatch, the dots on its did-not-attend arc.
+
+     Its own token rather than --card, which is the nearest-looking one, because
+     --card is a SURFACE and is retuned per scope (#f9fbfe here, #ffffff inside
+     .app-frame). Relief cut into a green or amber arc must not follow a surface
+     colour around: at #f9fbfe it reads as dirt on the ring rather than as light
+     through it. This value answers a different question and so it does not move. */
+  --on-fill: #ffffff;
 
   /* Chrome gradient stops (deep to lead blue), used by .chrome-nav. */
   --chrome-from: #082249;
@@ -37,6 +46,15 @@
   --side-ink: #3b5686; /* sidebar nav text on the frame */
   --side-label: #7d93bd; /* sidebar group labels on the frame */
   --blue-soft: #eef4fb; /* soft blue chip fill (topbar site chip) */
+  /* The two neutral washes that had been living in components as raw hex. Both
+     predate this file and were pasted rather than derived, which is why neither
+     lands on --card or --card-muted:
+       --tile       the square behind a small icon, always paired with --side-ink
+       --row-hover  the wash a row or a bordered control takes under the pointer
+     Named at their exact previous values, so naming them changed nothing on
+     screen. What it changes is that a re-skin can now reach them. */
+  --tile: #f0f4f9;
+  --row-hover: #f7f9fc;
   --band: #e9f1fb; /* the numbers band: the page's ONE blue moment */
   --band-line: #d3e2f5;
   --navy-soft: #16407a; /* raised/hover surface on the blue chrome */
@@ -109,6 +127,8 @@
   --color-side-ink: var(--side-ink);
   --color-side-label: var(--side-label);
   --color-blue-soft: var(--blue-soft);
+  --color-tile: var(--tile);
+  --color-row-hover: var(--row-hover);
   --color-on-navy: var(--on-navy);
   --color-on-navy-muted: var(--on-navy-muted);
   --color-success: var(--success);

@@ -49,7 +49,9 @@ export function CaveatMark({
         className,
       )}
     >
-      <span aria-hidden className="text-[8.5px] font-bold leading-none">
+      {/* 9px: the screen's smallest drawn step, shared with the invoiced axis
+          ticks and the row initials. It was 8.5px, a size used nowhere else. */}
+      <span aria-hidden className="text-[9px] font-bold leading-none">
         {material ? "!" : "i"}
       </span>
     </button>

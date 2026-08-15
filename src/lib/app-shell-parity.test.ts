@@ -234,4 +234,47 @@ describe("the owner home page renders the same dashboard the practice does", () 
       expect(client, `the staff home renders the owner-only ${component}`).not.toContain(component);
     }
   });
+
+  it("gives the dashboard the same width in both trees, and re-caps its neighbours the same way", () => {
+    // Parity is a property of the SHAPE of the page too, not only of which
+    // components it renders. Both shells cap the main column at max-w-[1400px] and
+    // drop the cap on has-[[data-wide]]; both home pages set that marker so the
+    // dashboard - an instrument that was floating in white space on a 1920 monitor -
+    // takes the viewport.
+    //
+    // And both must then re-cap what sits UNDER the dashboard, because the shell
+    // reads the marker with a :has() and :has() matches any descendant: the marker
+    // un-caps every child of that column, not just the one that set it. On /owner
+    // that is the entire owner console. The two files are asserted here to carry the
+    // identical wrapper, character for character, so one tree cannot quietly become
+    // wider or narrower than the other. dashboard-width.test.ts proves the structure
+    // (marker encloses the dashboard, re-cap encloses everything else); this proves
+    // the two trees agree about it.
+    const MARKER = "<div data-wide className=";
+    const RECAP = 'className="mx-auto max-w-[1400px] space-y-4"';
+    for (const [name, source] of [["/c", client], ["/owner", owner]] as const) {
+      expect(source, `${name} home does not open the shell's width hatch for the dashboard`).toContain(
+        MARKER,
+      );
+      expect(
+        source.indexOf(MARKER),
+        `${name} home sets the width marker after the dashboard, so it cannot wrap it`,
+      ).toBeLessThan(source.indexOf("<PracticeDashboard"));
+      expect(source, `${name} home does not re-cap the siblings the marker un-capped`).toContain(
+        RECAP,
+      );
+      expect(
+        source.indexOf(RECAP),
+        `${name} home re-caps before the dashboard, which would box the dashboard as well`,
+      ).toBeGreaterThan(source.indexOf("<PracticeDashboard"));
+    }
+    // The task queue is the sibling BOTH trees have, so it is the one that proves
+    // the re-cap is really wrapping something in each of them.
+    for (const [name, source] of [["/c", client], ["/owner", owner]] as const) {
+      expect(
+        source.indexOf("<TaskQueueBoard"),
+        `${name} home renders the task queue outside the re-cap, so it goes full-bleed`,
+      ).toBeGreaterThan(source.indexOf(RECAP));
+    }
+  });
 });

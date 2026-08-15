@@ -39,26 +39,41 @@ function Cell({
       aria-selected={selected}
       onClick={onSelect}
       className={cn(
-        "pressable group relative flex min-w-0 flex-col items-start gap-[3px] px-4 py-2.5 text-left transition-colors",
+        // Padding tracks the shell's gutter (px-4 sm:px-5 lg:px-6), because the
+        // strip bleeds out by exactly that much. See the bleed comment below.
+        "pressable group relative flex min-w-0 flex-col items-start gap-[3px] px-4 py-2.5 text-left transition-colors sm:px-5 lg:px-6",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
-        selected ? "bg-card-muted" : "hover:bg-card-muted/50",
+        // THE SELECTED CELL IS RAISED, NOT TINTED - and that is an inversion.
+        //
+        // It used to be the other way up: the strip sat on the page and the chosen
+        // period was painted card-muted, i.e. the chosen cell was the DARKER one.
+        // That is the opposite of what Dentally does and the opposite of what a
+        // physical control does; the eye reads the recessed cell as the disabled
+        // one. Now the strip is the muted surface and TODAY is the card lifted off
+        // it, which is also why the cells are tabs: this is a role="tablist".
+        selected ? "bg-card shadow-chip" : "hover:bg-card/60",
       )}
     >
-      {/* The selected period carries a solid rule along the top, so it reads as
-          chosen from across a desk and not only by a fill that a projector loses. */}
+      {/* The selected period also carries a rule along the top, so it reads as
+          chosen from across a desk and not only by a fill that a projector loses.
+          Two cues, neither of them a hue: the cell is LIGHTER than the strip and
+          lifted off it, and it is the one with the rule. The rule is 2px now
+          rather than 3px because it is no longer carrying the job alone. */}
       <span
         aria-hidden
         className={cn(
-          "absolute inset-x-0 top-0 h-[3px]",
+          "absolute inset-x-0 top-0 h-[2px]",
           selected ? "bg-navy" : "bg-transparent",
         )}
       />
-      <span
-        className={cn(
-          "text-[10px] font-semibold uppercase tracking-[0.07em]",
-          selected ? "text-navy" : "text-muted",
-        )}
-      >
+      {/* The period caption. Sentence case, at the screen's META step: this is a
+          tab's caption, not a heading, and the file's own rule directly above is
+          that "the money is the only thing set large". It used to be 10px caps -
+          one of fifteen instances of a hand-copied uppercase class string, none
+          of which agreed with PRODUCT.md's "prefer sentence case". Selection is
+          still legible here in the ink weight, but it is the third cue and not
+          the load-bearing one; see the lift and the rule above. */}
+      <span className={cn("text-[11px] font-semibold", selected ? "text-navy" : "text-muted")}>
         {PERIOD_LABELS[cell.period]}
       </span>
 
@@ -108,18 +123,31 @@ export function TakingsStripPanel({
     <section aria-label="Takings">
       <div className="flex flex-col gap-1.5 border-b border-line pb-1.5 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-1.5">
-          <h2 className="text-[12px] font-semibold text-muted">Takings</h2>
+          {/* ONE HEADING TREATMENT ON THIS SCREEN. This <h2>, the appointment
+              list's <h2> and every PanelTitle are peers a reader takes in
+              together, and they used to be 12px sentence case, 10px uppercase
+              and 10px uppercase respectively - three looks for one rank. They
+              are all .text-title now, which is also SectionCard's <h3>. */}
+          <h2 className="text-title text-navy">Takings</h2>
           <CaveatMark caveats={caveats} onOpen={onOpenCaveat} />
         </span>
         {siteControl}
       </div>
 
-      {/* The cells bleed to the content edge, so the first figure sits on the
-          same left rule as every heading and row on the page. */}
+      {/* The cells bleed to the content edge, so the first figure sits on the same
+          left rule as every heading and row on the page. That claim used to be
+          false above sm: the bleed was a flat -mx-4 while the shell's gutter grows
+          to px-5 and px-6, so the strip stopped 8px short of the edge at lg. The
+          bleed and the cells' own padding now both track the gutter.
+
+          NO BOTTOM RULE. There was one, and twelve pixels below it the band opened
+          on a border-t of its own: two parallel hairlines with nothing between
+          them. The strip is a filled surface now, so its own edge is the boundary
+          and the band keeps the pair of rules that belong to the band. */}
       <div
         role="tablist"
         aria-label="Choose a period"
-        className="-mx-4 grid grid-cols-2 divide-x divide-line border-b border-line sm:grid-cols-3 lg:grid-cols-5"
+        className="-mx-4 grid grid-cols-2 divide-x divide-line bg-card-muted sm:-mx-5 sm:grid-cols-3 lg:-mx-6 lg:grid-cols-5"
       >
         {cells.map((cell) => (
           <Cell

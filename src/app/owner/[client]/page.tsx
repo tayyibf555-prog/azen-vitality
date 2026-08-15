@@ -129,81 +129,101 @@ export default async function OwnerHomePage({
   // No PageHeader above the dashboard, for the same reason /c has none: a hero
   // title plus a subtitle repeating the panel headings costs about ninety pixels
   // of the fold. The dashboard renders its own compact title line.
+  //
+  // WIDTH, and this tree is the reason it is done this way. data-wide drops the
+  // shell's max-w-[1400px] cap for the dashboard, which is an instrument and was
+  // throwing away 388px of a 1920 monitor. But the marker is read by a :has() on
+  // the shell's main column and :has() matches ANY descendant, so setting it here
+  // un-caps EVERY child of that column: the task queue, the Management header, the
+  // owner stat row, the recovery table and the whole systems catalogue would all
+  // go full-bleed too. A 2500px line of body copy is not a better owner console.
+  //
+  // So everything below the dashboard is re-capped, in one wrapper, at the same
+  // 1400px the shell caps at. (Not to the pixel: the shell's cap includes its own
+  // px-6 gutter and this one does not, so the console runs 48px wider than before
+  // on a large screen. Centred and at that size, that is not a difference anyone
+  // reads - and matching it exactly would mean hardcoding 1400-minus-a-gutter.)
+  //
+  // c/[client]/page.tsx carries the identical structure - same marker, same
+  // wrapper, same class string - because the two trees render the same dashboard
+  // and must not disagree about its size.
   return (
-    <>
+    <div data-wide className="space-y-4">
       <PracticeDashboard
         view={view}
         clientSlug={clientSlug}
         initialSiteId={selection === ALL_SITES ? null : selection}
       />
-      <TaskQueueBoard
-        plain
-        clientSlug={clientSlug}
-        maxRows={8}
-        title="Next actions"
-        description="The highest-priority work across every module. Finish one and the next slides in."
-      />
+      <div className="mx-auto max-w-[1400px] space-y-4">
+        <TaskQueueBoard
+          plain
+          clientSlug={clientSlug}
+          maxRows={8}
+          title="Next actions"
+          description="The highest-priority work across every module. Finish one and the next slides in."
+        />
 
-      {/* Everything below this line is the OWNER's, and nobody else's. */}
-      <PageHeader
-        title="Management"
-        description="Your owner command view. Switch between practice operations and the AI systems running them."
-      />
+        {/* Everything below this line is the OWNER's, and nobody else's. */}
+        <PageHeader
+          title="Management"
+          description="Your owner command view. Switch between practice operations and the AI systems running them."
+        />
 
-      <OwnerViewSwitch
-        systems={<SystemsCatalog />}
-        operations={
-          <>
-            <div className="flex flex-wrap gap-x-7 gap-y-4">
-              <StatCard
-                label="Recoverable value"
-                value={gbp(totalRecoverable)}
-                dot="bg-status-amber"
-                hint="Outstanding across open plans"
-              />
-              <StatCard
-                label="Open opportunities"
-                value={openCount}
-                dot="bg-status-blue"
-                hint="Plans not yet completed"
-              />
-              <StatCard
-                label="Recovered to date"
-                value={gbp(recoveredToDate)}
-                dot="bg-status-green"
-                hint="Completed plan value"
-              />
-            </div>
-
-            <SectionCard
-              title="Treatment recovery"
-              description={
-                scope.isAllSites
-                  ? "Accepted but incomplete treatment across all sites, live from the coordinator."
-                  : `Accepted but incomplete treatment at ${scope.siteName}, live from the coordinator.`
-              }
-              bodyClassName="p-0"
-            >
-              {opportunities.length === 0 ? (
-                <p className="m-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
-                  <Building2 size={15} className="shrink-0 text-muted" />
-                  No opportunities synced yet. Run the Dentally sync to populate the per-site
-                  breakdown. This view stays empty until real data lands.
-                </p>
-              ) : (
-                <DataTable
-                  columns={SITE_RECOVERY_COLUMNS}
-                  rows={siteRecovery}
-                  getRowKey={(r) => r.siteId}
-                  className="px-2 py-1"
+        <OwnerViewSwitch
+          systems={<SystemsCatalog />}
+          operations={
+            <>
+              <div className="flex flex-wrap gap-x-7 gap-y-4">
+                <StatCard
+                  label="Recoverable value"
+                  value={gbp(totalRecoverable)}
+                  dot="bg-status-amber"
+                  hint="Outstanding across open plans"
                 />
-              )}
-            </SectionCard>
+                <StatCard
+                  label="Open opportunities"
+                  value={openCount}
+                  dot="bg-status-blue"
+                  hint="Plans not yet completed"
+                />
+                <StatCard
+                  label="Recovered to date"
+                  value={gbp(recoveredToDate)}
+                  dot="bg-status-green"
+                  hint="Completed plan value"
+                />
+              </div>
 
-            <OverviewDashboard hideHero siteIds={siteIds} />
-          </>
-        }
-      />
-    </>
+              <SectionCard
+                title="Treatment recovery"
+                description={
+                  scope.isAllSites
+                    ? "Accepted but incomplete treatment across all sites, live from the coordinator."
+                    : `Accepted but incomplete treatment at ${scope.siteName}, live from the coordinator.`
+                }
+                bodyClassName="p-0"
+              >
+                {opportunities.length === 0 ? (
+                  <p className="m-5 flex items-center gap-2 rounded-lg border border-line bg-card-muted px-4 py-3 text-sm text-muted">
+                    <Building2 size={15} className="shrink-0 text-muted" />
+                    No opportunities synced yet. Run the Dentally sync to populate the per-site
+                    breakdown. This view stays empty until real data lands.
+                  </p>
+                ) : (
+                  <DataTable
+                    columns={SITE_RECOVERY_COLUMNS}
+                    rows={siteRecovery}
+                    getRowKey={(r) => r.siteId}
+                    className="px-2 py-1"
+                  />
+                )}
+              </SectionCard>
+
+              <OverviewDashboard hideHero siteIds={siteIds} />
+            </>
+          }
+        />
+      </div>
+    </div>
   );
 }

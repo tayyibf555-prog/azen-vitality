@@ -15,16 +15,21 @@
 // now-unused rules omitted; a few form-interaction rules the embedded consultation
 // form needs (channel selector, consent row, error + success states) are added at
 // the end, in the same prefixed style.
+//
+// THE COLOURS ARE NOT AUTHORED HERE ANY MORE. The `.vd-landing` token block below
+// is emitted by paletteCssBlock("landing-blue") from lib/assess/palette.ts — the
+// same catalogue the public Smile Assessment funnel themes from. The values are
+// unchanged (the drift test asserts the emitted string byte-for-byte against what
+// this file used to hold), but they now have ONE owner: an ad that runs to a
+// landing page and a quiz can no longer be re-branded apart. Everything else in
+// this stylesheet, including `--r` and the second `.vd-landing{` token block
+// further down, is still hand-authored here.
+
+import { paletteCssBlock } from "@/lib/assess/palette";
 
 export const VITALITY_INVISALIGN_CSS = `
 .vd-landing{
-  --navy:#0b2049; --chrome-from:#082249; --chrome-mid:#0f3670; --chrome-to:#16559a;
-  --blue:#16559a; --blue-deep:#1a648f; --blue-light:#5bc4f7; --blue-royal:#16559a;
-  --frame:#c3d7ef; --blue-soft:#eef4fb; --blue-chip:#dce9fb;
-  --light:#f2f7fd; --panel:#ffffff; --panel-2:#f7fafe;
-  --tx:#16233f; --tx-soft:#53607c; --tx-faint:#8b96ad;
-  --line:#e2e9f4;
-  --tx-on:#eaf1fb; --tx-on-soft:#a9c1e2; --line-d:rgba(255,255,255,.11);
+${paletteCssBlock("landing-blue")}
   --r:16px;
   box-sizing:border-box;
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;

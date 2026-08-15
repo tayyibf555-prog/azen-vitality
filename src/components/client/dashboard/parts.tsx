@@ -11,15 +11,32 @@ import { cn, num } from "@/lib/utils";
 // on, and a blank gets questioned.
 //
 // TYPE SCALE. The screen used to run fourteen font sizes between 9.5px and 40px,
-// which is why it read as unrelated pieces rather than one instrument. It now
-// runs four, and nothing else:
+// which is why it read as unrelated pieces rather than one instrument. A note
+// here then claimed it ran "four, and nothing else" - which was not true of the
+// code under it, and by the time anybody counted it was eleven sizes. A rule
+// nothing can fail is not a rule, so this one is a census that names its own
+// exceptions, and there is a test beside it:
 //
 //   FIGURE  22px bold, tabular    the money and the totals that lead a panel
+//   STACK   20px bold, tabular    the six blue counts Dentally stacks (StackStat)
 //   DATA    12.5px bold, tabular  every other numeral, and patient names
-//   META    11px medium           row labels, reasons, prose
-//   LABEL   10px semibold caps    panel and column headings
+//   TITLE   .text-title (13px)    EVERY heading on the screen - see below
+//   META    11px medium           row labels, reasons, prose, period captions
+//   MICRO   10px medium           the quiet counters hanging off a heading or a
+//                                 row: a day, a duration, a site, "N shown"
 //
-// The page title is the single exception at 15px, and it is a line, not a hero.
+// Two sizes sit outside it and both are drawn rather than read: 9px for the
+// invoiced axis ticks, the row initials and the caveat glyph, and the page
+// title's own 15px line. Adding a size means changing this list.
+//
+// HEADINGS ARE SENTENCE CASE, in the house .text-title token rather than
+// anything local. This screen carried fifteen 10px uppercase labels across six
+// call sites, every one of them the same hand-copied class string, and three
+// sibling <h2>s within one scroll wore three different treatments. PRODUCT.md
+// asks for sentence-case headings while the other house token, .text-label, is
+// uppercase BY DEFINITION - the two cannot both be honoured, and .text-title is
+// the one that can. It costs 3px of height per heading and buys one heading
+// treatment for the whole product: SectionCard's <h3> is already this token.
 // ---------------------------------------------------------------------------
 
 /** The two rendered numeral sizes. Nothing on this screen sits between them. */
@@ -30,7 +47,13 @@ const FIGURE_SIZES: Record<FigureSize, string> = {
   figure: "text-[22px] tracking-[-0.6px]",
 };
 
-/** A panel heading: small, quiet, hairline under it. Numbers are the content. */
+/**
+ * A panel heading: sentence case, hairline under it. Numbers are the content.
+ *
+ * Navy rather than muted, because the sub-headings inside a panel now share the
+ * same size token and rank has to be carried by something. Colour carries it:
+ * the panel's own name is ink, the sub-columns under it are muted.
+ */
 export function PanelTitle({
   children,
   right,
@@ -42,7 +65,7 @@ export function PanelTitle({
 }) {
   return (
     <div className={cn("flex items-baseline justify-between gap-2 border-b border-line pb-1", className)}>
-      <h3 className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted">{children}</h3>
+      <h3 className="text-title text-navy">{children}</h3>
       {right ? <span className="text-[10px] font-medium text-faint">{right}</span> : null}
     </div>
   );
@@ -167,7 +190,10 @@ export function StackStat({
             : num(metric.value)}
         </b>
       )}
-      <span className="mt-[1px] block truncate text-[10.5px] font-medium text-muted">{label}</span>
+      {/* 11px, the screen's META step. It was 10.5px, which is a size no other
+          thing on the page used and which half-pixel-rounds differently per
+          browser; the labels are single short words and truncate anyway. */}
+      <span className="mt-[1px] block truncate text-[11px] font-medium text-muted">{label}</span>
     </div>
   );
 }

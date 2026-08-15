@@ -165,6 +165,13 @@ function Row({ row, showDay, basePath }: { row: AppointmentRow; showDay: boolean
   // The reason and whatever the receptionist typed share ONE line, so every row
   // is the same height and the list scans as a column of times. Neither is
   // shortened: the full text is on the row's title for anything that truncates.
+  //
+  // ABOVE 1536px THEY STOP SHARING IT. Widening the dashboard is only worth doing
+  // if the width is spent on information rather than on margin - the house rule is
+  // that removing chrome must never leave a sparser screen than Dentally's - and
+  // the note is the row's most-truncated field. So at 2xl it gets a column of its
+  // own and the reason gets the whole of the line it was sharing. Same two
+  // strings, both already on the row: this reveals data, it does not fetch any.
   const reason = row.reason ?? "No reason recorded";
   const second = row.note ? `${reason} · ${row.note}` : reason;
   return (
@@ -213,8 +220,23 @@ function Row({ row, showDay, basePath }: { row: AppointmentRow; showDay: boolean
           </PatientLink>
         )}
         <span title={second} className="block truncate text-[11px] font-medium leading-[1.25] text-muted">
-          {second}
+          <span className="2xl:hidden">{second}</span>
+          <span className="hidden 2xl:inline">{reason}</span>
         </span>
+      </span>
+
+      {/* The receptionist's note, on its own at the widths that have room for it.
+          The title above still carries the whole of "reason · note", so nothing
+          becomes unreachable at any width and a note is never half-shown here. */}
+      <span className="hidden w-[190px] shrink-0 2xl:block">
+        {row.note ? (
+          <span
+            title={row.note}
+            className="block truncate text-[11px] font-medium leading-[1.25] text-muted"
+          >
+            {row.note}
+          </span>
+        ) : null}
       </span>
 
       <span className="hidden w-[150px] shrink-0 sm:block">
@@ -289,9 +311,9 @@ export function AppointmentListPanel({
     <section aria-label="Appointments list">
       <div className="flex flex-col gap-1 border-b border-line pb-1.5">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted">
-            Appointments
-          </h2>
+          {/* The same heading treatment as the takings <h2> and every PanelTitle
+              in the band: .text-title, sentence case. See takings-strip.tsx. */}
+          <h2 className="text-title text-navy">Appointments</h2>
           <span className="text-[10px] font-medium text-faint">
             {PERIOD_LABELS[period]} · {num(visible.length)} shown
           </span>

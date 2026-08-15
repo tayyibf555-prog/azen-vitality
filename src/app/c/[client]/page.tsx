@@ -60,20 +60,34 @@ export default async function ClientHomePage({
   // No PageHeader on purpose: a hero title plus a subtitle repeating what the
   // panel headings already say costs about ninety pixels of the fold on a screen
   // read between phone calls. The dashboard renders its own compact title line.
+  //
+  // WIDTH. data-wide drops the shell's max-w-[1400px] cap, because this dashboard
+  // is an instrument and a 1920 reception monitor was throwing 388px of it away -
+  // the band froze at four equal columns and floated in white space, which is the
+  // owner's own complaint against it and the thing Dentally does not do.
+  //
+  // The marker is read by a :has() on the shell's main column, and :has() matches
+  // ANY descendant, so it un-caps that column for EVERY child - not just the one
+  // that set it. The task queue underneath is prose and a list of rows; it wants a
+  // reading measure, not a viewport. So it gets the cap back, explicitly, in a
+  // wrapper of its own. /owner/[client]/page.tsx is the same structure, because
+  // the two trees render the same dashboard and must not disagree about its size.
   return (
-    <>
+    <div data-wide className="space-y-4">
       <PracticeDashboard
         view={view}
         clientSlug={clientSlug}
         initialSiteId={selection === ALL_SITES ? null : selection}
       />
-      <TaskQueueBoard
-        plain
-        clientSlug={clientSlug}
-        maxRows={8}
-        title="Next actions"
-        description="The highest-priority work across every module. Finish one and the next slides in."
-      />
-    </>
+      <div className="mx-auto max-w-[1400px] space-y-4">
+        <TaskQueueBoard
+          plain
+          clientSlug={clientSlug}
+          maxRows={8}
+          title="Next actions"
+          description="The highest-priority work across every module. Finish one and the next slides in."
+        />
+      </div>
+    </div>
   );
 }

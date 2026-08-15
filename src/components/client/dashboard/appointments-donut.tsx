@@ -25,8 +25,20 @@ import { PanelTitle, Unavailable } from "./parts";
 // LAYOUT. The donut and its legend are one block, sized to the column and set in
 // the middle of the panel's share of the band, rather than a small ring floating
 // at the top of an otherwise empty column.
+//
+// AND AT 2xl THEY SIT SIDE BY SIDE. Once the dashboard escapes the shell's
+// 1400px cap this column roughly doubles, and a stacked 140px ring in a 600px
+// column is the same "small ring floating in an empty column" defect wearing a
+// different hat - just horizontally instead of vertically. So above 1536px the
+// ring moves BESIDE the legend and grows with the room it has.
+//
+// The ring grows in CSS, not in SIZE. SIZE stays the viewBox's own coordinate
+// space - the arc geometry, the stroke width and the dash lengths are all
+// computed in it - and the rendered box is set by classes on the <svg>, so the
+// whole drawing scales as one thing and nothing has to be recomputed per width.
 // ---------------------------------------------------------------------------
 
+/** The donut's coordinate space. The RENDERED size is set in CSS - see above. */
 const SIZE = 140;
 const RADIUS = 54;
 const STROKE = 17;
@@ -54,13 +66,17 @@ function Swatch({ colour, pattern }: { colour: string; pattern: string | null })
 function Patterns() {
   return (
     <defs>
+      {/* --on-fill, not --card. These are drawn ON TOP of a saturated arc, so they
+          want true white. --card is the nearest-looking token but it is a SURFACE
+          and is retuned per scope (#f9fbfe at :root), and a tinted off-white over
+          green or amber reads as dirt on the ring rather than as light through it. */}
       <pattern id="dash-hatch" width={5} height={5} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
         <rect width={5} height={5} fill="transparent" />
-        <line x1={0} y1={0} x2={0} y2={5} stroke="#ffffff" strokeWidth={2.2} strokeOpacity={0.55} />
+        <line x1={0} y1={0} x2={0} y2={5} stroke="var(--on-fill)" strokeWidth={2.2} strokeOpacity={0.55} />
       </pattern>
       <pattern id="dash-dots" width={5} height={5} patternUnits="userSpaceOnUse">
         <rect width={5} height={5} fill="transparent" />
-        <circle cx={2.5} cy={2.5} r={1.15} fill="#ffffff" fillOpacity={0.6} />
+        <circle cx={2.5} cy={2.5} r={1.15} fill="var(--on-fill)" fillOpacity={0.6} />
       </pattern>
     </defs>
   );
@@ -162,7 +178,10 @@ export function AppointmentsDonut({
         Appointments
       </PanelTitle>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 py-2">
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 py-2 2xl:flex-row 2xl:gap-5">
+        {/* className sets the RENDERED box and CSS wins over the width/height
+            attributes; those stay as the intrinsic size and the no-CSS fallback.
+            Growing the box rather than the viewBox scales the strokes with it. */}
         <div className="relative shrink-0">
           <svg
             width={SIZE}
@@ -170,6 +189,7 @@ export function AppointmentsDonut({
             viewBox={`0 0 ${SIZE} ${SIZE}`}
             role="img"
             aria-label={`${total} appointments: ${describe}, still to come ${other}`}
+            className="h-[140px] w-[140px] 2xl:h-[172px] 2xl:w-[172px]"
           >
             <Patterns />
             {/* The track is what is left of the day, not decoration. */}
@@ -212,7 +232,7 @@ export function AppointmentsDonut({
           </svg>
         </div>
 
-        <dl className="w-full min-w-0">
+        <dl className="w-full min-w-0 2xl:flex-1">
           {SLICES.map((slice) => (
             <LegendRow
               key={slice.key}

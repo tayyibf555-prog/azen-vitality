@@ -24,10 +24,16 @@ import { PanelTitle, StackStat, Unavailable } from "./parts";
 // believed.
 // ---------------------------------------------------------------------------
 
+/**
+ * A sub-column heading inside this panel: the same .text-title token the panel's
+ * own heading uses, one rank down in colour. See PanelTitle in parts.tsx - rank
+ * is carried by ink versus muted rather than by a second size, so the screen
+ * gains a hierarchy and loses a type treatment at the same time.
+ */
 function SubHeading({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-2 border-b border-line pb-[3px]">
-      <h4 className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted">{children}</h4>
+      <h4 className="text-title text-muted">{children}</h4>
       {right}
     </div>
   );
@@ -49,9 +55,11 @@ function UdaProgressLine({
     return (
       <div className="mt-auto border-t border-line pt-2">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted">
-            Contract {yearLabel}
-          </span>
+          {/* A LINE LABEL, not a heading: it names the figure sitting opposite it
+              on the same baseline, exactly as parts.tsx's Line does, so it takes
+              the same META treatment. The heading token would set it larger than
+              the percentage it labels, which inverts the two. */}
+          <span className="text-[11px] font-medium text-muted">Contract {yearLabel}</span>
           <span className="flex items-baseline gap-1.5">
             <Unavailable reason={panel.reason} />
             <CaveatMark caveats={caveats} onOpen={onOpenCaveat} />
@@ -68,9 +76,10 @@ function UdaProgressLine({
   return (
     <div className="mt-auto border-t border-line pt-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted">
-          Contract {yearLabel}
-        </span>
+        {/* Same line label as the unavailable branch above, and it has to stay the
+            same: the line must not change size depending on whether the figure
+            beside it could be sourced. */}
+        <span className="text-[11px] font-medium text-muted">Contract {yearLabel}</span>
         <span className="flex items-baseline gap-1.5">
           <span className="text-[12.5px] font-bold tabular-nums tracking-[-0.2px] text-navy">
             {progress.percentOfTarget.toFixed(1)}%

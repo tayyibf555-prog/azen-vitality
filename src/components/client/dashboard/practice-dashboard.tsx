@@ -35,12 +35,23 @@ import { TakingsStripPanel } from "./takings-strip";
 // band, hairline rules between the columns, and every panel stretched to the
 // same height so tops and bottoms line up. Ragged panel heights were why the
 // band read as four unrelated things rather than one instrument.
+//
+// WIDTHS ABOVE xl. The grid has as many columns as it has panels, so at xl it has
+// run out of ways to reflow and simply stretches: four equal columns, each of
+// them half again wider than the content drawn in it. The 2xl track sizes below
+// are the fix - the two panels that can actually SPEND width (the donut, which
+// puts its ring beside its legend there, and the counts column, which carries
+// four sub-columns of figures) take a larger share than the two that cannot.
+// Equal columns above xl is what "floats in white space" looked like.
 // ---------------------------------------------------------------------------
 
 /** Hairlines for a band cell: one column, two columns, then four. */
 function bandCell(index: number): string {
   return cn(
-    "flex min-w-0 flex-col px-4 py-2.5",
+    // Padding tracks the shell's own gutter (px-4 sm:px-5 lg:px-6) because the band
+    // bleeds out by exactly that much below. The two have to move together or the
+    // first figure in the band stops lining up with every heading on the page.
+    "flex min-w-0 flex-col px-4 py-2.5 sm:px-5 lg:px-6",
     // Stacked: a rule above every panel but the first.
     index > 0 && "border-t border-line",
     // Two columns: the second panel starts a row of its own, so it loses that rule.
@@ -115,8 +126,21 @@ export function PracticeDashboard({
   );
 
   return (
-    // The dashboard wants width, and takes it the same way every other page does:
-    // the shared sidebar collapse toggle. No per-page override any more.
+    // WIDTH IS THE PAGE'S, NOT THIS COMPONENT'S - and that is a REVERSAL.
+    //
+    // This used to read "the dashboard wants width, and takes it the same way every
+    // other page does: the shared sidebar collapse toggle. No per-page override any
+    // more." That was wrong, and the owner said so: collapsing the rail buys about
+    // 190px, while the shell's max-w-[1400px] cap throws away 388px on a 1920 screen
+    // and over a thousand on a 2560 one, and no amount of collapsing reaches past a
+    // cap. So there IS a per-page override again: data-wide, on the page wrapper.
+    //
+    // It is set by c/[client]/page.tsx and owner/[client]/page.tsx rather than here,
+    // deliberately. The shell reads the marker with a :has(), which matches ANY
+    // descendant, so whoever sets it un-caps every sibling in the main column too -
+    // the task queue, and on /owner the entire owner console. Only the page knows
+    // what its siblings are and can re-cap them. A marker set here would silently
+    // widen screens this component has never heard of.
     <div className="space-y-3">
       {/* A line, not a hero. The section headings below carry the structure. */}
       <h1 className="text-[15px] font-semibold tracking-[-0.3px] text-navy">Dashboard</h1>
@@ -134,7 +158,11 @@ export function PracticeDashboard({
         onOpenCaveat={setOpenCaveat}
       />
 
-      <div className="-mx-4 grid grid-cols-1 border-y border-line md:grid-cols-2 xl:grid-cols-4">
+      {/* The band bleeds by exactly the shell's gutter at every breakpoint. It used
+          to bleed a flat -mx-4 while the gutter grew to px-5 and px-6, so above sm
+          the band stopped short of the edge it is supposed to reach - 8px on each
+          side at lg, visible against every rule under it. */}
+      <div className="-mx-4 grid grid-cols-1 border-y border-line sm:-mx-5 md:grid-cols-2 lg:-mx-6 xl:grid-cols-4 2xl:grid-cols-[1.15fr_1fr_1fr_1.15fr]">
         <div className={bandCell(0)}>
           <AppointmentsDonut
             panel={panels.appointments}

@@ -174,11 +174,15 @@ export const PALETTES: Palette[] = [
     "Landing page blue",
     "Matches the practice's bespoke landing pages, for an ad that runs to both.",
     {
-      // Lifted from the ONE hard-coded block every bespoke landing page wears:
-      // vitality-invisalign-landing.styles.ts:20-32 (.vd-landing). Its names map
-      // across as: --light -> cream, --panel -> card, --panel-2 -> card-muted,
+      // THE SOURCE OF TRUTH for the `.vd-landing` token block every bespoke
+      // landing page wears. These values started life hard-coded in
+      // vitality-invisalign-landing.styles.ts; that stylesheet now emits them
+      // from here via paletteCssBlock() below, so the ad and the quiz it links
+      // to cannot drift apart. The landing design's own names map across as:
+      // --light -> cream, --panel -> card, --panel-2 -> card-muted,
       // --tx/--tx-soft/--tx-faint -> ink/muted/faint, --tx-on-soft ->
-      // on-navy-muted, --blue-soft/--blue-chip -> tint-royal/tint-royal-line.
+      // on-navy-muted, --blue-soft/--blue-chip -> tint-royal/tint-royal-line,
+      // --blue -> blue-dark. LANDING_TOKEN_BLOCK holds that mapping.
       cream: "#f2f7fd",
       card: "#ffffff",
       "card-muted": "#f7fafe",
@@ -202,7 +206,15 @@ export const PALETTES: Palette[] = [
       "status-royal": "#16559a",
       "tint-royal": "#eef4fb",
       "tint-royal-line": "#dce9fb",
-      // The landing hero's own glow, to the digit (styles.ts:59).
+      // NOT the landing page's glow, and deliberately not wired to it. Three
+      // things are true of the hero glow and none of them make it a shared fact:
+      // it is not a custom property at all (it is a literal inside a gradient,
+      // styles.ts:57); it is written there as `rgba(91,196,247,.20)`, which is a
+      // different byte string from this one; and a later rule (styles.ts:283)
+      // overrides that gradient outright, so the alpha the hero actually paints
+      // is .26. This value is the assessment quiz's own glow — the same hue at
+      // the same strength, chosen so a landing-blue quiz reads as a continuation
+      // of the ad — and paletteCssBlock() below does not emit it.
       "assess-glow": "rgba(91,196,247,0.20)",
     },
   ),
@@ -331,4 +343,112 @@ export function paletteVars(key: string | null | undefined): Record<string, stri
   const out: Record<string, string> = {};
   for (const token of PALETTE_TOKENS) out[`--${token}`] = palette.vars[token];
   return out;
+}
+
+/* ---------------------------------------------------------------------------
+ * The landing seam: the same catalogue, serialised as raw CSS.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One declaration in the `.vd-landing` token block. Either a catalogue token
+ * wearing the landing design's own name for it, or a literal the catalogue has
+ * no counterpart for.
+ */
+type LandingDecl =
+  | { readonly name: string; readonly token: PaletteToken }
+  | { readonly name: string; readonly literal: string };
+
+/**
+ * THE BLOCK, AS THE DESIGN AUTHORED IT — grouped by meaning, not alphabetised,
+ * and wrapped by hand: chrome, then blues, then the frame/chip pair, then
+ * surfaces, then ink, then the hairline, then the on-dark set.
+ *
+ * The outer array is LINES and the inner array is the declarations on that line.
+ * That shape is the whole point. The stylesheet this feeds ships raw to the
+ * browser inside a `<style dangerouslySetInnerHTML>` on four public pages, and
+ * the block it replaces was hand-wrapped; an `Object.entries().join("; ")` would
+ * have produced one long line and a diff nobody could read against the design it
+ * was ported from. So the grouping is data here, and the emitter is dumb.
+ *
+ * PASSENGERS. Six of these are literals, because the catalogue has no token for
+ * them: the three `--chrome-*` stops of the hero gradient, `--frame`, `--tx-on`,
+ * and `--line-d`. They are the landing design's own, they are not themed by any
+ * scheme, and they ride along here so that the block stays one contiguous thing
+ * rather than a generated fragment with hand-written strays either side of it.
+ *
+ * DELIBERATELY ABSENT, and each for its own reason:
+ *   - `line-strong` — a catalogue-only token. It is DERIVED (see landing-blue
+ *     above), the landing design has a single hairline, and writing it into the
+ *     CSS would add a custom property no rule in that stylesheet reads.
+ *   - `status-royal` — same colour as `blue-royal` in this scheme; the landing
+ *     design has no status ink, so there is nothing to name.
+ *   - `assess-glow` — not a custom property in that stylesheet at all. See the
+ *     note on the landing-blue entry above.
+ */
+const LANDING_TOKEN_BLOCK: readonly (readonly LandingDecl[])[] = [
+  [
+    { name: "navy", token: "navy" },
+    { name: "chrome-from", literal: "#082249" },
+    { name: "chrome-mid", literal: "#0f3670" },
+    { name: "chrome-to", literal: "#16559a" },
+  ],
+  [
+    // The landing design fills every button with one blue; `blue-dark` is the
+    // catalogue's name for the action colour.
+    { name: "blue", token: "blue-dark" },
+    { name: "blue-deep", token: "blue-deep" },
+    { name: "blue-light", token: "blue-light" },
+    { name: "blue-royal", token: "blue-royal" },
+  ],
+  [
+    { name: "frame", literal: "#c3d7ef" },
+    { name: "blue-soft", token: "tint-royal" },
+    { name: "blue-chip", token: "tint-royal-line" },
+  ],
+  [
+    { name: "light", token: "cream" },
+    { name: "panel", token: "card" },
+    { name: "panel-2", token: "card-muted" },
+  ],
+  [
+    { name: "tx", token: "ink" },
+    { name: "tx-soft", token: "muted" },
+    { name: "tx-faint", token: "faint" },
+  ],
+  [{ name: "line", token: "line" }],
+  [
+    { name: "tx-on", literal: "#eaf1fb" },
+    { name: "tx-on-soft", token: "on-navy-muted" },
+    { name: "line-d", literal: "rgba(255,255,255,.11)" },
+  ],
+];
+
+/**
+ * The `.vd-landing` custom-property block as a CSS string, painted from a scheme.
+ *
+ * Returns the declarations only — no selector, no braces, no trailing newline —
+ * so the stylesheet keeps ownership of everything around it (`--r`, the reset,
+ * the font stack). Two-space indent, no space after the colon, `"; "` between
+ * declarations on a line, `"\n"` between lines: byte-for-byte the format the
+ * design was ported in, because that string is a checked-in contract and a
+ * reformat would read as a change to a public page.
+ *
+ * ONE CALLER, ONE KEY. `vitality-invisalign-landing.styles.ts` passes
+ * "landing-blue", which is where these values came from. The parameter exists
+ * because the catalogue is the parameter — but note the six passengers above are
+ * NOT themed, so handing this a teal scheme would emit teal surfaces under a
+ * blue hero gradient. That is a half-theme, not a feature; if a second landing
+ * skin is ever wanted, the passengers become tokens first.
+ */
+export function paletteCssBlock(key: string | null | undefined): string {
+  const palette = paletteFor(key);
+  return LANDING_TOKEN_BLOCK.map((line) => {
+    const declarations = line.map((decl) => {
+      // Lowercased on the way out so the emitted format is the function's own
+      // contract rather than a property of however the catalogue was typed.
+      const value = "token" in decl ? palette.vars[decl.token] : decl.literal;
+      return `--${decl.name}:${value.toLowerCase()}`;
+    });
+    return `  ${declarations.join("; ")};`;
+  }).join("\n");
 }

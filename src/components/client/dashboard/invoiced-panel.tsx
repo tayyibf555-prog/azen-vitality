@@ -144,17 +144,21 @@ export function InvoicedPanelView({
 
           {/* The figures in words under the columns. This is what the chart is
               read FROM once the shape has been taken in, and it is what assistive
-              tech gets instead of the axis. */}
+              tech gets instead of the axis.
+
+              12.5px, which is the screen's DATA step and what every other numeral
+              of this rank is set in. They were 12px - half a pixel off the scale
+              and off nothing else on the page. */}
           <dl className="mt-1.5 flex gap-3 pl-[28px]">
             <div className="min-w-0 flex-1 text-center">
               <dt className="truncate text-[10px] font-medium text-muted">Paid</dt>
-              <dd className="truncate text-[12px] font-bold tabular-nums tracking-[-0.2px] text-navy">
+              <dd className="truncate text-[12.5px] font-bold tabular-nums tracking-[-0.2px] text-navy">
                 {formatPenceGbp(paid)}
               </dd>
             </div>
             <div className="min-w-0 flex-1 text-center">
               <dt className="truncate text-[10px] font-medium text-muted">Unpaid</dt>
-              <dd className="truncate text-[12px] font-bold tabular-nums tracking-[-0.2px] text-navy">
+              <dd className="truncate text-[12.5px] font-bold tabular-nums tracking-[-0.2px] text-navy">
                 {formatPenceGbp(unpaid)}
               </dd>
             </div>
