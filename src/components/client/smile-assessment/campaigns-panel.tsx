@@ -27,7 +27,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, Tabs, type TabItem } from "@/components/primitives";
 import { GOAL_CATALOG, BUDGET_CATALOG, goalLabel } from "@/lib/smile-assessment/campaign";
-import { DEFAULT_PALETTE_KEY, PALETTES, paletteVars } from "@/lib/assess/palette";
+import { DEFAULT_PALETTE_KEY, PALETTES, paletteFor, paletteVars } from "@/lib/assess/palette";
 import { groupCampaignsByGoal } from "@/lib/smile-assessment/grouping";
 import { nodeMap, normaliseFlow, type FlowGraph } from "@/lib/smile-assessment/flow";
 import { phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
@@ -105,6 +105,14 @@ interface AdminCampaign {
   flow?: unknown;
   flowVersion?: number;
   flowPublished?: boolean;
+  /**
+   * The chosen colour scheme: a key from PALETTES, or null for "exactly as it
+   * shipped". OPTIONAL for the same reason the funnel fields above are — on a
+   * deployment where 0079 has not been applied the column is not read back at
+   * all, and an absent theme and a null theme must render the same page
+   * (palette.ts, paletteFor).
+   */
+  theme?: string | null;
 }
 
 interface FormState {
@@ -820,7 +828,7 @@ function DetailsStage({
 }
 
 /**
- * The colour-scheme picker: one chip-stack per palette.
+ * One palette, as the three chips both controls below wear.
  *
  * EVERY COLOUR ON SCREEN HERE COMES OUT OF THE CATALOGUE MODULE. Not one hex
  * literal in this file, which is a rule the shell suite enforces
@@ -830,6 +838,28 @@ function DetailsStage({
  * from colours that are no longer the colours. `palette.swatch` is derived from
  * the same `vars` map the page wears (palette.ts, definePalette), so the chips
  * cannot be wrong.
+ *
+ * ONE COMPONENT FOR BOTH PICKERS, deliberately: the create picker and the
+ * re-colour row on a card have to show the SAME scheme as the same three chips,
+ * or an owner would be told a colour was one thing at creation and another
+ * afterwards.
+ */
+function PaletteChips({ palette }: { palette: (typeof PALETTES)[number] }) {
+  return (
+    <span aria-hidden className="flex shrink-0 items-center -space-x-1">
+      {palette.swatch.map((colour, i) => (
+        <span
+          key={colour + String(i)}
+          className="h-4 w-4 rounded-full border border-line-strong"
+          style={{ background: colour }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The colour-scheme picker: one chip-stack per palette, each with its name.
  *
  * A radiogroup, not a row of toggles: exactly one scheme is in force, and arrow
  * keys should move between them.
@@ -854,15 +884,7 @@ function ThemePicker({ value, onChange }: { value: string; onChange: (key: strin
                 : "border-line bg-card hover:border-line-strong",
             ].join(" ")}
           >
-            <span aria-hidden className="flex shrink-0 items-center -space-x-1">
-              {palette.swatch.map((colour, i) => (
-                <span
-                  key={colour + String(i)}
-                  className="h-4 w-4 rounded-full border border-line-strong"
-                  style={{ background: colour }}
-                />
-              ))}
-            </span>
+            <PaletteChips palette={palette} />
             <span
               className={[
                 "text-[11.5px] font-semibold",
@@ -871,6 +893,72 @@ function ThemePicker({ value, onChange }: { value: string; onChange: (key: strin
             >
               {palette.label}
             </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * THE RE-COLOUR ROW: the same catalogue, on a campaign that already exists.
+ *
+ * WHY A SECOND CONTROL AND NOT THE PICKER ITSELF. ThemePicker names every scheme,
+ * because at creation the owner is meeting them for the first time and a colour
+ * with no name is not a choice. On a card, seven named buttons would be the
+ * tallest thing on it — taller than the campaign's own header — for a decision
+ * that is already made and is only occasionally revisited. So the labels come off
+ * and the chips stay: the row is one line, the current scheme is named ONCE
+ * beside it, and every button still carries its palette's name as its accessible
+ * name and its description in the tooltip. Nothing is hidden, only unrepeated.
+ *
+ * SAME CATALOGUE, SAME CHIPS, SAME ORDER — PALETTES and PaletteChips, never a
+ * local list. A hand-kept row here would be the third copy of the palette and the
+ * first one free to be wrong.
+ *
+ * A radiogroup for the same reason as the picker: exactly one scheme is in force.
+ */
+function ThemeSwatchRow({
+  campaignName,
+  value,
+  busy,
+  onChange,
+}: {
+  /** Names the group, so a page of cards has one distinguishable control each. */
+  campaignName: string;
+  value: string;
+  busy: boolean;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={`Colour scheme for ${campaignName}`}
+      className="flex flex-wrap items-center gap-1.5"
+    >
+      {PALETTES.map((palette) => {
+        const selected = palette.key === value;
+        return (
+          <button
+            key={palette.key}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            // The name the picker prints under the chips, carried as the
+            // accessible name instead: a row of unlabelled swatches must still
+            // read as "Clinical teal", not "button".
+            aria-label={palette.label}
+            title={`${palette.label} — ${palette.description}`}
+            disabled={busy}
+            onClick={() => onChange(palette.key)}
+            className={[
+              "rounded-lg border p-1 transition disabled:opacity-60",
+              selected
+                ? "border-blue-royal bg-tint-royal ring-2 ring-blue-royal/25"
+                : "border-line bg-card hover:border-line-strong",
+            ].join(" ")}
+          >
+            <PaletteChips palette={palette} />
           </button>
         );
       })}
@@ -947,9 +1035,14 @@ function CampaignList({ campaigns, ...rest }: ListProps) {
   );
 }
 
-/** One campaign: header + meta, its public URL, an embedded live preview
- *  (Classic/Guided), the funnel builder, and any extra detail. */
-function CampaignCard({
+/** One campaign: header + meta, its public URL, its colour scheme, an embedded
+ *  live preview (Classic/Guided), the funnel builder, and any extra detail.
+ *
+ *  EXPORTED FOR THE SUITE. vitest renders this card for real
+ *  (campaign-recolour.test.ts) to hold the one thing source-reading cannot show:
+ *  that the re-colour row on a card is checked against THAT campaign's stored
+ *  scheme. Nothing else imports it. */
+export function CampaignCard({
   clientSlug,
   campaign,
   togglingId,
@@ -968,6 +1061,65 @@ function CampaignCard({
   // seeded with the funnel that was chosen for it - the wizard's last step, not a
   // separate errand the owner has to remember to go on.
   const [editing, setEditing] = useState(openCanvasFor === campaign.id);
+
+  // THE RE-COLOUR, in flight. The key being written (so the row can be locked
+  // while it lands), and the reason if it did not.
+  const [themeSaving, setThemeSaving] = useState<string | null>(null);
+  const [themeError, setThemeError] = useState<string | null>(null);
+  // Bumped after a successful re-colour so the live preview below re-fetches the
+  // public page and shows the new scheme. Without it the one thing on the card
+  // that renders the colours would keep rendering the old ones, and a change that
+  // DID land would read as a change that did not.
+  const [previewNonce, setPreviewNonce] = useState(0);
+
+  // null is every campaign made before the picker existed, and every campaign on
+  // a deployment where 0079 has not been applied. Both are the default scheme -
+  // the same resolution paletteFor makes for the public page (palette.ts), so the
+  // card cannot claim a colour the patient is not seeing.
+  const currentTheme = campaign.theme ?? DEFAULT_PALETTE_KEY;
+
+  /**
+   * Re-colour an existing assessment: the SAME PATCH the pause/activate toggle
+   * uses, on the same route, with the same optimistic-then-revert shape. Only the
+   * field differs — `theme` alone, never restated alongside `status`, because the
+   * route reads presence rather than truthiness and an absent status means "leave
+   * it running" (campaign/[slug]/route.ts).
+   *
+   * The failure is SPOKEN, not swallowed. The toggle can revert in silence — a
+   * pill that flips back says what happened — but a swatch that quietly un-picks
+   * itself does not explain that 0079 has not been applied on this deployment,
+   * which is the one failure this path actually has and the one the route
+   * answers 503 with a sentence for.
+   */
+  async function recolour(key: string) {
+    if (themeSaving || key === currentTheme) return;
+    const previous = campaign.theme ?? null;
+    setThemeSaving(key);
+    setThemeError(null);
+    // Optimistic: the card wears the new scheme at once, and is put back if the
+    // write fails.
+    onCampaignUpdated(campaign.id, { theme: key });
+    try {
+      const res = await fetch(
+        `/api/smile-assessment/campaign/${encodeURIComponent(campaign.slug)}?client=${encodeURIComponent(clientSlug)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientSlug, theme: key }),
+        },
+      );
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `The colour scheme could not be saved (${res.status}).`);
+      }
+      setPreviewNonce((n) => n + 1);
+    } catch (err) {
+      onCampaignUpdated(campaign.id, { theme: previous });
+      setThemeError(err instanceof Error ? err.message : "The colour scheme could not be saved.");
+    } finally {
+      setThemeSaving(null);
+    }
+  }
 
   // SHAPE ONLY, deliberately. normaliseFlow says "can this be read as a graph";
   // whether it is a LEGAL funnel is validateFlow's business, and the builder is
@@ -1043,6 +1195,39 @@ function CampaignCard({
         </a>
       </div>
 
+      {/* THE RE-COLOUR ROW, directly above the preview it repaints - the same
+          reason the create picker sits on the summary card above its strip
+          (DetailsStage). This is the only control on the card whose effect is
+          visible from the card, and putting it anywhere else would mean picking a
+          colour with nothing on screen showing what the colour does.
+
+          One line, under the link rather than up in the header: the header is
+          what this assessment IS and whether it is running; the colour is how it
+          looks, which belongs with the link and the preview of the page it
+          paints. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-3">
+        <span className="text-xs font-semibold text-navy">Colour scheme</span>
+        <ThemeSwatchRow
+          campaignName={campaign.name}
+          value={currentTheme}
+          busy={themeSaving !== null}
+          onChange={recolour}
+        />
+        {/* Named ONCE, since the row itself dropped the labels. Resolved through
+            the catalogue, so a retired key reads as what the patient is actually
+            being shown rather than as the key nobody chose. */}
+        <span className="inline-flex items-center gap-1.5 text-xs text-muted">
+          {themeSaving ? <Loader2 size={12} className="animate-spin" /> : null}
+          {paletteFor(campaign.theme).label}
+        </span>
+      </div>
+
+      {themeError ? (
+        <p className="mt-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-[11.5px] text-danger">
+          {themeError}
+        </p>
+      ) : null}
+
       {editing ? (
         <FlowBuilder
           clientSlug={clientSlug}
@@ -1069,6 +1254,7 @@ function CampaignCard({
         path={campaign.path}
         title={campaign.name}
         flowPublished={published}
+        reloadKey={previewNonce}
       />
 
       <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3 text-xs">

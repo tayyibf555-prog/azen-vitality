@@ -25,6 +25,7 @@ export function AssessmentLivePreview({
   path,
   title,
   flowPublished = false,
+  reloadKey = 0,
 }: {
   /** The campaign's public path, e.g. "/assess/vitality/invisalign" (no query). */
   path: string;
@@ -38,6 +39,14 @@ export function AssessmentLivePreview({
    * false so every existing call site keeps today's behaviour exactly.
    */
   flowPublished?: boolean;
+  /**
+   * Bump to re-fetch the embedded page. The src is unchanged by a re-colour — the
+   * scheme lives on the campaign row, not in the URL — so the iframe has no
+   * reason of its own to reload, and would keep showing the colours the page had
+   * when it was first framed. Defaults to 0, so every call site that does not
+   * pass it behaves exactly as before.
+   */
+  reloadKey?: number;
 }) {
   const [open, setOpen] = useState(true);
   const [style, setStyle] = useState<PreviewStyle>("classic");
@@ -105,7 +114,7 @@ export function AssessmentLivePreview({
       </div>
       {open ? (
         <iframe
-          key={style}
+          key={`${style}-${reloadKey}`}
           src={src}
           title={`Live preview of ${title} (${style})`}
           loading="lazy"
