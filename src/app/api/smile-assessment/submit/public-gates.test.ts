@@ -128,6 +128,56 @@ describe("smile assessment submit, durable spend ceiling", () => {
   });
 });
 
+describe("smile assessment submit, the per-IP budget identity", () => {
+  // TASK #105. This route read the LEFTMOST x-forwarded-for hop — the one the
+  // browser writes — so both of its per-IP ceilings could be reset by changing a
+  // header. That matters more here than on any other public route in this tree: a
+  // HIGH band drafts a first contact with Claude and sends a real SMS, so the
+  // per-IP cap is a SPEND ceiling, not a table-size one. It now reads the shared
+  // helper (@/lib/http/client-ip), exactly as /next and /step-event do.
+
+  async function ipKeyWith(headers: Record<string, string>): Promise<string> {
+    vi.clearAllMocks();
+    h.consumeBudget.mockResolvedValue(true);
+    await POST(
+      new Request("http://localhost/api/smile-assessment/submit", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(GOOD),
+      }),
+    );
+    const key = h.consumeBudget.mock.calls
+      .map((c) => c[0] as string)
+      .find((k) => k.startsWith("smile-submit-ip:"));
+    return key ?? `MISSING(${JSON.stringify(headers)})`;
+  }
+
+  it("keys two spoofed x-forwarded-for prefixes from one real client to the SAME budget", async () => {
+    const a = await ipKeyWith({ "x-forwarded-for": "1.2.3.4, 9.9.9.9" });
+    const b = await ipKeyWith({ "x-forwarded-for": "5.6.7.8, 9.9.9.9" });
+
+    expect(a).toBe("smile-submit-ip:9.9.9.9");
+    expect(b).toBe(a);
+  });
+
+  it("still separates two genuinely different clients behind the same spoofed prefix", async () => {
+    const a = await ipKeyWith({ "x-forwarded-for": "9.9.9.9, 1.1.1.1" });
+    const b = await ipKeyWith({ "x-forwarded-for": "9.9.9.9, 2.2.2.2" });
+
+    expect(a).toBe("smile-submit-ip:1.1.1.1");
+    expect(b).toBe("smile-submit-ip:2.2.2.2");
+  });
+
+  it("prefers the platform-set x-real-ip over anything the caller forwarded", async () => {
+    const k = await ipKeyWith({ "x-real-ip": "192.0.2.10", "x-forwarded-for": "1.2.3.4, 5.6.7.8" });
+    expect(k).toBe("smile-submit-ip:192.0.2.10");
+  });
+
+  it("falls back to a single shared key when there is no address at all", async () => {
+    expect(await ipKeyWith({})).toBe("smile-submit-ip:unknown");
+  });
+});
+
 describe("smile assessment submit, Speed-to-lead kill switch", () => {
   it("records the response but never bridges when speed-to-lead is off", async () => {
     h.isSystemEnabledForSend.mockImplementation(async (..._a: unknown[]) => _a[1] !== "speed-to-lead");

@@ -23,18 +23,29 @@
 
 import {
   FLOW_BANDS,
+  FLOW_BLOCK_KINDS,
   FLOW_LIMITS,
+  acceptsBlocks,
+  blockCopyFields,
+  blocksOf,
   cloneFlowBlock,
   edgesFrom,
   isFlowBand,
+  isFlowBlockKind,
   nodeMap,
+  optionImagesOf,
+  withRequiredSchemaVersion,
   type FlowBand,
+  type FlowBlock,
+  type FlowBlockKind,
   type FlowEdge,
   type FlowGraph,
   type FlowNode,
+  type FlowOptionImage,
 } from "./flow";
 import { validateFlow } from "./flow-validate";
 import { QUIZ_QUESTIONS, questionById } from "./quiz";
+import { assessImage, assessImagesForSlot } from "@/lib/assess/image-library";
 
 export type FlowEditResult =
   | { ok: true; graph: FlowGraph }
@@ -646,6 +657,565 @@ export function setWelcomeCopy(
   if (i) next.intro = i;
   if (node.blocks) next.blocks = node.blocks.map(cloneFlowBlock);
   return ok(replaceNode(graph, nodeId, next));
+}
+
+// ---------------------------------------------------------------------------
+// CONTENT BLOCKS, AS EDITS (A2's builder half).
+//
+// The model landed with A2; nothing could put a block on a screen but the
+// generator and a hand-written fixture. These are the ops the rail drives, and
+// every one of them holds a rule that is wrong the first time it is written in
+// JSX instead:
+//
+//   A GRAPH THESE OPS BUILT IS ALWAYS READABLE. normaliseFlow is all-or-nothing
+//   (flow.ts:343-357): ONE blank string anywhere in a block and the whole funnel
+//   comes back from the save as "the funnel could not be read as a graph", which
+//   is a message about nothing an owner can find. So a block field is never
+//   allowed to become empty here - clearing one is REFUSED, in words, naming the
+//   remedy (remove the block). Rule 12's block_text_empty stays as the floor for
+//   graphs that did not come through here (the generator, a stored row, an
+//   importer); it is not the primary defence for an owner typing in a box.
+//
+//   ADDING CONTENT BUMPS THE SCHEMA VERSION. A funnel drawn before A2 is stored
+//   at v1. Put a block on it without bumping and rule 1 refuses the save with
+//   `schema_version_too_old` - the graph is fine, the version line is not. Every
+//   writer below ends in withRequiredSchemaVersion for that reason, and it never
+//   walks back down (flow.ts:223-232).
+//
+//   NOTHING HERE INVENTS A TESTIMONIAL. `starterBlock` returns null for the
+//   testimonial kind, on purpose and permanently: there is no honest default for
+//   a quote a practice has not given us. The rail asks for the words; this layer
+//   refuses to make a block without them (flow-inspect.ts). That is the charter
+//   rule made structural rather than remembered.
+//
+//   AND NOTHING HERE INVENTS A CLAIM. The starter copy for the other kinds is
+//   deliberately about the FUNNEL ("about 30 seconds", "the practice replies
+//   about your enquiry"), never about the practice: seeding "Open Saturdays" is
+//   the same failure as seeding a quote, one save away from being published
+//   untrue. The picture starter is the manifest's own alt text, which is a
+//   description of a file we ship.
+// ---------------------------------------------------------------------------
+
+/** Owner-facing names for the four kinds. Used in refusals and by the picker. */
+export const BLOCK_LABELS: Readonly<Record<FlowBlockKind, string>> = {
+  "trust-strip": "trust strip",
+  testimonial: "testimonial",
+  faq: "questions and answers",
+  image: "picture",
+};
+
+/**
+ * Rule 12's own minimums, restated because FLOW_LIMITS carries caps only
+ * (flow-validate.ts:189,199 hold the floors). flow-edit.test.ts pins both against
+ * validateFlow itself, so a change there goes red here rather than letting the
+ * rail remove a chip the validator then refuses to publish.
+ */
+const MIN_CHIPS = 1;
+const MIN_FAQ_ITEMS = 2;
+
+/** The starter trust strip's one chip. About the funnel, never about the practice. */
+const STARTER_CHIP = "Takes about 30 seconds";
+
+/**
+ * The starter faq. Both answers are true of every funnel on this platform: the
+ * length is the assessment's own intro line (flow-phone-screen.ts:199) and the
+ * follow-up is its consent line (:234). Neither says anything about a practice
+ * that a practice has not said.
+ */
+const STARTER_FAQ: readonly { q: string; a: string }[] = [
+  { q: "How long does this take?", a: "About 30 seconds. A few quick questions, then where to send your answer." },
+  { q: "What happens after I send it?", a: "The practice gets in touch about your enquiry, using the details you leave." },
+];
+
+type BlockSite =
+  | { ok: true; node: FlowNode; blocks: FlowBlock[] }
+  | { ok: false; reason: string };
+
+/**
+ * The screen's blocks as a COPY, or why it cannot carry any. The copy matters:
+ * every writer below edits the list it is handed, and handing back the stored
+ * array would make an edit mutate the draft graph in place.
+ */
+function blockSite(graph: FlowGraph, nodeId: string): BlockSite {
+  const node = nodeMap(graph).get(nodeId);
+  if (!node) return { ok: false, reason: "That step is no longer there." };
+  if (!acceptsBlocks(node.kind)) {
+    return {
+      ok: false,
+      reason:
+        node.kind === "question"
+          ? "A question screen’s job is the one question, so it carries no content blocks. Put them on the opening screen or a result screen."
+          : "The contact screen’s job is the form, so it carries no content blocks. Put them on the opening screen or a result screen.",
+    };
+  }
+  return { ok: true, node, blocks: blocksOf(node).map(cloneFlowBlock) };
+}
+
+/** The screen rebuilt around a new block list. Field by field, per the note above. */
+function withBlocks(graph: FlowGraph, node: FlowNode, blocks: FlowBlock[]): FlowGraph {
+  if (node.kind === "welcome") {
+    const next: FlowNode = { id: node.id, kind: "welcome" };
+    if (node.headline) next.headline = node.headline;
+    if (node.intro) next.intro = node.intro;
+    if (blocks.length > 0) next.blocks = blocks;
+    return withRequiredSchemaVersion(replaceNode(graph, node.id, next));
+  }
+  if (node.kind === "outcome") {
+    const next: FlowNode = { id: node.id, kind: "outcome", band: node.band };
+    if (node.headline) next.headline = node.headline;
+    if (blocks.length > 0) next.blocks = blocks;
+    return withRequiredSchemaVersion(replaceNode(graph, node.id, next));
+  }
+  return graph; // unreachable: blockSite has already refused every other kind
+}
+
+/**
+ * The content a NEW block of this kind starts with, or null when there is no
+ * honest one. Null is not an error state: it is the answer for a testimonial
+ * (nobody but the practice may write a quote) and for a trust strip whose
+ * practice name we were not given.
+ */
+export function starterBlock(kind: FlowBlockKind, practiceName?: string): FlowBlock | null {
+  switch (kind) {
+    case "trust-strip": {
+      const name = (practiceName ?? "").trim().slice(0, FLOW_LIMITS.practiceName);
+      return name ? { kind: "trust-strip", practiceName: name, chips: [STARTER_CHIP] } : null;
+    }
+    case "testimonial":
+      return null;
+    case "faq":
+      return { kind: "faq", items: STARTER_FAQ.map((i) => ({ q: i.q, a: i.a })) };
+    case "image": {
+      // The manifest's first screen picture, with the manifest's own alt: a
+      // description of a file we ship, so it is true before it is edited.
+      const first = assessImagesForSlot("hero")[0];
+      return first ? { kind: "image", image: first.key, alt: first.alt } : null;
+    }
+  }
+}
+
+/**
+ * The kinds this screen could still take: the ones it does not already have.
+ * Empty for a screen that cannot carry blocks at all, and for one at the cap.
+ *
+ * IT IS RULE 12 READ BACK, not a second copy of it: block_duplicate_kind is the
+ * failure this list makes unreachable from the rail, and blocksPerNode is the
+ * other one. A picker that offered a kind addBlock would refuse is a picker that
+ * lies.
+ */
+export function addableBlockKinds(graph: FlowGraph, nodeId: string): FlowBlockKind[] {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return [];
+  if (site.blocks.length >= FLOW_LIMITS.blocksPerNode) return [];
+  const taken = new Set(site.blocks.map((b) => b.kind));
+  return FLOW_BLOCK_KINDS.filter((k) => !taken.has(k));
+}
+
+export function addBlock(graph: FlowGraph, nodeId: string, block: FlowBlock): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  if (!isFlowBlockKind(block.kind)) {
+    return no(`“${String(block.kind)}” is not a content block this build can render.`);
+  }
+  if (site.blocks.some((b) => b.kind === block.kind)) {
+    return no(
+      `This screen already has a ${BLOCK_LABELS[block.kind]} block. Change the one it has, or remove it first.`,
+    );
+  }
+  if (site.blocks.length >= FLOW_LIMITS.blocksPerNode) {
+    return no(`A screen can hold at most ${FLOW_LIMITS.blocksPerNode} content blocks.`);
+  }
+  // Blank copy would make the SAVE unreadable rather than merely invalid, so the
+  // block is checked here as well as by rule 12. A caller assembling one by hand
+  // (the rail's testimonial form) gets told which line is missing.
+  for (const f of blockCopyFields(block)) {
+    if (f.text.trim() === "") return no(`A ${BLOCK_LABELS[block.kind]} needs its ${f.field} filled in.`);
+  }
+  return ok(withBlocks(graph, site.node, [...site.blocks, cloneFlowBlock(block)]));
+}
+
+export function removeBlock(graph: FlowGraph, nodeId: string, index: number): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  if (!site.blocks[index]) return no("That block is no longer on this screen.");
+  return ok(withBlocks(graph, site.node, site.blocks.filter((_, i) => i !== index)));
+}
+
+/**
+ * Move a block up or down the screen. Authored order IS render order - blockViews
+ * keeps it (flow-block-view.ts:129) and both the public quiz and the phone minis
+ * map over what it returns - so this is the only control that decides whether the
+ * trust strip sits above the faq or below it.
+ *
+ * Refuses at the ends rather than wrapping, and says which end, for the same
+ * reason moveEdge does: a button that silently does nothing reads as broken.
+ */
+export function moveBlock(
+  graph: FlowGraph,
+  nodeId: string,
+  index: number,
+  delta: number,
+): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  const block = site.blocks[index];
+  if (!block) return no("That block is no longer on this screen.");
+  if (delta === 0) return ok(graph);
+  const to = index + (delta > 0 ? 1 : -1);
+  if (to < 0) return no("That block is already at the top of this screen.");
+  if (to >= site.blocks.length) return no("That block is already at the bottom of this screen.");
+  const blocks = site.blocks.map((b, i) => (i === index ? site.blocks[to]! : i === to ? block : b));
+  return ok(withBlocks(graph, site.node, blocks));
+}
+
+/** A `chips[2]`-style path, as its index. Null when the path is not that list. */
+function listIndex(field: string, name: string): number | null {
+  const m = new RegExp(`^${name}\\[(\\d+)\\]$`).exec(field);
+  if (!m) return null;
+  const at = Number(m[1]);
+  return Number.isInteger(at) ? at : null;
+}
+
+/**
+ * One authored line of a block, replaced. The field path is blockCopyFields' own
+ * (flow.ts:187) - THE list of what a block carries, which rule 12 and the
+ * compliance scan already read. A field it does not name cannot be written here,
+ * so a line can never reach a patient uncapped or unscanned.
+ */
+function withBlockField(block: FlowBlock, field: string, value: string): FlowBlock | null {
+  switch (block.kind) {
+    case "trust-strip": {
+      if (field === "practiceName") {
+        return { kind: "trust-strip", practiceName: value, chips: [...block.chips] };
+      }
+      const at = listIndex(field, "chips");
+      if (at === null || at >= block.chips.length) return null;
+      return {
+        kind: "trust-strip",
+        practiceName: block.practiceName,
+        chips: block.chips.map((c, i) => (i === at ? value : c)),
+      };
+    }
+    case "testimonial":
+      if (field === "quote") return { kind: "testimonial", quote: value, attribution: block.attribution };
+      if (field === "attribution") return { kind: "testimonial", quote: block.quote, attribution: value };
+      return null;
+    case "faq": {
+      const m = /^items\[(\d+)\]\.([qa])$/.exec(field);
+      if (!m) return null;
+      const at = Number(m[1]);
+      if (!Number.isInteger(at) || at >= block.items.length) return null;
+      const which = m[2];
+      return {
+        kind: "faq",
+        items: block.items.map((it, i) =>
+          i === at
+            ? { q: which === "q" ? value : it.q, a: which === "a" ? value : it.a }
+            : { q: it.q, a: it.a },
+        ),
+      };
+    }
+    case "image":
+      // The picture REFERENCE is not copy (flow.ts:184-186), so it is not writable
+      // from here. setBlockImage holds it, against the manifest.
+      if (field === "alt") return { kind: "image", image: block.image, alt: value };
+      return null;
+  }
+}
+
+export function setBlockText(
+  graph: FlowGraph,
+  nodeId: string,
+  index: number,
+  field: string,
+  text: string,
+): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  const block = site.blocks[index];
+  if (!block) return no("That block is no longer on this screen.");
+  const spec = blockCopyFields(block).find((f) => f.field === field);
+  if (!spec) return no(`“${field}” is not something a ${BLOCK_LABELS[block.kind]} block carries.`);
+
+  const value = text.trim().slice(0, spec.max);
+  if (value === "") {
+    return no(
+      `Every line of a ${BLOCK_LABELS[block.kind]} block is read by a patient, so none of them can be left empty. Remove the block if it is not wanted.`,
+    );
+  }
+  const next = withBlockField(block, field, value);
+  if (!next) return no(`“${field}” is not something a ${BLOCK_LABELS[block.kind]} block carries.`);
+  return ok(withBlocks(graph, site.node, site.blocks.map((b, i) => (i === index ? next : b))));
+}
+
+/**
+ * Point a picture block at a different picture from the curated manifest.
+ *
+ * THE DESCRIPTION FOLLOWS THE PICTURE, always, and that is a decision rather than
+ * a convenience. An alt is a description OF the file; carrying the old one across
+ * a swap leaves a screen reader saying "a hygiene appointment at the practice"
+ * over a photograph of aligners, which is worse than saying nothing. The owner's
+ * own wording is one field away, under the picker, and it is about the picture
+ * they can now see.
+ */
+export function setBlockImage(
+  graph: FlowGraph,
+  nodeId: string,
+  index: number,
+  key: string,
+): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  const block = site.blocks[index];
+  if (!block) return no("That block is no longer on this screen.");
+  if (block.kind !== "image") return no(`A ${BLOCK_LABELS[block.kind]} block has no picture.`);
+
+  const image = assessImage(key);
+  if (!image) {
+    return no(
+      `“${key}” is not a picture in the library. A funnel can only use the curated pictures, never a link.`,
+    );
+  }
+  if (image.slot !== "hero") {
+    return no(
+      `“${key}” is an answer tile (${image.width}x${image.height}); a screen needs a picture made for a screen.`,
+    );
+  }
+  const next: FlowBlock = { kind: "image", image: image.key, alt: image.alt };
+  return ok(withBlocks(graph, site.node, site.blocks.map((b, i) => (i === index ? next : b))));
+}
+
+/** One more reassurance chip on a trust strip. The words are the owner's. */
+export function addBlockChip(
+  graph: FlowGraph,
+  nodeId: string,
+  index: number,
+  text: string,
+): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  const block = site.blocks[index];
+  if (!block) return no("That block is no longer on this screen.");
+  if (block.kind !== "trust-strip") return no(`A ${BLOCK_LABELS[block.kind]} block has no chips.`);
+  const chip = text.trim().slice(0, FLOW_LIMITS.chipLabel);
+  if (chip === "") return no("Type the chip before adding it: a blank one renders as a hole in the row.");
+  if (block.chips.length >= FLOW_LIMITS.chips) {
+    return no(`A trust strip can hold at most ${FLOW_LIMITS.chips} chips.`);
+  }
+  const next: FlowBlock = {
+    kind: "trust-strip",
+    practiceName: block.practiceName,
+    chips: [...block.chips, chip],
+  };
+  return ok(withBlocks(graph, site.node, site.blocks.map((b, i) => (i === index ? next : b))));
+}
+
+/** One more question-and-answer pair. Both halves are required: half a faq is noise. */
+export function addBlockFaqItem(
+  graph: FlowGraph,
+  nodeId: string,
+  index: number,
+  q: string,
+  a: string,
+): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  const block = site.blocks[index];
+  if (!block) return no("That block is no longer on this screen.");
+  if (block.kind !== "faq") return no(`A ${BLOCK_LABELS[block.kind]} block has no questions.`);
+  const question = q.trim().slice(0, FLOW_LIMITS.faqQuestion);
+  const answer = a.trim().slice(0, FLOW_LIMITS.faqAnswer);
+  if (question === "" || answer === "") {
+    return no("A question needs an answer, and an answer needs a question. Type both, then add it.");
+  }
+  if (block.items.length >= FLOW_LIMITS.faqItems) {
+    return no(`This block can hold at most ${FLOW_LIMITS.faqItems} questions.`);
+  }
+  const next: FlowBlock = {
+    kind: "faq",
+    items: [...block.items.map((it) => ({ q: it.q, a: it.a })), { q: question, a: answer }],
+  };
+  return ok(withBlocks(graph, site.node, site.blocks.map((b, i) => (i === index ? next : b))));
+}
+
+/**
+ * Drop one chip or one faq pair. It refuses to take the list below rule 12's
+ * floor rather than letting the owner make a funnel that cannot be published from
+ * a control two rows from the one that would fix it - the same shape as the
+ * contact step's missing band route (Branches, flow-inspector.tsx).
+ */
+export function removeBlockItem(
+  graph: FlowGraph,
+  nodeId: string,
+  index: number,
+  at: number,
+): FlowEditResult {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return no(site.reason);
+  const block = site.blocks[index];
+  if (!block) return no("That block is no longer on this screen.");
+
+  if (block.kind === "trust-strip") {
+    if (at < 0 || at >= block.chips.length) return no("That chip is no longer there.");
+    if (block.chips.length <= MIN_CHIPS) {
+      return no("A trust strip needs at least one chip. Remove the whole block instead.");
+    }
+    const next: FlowBlock = {
+      kind: "trust-strip",
+      practiceName: block.practiceName,
+      chips: block.chips.filter((_, i) => i !== at),
+    };
+    return ok(withBlocks(graph, site.node, site.blocks.map((b, i) => (i === index ? next : b))));
+  }
+  if (block.kind === "faq") {
+    if (at < 0 || at >= block.items.length) return no("That question is no longer there.");
+    if (block.items.length <= MIN_FAQ_ITEMS) {
+      return no(
+        `A questions-and-answers block needs at least ${MIN_FAQ_ITEMS} questions. Remove the whole block instead.`,
+      );
+    }
+    const next: FlowBlock = {
+      kind: "faq",
+      items: block.items.filter((_, i) => i !== at).map((it) => ({ q: it.q, a: it.a })),
+    };
+    return ok(withBlocks(graph, site.node, site.blocks.map((b, i) => (i === index ? next : b))));
+  }
+  return no(`A ${BLOCK_LABELS[block.kind]} block has no list to remove from.`);
+}
+
+// ---------------------------------------------------------------------------
+// ANSWER-CARD PICTURES (rule 14's editing half).
+// ---------------------------------------------------------------------------
+
+/** One answer of a question step, and the picture on it. The rail's row. */
+export interface OptionImageRow {
+  value: string;
+  label: string;
+  /** The manifest key on this answer right now, or null for an unpictured one. */
+  image: string | null;
+  /**
+   * True for the ONE answer rule 14 lets go without a picture: the last one,
+   * which is where every escape hatch in the bank is written ("I'm not sure").
+   */
+  mayGoWithout: boolean;
+}
+
+/**
+ * Every answer of this step with its picture, in the order the patient sees them.
+ * Keyed off the QUESTION rather than off the stored list, so an answer with no
+ * picture still has a row to put one on - which is the whole point of the picker.
+ *
+ * FIRST ENTRY WINS on a repeated value, matching optionImageViews
+ * (flow-block-view.ts:148) and nodeMap: a second picture for one answer is a
+ * mistake rather than an override, and the drawing and the editor must agree
+ * about which of the two is showing.
+ */
+export function optionImageRows(graph: FlowGraph, nodeId: string): OptionImageRow[] {
+  const node = nodeMap(graph).get(nodeId);
+  if (!node || node.kind !== "question") return [];
+  const answers = routableAnswers(node);
+  const byValue = new Map<string, string>();
+  for (const o of optionImagesOf(node)) if (!byValue.has(o.value)) byValue.set(o.value, o.image);
+  return answers.map((a, i) => ({
+    value: a.value,
+    label: a.label,
+    image: byValue.get(a.value) ?? null,
+    mayGoWithout: i === answers.length - 1,
+  }));
+}
+
+/** The question node rebuilt around a new picture list. Field by field, as ever. */
+function withOptionImages(
+  graph: FlowGraph,
+  node: Extract<FlowNode, { kind: "question" }>,
+  images: FlowOptionImage[],
+): FlowGraph {
+  const next: FlowNode = { id: node.id, kind: "question", questionId: node.questionId };
+  if (node.transition) next.transition = node.transition;
+  if (images.length > 0) next.optionImages = images;
+  return withRequiredSchemaVersion(replaceNode(graph, node.id, next));
+}
+
+/**
+ * Put a picture on one answer, or change the one it has.
+ *
+ * IT DOES NOT REFUSE A RAGGED GRID, deliberately. Pictures are assigned one
+ * answer at a time, so every grid is ragged on the way to being complete, and a
+ * control that refused the first one would refuse all of them. Rule 14 is the
+ * judgement, it names the answers still missing one, and the rail shows that
+ * message live off validateFlow - so the owner is told what is left rather than
+ * stopped from starting.
+ */
+export function setOptionImage(
+  graph: FlowGraph,
+  nodeId: string,
+  value: string,
+  key: string,
+): FlowEditResult {
+  const node = nodeMap(graph).get(nodeId);
+  if (!node || node.kind !== "question") return no("That question step is no longer there.");
+  if (!routableAnswers(node).some((a) => a.value === value)) {
+    return no(`“${value}” is not an answer of the question this step asks.`);
+  }
+  const image = assessImage(key);
+  if (!image) {
+    return no(
+      `“${key}” is not a picture in the library. A funnel can only use the curated pictures, never a link.`,
+    );
+  }
+  if (image.slot !== "answer") {
+    return no(
+      `“${key}” is a screen picture (${image.width}x${image.height}); an answer card needs a tile made for a card.`,
+    );
+  }
+
+  const current = optionImagesOf(node);
+  const held = current.some((o) => o.value === value);
+  if (!held && current.length >= FLOW_LIMITS.optionImages) {
+    return no(`A question can carry at most ${FLOW_LIMITS.optionImages} answer pictures.`);
+  }
+  // Replaced IN PLACE when the answer already had one: the stored order is what
+  // rule 14 walks and what the owner just read down the rail.
+  const images = held
+    ? current.map((o) => (o.value === value ? { value: o.value, image: image.key } : { value: o.value, image: o.image }))
+    : [...current.map((o) => ({ value: o.value, image: o.image })), { value, image: image.key }];
+  return ok(withOptionImages(graph, node, images));
+}
+
+export function removeOptionImage(graph: FlowGraph, nodeId: string, value: string): FlowEditResult {
+  const node = nodeMap(graph).get(nodeId);
+  if (!node || node.kind !== "question") return no("That question step is no longer there.");
+  const current = optionImagesOf(node);
+  if (!current.some((o) => o.value === value)) return no("That answer has no picture on it.");
+  return ok(
+    withOptionImages(
+      graph,
+      node,
+      current.filter((o) => o.value !== value).map((o) => ({ value: o.value, image: o.image })),
+    ),
+  );
+}
+
+/**
+ * WHAT CHANGING THE QUESTION WOULD COST, in words, BEFORE it is changed.
+ *
+ * setNodeQuestion drops answer-card pictures silently, and it has to: they name
+ * option values of the question being swapped away, so rule 14 would fail on
+ * every one of them (setNodeQuestion's own header). Silently is the problem. The
+ * rail has no confirm dialog anywhere - its whole pattern is "refuse, in words" -
+ * and this is the half of that pattern for an edit that is allowed: say what will
+ * go, on the picker, while the old question is still selected.
+ *
+ * Null when nothing would be lost, which is the usual case.
+ */
+export function questionSwapWarning(graph: FlowGraph, nodeId: string): string | null {
+  const node = nodeMap(graph).get(nodeId);
+  if (!node || node.kind !== "question") return null;
+  const count = optionImagesOf(node).length;
+  if (count === 0) return null;
+  return count === 1
+    ? "Changing the question removes the answer picture on this screen: it belongs to an answer the new question does not have."
+    : `Changing the question removes the ${count} answer pictures on this screen: they belong to answers the new question does not have.`;
 }
 
 // ---------------------------------------------------------------------------

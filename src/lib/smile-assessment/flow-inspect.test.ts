@@ -10,12 +10,14 @@
 // itself) were already wrong there.
 
 import { describe, it, expect } from "vitest";
-import { type FlowGraph, type FlowNode } from "./flow";
+import { type FlowBlock, type FlowGraph, type FlowNode } from "./flow";
 import { validateFlow, type FlowValidationFailure } from "./flow-validate";
 import { templateForGoal } from "./flow-templates";
-import { setEdgeAnswer } from "./flow-edit";
+import { setEdgeAnswer, starterBlock } from "./flow-edit";
 import {
   applyInspectorEdit,
+  blockIssues,
+  blockIssuesFor,
   edgeIssues,
   edgeWhere,
   isNodeSelected,
@@ -511,5 +513,317 @@ describe("a validation failure is shown against the control that fixes it", () =
     const g = invisalign();
     expect(nodeIssues(g, validateFlow(g).failures, "q-timeline")).toEqual([]);
     expect(edgeIssues(g, validateFlow(g).failures, 99)).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 5. THE BLOCK CONTROLS. A2's furniture, driven from the rail.
+ *
+ * The intents here carry WORDS rather than finished blocks, because the one rule
+ * this lane turns on is what a new block is allowed to say. A rail that assembled
+ * the block itself would put that rule in JSX, where the charter's "AI never
+ * invents a testimonial" becomes a disabled attribute on a button.
+ * ------------------------------------------------------------------------- */
+
+const blocksOn = (graph: FlowGraph, id: string): FlowBlock[] => {
+  const n = nodeOf(graph, id);
+  return n.kind === "welcome" || n.kind === "outcome" ? (n.blocks ?? []) : [];
+};
+
+describe("adding a content block from the rail", () => {
+  // THE CHARTER RULE. MUTATION: let this through with a starter quote and the
+  // funnel can be published carrying words no patient ever said.
+  it("refuses a testimonial with no quote, and says whose words it has to be", () => {
+    const g = invisalign();
+    const reason = refused(
+      applyInspectorEdit(g, at("welcome"), { kind: "add-block", blockKind: "testimonial" }),
+    );
+    expect(reason).toContain("the practice already holds");
+    expect(reason).toContain("nothing here writes one for you");
+
+    // Half of it is still none of it: an anonymous quote is an unattributed claim.
+    expect(
+      refused(
+        applyInspectorEdit(g, at("welcome"), {
+          kind: "add-block",
+          blockKind: "testimonial",
+          quote: "They explained every step.",
+        }),
+      ),
+    ).toContain("nothing here writes one for you");
+  });
+
+  it("takes a testimonial the practice typed, verbatim", () => {
+    const g = must(
+      applyInspectorEdit(invisalign(), at("welcome"), {
+        kind: "add-block",
+        blockKind: "testimonial",
+        quote: "  They explained every step before starting.  ",
+        attribution: " Jo B. ",
+      }),
+    );
+    expect(blocksOn(g, "welcome")).toEqual([
+      { kind: "testimonial", quote: "They explained every step before starting.", attribution: "Jo B." },
+    ]);
+    expect(validateFlow(g).ok).toBe(true);
+  });
+
+  it("starts a trust strip only when it has been given a name to put on it", () => {
+    const g = invisalign();
+    expect(
+      refused(applyInspectorEdit(g, at("welcome"), { kind: "add-block", blockKind: "trust-strip" })),
+    ).toContain("practice’s name");
+
+    const named = must(
+      applyInspectorEdit(g, at("welcome"), {
+        kind: "add-block",
+        blockKind: "trust-strip",
+        practiceName: "Vitality Dental",
+      }),
+    );
+    expect(blocksOn(named, "welcome")[0]).toEqual(
+      starterBlock("trust-strip", "Vitality Dental"),
+    );
+  });
+
+  it("adds the kinds that need no words of their own straight away", () => {
+    const faq = must(applyInspectorEdit(invisalign(), at("welcome"), { kind: "add-block", blockKind: "faq" }));
+    expect(blocksOn(faq, "welcome")[0]).toEqual(starterBlock("faq"));
+    const picture = must(applyInspectorEdit(faq, at("result-high"), { kind: "add-block", blockKind: "image" }));
+    expect(blocksOn(picture, "result-high")[0]).toEqual(starterBlock("image"));
+    expect(validateFlow(picture).ok).toBe(true);
+  });
+
+  it("refuses a kind this build cannot render, rather than guessing", () => {
+    expect(
+      refused(
+        applyInspectorEdit(invisalign(), at("welcome"), {
+          kind: "add-block",
+          blockKind: "video" as never,
+        }),
+      ),
+    ).toContain("not a content block");
+  });
+
+  // THE SELECTION RULE, which every node-scoped intent shares: a block edit fired
+  // against a CONNECTION (or a step that has since gone) refuses in words rather
+  // than editing whatever happens to be first.
+  it("refuses when the rail is not pointed at a screen", () => {
+    const g = invisalign();
+    expect(refused(applyInspectorEdit(g, { kind: "edge", index: 0 }, { kind: "add-block", blockKind: "faq" }))).toContain(
+      "Nothing is selected",
+    );
+    expect(refused(applyInspectorEdit(g, at("gone"), { kind: "remove-block", index: 0 }))).toContain(
+      "no longer there",
+    );
+  });
+});
+
+describe("editing a block from the rail", () => {
+  const withFaq = (): FlowGraph =>
+    must(applyInspectorEdit(invisalign(), at("welcome"), { kind: "add-block", blockKind: "faq" }));
+
+  it("routes each control to the op that holds its rule", () => {
+    let g = withFaq();
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "block-faq-add", index: 0, q: "Is it far?", a: "Ten minutes from the station." }));
+    expect((blocksOn(g, "welcome")[0] as { items: unknown[] }).items).toHaveLength(3);
+
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "block-text", index: 0, field: "items[2].a", text: "Five minutes from the station." }));
+    expect(blocksOn(g, "welcome")[0]).toMatchObject({ items: [{}, {}, { a: "Five minutes from the station." }] });
+
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "block-item-remove", index: 0, at: 0 }));
+    expect((blocksOn(g, "welcome")[0] as { items: unknown[] }).items).toHaveLength(2);
+
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "add-block", blockKind: "image" }));
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "block-image", index: 1, image: "screens/fresh-smile" }));
+    expect(blocksOn(g, "welcome")[1]).toMatchObject({ kind: "image", image: "screens/fresh-smile" });
+
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "move-block", index: 1, delta: -1 }));
+    expect(blocksOn(g, "welcome").map((b) => b.kind)).toEqual(["image", "faq"]);
+
+    g = must(applyInspectorEdit(g, at("welcome"), { kind: "remove-block", index: 0 }));
+    expect(blocksOn(g, "welcome").map((b) => b.kind)).toEqual(["faq"]);
+    expect(validateFlow(g).ok).toBe(true);
+  });
+
+  it("carries a chip's words through and refuses a blank one", () => {
+    const strip = must(
+      applyInspectorEdit(invisalign(), at("welcome"), {
+        kind: "add-block",
+        blockKind: "trust-strip",
+        practiceName: "Vitality Dental",
+      }),
+    );
+    expect(refused(applyInspectorEdit(strip, at("welcome"), { kind: "block-chip-add", index: 0, text: " " }))).toContain(
+      "blank",
+    );
+    const g = must(applyInspectorEdit(strip, at("welcome"), { kind: "block-chip-add", index: 0, text: "Open Saturdays" }));
+    expect(blocksOn(g, "welcome")[0]).toMatchObject({ chips: ["Takes about 30 seconds", "Open Saturdays"] });
+  });
+
+  // A block edit does not move the ground under the selection - unlike an
+  // insertion or a removal, which is what selectionAfterEdit exists for. Standing
+  // still is the right answer: the owner is editing THIS screen.
+  it("leaves the selection on the screen being edited", () => {
+    const g = withFaq();
+    const here = at("welcome");
+    for (const edit of [
+      { kind: "add-block", blockKind: "image" },
+      { kind: "block-text", index: 0, field: "items[0].q", text: "Changed?" },
+      { kind: "remove-block", index: 0 },
+      { kind: "move-block", index: 0, delta: 1 },
+      { kind: "option-image", value: "crowded", image: "conditions/crowded" },
+    ] as InspectorEdit[]) {
+      expect(selectionAfterEdit(here, edit, g)).toEqual(here);
+    }
+  });
+
+  it("hands back a NEW graph and never touches the one it was given", () => {
+    const g = withFaq();
+    unchanged(g, { kind: "block-text", index: 0, field: "items[0].q", text: "New" }, at("welcome"));
+    unchanged(g, { kind: "remove-block", index: 0 }, at("welcome"));
+    unchanged(g, { kind: "option-image", value: "crowded", image: "conditions/crowded" }, at("q-smile_concern"));
+  });
+});
+
+describe("answer-card pictures from the rail", () => {
+  it("assigns and removes one, through the ops that check the manifest", () => {
+    const g = must(
+      applyInspectorEdit(invisalign(), at("q-smile_concern"), {
+        kind: "option-image",
+        value: "crowded",
+        image: "conditions/crowded",
+      }),
+    );
+    const node = nodeOf(g, "q-smile_concern");
+    expect(node.kind === "question" ? node.optionImages : null).toEqual([
+      { value: "crowded", image: "conditions/crowded" },
+    ]);
+
+    expect(
+      refused(
+        applyInspectorEdit(g, at("q-smile_concern"), {
+          kind: "option-image",
+          value: "crowded",
+          image: "screens/aligners",
+        }),
+      ),
+    ).toContain("screen picture");
+
+    const bare = must(
+      applyInspectorEdit(g, at("q-smile_concern"), { kind: "option-image-remove", value: "crowded" }),
+    );
+    const after = nodeOf(bare, "q-smile_concern");
+    expect(after.kind === "question" ? after.optionImages : undefined).toBeUndefined();
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 6. WHERE A BLOCK FAILURE BELONGS IN THE RAIL.
+ * ------------------------------------------------------------------------- */
+
+/** A funnel whose welcome screen carries two genuinely broken blocks. */
+function withBrokenBlocks(): FlowGraph {
+  const g = invisalign();
+  return {
+    ...g,
+    nodes: g.nodes.map((n) =>
+      n.id === "welcome"
+        ? {
+            ...n,
+            blocks: [
+              // rule 12: a faq needs 2 to 6 questions. Named on the BLOCK.
+              { kind: "faq", items: [{ q: "Only one", a: "Answer" }] },
+              // rule 13: named on the block's `image` LINE.
+              { kind: "image", image: "screens/does-not-exist", alt: "A picture" },
+            ],
+          }
+        : n,
+    ),
+  } as FlowGraph;
+}
+
+describe("a failure inside a block", () => {
+  it("lands in the blocks section of the step it is on", () => {
+    const g = withBrokenBlocks();
+    const failures = validateFlow(g).failures;
+    const codes = issuesFor(nodeIssues(g, failures, "welcome"), "blocks").map((i) => i.code);
+    expect(codes).toContain("faq_item_count");
+    expect(codes).toContain("image_unknown");
+    // ...and nothing about a block is dumped at the head of the rail instead.
+    expect(issuesFor(nodeIssues(g, failures, "welcome"), "step")).toEqual([]);
+  });
+
+  it("carries the LINE it is about, so the rail can print it under that box", () => {
+    const failures = validateFlow(withBrokenBlocks()).failures;
+
+    const faq = blockIssues(failures, "welcome", 0);
+    expect(faq).toHaveLength(1);
+    expect(faq[0]!.field).toBeNull(); // about the block, not about one line
+    expect(faq[0]!.code).toBe("faq_item_count");
+
+    const picture = blockIssues(failures, "welcome", 1);
+    expect(picture.map((i) => i.field)).toEqual(["image"]);
+    expect(blockIssuesFor(picture, "image")).toHaveLength(1);
+    expect(blockIssuesFor(picture, null)).toEqual([]);
+  });
+
+  // MUTATION: match with startsWith(prefix) alone and block 1 shows block 10's
+  // failures the first time a screen has eleven of them.
+  it("does not confuse blocks[1] with blocks[10]", () => {
+    const failures: FlowValidationFailure[] = [
+      { rule: 12, code: "block_text_empty", where: `node "welcome".blocks[10].quote`, message: "ten" },
+      { rule: 12, code: "faq_item_count", where: `node "welcome".blocks[1]`, message: "one" },
+    ];
+    expect(blockIssues(failures, "welcome", 1).map((i) => i.message)).toEqual(["one"]);
+    expect(blockIssues(failures, "welcome", 10).map((i) => i.message)).toEqual(["ten"]);
+    expect(blockIssues(failures, "someone-else", 1)).toEqual([]);
+  });
+
+  // ONE CODE, TWO SECTIONS. rule 13 reports image_unknown for a screen picture and
+  // for an answer tile alike; only the PATH says which list to print it in.
+  // MUTATION: map by code and a broken answer tile is reported under the blocks.
+  it("tells a screen picture from an answer picture by its path, not its code", () => {
+    const g = invisalign();
+    const broken = {
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === "q-smile_concern"
+          ? { ...n, optionImages: [{ value: "crowded", image: "conditions/does-not-exist" }] }
+          : n,
+      ),
+    } as FlowGraph;
+    const issues = nodeIssues(broken, validateFlow(broken).failures, "q-smile_concern");
+    expect(issuesFor(issues, "answer-images").map((i) => i.code)).toContain("image_unknown");
+    expect(issuesFor(issues, "blocks")).toEqual([]);
+  });
+
+  // Rule 14's ragged message is the ONLY statement of that rule the owner gets -
+  // the op deliberately allows a half-finished grid - so it has to reach the
+  // section the pictures are in rather than the head of the rail.
+  it("puts the ragged-grid rule under the answer pictures, in words", () => {
+    const half = must(
+      applyInspectorEdit(invisalign(), at("q-smile_concern"), {
+        kind: "option-image",
+        value: "crowded",
+        image: "conditions/crowded",
+      }),
+    );
+    const issues = nodeIssues(half, validateFlow(half).failures, "q-smile_concern");
+    const ragged = issuesFor(issues, "answer-images").find((i) => i.code === "option_images_ragged");
+    expect(ragged?.message).toContain("Give every answer a picture");
+    expect(ragged?.message).toContain("unsure");
+  });
+
+  it("puts a misplaced block on the section that would have held it", () => {
+    const g = invisalign();
+    const wrong = {
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === "contact" ? { ...n, blocks: [{ kind: "faq", items: [{ q: "Q", a: "A" }, { q: "Q2", a: "A2" }] }] } : n,
+      ),
+    } as FlowGraph;
+    const issues = nodeIssues(wrong, validateFlow(wrong).failures, "contact");
+    expect(issuesFor(issues, "blocks").map((i) => i.code)).toContain("blocks_wrong_screen");
   });
 });

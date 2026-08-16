@@ -21,6 +21,8 @@ import {
   type ImageView,
 } from "@/lib/smile-assessment/flow-block-view";
 import type { PublicFlow } from "@/lib/smile-assessment/campaign";
+import { stepNumbering, stepIndexOf } from "@/lib/smile-assessment/step-numbering";
+import { createStepBeacon, type StepBeacon } from "@/lib/smile-assessment/step-beacon";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { FunnelBlocks } from "./funnel-blocks";
 import { iconFor } from "./option-icons";
@@ -67,6 +69,13 @@ interface FunnelQuestion {
 
 interface Step {
   question: FunnelQuestion;
+  /**
+   * The GRAPH NODE this screen came from, so the step-drop-off beacon can say
+   * which screen was reached. Absent on the degraded adaptive path, which routes
+   * by the bank alone and has no node — and absence is the signal there: a screen
+   * with no node has no ordinal in the authored funnel and emits nothing.
+   */
+  nodeId?: string;
   /** The warm lead-in above this question (absent on the first screen). */
   transition?: string;
   /**
@@ -105,6 +114,14 @@ interface Props {
   /** The authored funnel, already validated and stripped server-side. */
   flow: PublicFlow;
   /**
+   * Which SAVE of that funnel this is (smile_assessment_campaign.flow_version,
+   * 0078). Step-drop-off rows are scoped to one version, because a tally that
+   * mixes versions averages the funnel an owner just fixed with the one they fixed
+   * it from. Absent means the page did not supply one, and the beacon goes inert
+   * rather than writing rows nobody can attribute.
+   */
+  flowVersion?: number;
+  /**
    * True only for the internal admin live-preview iframe (?preview=1). The funnel
    * tracker no-ops and the final submit is disabled, so an owner clicking through
    * a preview can never record a real enquiry or fire a real text. Honoured here
@@ -112,6 +129,13 @@ interface Props {
    */
   previewMode?: boolean;
 }
+
+/**
+ * previewMode's beacon: every method a no-op, the same shape the funnel tracker
+ * takes there. An owner clicking through the internal live preview must not fill
+ * the practice's own drop-off chart with sessions that were never patients.
+ */
+const INERT_BEACON: StepBeacon = { view: () => {}, flush: () => {} };
 
 /** The bank's opening question, for the degraded path only. */
 function bankFirstStep(): Step {
@@ -149,6 +173,7 @@ export function DeterministicAssessmentQuiz({
   intro,
   practiceName,
   flow,
+  flowVersion,
   previewMode,
 }: Props) {
   // The question wording, by id. Built once: the funnel only ever asks questions
@@ -175,7 +200,11 @@ export function DeterministicAssessmentQuiz({
     // pictures must render the answer rows it rendered before A2, and the
     // difference between "no images" and "an empty images map" is what decides it.
     const images = optionImageViews(walk.node);
-    const step: Step = { question: q, transition: walk.transition ?? undefined };
+    const step: Step = {
+      question: q,
+      nodeId: walk.node.id,
+      transition: walk.transition ?? undefined,
+    };
     if (images.size > 0) step.images = images;
     return step;
   }
@@ -224,6 +253,40 @@ export function DeterministicAssessmentQuiz({
     tracker.track("started");
   }, [tracker]);
 
+  // ---------------------------------------------------------------------------
+  // STEP DROP-OFF (A3), wired here and nowhere else.
+  //
+  // THIS RUNTIME ONLY. The adaptive quiz emits nothing at all: its next question
+  // comes from the model, so there is no fixed set of screens to be the third one
+  // of, and a "step 3" that means a different question for every patient is not a
+  // number a drop-off chart can add up. A funnel a practice DREW has exactly that
+  // fixed set, which is why this feature is deterministic-only.
+  //
+  // THE ORDINAL COMES FROM ONE PLACE, step-numbering.ts, which the guarded read
+  // route also calls to label the chart and to pad it to the funnel's length. Two
+  // derivations would be two numberings, and the disagreement would show up as a
+  // chart quietly describing the wrong screens.
+  //
+  // NO PII. The only things that can leave here are a client slug, a campaign
+  // slug, a version, a per-session nonce and small integers; the call signature
+  // offers nowhere to put anything else (step-events.ts).
+  // ---------------------------------------------------------------------------
+  const numbering = useMemo(() => stepNumbering(flow.graph), [flow.graph]);
+  const [beacon] = useState<StepBeacon>(() =>
+    previewMode
+      ? INERT_BEACON
+      : createStepBeacon({
+          clientSlug,
+          // The generic /assess/<client> quiz never reaches this component, but the
+          // empty string is the honest value if it ever did: no campaign, nothing
+          // to attribute a step to, and createStepBeacon goes inert on it.
+          campaignSlug: campaignSlug ?? "",
+          // -1 is not a version, so a page that forgot to pass one gets an inert
+          // beacon rather than rows filed under a version that does not exist.
+          flowVersion: flowVersion ?? -1,
+        }),
+  );
+
   const current = history[history.length - 1];
   const step = history.length;
 
@@ -241,6 +304,38 @@ export function DeterministicAssessmentQuiz({
   // funnel that opens straight on a question: a question node cannot carry blocks
   // (flow.ts, FLOW_BLOCK_SCREEN_KINDS), so there is nothing to draw.
   const welcomeBlocks = useMemo(() => (welcome ? blockViews(welcome) : []), [welcome]);
+
+  // ONE VIEW PER SCREEN SHOWN, driven off the screen itself rather than off the
+  // handlers that change it. Every way a screen can come up — the opening render,
+  // an answer, Back, a bfcache restore — goes through this one effect, so there is
+  // no route to a screen that forgets to record it. The beacon de-duplicates per
+  // session, so a re-render is free.
+  //
+  // NOTHING WHILE DEGRADED. If walkFlow could not route a session, the component
+  // finishes it on the ADAPTIVE funnel (see the header), and from that point the
+  // screens are the model's rather than the graph's — so there is no ordinal to
+  // give them, and the honest record is the steps this session took while it was
+  // still walking the drawn funnel.
+  useEffect(() => {
+    if (mode !== "flow") return;
+
+    if (phase === "question") {
+      const ordinal = current.nodeId ? stepIndexOf(numbering, current.nodeId) : null;
+      if (ordinal !== null) beacon.view(ordinal);
+      return;
+    }
+
+    if (phase === "contact") {
+      if (numbering.contactStep !== null) beacon.view(numbering.contactStep);
+      return;
+    }
+
+    // "thanks": the result screen, which every band shares. FLUSHED here rather
+    // than left to the debounce — the last screen a session saw is the one the
+    // whole chart is about, and this is the moment we know there will be no more.
+    if (numbering.outcomeStep !== null) beacon.view(numbering.outcomeStep);
+    beacon.flush();
+  }, [phase, current, mode, numbering, beacon]);
 
   const progress = useMemo(() => {
     if (phase === "question") return Math.min(0.9, step / 6) * 100;

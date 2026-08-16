@@ -1,14 +1,17 @@
 // THE BEACON, held at the two seams a pure test of step-events.ts cannot reach:
-// that what it MINTS is what the server ACCEPTS, and that it is still unwired.
+// that what it MINTS is what the server ACCEPTS, and that exactly ONE thing calls
+// it — the deterministic quiz.
 //
-// The second is not ceremony. This module ships exported and uncalled on purpose
-// (the stitch step owns the wiring), and "uncalled" is a claim that decays the
-// moment somebody imports it "just to try it" — at which point a public endpoint
-// starts taking real traffic before the numbering it depends on has been decided.
-// So it is asserted, from the filesystem, rather than remembered.
+// The second is not ceremony. This module writes to a public, unauthenticated
+// endpoint, and the ordinals it posts only mean anything against the numbering in
+// step-numbering.ts. A second importer is how that stops being true: the adaptive
+// quiz, the Guided style or a landing page would each be emitting step numbers
+// for screens the drop-off chart is not describing, into the same table, under the
+// same campaign. So the importer list is asserted from the filesystem rather than
+// remembered.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
 import { isValidNonce, MAX_EVENTS_PER_BATCH } from "./step-events";
@@ -94,7 +97,7 @@ const OPTS = { clientSlug: "vitality", campaignSlug: "invisalign-spring", flowVe
  * 1. It is still unwired, and that is the whole point of this lane.
  * ------------------------------------------------------------------------- */
 
-describe("the beacon is exported and deliberately uncalled", () => {
+describe("the beacon has exactly one caller", () => {
   const SRC_ROOT = resolve(process.cwd(), "src");
 
   function walk(dir: string, out: string[] = []): string[] {
@@ -106,22 +109,41 @@ describe("the beacon is exported and deliberately uncalled", () => {
     return out;
   }
 
-  // MUTATION: wire it into the quiz "while I am here". The step NUMBERING it
-  // depends on is not decided yet (see the module header), so an early call would
-  // start filling a public table with ordinals the chart cannot read.
-  it("is imported by nothing but its own test", () => {
-    const importers = walk(SRC_ROOT).filter((file) => {
-      if (file.endsWith("step-beacon.ts") || file.endsWith("step-beacon.test.ts")) return false;
-      return /from\s+["'][^"']*step-beacon["']/.test(readFileSync(file, "utf8"));
-    });
+  function importers(): string[] {
+    return walk(SRC_ROOT)
+      .filter((file) => {
+        if (file.endsWith("step-beacon.ts") || file.endsWith("step-beacon.test.ts")) return false;
+        return /from\s+["'][^"']*step-beacon["']/.test(readFileSync(file, "utf8"));
+      })
+      .map((f) => f.slice(SRC_ROOT.length + 1).split(sep).join("/"))
+      .sort();
+  }
+
+  // MUTATION: wire it into the ADAPTIVE quiz, the Guided style or a landing page
+  // "for parity". Those runtimes have no authored graph, so their screens have no
+  // ordinal in step-numbering.ts — they would post step numbers into the same
+  // table, under the same campaign, describing screens the chart is not about.
+  it("is imported by the deterministic quiz and by nothing else", () => {
     expect(
-      importers.map((f) => f.slice(SRC_ROOT.length + 1)),
-      "step-beacon is now imported somewhere: the stitch step has happened, so update this test with it",
-    ).toEqual([]);
+      importers(),
+      "step-beacon has a new importer: only the deterministic runtime has a numbering to emit against",
+    ).toEqual(["components/assess/deterministic-assessment-quiz.tsx"]);
   });
 
-  it("says so in the file, naming the step that will wire it", () => {
-    expect(SOURCE).toContain("STITCH STEP");
+  // MUTATION: emit an ordinal the component derived itself. The chart's labels and
+  // its length come from step-numbering.ts on the server; a second derivation in
+  // the browser is a chart quietly describing the wrong screens.
+  it("is called with an ordinal that came from the shared numbering", () => {
+    const quiz = readFileSync(
+      join(SRC_ROOT, "components/assess/deterministic-assessment-quiz.tsx"),
+      "utf8",
+    );
+    expect(quiz).toMatch(/from\s+["']@\/lib\/smile-assessment\/step-numbering["']/);
+    expect(quiz).toContain("stepIndexOf(numbering,");
+  });
+
+  it("says in the file which runtime calls it, and why only that one", () => {
+    expect(SOURCE).toContain("deterministic-assessment-quiz");
   });
 });
 

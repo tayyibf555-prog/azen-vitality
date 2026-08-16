@@ -1,4 +1,5 @@
 import { getClient } from "@/lib/mock/clients";
+import { clientIp } from "@/lib/http/client-ip";
 import { consumeBudget } from "@/lib/rate-budget";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { parseStepEventBatch } from "@/lib/smile-assessment/step-events";
@@ -90,32 +91,18 @@ function str(v: unknown): string {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : "";
 }
 
-/**
- * The identity the per-IP budget is spent against, derived EXACTLY as the other
- * public assessment endpoint derives it (next/route.ts): platform-set `x-real-ip`
- * first, else the LAST `x-forwarded-for` entry.
- *
- * The order is the whole guard. `x-forwarded-for` is a list the caller can seed:
- * the browser sends whatever it likes and the platform APPENDS the real connecting
- * address, so the LEFTMOST entry is attacker-chosen and the RIGHTMOST is the only
- * hop nobody upstream of us wrote. Keying the budget on the leftmost entry would
- * mean one flooder could mint a fresh 240-post allowance per request simply by
- * changing a header — a per-IP cap that caps nothing. Two spoofed prefixes from the
- * same real client must land on the SAME key, and that is what this does.
- */
-function clientIp(request: Request): string {
-  const real = request.headers.get("x-real-ip")?.trim();
-  if (real) return real;
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) {
-    const parts = fwd
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    return parts[parts.length - 1] || "unknown";
-  }
-  return "unknown";
-}
+// THE IDENTITY THE PER-IP BUDGET IS SPENT AGAINST comes from the shared reader
+// (@/lib/http/client-ip), which every public assessment endpoint now uses:
+// platform-set `x-real-ip` first, else the LAST `x-forwarded-for` hop.
+//
+// The order is the whole guard. `x-forwarded-for` is a list the caller can seed:
+// the browser sends whatever it likes and the platform APPENDS the real connecting
+// address, so the LEFTMOST entry is attacker-chosen and the RIGHTMOST is the only
+// hop nobody upstream of us wrote. Keying the budget on the leftmost entry would
+// mean one flooder could mint a fresh 240-post allowance per request simply by
+// changing a header — a per-IP cap that caps nothing. Two spoofed prefixes from the
+// same real client must land on the SAME key, and that is what the shared reader
+// does; the spoof-variant tests below pin it on this route specifically.
 
 export async function POST(request: Request): Promise<Response> {
   try {

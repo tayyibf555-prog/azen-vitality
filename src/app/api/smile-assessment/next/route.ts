@@ -12,6 +12,7 @@ import {
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
 import { consumeBudget } from "@/lib/rate-budget";
+import { clientIp } from "@/lib/http/client-ip";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
@@ -42,19 +43,10 @@ function tooManyForIp(ip: string, now: number): boolean {
   }
   return hits.length > IP_LIMIT;
 }
-function clientIp(request: Request): string {
-  // Prefer the platform-set x-real-ip (not client-spoofable). Fall back to the
-  // LAST x-forwarded-for entry (Vercel appends the real connecting IP at the end);
-  // the leftmost entry is attacker-controlled, so never trust it.
-  const real = request.headers.get("x-real-ip")?.trim();
-  if (real) return real;
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) {
-    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
-    return parts[parts.length - 1] || "unknown";
-  }
-  return "unknown";
-}
+// The per-IP budget identity comes from @/lib/http/client-ip: the platform-set
+// x-real-ip when present, else the LAST x-forwarded-for hop, because the leftmost
+// hops are the caller's own. This route held the original copy of that rule; it is
+// now shared with /submit and /step-event so the three cannot drift apart.
 
 function cleanLine(s: string): string {
   return s.replace(/[—–]/g, ", ").replace(/\s+/g, " ").trim().slice(0, 120).trim();

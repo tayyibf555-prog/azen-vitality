@@ -2,7 +2,10 @@ import { getClient } from "@/lib/mock/clients";
 import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
+import { normaliseFlow } from "@/lib/smile-assessment/flow";
 import { aggregateStepEvents, MAX_FLOW_VERSION } from "@/lib/smile-assessment/step-events";
+import { stepNumbering } from "@/lib/smile-assessment/step-numbering";
+import { stepLabels } from "@/lib/smile-assessment/step-labels";
 import {
   readStepEvents,
   StepEventTableMissingError,
@@ -110,15 +113,51 @@ export async function GET(
       toIso: to.toISOString(),
     });
 
-    // NO stepCount, DELIBERATELY. aggregateStepEvents can fill the ordinals nobody
-    // reached with empty bars, but only when the caller knows how long the funnel
-    // is — and the funnel's step NUMBERING is set by the runtime that emits the
-    // beacon, which is not wired yet (step-beacon.ts). Deriving a length here from
-    // the stored graph would invent a numbering the emitter has not agreed to, and
-    // the first real event would silently disagree with the chart. Until the stitch
-    // step fixes the numbering, this reports the steps it has rows for, which is
-    // the only thing the data supports.
-    const funnel = aggregateStepEvents(scan.rows);
+    // stepCount AND labels, FROM THE SAME MODULE THE BEACON EMITS WITH.
+    //
+    // aggregateStepEvents fills the ordinals nobody reached with empty bars, but
+    // only when the caller knows how long the funnel is — and a funnel's step
+    // NUMBERING has one owner, step-numbering.ts, which the deterministic runtime
+    // calls to decide which ordinal to post. Deriving a second length here would be
+    // the exact failure A3 refused to risk; calling the same function is not.
+    //
+    // ONLY FOR THE CURRENT VERSION, and the guard is not defensive tidiness. A
+    // campaign row stores ONE funnel — the latest (0078). Asked about an older
+    // flow_version, the graph in hand is not the graph those events came out of, so
+    // numbering them with it would label bar 3 with a question that funnel never
+    // asked and pad the chart to a length it never had. An older version therefore
+    // reports the steps it has rows for, unlabelled, which is what the data
+    // supports; the CURRENT version — the one an owner is actually looking at —
+    // gets the full picture.
+    //
+    // normaliseFlow, not normaliseAndValidateFlow: "can this be read as a graph" is
+    // the question here. A legal-but-imperfect draft still has screens a patient
+    // reached, and screenFor names a broken step out loud rather than blanking it.
+    //
+    // COMPLETION. The last ordinal is the RESULT screen, which every band shares
+    // (step-numbering.ts), so `funnel.completionPct` reads as "reached a result
+    // screen" — the funnel's completion rate — rather than as the share who got one
+    // particular band.
+    let stepCount: number | undefined;
+    let labels: Record<number, string> | undefined;
+    if (flowVersion === campaign.flowVersion) {
+      const graph = normaliseFlow(campaign.flow);
+      if (graph) {
+        const numbering = stepNumbering(graph);
+        if (numbering.stepCount > 0) {
+          stepCount = numbering.stepCount;
+          labels = stepLabels(graph, numbering, {
+            headline: campaign.headline,
+            intro: campaign.intro,
+          });
+        }
+      }
+    }
+
+    const funnel = aggregateStepEvents(
+      scan.rows,
+      stepCount === undefined ? undefined : { stepCount },
+    );
 
     return Response.json({
       ok: true,
@@ -130,6 +169,10 @@ export async function GET(
       // one: at this point the funnel describes the most recent events only.
       truncated: scan.truncated,
       funnel,
+      // Absent (not empty) when this version's graph is not the one in hand, so the
+      // chart falls back to "Step N" rather than to somebody else's questions.
+      ...(labels ? { labels } : {}),
+      ...(stepCount === undefined ? {} : { stepCount }),
     });
   } catch (e) {
     // 0080 not applied on this deployment. Named, not swallowed: here the data IS

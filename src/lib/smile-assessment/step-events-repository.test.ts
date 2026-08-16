@@ -197,10 +197,10 @@ describe("readStepEvents, the query it builds", () => {
   it("selects the cursor columns as well as the tally columns", async () => {
     state.rows = makeRows(3);
     await scan();
-    // id and created_at are read for the cursor. Both are carried in 0080's
-    // read-path index (created_at as a key column, id in the INCLUDE), so this
-    // select is still an index-only scan — which is the whole reason the INCLUDE
-    // list names id.
+    // id and created_at are read for the cursor. Both are KEY columns of 0080's
+    // read-path index — its last two — so this select is still an index-only scan
+    // AND the ORDER BY below needs no sort, which is why id is in the key rather
+    // than merely in the INCLUDE list.
     expect(state.selected).toBe("id, created_at, step_index, session_nonce");
   });
 

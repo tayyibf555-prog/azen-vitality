@@ -2,21 +2,22 @@
 // server which screen of an authored funnel a session reached.
 //
 // ============================================================================
-// EXPORTED AND DELIBERATELY UNCALLED.
+// ONE CALLER, BY DESIGN: the deterministic quiz
+// (src/components/assess/deterministic-assessment-quiz.tsx), which creates a
+// beacon on mount and calls view() once per screen it shows.
 //
-// Nothing imports this yet. The runtime that would call it — the deterministic
-// quiz component — is owned by a concurrent lane, and wiring the two together is
-// the STITCH STEP ("Stitch A: beacon wiring + chart mount"), not this one.
-//
-// That is a decision, not an omission. The stitch has to settle one thing this
-// lane cannot settle alone: WHAT STEP NUMBER A SCREEN HAS. `phoneFlowLayout`'s
+// It shipped exported and uncalled while the STEP NUMBERING was undecided, because
+// none of the numbers already in the tree is a screen ordinal: `phoneFlowLayout`'s
 // `step` is a 1-based QUESTION chip for the preview strip (a welcome screen shares
-// the first question's number, and a branch can reach the same node by paths of
-// different lengths), and `walkFlow`'s `asked` is a list of question ids. Neither
-// is a screen ordinal, and picking one here would fix a numbering the emitter has
-// not agreed to. So the beacon takes the ordinal as an argument and refuses to
-// invent it, the guarded read route deliberately does not fill unreached steps,
-// and the stitch decides the numbering once, in the one place that emits it.
+// the first question's number), and `walkFlow`'s `asked` is a list of question ids,
+// i.e. the path one SESSION took. The stitch settled it in step-numbering.ts — a
+// screen's position in the funnel's own canonical order — and that ONE module is
+// called by both halves: this beacon's caller to decide what to post, and the
+// guarded read route to label the chart and pad it to the funnel's length.
+//
+// So this file still refuses to invent an ordinal. It takes one, validates it
+// against the rules the server validates with, and posts nothing it cannot stand
+// behind. step-beacon.test.ts pins that the single importer is the quiz.
 // ============================================================================
 //
 // BROWSER-ONLY, with no server imports at all: it guards on `typeof window` and

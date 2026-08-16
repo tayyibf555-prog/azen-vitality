@@ -11,9 +11,10 @@ import { cn } from "@/lib/utils";
 // function props), so a server component can render it directly without the file
 // becoming a client boundary.
 //
-// NOT MOUNTED ANYWHERE YET. The panel that will hold it is owned by a concurrent
-// lane and is frozen; mounting is part of the stitch step, alongside wiring the
-// beacon. It renders correctly today and is pinned by dropoff-chart.test.ts.
+// MOUNTED BY dropoff-section.tsx, on the campaign card, under the live preview of
+// the very funnel it measures. That component owns the fetch, the disclosure and
+// every failure state (including the 503 that names migration 0080); this file
+// owns nothing but the drawing, which is why it can stay free of "use client".
 //
 // HORIZONTAL, NOT VERTICAL, and that is a legibility decision rather than taste: a
 // step's label is a sentence ("Which treatment are you interested in?"), and

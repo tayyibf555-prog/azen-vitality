@@ -8,9 +8,10 @@
 // static render cannot show — what the file imports and what hooks it calls — is
 // read out of the source as text.
 //
-// NOT MOUNTED ANYWHERE YET, which is why this file exists at all: without it the
-// component would ship unrendered and unread until the stitch step, and a chart
-// nobody has rendered is a chart nobody knows is wrong.
+// WHY A RENDER TEST AT ALL. This component is mounted from a client component
+// (dropoff-section.tsx) inside the campaigns panel, so nothing else in the suite
+// ever renders it — and a chart nobody has rendered is a chart nobody knows is
+// wrong.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -285,10 +286,17 @@ describe("the chart is presentational, structurally", () => {
     expect(imports.sort()).toEqual(["@/lib/smile-assessment/step-events", "@/lib/utils"]);
   });
 
-  it("is not mounted anywhere yet, which is the stitch step's job", () => {
-    // MUTATION: mount it in the frozen panel. The panel is owned by another lane
-    // right now; when the stitch lands, this expectation is the thing that has to
-    // be updated deliberately rather than a surprise.
-    expect(SOURCE).toContain("NOT MOUNTED ANYWHERE YET");
+  // MUTATION: fetch here, or take an onRetry callback. The moment this file holds
+  // state or a function prop it becomes a client boundary, and a server component
+  // can no longer render it — which is the whole reason the fetching, the
+  // disclosure and every error state live in dropoff-section.tsx instead.
+  it("is mounted by the section that owns the fetch, and stays a picture itself", () => {
+    const section = readFileSync(join(HERE, "dropoff-section.tsx"), "utf8");
+    expect(section).toContain("DropoffChart");
+    expect(section).toContain("drop-off");
+    // The chart itself: no fetching, no state, no client directive.
+    expect(CODE).not.toContain("use client");
+    expect(CODE).not.toContain("fetch(");
+    expect(CODE).not.toContain("useState");
   });
 });

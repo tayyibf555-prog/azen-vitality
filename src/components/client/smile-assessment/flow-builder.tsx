@@ -384,6 +384,10 @@ export function FlowBuilder({
             graph={graph}
             selection={selected}
             failures={validation.failures}
+            // For a trust strip's first line. The PRACTICE's name, the same one
+            // the minis wear - never the campaign's, which is an internal source
+            // label ("Instagram bio") and would read as a stranger to a patient.
+            practiceName={practiceName}
             onEdit={onEdit}
             onSelect={select}
           />

@@ -47,6 +47,7 @@ import {
   type TemplateChoice,
 } from "@/lib/smile-assessment/wizard-state";
 import { AssessmentLivePreview } from "./assessment-live-preview";
+import { DropoffSection } from "./dropoff-section";
 import { TemplateGallery } from "./template-gallery";
 import { FlowBuilder } from "./flow-builder";
 import { FlowPhoneCanvas } from "./flow-phone-canvas";
@@ -1267,6 +1268,25 @@ export function CampaignCard({
         flowPublished={published}
         reloadKey={previewNonce}
       />
+
+      {/* THE DROP-OFF CHART (A3), directly under the preview of the funnel it is
+          about — the same argument as the re-colour row above: the number and the
+          thing it describes belong on one screen.
+
+          ONLY FOR A CAMPAIGN THAT HAS A DRAWN FUNNEL. Step views come from the
+          deterministic runtime walking an authored graph; a campaign running the
+          adaptive funnel emits none, and its chart would say "no one has reached a
+          step yet" forever — a true sentence that reads as a broken feature. A
+          funnel that exists but is unpublished still gets the section, because the
+          rows it collected while it WAS published are still the answer to "did my
+          funnel work". */}
+      {hasFunnel ? (
+        <DropoffSection
+          clientSlug={clientSlug}
+          campaignSlug={campaign.slug}
+          flowVersion={campaign.flowVersion}
+        />
+      ) : null}
 
       <dl className="mt-3 space-y-1.5 rounded-xl border border-line bg-card-muted/40 p-3 text-xs">
         {campaign.idealCustomer ? (

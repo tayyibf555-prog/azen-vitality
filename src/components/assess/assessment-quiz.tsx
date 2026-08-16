@@ -107,6 +107,13 @@ interface Props {
    * exist would be worse than ignoring the switch.
    */
   flow?: PublicFlow | null;
+  /**
+   * Which SAVE of that funnel is on screen (flow_version, 0078). Used only by the
+   * deterministic runtime, and only for step-drop-off telemetry: a tally that mixes
+   * versions averages the funnel an owner just fixed with the one they fixed it
+   * from. Ignored by Classic and Guided, which have no authored funnel to version.
+   */
+  flowVersion?: number;
 }
 
 /** Normalise the first deterministic question into a FunnelQuestion. */

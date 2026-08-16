@@ -322,3 +322,109 @@ describe("drop-off, the answer", () => {
     expect(body.truncated).toBe(true);
   });
 });
+
+/* ---------------------------------------------------------------------------
+ * The stitch: the numbering the beacon emits with is the numbering this route
+ * labels and pads with. A3 deliberately shipped without it; these are the pins
+ * that keep the two halves talking about the same screens.
+ * ------------------------------------------------------------------------- */
+
+const FUNNEL_GRAPH = {
+  schemaVersion: 2,
+  entry: "w",
+  nodes: [
+    { kind: "welcome", id: "w", headline: "Straighter teeth", intro: "Two minutes." },
+    { kind: "question", id: "q1", questionId: "treatment_interest", transition: null },
+    { kind: "question", id: "q2", questionId: "timeline", transition: null },
+    { kind: "contact", id: "c" },
+    { kind: "outcome", id: "hot", band: "high", headline: "A great fit" },
+    { kind: "outcome", id: "cold", band: "low", headline: "Worth a chat" },
+  ],
+  edges: [
+    { from: "w", to: "q1", answer: null, transition: null },
+    { from: "q1", to: "q2", answer: null, transition: null },
+    { from: "q2", to: "c", answer: null, transition: null },
+    { from: "c", to: "hot", answer: "high", transition: null },
+    { from: "c", to: "cold", answer: "low", transition: null },
+  ],
+};
+
+interface DropOffBody {
+  funnel: { steps: Array<{ stepIndex: number; views: number }>; completionPct: number | null };
+  labels?: Record<string, string>;
+  stepCount?: number;
+}
+
+describe("drop-off, the funnel's own step numbering", () => {
+  beforeEach(() => {
+    store.campaign = { ...CAMPAIGN, flow: FUNNEL_GRAPH, headline: "Straighter teeth", intro: null };
+  });
+
+  // MUTATION: drop stepCount. A screen nobody reached then VANISHES from the chart
+  // instead of drawing as an empty bar — which is precisely the fault an owner
+  // opens this panel to find.
+  it("pads the funnel to the length of the graph, so an unreached screen is an empty bar", async () => {
+    store.rows = [
+      { stepIndex: 0, nonce: "a" },
+      { stepIndex: 0, nonce: "b" },
+      { stepIndex: 1, nonce: "a" },
+    ];
+
+    const body = (await (await get()).json()) as DropOffBody;
+    // 6 nodes, 4 screens: the welcome step is not one, and the two result steps
+    // share the last ordinal.
+    expect(body.stepCount).toBe(4);
+    expect(body.funnel.steps.map((s) => s.views)).toEqual([2, 1, 0, 0]);
+  });
+
+  // MUTATION: label from a second lookup, or not at all. "Step 1, Step 2, Step 3"
+  // answers nothing an owner asked — the whole question is WHICH screen loses
+  // people.
+  it("labels each ordinal with the screen's own words, and the result slot for what it is", async () => {
+    const body = (await (await get()).json()) as DropOffBody;
+    expect(body.labels).toBeDefined();
+    const labels = body.labels!;
+    expect(labels["0"]).toMatch(/\?$/); // the first question's prompt
+    expect(labels["1"]).not.toBe(labels["0"]);
+    expect(labels["2"]).toBe("Where should we send your tailored next step?");
+    expect(labels["3"]).toBe("Result");
+    // Never one band's headline: every band shares that slot.
+    expect(labels["3"]).not.toBe("A great fit");
+  });
+
+  // MUTATION: label an older version with today's graph. A campaign row stores ONE
+  // funnel, so bar 3 would be named with a question that funnel never asked and the
+  // chart padded to a length it never had.
+  it("refuses to label or pad an older flow version, whose graph it does not have", async () => {
+    store.rows = [{ stepIndex: 0, nonce: "a" }];
+
+    const body = (await (await get("?client=vitality&flowVersion=3")).json()) as DropOffBody;
+    expect(body.labels).toBeUndefined();
+    expect(body.stepCount).toBeUndefined();
+    expect(body.funnel.steps).toHaveLength(1);
+  });
+
+  it("says nothing about numbering for a campaign with no readable funnel", async () => {
+    store.campaign = { ...CAMPAIGN, flow: { not: "a graph" } };
+
+    const body = (await (await get()).json()) as DropOffBody;
+    expect(body.labels).toBeUndefined();
+    expect(body.stepCount).toBeUndefined();
+  });
+
+  // The completion decision, end to end: the last ordinal is the RESULT screen, so
+  // completionPct is the funnel's completion rate rather than the share of visitors
+  // who happened to get one particular band.
+  it("reports completion as the share who reached a result screen", async () => {
+    store.rows = [
+      { stepIndex: 0, nonce: "a" },
+      { stepIndex: 0, nonce: "b" },
+      { stepIndex: 0, nonce: "c" },
+      { stepIndex: 0, nonce: "d" },
+      { stepIndex: 3, nonce: "a" },
+    ];
+
+    const body = (await (await get()).json()) as DropOffBody;
+    expect(body.funnel.completionPct).toBe(25);
+  });
+});

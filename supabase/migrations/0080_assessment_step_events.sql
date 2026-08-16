@@ -137,29 +137,34 @@ create table if not exists assessment_step_event (
 -- THE AGGREGATION READ PATH, and the only query the owner view runs: every event
 -- for one campaign, one flow version, over a date range. Leading (campaign_id,
 -- flow_version) makes it an exact-prefix seek rather than a scan of the practice's
--- whole telemetry, and created_at last serves the range on top of it.
+-- whole telemetry, and created_at serves the range on top of it.
 --
--- The INCLUDE columns are the other half: they are every field the read actually
--- selects, so this is an index-only scan and the heap is never touched. On a table
--- this write-heavy and this read-narrow that is the difference between a report
--- and a table scan.
+-- The INCLUDE columns are the other half: with id in the key, the four key columns
+-- plus these two are every field the read selects, so this is an index-only scan
+-- and the heap is never touched. On a table this write-heavy and this read-narrow
+-- that is the difference between a report and a table scan.
 --
--- WHY id IS IN THE INCLUDE LIST. The read is paged, and it pages by KEYSET rather
--- than by OFFSET — each page asks for the rows strictly older than the last row of
--- the page before it, so a concurrent insert (this table is written to by a public
--- endpoint while the report runs) cannot shift a row across a page boundary and
--- have it silently skipped. That cursor is (created_at, id): created_at alone is
--- not unique on a table that ingests whole batches inside one millisecond. So the
--- reader SELECTs id as well as the two tally fields, and if id were not carried
--- here the index-only scan this index exists for would become a heap fetch per row
--- — the ORDER BY already names id, but ordering by a column is not the same as
--- being able to return it. Ordering matches the reader exactly:
+-- WHY id IS A FOURTH KEY COLUMN AND NOT AN INCLUDE. The read is paged, and it pages
+-- by KEYSET rather than by OFFSET — each page asks for the rows strictly older than
+-- the last row of the page before it, so a concurrent insert (this table is written
+-- to by a public endpoint while the report runs) cannot shift a row across a page
+-- boundary and have it silently skipped. That cursor is (created_at, id), because
+-- created_at alone is not unique on a table that ingests whole batches inside one
+-- millisecond, and the reader's order is exactly:
 --   order by created_at desc, id desc
--- (an index scan reads a btree backwards just as cheaply as forwards, so a
--- descending read needs no second index).
+-- An INCLUDE column is payload: it can be RETURNED from the index but it does not
+-- order it. With id merely included, the index would settle rows only as far as
+-- created_at, and every group of same-millisecond rows — precisely the groups this
+-- table creates, one per posted batch — would have to be sorted to satisfy that
+-- ORDER BY, and the `created_at = cursor AND id < cursor_id` half of the keyset
+-- predicate would be a filter applied after the fact rather than a seek. As a key
+-- column, id makes the index's own order the reader's order: no sort node, and the
+-- cursor lands by seek. It is still returned, so the index-only scan is unchanged,
+-- and it costs the same 16 bytes either way. (A btree reads backwards just as
+-- cheaply as forwards, so a descending read needs no second index.)
 create index if not exists idx_assessment_step_event_campaign_version_created
-  on assessment_step_event (campaign_id, flow_version, created_at)
-  include (id, step_index, session_nonce);
+  on assessment_step_event (campaign_id, flow_version, created_at, id)
+  include (step_index, session_nonce);
 
 -- The SECOND axis, and not a duplicate of the first: retention. A purge ("delete
 -- everything older than N days", per practice) and any future cross-campaign
@@ -178,6 +183,7 @@ create index if not exists idx_assessment_step_event_client_created
 alter table assessment_step_event enable row level security;
 revoke all on assessment_step_event from anon, authenticated;
 
--- NO SEED. Running this records no step, changes no page and turns nothing on. The
--- first row arrives when the beacon is wired into the quiz — a later, separate
--- stitch step that this file deliberately does not depend on.
+-- NO SEED. Running this records no step, changes no page and turns nothing on
+-- beyond giving the already-wired beacon a table to land in: the deterministic
+-- quiz emits step views (deterministic-assessment-quiz.tsx via step-beacon.ts),
+-- and until this file is applied the endpoint's insert fails silently by design.

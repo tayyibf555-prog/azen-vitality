@@ -1,10 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { FLOW_BANDS, FLOW_LIMITS, type FlowBlock, type FlowEdge, type FlowGraph } from "./flow";
+import {
+  FLOW_BANDS,
+  FLOW_BLOCK_KINDS,
+  FLOW_LIMITS,
+  blockCopyFields,
+  normaliseFlow,
+  type FlowBlock,
+  type FlowEdge,
+  type FlowGraph,
+} from "./flow";
 import { validateFlow } from "./flow-validate";
+import { scanFlowCopy } from "./flow-copy";
 import { nextNode } from "./flow-runtime";
 import { FLOW_TEMPLATES, buildScratchFlow, templateForGoal } from "./flow-templates";
 import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
+import { assessImagesForSlot } from "@/lib/assess/image-library";
 import {
+  addBlock,
+  addBlockChip,
+  addBlockFaqItem,
+  addableBlockKinds,
+  moveBlock,
+  optionImageRows,
+  questionSwapWarning,
+  removeBlock,
+  removeBlockItem,
+  removeOptionImage,
+  setBlockImage,
+  setBlockText,
+  setOptionImage,
+  starterBlock,
   addEdge,
   connectableTargets,
   defaultEdgeOf,
@@ -921,5 +946,487 @@ describe("what a card says", () => {
       "elsewhere",
     ]);
     expect(routableAnswers({ id: "w", kind: "welcome" })).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * CONTENT BLOCKS (A2's builder half).
+ *
+ * The rules under the rail's block section. Two of them are invisible until they
+ * are broken in production: a graph these ops built must still be READABLE (one
+ * blank string makes the whole save come back as "could not be read as a graph"),
+ * and adding content to a funnel drawn before A2 must bump its schema version or
+ * rule 1 refuses the save with the graph itself perfectly fine.
+ * ------------------------------------------------------------------------- */
+
+const welcomeBlocksOf = (g: FlowGraph): FlowBlock[] => {
+  const n = g.nodes.find((x) => x.id === "welcome");
+  return n && n.kind === "welcome" ? (n.blocks ?? []) : [];
+};
+
+const faqBlock = (): FlowBlock => {
+  const b = starterBlock("faq");
+  if (!b) throw new Error("no faq starter");
+  return b;
+};
+
+const refusal = (result: { ok: boolean; reason?: string }): string => {
+  if (result.ok) throw new Error("expected a refusal, got an edited graph");
+  return result.reason ?? "";
+};
+
+/** An op run against a copy, so "the input was not touched" is checkable. */
+function untouched(graph: FlowGraph, run: (g: FlowGraph) => unknown): void {
+  const before = JSON.stringify(graph);
+  run(graph);
+  expect(JSON.stringify(graph), "the draft graph was mutated in place").toBe(before);
+}
+
+describe("adding a content block", () => {
+  it("puts a starter block on the welcome screen and leaves the funnel publishable", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    const blocks = welcomeBlocksOf(g);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.kind).toBe("faq");
+    expect(validateFlow(g).ok).toBe(true);
+  });
+
+  // MUTATION: drop withRequiredSchemaVersion from withBlocks and this goes red -
+  // the graph is perfect and rule 1 refuses the save as `schema_version_too_old`,
+  // which reads to an owner as the funnel being broken by adding a block to it.
+  it("bumps a pre-A2 funnel's schema version, because content it cannot declare is content an older reader would strip", () => {
+    const v1: FlowGraph = { ...invisalign(), schemaVersion: 1 };
+    expect(validateFlow(v1).ok).toBe(true);
+
+    const g = must(addBlock(v1, "welcome", faqBlock()));
+    expect(g.schemaVersion).toBe(2);
+    expect(validateFlow(g).ok).toBe(true);
+  });
+
+  // MUTATION: let a second block of one kind through and rule 12's
+  // block_duplicate_kind fires on a funnel the owner cannot publish, from a picker
+  // that offered the kind.
+  it("refuses a second block of the same kind, and stops offering that kind", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    expect(refusal(addBlock(g, "welcome", faqBlock()))).toContain("already has");
+    expect(addableBlockKinds(g, "welcome")).not.toContain("faq");
+    expect(addableBlockKinds(invisalign(), "welcome")).toContain("faq");
+  });
+
+  it("refuses a screen that is an ask or a form, and says which screens take blocks", () => {
+    const g = invisalign();
+    expect(refusal(addBlock(g, "q-timeline", faqBlock()))).toContain("opening screen or a result screen");
+    expect(refusal(addBlock(g, "contact", faqBlock()))).toContain("opening screen or a result screen");
+    expect(addableBlockKinds(g, "q-timeline")).toEqual([]);
+    expect(addableBlockKinds(g, "contact")).toEqual([]);
+    expect(addableBlockKinds(g, "nowhere")).toEqual([]);
+  });
+
+  // MUTATION: accept a block with a blank line and the SAVE fails with rule 0
+  // ("the funnel could not be read as a graph") - a message about nothing an
+  // owner can find, from a control that reported success.
+  it("refuses a block with a line left blank, naming the line", () => {
+    const g = invisalign();
+    const blank: FlowBlock = { kind: "testimonial", quote: "  ", attribution: "Jane" };
+    expect(refusal(addBlock(g, "welcome", blank))).toContain("quote");
+    expect(normaliseFlow(JSON.parse(JSON.stringify(g)))).not.toBeNull();
+  });
+
+  it("stops offering kinds once the screen is full", () => {
+    let g = invisalign();
+    for (const kind of FLOW_BLOCK_KINDS) {
+      const block =
+        kind === "testimonial"
+          ? ({ kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." } as FlowBlock)
+          : starterBlock(kind, "Vitality Dental");
+      if (!block) throw new Error(`no starter for ${kind}`);
+      g = must(addBlock(g, "welcome", block));
+    }
+    expect(welcomeBlocksOf(g)).toHaveLength(FLOW_LIMITS.blocksPerNode);
+    expect(addableBlockKinds(g, "welcome")).toEqual([]);
+    expect(validateFlow(g).ok).toBe(true);
+  });
+});
+
+describe("what a new block starts as", () => {
+  // THE CHARTER RULE, MADE STRUCTURAL. AI never invents a testimonial - and
+  // neither does the starter. MUTATION: return a placeholder quote here and the
+  // funnel can be published with words no patient ever said.
+  it("has no starter for a testimonial, ever: the quote is the practice's own words", () => {
+    expect(starterBlock("testimonial")).toBeNull();
+    expect(starterBlock("testimonial", "Vitality Dental")).toBeNull();
+  });
+
+  it("needs the practice's name before it can start a trust strip", () => {
+    expect(starterBlock("trust-strip")).toBeNull();
+    expect(starterBlock("trust-strip", "   ")).toBeNull();
+    expect(starterBlock("trust-strip", "Vitality Dental")).toEqual({
+      kind: "trust-strip",
+      practiceName: "Vitality Dental",
+      chips: ["Takes about 30 seconds"],
+    });
+  });
+
+  it("starts a picture on a real manifest key, with the manifest's own description", () => {
+    const first = assessImagesForSlot("hero")[0]!;
+    expect(starterBlock("image")).toEqual({ kind: "image", image: first.key, alt: first.alt });
+  });
+
+  // Every seeded line is patient-facing copy that the server scans at write time.
+  // A starter that cannot be published is a starter that breaks the first save.
+  it("seeds only copy a funnel is allowed to publish", () => {
+    let g = invisalign();
+    g = must(addBlock(g, "welcome", faqBlock()));
+    g = must(addBlock(g, "welcome", starterBlock("trust-strip", "Vitality Dental")!));
+    g = must(addBlock(g, "welcome", starterBlock("image")!));
+    expect(validateFlow(g).ok).toBe(true);
+    expect(scanFlowCopy(g)).toEqual([]);
+  });
+});
+
+describe("editing a block's copy", () => {
+  it("writes one field and leaves every other line of the screen alone", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    const before = welcomeBlocksOf(g)[0]!;
+    const after = welcomeBlocksOf(
+      must(setBlockText(g, "welcome", 0, "items[1].a", "  We call you back the same day.  ")),
+    )[0]!;
+    expect(after.kind === "faq" ? after.items[1]!.a : null).toBe("We call you back the same day.");
+    expect(after.kind === "faq" ? after.items[1]!.q : null).toBe(
+      before.kind === "faq" ? before.items[1]!.q : "x",
+    );
+    expect(after.kind === "faq" ? after.items[0] : null).toEqual(
+      before.kind === "faq" ? before.items[0] : null,
+    );
+  });
+
+  it("caps a line at the limit blockCopyFields declares for it", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    const long = "a".repeat(FLOW_LIMITS.faqQuestion + 40);
+    const after = welcomeBlocksOf(must(setBlockText(g, "welcome", 0, "items[0].q", long)))[0]!;
+    expect(after.kind === "faq" ? after.items[0]!.q.length : 0).toBe(FLOW_LIMITS.faqQuestion);
+    expect(validateFlow(must(setBlockText(g, "welcome", 0, "items[0].q", long))).ok).toBe(true);
+  });
+
+  // MUTATION: normalise a cleared field to absent, the way the optional copy
+  // setters do, and normaliseFlow refuses the whole graph on save - the funnel
+  // comes back unreadable over one emptied box.
+  it("refuses to empty a line, and says to remove the block instead", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    expect(refusal(setBlockText(g, "welcome", 0, "items[0].q", "   "))).toContain("Remove the block");
+  });
+
+  it("refuses a field the block does not carry, including the picture reference", () => {
+    let g = must(addBlock(invisalign(), "welcome", starterBlock("image")!));
+    expect(refusal(setBlockText(g, "welcome", 0, "image", "screens/aligners"))).toContain("not something");
+    expect(refusal(setBlockText(g, "welcome", 0, "quote", "hello"))).toContain("not something");
+    g = must(addBlock(g, "welcome", faqBlock()));
+    expect(refusal(setBlockText(g, "welcome", 1, "items[9].q", "hello"))).toContain("not something");
+    expect(refusal(setBlockText(g, "welcome", 7, "quote", "hello"))).toContain("no longer on this screen");
+  });
+
+  // THE TWO LISTS AGREE. blockCopyFields is what rule 12 caps and what the
+  // compliance scan reads; withBlockField is what the rail writes through. A field
+  // in one and not the other is either an uneditable line or an unscanned one.
+  it("can write every line blockCopyFields names, for every kind", () => {
+    const samples: FlowBlock[] = [
+      { kind: "trust-strip", practiceName: "Vitality Dental", chips: ["One", "Two"] },
+      { kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." },
+      { kind: "faq", items: [{ q: "Q1", a: "A1" }, { q: "Q2", a: "A2" }] },
+      { kind: "image", image: assessImagesForSlot("hero")[0]!.key, alt: "A picture" },
+    ];
+    for (const block of samples) {
+      const g = must(addBlock(invisalign(), "welcome", block));
+      for (const field of blockCopyFields(block)) {
+        const after = must(setBlockText(g, "welcome", 0, field.field, "Rewritten"));
+        const written = blockCopyFields(welcomeBlocksOf(after)[0]!).find((f) => f.field === field.field);
+        expect(written?.text, `${block.kind}.${field.field} is not writable`).toBe("Rewritten");
+      }
+    }
+  });
+});
+
+describe("a picture block's picture", () => {
+  // MUTATION: carry the authored alt across a swap and a screen reader describes
+  // the picture that used to be there.
+  it("takes its description with it, because an alt describes the file", () => {
+    const [first, second] = assessImagesForSlot("hero");
+    const g = must(addBlock(invisalign(), "welcome", starterBlock("image")!));
+    const owned = must(setBlockText(g, "welcome", 0, "alt", "Our reception"));
+    expect(welcomeBlocksOf(owned)[0]).toEqual({ kind: "image", image: first!.key, alt: "Our reception" });
+
+    const swapped = must(setBlockImage(owned, "welcome", 0, second!.key));
+    expect(welcomeBlocksOf(swapped)[0]).toEqual({ kind: "image", image: second!.key, alt: second!.alt });
+    expect(validateFlow(swapped).ok).toBe(true);
+  });
+
+  it("refuses an answer tile on a screen, a key that is not in the library, and a block with no picture", () => {
+    const g = must(addBlock(invisalign(), "welcome", starterBlock("image")!));
+    expect(refusal(setBlockImage(g, "welcome", 0, assessImagesForSlot("answer")[0]!.key))).toContain(
+      "answer tile",
+    );
+    expect(refusal(setBlockImage(g, "welcome", 0, "https://example.com/x.jpg"))).toContain("never a link");
+    const withFaq = must(addBlock(g, "welcome", faqBlock()));
+    expect(refusal(setBlockImage(withFaq, "welcome", 1, "screens/aligners"))).toContain("no picture");
+  });
+});
+
+describe("a block's own lists", () => {
+  it("adds a chip in the owner's words and refuses a blank one", () => {
+    const g = must(addBlock(invisalign(), "welcome", starterBlock("trust-strip", "Vitality Dental")!));
+    expect(refusal(addBlockChip(g, "welcome", 0, "  "))).toContain("blank");
+    const after = welcomeBlocksOf(must(addBlockChip(g, "welcome", 0, " Open Saturdays ")))[0]!;
+    expect(after.kind === "trust-strip" ? after.chips : []).toEqual([
+      "Takes about 30 seconds",
+      "Open Saturdays",
+    ]);
+  });
+
+  it("holds the chip cap and the faq cap", () => {
+    let g = must(addBlock(invisalign(), "welcome", starterBlock("trust-strip", "Vitality Dental")!));
+    while (welcomeBlocksOf(g)[0]!.kind === "trust-strip") {
+      const chips = (welcomeBlocksOf(g)[0] as { chips: string[] }).chips;
+      if (chips.length >= FLOW_LIMITS.chips) break;
+      g = must(addBlockChip(g, "welcome", 0, `Chip ${chips.length}`));
+    }
+    expect(refusal(addBlockChip(g, "welcome", 0, "One too many"))).toContain(`${FLOW_LIMITS.chips}`);
+
+    let f = must(addBlock(invisalign(), "welcome", faqBlock()));
+    while ((welcomeBlocksOf(f)[0] as { items: unknown[] }).items.length < FLOW_LIMITS.faqItems) {
+      const n = (welcomeBlocksOf(f)[0] as { items: unknown[] }).items.length;
+      f = must(addBlockFaqItem(f, "welcome", 0, `Q${n}`, `A${n}`));
+    }
+    expect(refusal(addBlockFaqItem(f, "welcome", 0, "Q", "A"))).toContain(`${FLOW_LIMITS.faqItems}`);
+    expect(refusal(addBlockFaqItem(f, "welcome", 0, "Q", ""))).toContain("needs an answer");
+  });
+
+  // MIN_CHIPS AND MIN_FAQ_ITEMS ARE RULE 12'S, PINNED AGAINST IT. flow-validate
+  // holds the floors as literals (`< 1`, `< 2`); these ops hold their own copy, so
+  // the copy is checked against the validator rather than trusted.
+  it("will not take a list below the floor rule 12 publishes at", () => {
+    const strip = must(addBlock(invisalign(), "welcome", starterBlock("trust-strip", "Vitality Dental")!));
+    expect(refusal(removeBlockItem(strip, "welcome", 0, 0))).toContain("at least one chip");
+    // ...and the floor is real: a trust strip with no chips does not validate.
+    expect(
+      validateFlow({
+        ...strip,
+        nodes: strip.nodes.map((n) =>
+          n.id === "welcome" ? { ...n, blocks: [{ kind: "trust-strip", practiceName: "V", chips: [] }] } : n,
+        ),
+      } as FlowGraph).failures.some((f) => f.code === "trust_strip_chip_count"),
+    ).toBe(true);
+
+    const faq = must(addBlock(invisalign(), "welcome", faqBlock()));
+    expect(refusal(removeBlockItem(faq, "welcome", 0, 0))).toContain("at least 2 questions");
+    expect(
+      validateFlow({
+        ...faq,
+        nodes: faq.nodes.map((n) =>
+          n.id === "welcome" ? { ...n, blocks: [{ kind: "faq", items: [{ q: "Q", a: "A" }] }] } : n,
+        ),
+      } as FlowGraph).failures.some((f) => f.code === "faq_item_count"),
+    ).toBe(true);
+  });
+
+  it("removes a chip once there is one to spare, and refuses a list a block has not got", () => {
+    let g = must(addBlock(invisalign(), "welcome", starterBlock("trust-strip", "Vitality Dental")!));
+    g = must(addBlockChip(g, "welcome", 0, "Open Saturdays"));
+    const after = welcomeBlocksOf(must(removeBlockItem(g, "welcome", 0, 0)))[0]!;
+    expect(after.kind === "trust-strip" ? after.chips : []).toEqual(["Open Saturdays"]);
+    expect(refusal(removeBlockItem(g, "welcome", 0, 9))).toContain("no longer there");
+
+    const image = must(addBlock(invisalign(), "welcome", starterBlock("image")!));
+    expect(refusal(removeBlockItem(image, "welcome", 0, 0))).toContain("no list");
+  });
+});
+
+describe("ordering and removing blocks", () => {
+  // Authored order IS render order (flow-block-view.ts), so this is the control
+  // that decides whether the trust strip sits above the questions or below them.
+  it("moves a block up and down, and says which end it is already at", () => {
+    let g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    g = must(addBlock(g, "welcome", starterBlock("image")!));
+    expect(welcomeBlocksOf(g).map((b) => b.kind)).toEqual(["faq", "image"]);
+
+    const moved = must(moveBlock(g, "welcome", 1, -1));
+    expect(welcomeBlocksOf(moved).map((b) => b.kind)).toEqual(["image", "faq"]);
+    expect(refusal(moveBlock(g, "welcome", 0, -1))).toContain("top");
+    expect(refusal(moveBlock(g, "welcome", 1, 1))).toContain("bottom");
+    expect(must(moveBlock(g, "welcome", 0, 0))).toEqual(g);
+  });
+
+  // MUTATION: leave `blocks: []` behind and the node is a v2 node carrying an
+  // empty list. normaliseFlow tolerates it (flow.ts:486-491) but the graph then
+  // claims content it does not have, which is exactly what misplaced() guards.
+  it("takes the key away with the last block rather than leaving an empty list", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    const bare = must(removeBlock(g, "welcome", 0));
+    const node = bare.nodes.find((n) => n.id === "welcome")!;
+    expect("blocks" in node ? node.blocks : undefined).toBeUndefined();
+    expect(refusal(removeBlock(bare, "welcome", 0))).toContain("no longer on this screen");
+  });
+});
+
+describe("every block op leaves a funnel the server can still read", () => {
+  // THE INVARIANT. normaliseFlow is all-or-nothing: anything it cannot read comes
+  // back as rule 0, "the funnel could not be read as a graph", which names nothing
+  // the owner can fix. So no op here may be able to produce one.
+  it("holds through a full editing session", () => {
+    let g: FlowGraph = { ...invisalign(), schemaVersion: 1 };
+    const readable = (): void => {
+      expect(normaliseFlow(JSON.parse(JSON.stringify(g))), "unreadable graph").not.toBeNull();
+    };
+    readable();
+    g = must(addBlock(g, "welcome", starterBlock("trust-strip", "Vitality Dental")!));
+    readable();
+    g = must(addBlockChip(g, "welcome", 0, "Open Saturdays"));
+    readable();
+    g = must(addBlock(g, "result-high", faqBlock()));
+    readable();
+    g = must(setBlockText(g, "result-high", 0, "items[0].a", "About half a minute."));
+    readable();
+    g = must(addBlock(g, "result-high", starterBlock("image")!));
+    readable();
+    g = must(moveBlock(g, "result-high", 1, -1));
+    readable();
+    g = must(removeBlock(g, "welcome", 0));
+    readable();
+    expect(validateFlow(g).ok).toBe(true);
+  });
+
+  it("never edits the graph it was handed", () => {
+    const g = must(addBlock(invisalign(), "welcome", faqBlock()));
+    untouched(g, (x) => addBlock(x, "result-low", starterBlock("image")!));
+    untouched(g, (x) => setBlockText(x, "welcome", 0, "items[0].q", "New"));
+    untouched(g, (x) => addBlockFaqItem(x, "welcome", 0, "Q", "A"));
+    untouched(g, (x) => removeBlockItem(x, "welcome", 0, 0));
+    untouched(g, (x) => moveBlock(x, "welcome", 0, 1));
+    untouched(g, (x) => removeBlock(x, "welcome", 0));
+    untouched(g, (x) => setOptionImage(x, "q-smile_concern", "crowded", "conditions/crowded"));
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * ANSWER-CARD PICTURES (rule 14's editing half).
+ * ------------------------------------------------------------------------- */
+
+const imagesOn = (g: FlowGraph, id: string): { value: string; image: string }[] => {
+  const n = g.nodes.find((x) => x.id === id);
+  return n && n.kind === "question" ? (n.optionImages ?? []) : [];
+};
+
+describe("pictures on the answer cards", () => {
+  it("draws a row for every answer, in the order the patient sees them", () => {
+    const g = invisalign();
+    const rows = optionImageRows(g, "q-smile_concern");
+    expect(rows.map((r) => r.value)).toEqual(
+      routableAnswers(g.nodes.find((n) => n.id === "q-smile_concern")!).map((a) => a.value),
+    );
+    expect(rows.every((r) => r.image === null)).toBe(true);
+    // Only the LAST answer may be left without one - rule 14's one relaxation,
+    // and the escape hatch every bank question writes last.
+    expect(rows.filter((r) => r.mayGoWithout).map((r) => r.value)).toEqual(["unsure"]);
+    expect(optionImageRows(g, "welcome")).toEqual([]);
+  });
+
+  it("assigns a picture, replaces one in place, and bumps a pre-A2 funnel", () => {
+    const v1: FlowGraph = { ...invisalign(), schemaVersion: 1 };
+    let g = must(setOptionImage(v1, "q-smile_concern", "crowded", "conditions/crowded"));
+    expect(g.schemaVersion).toBe(2);
+    expect(imagesOn(g, "q-smile_concern")).toEqual([{ value: "crowded", image: "conditions/crowded" }]);
+
+    g = must(setOptionImage(g, "q-smile_concern", "gaps", "conditions/gaps"));
+    g = must(setOptionImage(g, "q-smile_concern", "crowded", "conditions/even-bite"));
+    // Replaced where it stood: the order is what rule 14 walks and what the rail lists.
+    expect(imagesOn(g, "q-smile_concern")).toEqual([
+      { value: "crowded", image: "conditions/even-bite" },
+      { value: "gaps", image: "conditions/gaps" },
+    ]);
+    expect(optionImageRows(g, "q-smile_concern")[0]!.image).toBe("conditions/even-bite");
+  });
+
+  it("refuses a screen picture, an unknown key, and an answer the question has not got", () => {
+    const g = invisalign();
+    expect(refusal(setOptionImage(g, "q-smile_concern", "crowded", "screens/aligners"))).toContain(
+      "screen picture",
+    );
+    expect(refusal(setOptionImage(g, "q-smile_concern", "crowded", "../../etc/passwd"))).toContain(
+      "never a link",
+    );
+    expect(refusal(setOptionImage(g, "q-smile_concern", "sedation", "conditions/crowded"))).toContain(
+      "not an answer",
+    );
+    expect(refusal(setOptionImage(g, "welcome", "crowded", "conditions/crowded"))).toContain(
+      "no longer there",
+    );
+  });
+
+  // THE RAGGED RULE IS SURFACED, NOT ENFORCED HERE. Pictures go on one answer at a
+  // time, so every grid is ragged on the way to being complete; an op that refused
+  // the first picture would refuse all of them. MUTATION: refuse a ragged
+  // assignment here and answer pictures become unusable.
+  it("lets a grid be half-finished, and rule 14 is what says what is left", () => {
+    const half = must(setOptionImage(invisalign(), "q-smile_concern", "crowded", "conditions/crowded"));
+    const ragged = validateFlow(half).failures.find((f) => f.code === "option_images_ragged");
+    expect(ragged?.message).toContain("gaps");
+    expect(ragged?.message).toContain("unsure");
+
+    // ...and a grid with every answer but the last one pictured is publishable.
+    const pairs: [string, string][] = [
+      ["crowded", "conditions/crowded"],
+      ["gaps", "conditions/gaps"],
+      ["open_bite", "conditions/open-bite"],
+      ["overbite", "conditions/overbite"],
+      ["underbite", "conditions/underbite"],
+      ["crossbite", "conditions/crossbite"],
+      ["even", "conditions/even-bite"],
+    ];
+    let g = invisalign();
+    for (const [value, key] of pairs) g = must(setOptionImage(g, "q-smile_concern", value, key));
+    expect(validateFlow(g).ok).toBe(true);
+    expect(optionImageRows(g, "q-smile_concern").filter((r) => r.image === null).map((r) => r.value)).toEqual([
+      "unsure",
+    ]);
+  });
+
+  it("removes a picture and takes the key away with the last one", () => {
+    let g = must(setOptionImage(invisalign(), "q-smile_concern", "crowded", "conditions/crowded"));
+    g = must(setOptionImage(g, "q-smile_concern", "gaps", "conditions/gaps"));
+    g = must(removeOptionImage(g, "q-smile_concern", "crowded"));
+    expect(imagesOn(g, "q-smile_concern")).toEqual([{ value: "gaps", image: "conditions/gaps" }]);
+
+    const bare = must(removeOptionImage(g, "q-smile_concern", "gaps"));
+    const node = bare.nodes.find((n) => n.id === "q-smile_concern")!;
+    expect("optionImages" in node ? node.optionImages : undefined).toBeUndefined();
+    expect(refusal(removeOptionImage(bare, "q-smile_concern", "gaps"))).toContain("no picture");
+  });
+
+  it("keeps the step's lead-in line when a picture changes", () => {
+    let g = must(setQuestionTransition(invisalign(), "q-smile_concern", "Nearly there."));
+    g = must(setOptionImage(g, "q-smile_concern", "crowded", "conditions/crowded"));
+    const node = g.nodes.find((n) => n.id === "q-smile_concern")!;
+    expect(node.kind === "question" ? node.transition : null).toBe("Nearly there.");
+  });
+});
+
+describe("what changing a question costs", () => {
+  // setNodeQuestion DROPS answer pictures - it has to, they name the old
+  // question's options (rule 14 would fail on every one). The rail has no confirm
+  // dialog anywhere, so the cost is said in words, on the picker, first.
+  // MUTATION: return null here and the swap silently deletes the owner's pictures.
+  it("says how many pictures a swap would take with it, before it is made", () => {
+    const g = invisalign();
+    expect(questionSwapWarning(g, "q-smile_concern")).toBeNull();
+    expect(questionSwapWarning(g, "welcome")).toBeNull();
+
+    const one = must(setOptionImage(g, "q-smile_concern", "crowded", "conditions/crowded"));
+    expect(questionSwapWarning(one, "q-smile_concern")).toContain("the answer picture");
+    const two = must(setOptionImage(one, "q-smile_concern", "gaps", "conditions/gaps"));
+    expect(questionSwapWarning(two, "q-smile_concern")).toContain("the 2 answer pictures");
+
+    // ...and the warning is honest: the swap really does drop them.
+    const swapped = must(setNodeQuestion(two, "q-smile_concern", "align_detail"));
+    expect(imagesOn(swapped, "q-smile_concern")).toEqual([]);
+    expect(validateFlow(swapped).ok).toBe(true);
   });
 });

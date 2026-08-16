@@ -13,6 +13,7 @@ import {
   releaseLeadClaim,
 } from "@/lib/speed-to-lead/repository";
 import { consumeBudget } from "@/lib/rate-budget";
+import { clientIp } from "@/lib/http/client-ip";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
@@ -60,11 +61,14 @@ function tooManyForIp(ip: string, now: number): boolean {
   return hits.length > IP_RATE_LIMIT;
 }
 
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]!.trim();
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
+// The per-IP identity comes from the SHARED reader (@/lib/http/client-ip), not
+// from a local copy. This route used to prefer the LEFTMOST x-forwarded-for hop —
+// the one the caller writes — so both of this endpoint's per-IP ceilings could be
+// reset by changing a header, on the one public route in this tree that can spend
+// the practice's money (a HIGH band drafts with Claude and sends a real SMS). The
+// shared reader takes x-real-ip first and otherwise the RIGHTMOST hop, so two
+// spoofed prefixes from one client land on one key. Pinned by the spoof-variant
+// tests in public-gates.test.ts.
 
 function ok(band: string, message: string, leadCreated: boolean, bookingUrl?: string): Response {
   return Response.json(

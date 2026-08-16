@@ -148,9 +148,10 @@ function keysetFilter(c: ScanCursor): string {
  *
  * (created_at, id) TOGETHER, because neither is enough alone: created_at is not
  * unique on a table that ingests whole batches inside one millisecond, and id is a
- * random uuid with no time order. Both are covered by 0080's read-path index —
- * created_at as its last key column, id in the INCLUDE list — so paging this way
- * keeps the index-only scan the migration was shaped around.
+ * random uuid with no time order. Both are KEY columns of 0080's read-path index —
+ * the last two — so the index's own order is this query's order: the scan needs no
+ * sort, the cursor lands by seek, and the index-only scan the migration was shaped
+ * around is intact (step_index and session_nonce ride along in the INCLUDE list).
  *
  * SCOPED BY campaign_id AND flow_version, never by client alone. A drop-off number
  * is about one version of one funnel: mixing versions averages the funnel an owner

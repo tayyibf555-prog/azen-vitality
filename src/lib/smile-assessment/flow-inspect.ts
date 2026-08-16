@@ -30,24 +30,43 @@
 // dropped: an unmapped failure that names this step still surfaces, at the head
 // of the rail, because a rule the owner cannot see is a rule they cannot fix.
 
-import { nodeMap, type FlowEdge, type FlowGraph } from "./flow";
 import {
+  FLOW_LIMITS,
+  isFlowBlockKind,
+  nodeMap,
+  type FlowBlock,
+  type FlowBlockKind,
+  type FlowEdge,
+  type FlowGraph,
+} from "./flow";
+import {
+  addBlock,
+  addBlockChip,
+  addBlockFaqItem,
   addEdge,
   defaultTargetOf,
   insertQuestionOnEdge,
+  moveBlock,
   moveEdge,
   nextNodeId,
   outgoingEdges,
   planScreenInsertion,
+  removeBlock,
+  removeBlockItem,
   removeEdge,
   removeNode,
+  removeOptionImage,
+  setBlockImage,
+  setBlockText,
   setEdgeAnswer,
   setEdgeTarget,
   setEdgeTransition,
   setNodeQuestion,
+  setOptionImage,
   setOutcomeHeadline,
   setQuestionTransition,
   setWelcomeCopy,
+  starterBlock,
   type FlowEditResult,
 } from "./flow-edit";
 import type { FlowValidationFailure } from "./flow-validate";
@@ -140,9 +159,93 @@ export type InspectorEdit =
   | { kind: "remove-edge"; index: number }
   /** Move a branch up or down among the wires out of its own step. */
   | { kind: "move-edge"; index: number; delta: number }
-  | { kind: "insert-question"; index: number; questionId: string };
+  | { kind: "insert-question"; index: number; questionId: string }
+  // --- A2's furniture, on the welcome and result screens -------------------
+  /**
+   * ADD A CONTENT BLOCK. It carries the WORDS for the kinds that have none of
+   * their own, rather than a finished block, because "what may a new block say"
+   * is the rule this whole lane turns on: `starterBlock` has no answer for a
+   * testimonial (a quote is the practice's, never ours) and none for a trust
+   * strip without a practice name. Resolving that here keeps the rail a form and
+   * leaves the judgement in a module vitest can reach.
+   */
+  | {
+      kind: "add-block";
+      blockKind: FlowBlockKind;
+      /** Whose name goes on a trust strip. */
+      practiceName?: string;
+      /** A testimonial's own words, and who said them. Required for that kind. */
+      quote?: string;
+      attribution?: string;
+    }
+  | { kind: "remove-block"; index: number }
+  /** Move a block up or down the screen: authored order is render order. */
+  | { kind: "move-block"; index: number; delta: number }
+  /** One authored line of a block, by its blockCopyFields path (flow.ts:187). */
+  | { kind: "block-text"; index: number; field: string; text: string }
+  /** A picture block's picture, as a manifest key. Never a path, never a URL. */
+  | { kind: "block-image"; index: number; image: string }
+  | { kind: "block-chip-add"; index: number; text: string }
+  | { kind: "block-faq-add"; index: number; q: string; a: string }
+  /** Drop one chip or one faq pair from the block at `index`. */
+  | { kind: "block-item-remove"; index: number; at: number }
+  // --- A2's answer-card pictures, on a question screen ---------------------
+  | { kind: "option-image"; value: string; image: string }
+  | { kind: "option-image-remove"; value: string };
 
 const refuse = (reason: string): FlowEditResult => ({ ok: false, reason });
+
+/**
+ * WHAT A NEW BLOCK IS MADE OF - the one place the charter's testimonial rule is
+ * enforced rather than remembered.
+ *
+ * AI NEVER INVENTS A TESTIMONIAL, and neither does the builder. `starterBlock`
+ * returns null for that kind on purpose (flow-edit.ts), so this is where an
+ * "add a testimonial" click without the practice's own words becomes a refusal
+ * in words instead of a block containing something nobody said. The rail can
+ * only disable a button; a rule that lives in the disabled attribute is a rule
+ * that vanishes the first time the button is re-styled.
+ *
+ * The trust strip is the same shape for a smaller reason: it carries the
+ * practice's NAME, and this panel is not always given one.
+ */
+function blockToAdd(
+  edit: Extract<InspectorEdit, { kind: "add-block" }>,
+): { ok: true; block: FlowBlock } | { ok: false; reason: string } {
+  if (!isFlowBlockKind(edit.blockKind)) {
+    return { ok: false, reason: `“${String(edit.blockKind)}” is not a content block this build can render.` };
+  }
+  if (edit.blockKind === "testimonial") {
+    const quote = (edit.quote ?? "").trim();
+    const attribution = (edit.attribution ?? "").trim();
+    if (!quote || !attribution) {
+      return {
+        ok: false,
+        reason:
+          "A testimonial is a quote the practice already holds and the name of whoever gave it. Type both, in their words: nothing here writes one for you.",
+      };
+    }
+    return {
+      ok: true,
+      block: {
+        kind: "testimonial",
+        quote: quote.slice(0, FLOW_LIMITS.quote),
+        attribution: attribution.slice(0, FLOW_LIMITS.attribution),
+      },
+    };
+  }
+  const starter = starterBlock(edit.blockKind, edit.practiceName);
+  if (!starter) {
+    return {
+      ok: false,
+      reason:
+        edit.blockKind === "trust-strip"
+          ? "A trust strip carries the practice’s name, and this funnel was not given one. Type it in, then add the block."
+          : "There is no picture in the library for a screen yet.",
+    };
+  }
+  return { ok: true, block: starter };
+}
 
 /**
  * Apply one control's intent to the draft graph. Pure: a NEW graph out, or a
@@ -224,6 +327,38 @@ export function applyInspectorEdit(
 
     case "remove-node":
       return removeNode(graph, node.id);
+
+    case "add-block": {
+      const built = blockToAdd(edit);
+      return built.ok ? addBlock(graph, node.id, built.block) : refuse(built.reason);
+    }
+
+    case "remove-block":
+      return removeBlock(graph, node.id, edit.index);
+
+    case "move-block":
+      return moveBlock(graph, node.id, edit.index, edit.delta);
+
+    case "block-text":
+      return setBlockText(graph, node.id, edit.index, edit.field, edit.text);
+
+    case "block-image":
+      return setBlockImage(graph, node.id, edit.index, edit.image);
+
+    case "block-chip-add":
+      return addBlockChip(graph, node.id, edit.index, edit.text);
+
+    case "block-faq-add":
+      return addBlockFaqItem(graph, node.id, edit.index, edit.q, edit.a);
+
+    case "block-item-remove":
+      return removeBlockItem(graph, node.id, edit.index, edit.at);
+
+    case "option-image":
+      return setOptionImage(graph, node.id, edit.value, edit.image);
+
+    case "option-image-remove":
+      return removeOptionImage(graph, node.id, edit.value);
   }
 }
 
@@ -303,7 +438,11 @@ export type InspectorField =
   /** A connection's own answer picker... */
   | "answer"
   /** ...and its destination. */
-  | "target";
+  | "target"
+  /** The content blocks on a welcome or result screen (rules 12 and 13). */
+  | "blocks"
+  /** The pictures on a question's answer cards (rules 13 and 14). */
+  | "answer-images";
 
 export interface FieldIssue {
   field: InspectorField;
@@ -341,7 +480,31 @@ const NODE_FIELD_BY_CODE: Readonly<Record<string, InspectorField>> = {
   band_uncovered: "branches",
   outcome_not_terminal: "branches",
   terminal_not_outcome: "branches",
+  // rule 12 / 14 - about the furniture, reported ON the step rather than on one
+  // block ("this is a question step, blocks belong elsewhere").
+  blocks_wrong_screen: "blocks",
+  blocks_too_many: "blocks",
+  option_images_wrong_screen: "answer-images",
+  option_images_too_many: "answer-images",
+  option_images_ragged: "answer-images",
 };
+
+/**
+ * WHICH SECTION A FAILURE INSIDE A SCREEN BELONGS TO, decided by the PATH and not
+ * by the code - because one code lands in two different sections.
+ *
+ * Rule 13's `image_unknown` and `image_wrong_slot` are reported for a BLOCK's
+ * picture (`node "welcome".blocks[1].image`) and for an ANSWER CARD's picture
+ * (`node "q-x".optionImages[0].image`) with the same code, and those are two
+ * different lists in the rail. flow-validate writes the path, so the path is what
+ * can tell them apart. Null means "not one of these sections", and the code map
+ * above then has its say.
+ */
+function sectionFor(nodeId: string, where: string): InspectorField | null {
+  if (where.startsWith(`node "${nodeId}".blocks[`)) return "blocks";
+  if (where.startsWith(`node "${nodeId}".optionImages[`)) return "answer-images";
+  return null;
+}
 
 /** Which control an edge-scoped failure sits under, in a CONNECTION's rail. */
 const EDGE_FIELD_BY_CODE: Readonly<Record<string, InspectorField>> = {
@@ -372,10 +535,11 @@ export function nodeIssues(
   const own = new Set(outgoingEdges(graph, nodeId).map(({ edge }) => edgeWhere(edge)));
   const out: FieldIssue[] = [];
   for (const f of failures) {
-    // `node "id".blocks[0].quote` and friends: named ON this step, no control of
-    // their own in the rail yet, so they surface at its head.
+    // `node "id".blocks[0].quote` and friends land on the SECTION they are in;
+    // anything else named on this step falls to its own control, or to the head
+    // of the rail when nothing claims it.
     if (f.where === nodeId || f.where.startsWith(`node "${nodeId}".`)) {
-      out.push(issue(NODE_FIELD_BY_CODE[f.code] ?? "step", f));
+      out.push(issue(sectionFor(nodeId, f.where) ?? NODE_FIELD_BY_CODE[f.code] ?? "step", f));
     } else if (own.has(f.where)) {
       out.push(issue("branches", f));
     }
@@ -405,5 +569,62 @@ export function edgeIssues(
 
 /** The issues on one control, in the order validateFlow reported them. */
 export function issuesFor(issues: readonly FieldIssue[], field: InspectorField): FieldIssue[] {
+  return issues.filter((i) => i.field === field);
+}
+
+/**
+ * A failure inside ONE content block, with the line it is about.
+ *
+ * `field` is a blockCopyFields path (`quote`, `chips[0]`, `items[1].a`, `alt`) or
+ * `image` for the picture reference; null means it is about the block as a whole
+ * ("a faq needs 2 to 6 questions"). The rail prints the nulls at the head of the
+ * block's card and the rest under the box that fixes them - the same doctrine as
+ * nodeIssues, one level further in.
+ */
+export interface BlockIssue {
+  field: string | null;
+  rule: number;
+  code: string;
+  message: string;
+}
+
+/**
+ * Everything validateFlow said about the block at `index` on this step.
+ *
+ * MATCHED WHOLE, NEVER BY PREFIX ALONE, and that is the part worth a test:
+ * `node "welcome".blocks[1]` is a prefix of `node "welcome".blocks[10]`, so a
+ * loose startsWith would print block 10's failures on block 1 the first time a
+ * screen had eleven of them. The path must be the block's exactly, or the block's
+ * followed by a dot.
+ *
+ * NO GRAPH ARGUMENT on purpose: `where` is a STRING flow-validate wrote, and
+ * rebuilding it from the graph is the only way to read it. Taking the graph would
+ * invite deriving the answer from the block instead, which is how the mapping and
+ * the validator come to disagree.
+ */
+export function blockIssues(
+  failures: readonly FlowValidationFailure[],
+  nodeId: string,
+  index: number,
+): BlockIssue[] {
+  const prefix = `node "${nodeId}".blocks[${index}]`;
+  const out: BlockIssue[] = [];
+  for (const f of failures) {
+    if (f.where === prefix) {
+      out.push({ field: null, rule: f.rule, code: f.code, message: f.message });
+    } else if (f.where.startsWith(`${prefix}.`)) {
+      out.push({
+        field: f.where.slice(prefix.length + 1),
+        rule: f.rule,
+        code: f.code,
+        message: f.message,
+      });
+    }
+  }
+  return out;
+}
+
+/** The issues on one line of a block, or - with null - on the block itself. */
+export function blockIssuesFor(issues: readonly BlockIssue[], field: string | null): BlockIssue[] {
   return issues.filter((i) => i.field === field);
 }

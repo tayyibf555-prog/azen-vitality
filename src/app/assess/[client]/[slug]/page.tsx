@@ -162,6 +162,12 @@ export default async function CampaignAssessmentPage({
         style={style}
         previewMode={previewMode}
         flow={flow}
+        // WHICH SAVE of the funnel the patient is looking at, for step-drop-off
+        // telemetry only. Passed from the server so the browser cannot claim a
+        // version, and passed alongside `flow` so the two can never describe
+        // different saves. Absent flow means no deterministic runtime and no
+        // beacon, so this is inert on every adaptive session.
+        flowVersion={campaign.flowVersion}
       />
     </div>
   );

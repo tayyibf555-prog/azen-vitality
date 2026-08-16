@@ -174,3 +174,45 @@ describe("smile-assessment/next — campaign bias is best-effort and scoped", ()
     }
   });
 });
+
+// LAST IN THE FILE ON PURPOSE: the per-IP limiter is a module-level map, so these
+// two saturate a bucket and must not leave a full one behind for anything above.
+describe("smile-assessment/next — the per-IP limiter's identity", () => {
+  // The rule lives in @/lib/http/client-ip and is unit-tested there; what these two
+  // hold is that THIS ROUTE spends its per-IP allowance against the hop the caller
+  // cannot write. x-forwarded-for is a list the browser seeds and the platform
+  // APPENDS to, so the leftmost entry is attacker-chosen.
+
+  function post(xff: string): Promise<Response> {
+    return POST(
+      new Request("http://localhost/api/smile-assessment/next", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": xff },
+        body: JSON.stringify({ answers: { treatment_interest: "implants" } }),
+      }),
+    );
+  }
+
+  // MUTATION: read the leftmost hop. Every request below would then land in its own
+  // bucket and the 80-per-hour cap would never fire — a per-IP cap that caps
+  // nothing, on an endpoint where every call costs an AI token.
+  it("pours spoofed prefixes from one real client into ONE bucket, which fills", async () => {
+    let blocked = false;
+    for (let i = 0; i < 82; i++) {
+      // A different attacker-chosen prefix every time; the same real last hop.
+      const res = await post(`10.0.0.${i}, 9.9.9.9`);
+      if (res.status === 429) {
+        blocked = true;
+        break;
+      }
+    }
+    expect(blocked).toBe(true);
+  });
+
+  it("leaves a genuinely different client behind that same spoofed prefix untouched", async () => {
+    // The bucket for 9.9.9.9 is now full (above). A caller whose REAL hop is
+    // different must still be served, even though it forwards 9.9.9.9 first.
+    const res = await post("9.9.9.9, 198.51.100.77");
+    expect(res.status).toBe(200);
+  });
+});

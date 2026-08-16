@@ -21,18 +21,22 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { FlowGraph } from "@/lib/smile-assessment/flow";
+import { blockCopyFields, type FlowGraph } from "@/lib/smile-assessment/flow";
 import { validateFlow } from "@/lib/smile-assessment/flow-validate";
 import { FLOW_TEMPLATES, templateForGoal } from "@/lib/smile-assessment/flow-templates";
 import { insertionPoints, phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
 import { screenFor, type PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 import { questionById } from "@/lib/smile-assessment/quiz";
 import {
+  addableBlockKinds,
   describeEdge,
   insertableQuestionsAfter,
+  optionImageRows,
+  questionSwapWarning,
   swappableQuestions,
 } from "@/lib/smile-assessment/flow-edit";
-import type { FlowSelection } from "@/lib/smile-assessment/flow-inspect";
+import { applyInspectorEdit, type FlowSelection } from "@/lib/smile-assessment/flow-inspect";
+import { assessImage } from "@/lib/assess/image-library";
 import { FlowInspector } from "./flow-inspector";
 import { FlowPhoneCanvas } from "./flow-phone-canvas";
 
@@ -821,5 +825,316 @@ describe("every operation is reachable from a screen", () => {
         expect(html, `edge ${index}: no ${needle}`).toContain(needle);
       }
     });
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 8. A2's BUILDER SURFACE: content blocks, and pictures on the answer cards.
+ *
+ * The last thing in the funnel that could be authored by a generator and by
+ * nothing else. What is held here is the WIRING - that the sections appear on the
+ * screens that can carry them and nowhere else, that every authored line has a
+ * box, that a picture is picked rather than typed - and not the rules, which are
+ * flow-edit.test.ts's and flow-inspect.test.ts's.
+ * ------------------------------------------------------------------------- */
+
+/** The same funnel with two blocks on its welcome screen, in authored order. */
+function withFurniture(): FlowGraph {
+  const g = invisalign();
+  return {
+    ...g,
+    nodes: g.nodes.map((n) =>
+      n.id === "welcome"
+        ? {
+            ...n,
+            blocks: [
+              { kind: "trust-strip", practiceName: "Vitality Dental", chips: ["Open Saturdays", "Free parking"] },
+              { kind: "faq", items: [{ q: "How long?", a: "About 30 seconds." }, { q: "Then what?", a: "We call you." }] },
+            ],
+          }
+        : n,
+    ),
+  } as FlowGraph;
+}
+
+describe("the blocks section", () => {
+  // MUTATION: draw it on every rail. A question screen's job is the one question
+  // and the contact screen's is the form (flow.ts, FLOW_BLOCK_SCREEN_KINDS); rule
+  // 12 refuses a block on either, so a section there is a control that can only
+  // produce a funnel that will not publish.
+  it("is on the screens that can carry blocks, and on no others", () => {
+    const g = invisalign();
+    expect(rail(g, { kind: "node", id: "welcome" })).toContain("Blocks on this screen");
+    expect(rail(g, { kind: "node", id: "result-high" })).toContain("Blocks on this screen");
+    expect(rail(g, { kind: "node", id: "q-timeline" })).not.toContain("Blocks on this screen");
+    expect(rail(g, { kind: "node", id: "contact" })).not.toContain("Blocks on this screen");
+  });
+
+  it("offers exactly the kinds that screen has not got yet", () => {
+    const empty = rail(invisalign(), { kind: "node", id: "welcome" });
+    const at = empty.indexOf('<select id="ab-welcome"');
+    const kinds = empty.slice(at, empty.indexOf("</select>", at));
+    // One "choose a kind" placeholder plus one per addable kind.
+    expect(occurrences(kinds, "<option")).toBe(addableBlockKinds(invisalign(), "welcome").length + 1);
+    for (const kind of addableBlockKinds(invisalign(), "welcome")) {
+      expect(kinds).toContain(`value="${kind}"`);
+    }
+
+    // ...and the two already on the screen are gone from the picker.
+    const full = rail(withFurniture(), { kind: "node", id: "welcome" });
+    const at2 = full.indexOf('<select id="ab-welcome"');
+    const left = full.slice(at2, full.indexOf("</select>", at2));
+    expect(left).not.toContain('value="faq"');
+    expect(left).not.toContain('value="trust-strip"');
+    expect(left).toContain('value="testimonial"');
+  });
+
+  // EVERY AUTHORED LINE HAS A BOX, and the list is blockCopyFields' - the same one
+  // rule 12 caps and the compliance scan reads. MUTATION: draw a fixed set of
+  // fields per kind here and a chip added by the generator becomes uneditable.
+  it("draws one box per line blockCopyFields names, carrying that line's words", () => {
+    const g = withFurniture();
+    const html = rail(g, { kind: "node", id: "welcome" });
+    const blocks = nodeOf(g, "welcome");
+    const list = blocks.kind === "welcome" ? (blocks.blocks ?? []) : [];
+    expect(list).toHaveLength(2);
+
+    list.forEach((block, index) => {
+      for (const field of blockCopyFields(block)) {
+        const id = `bf-welcome-${index}-${field.field.replace(/[^a-z0-9]/gi, "")}`;
+        expect(html, `no box for ${block.kind}.${field.field}`).toContain(`id="${id}"`);
+        expect(html, `${field.field} does not carry its words`).toContain(esc(field.text));
+      }
+    });
+    // Both blocks, in authored order: the order they render in.
+    expect(html.indexOf("trust strip")).toBeLessThan(html.indexOf("questions and answers"));
+  });
+
+  it("gives every block a way up, a way down and a way out", () => {
+    const html = rail(withFurniture(), { kind: "node", id: "welcome" });
+    expect(html).toContain('aria-label="Move the trust strip down"');
+    expect(html).toContain('aria-label="Move the questions and answers up"');
+    expect(html).toContain('aria-label="Remove the trust strip"');
+    expect(html).toContain('aria-label="Remove the questions and answers"');
+    // A screen with ONE block has nothing to reorder, so it is not offered.
+    const one = invisalign();
+    const single = {
+      ...one,
+      nodes: one.nodes.map((n) =>
+        n.id === "result-low" ? { ...n, blocks: [{ kind: "faq", items: [{ q: "A", a: "B" }, { q: "C", a: "D" }] }] } : n,
+      ),
+    } as FlowGraph;
+    expect(rail(single, { kind: "node", id: "result-low" })).not.toContain('aria-label="Move the');
+  });
+
+  // THE CHARTER RULE, ON THE SURFACE THAT COULD BREAK IT. The add control asks
+  // for the practice's own words and says, in the rail, that nothing here writes
+  // one - and the refusal behind it lives in flow-inspect.ts, not in `disabled`.
+  it("says a testimonial is the practice's own words, and never starts one", () => {
+    const code = codeOnly(inspectorSource);
+    // Said where the owner is choosing what to add, not only once the fields for
+    // it appear: a rule behind a state change is a rule most owners never read.
+    expect(rail(invisalign(), { kind: "node", id: "welcome" })).toContain(
+      esc("A testimonial is the practice's own words"),
+    );
+    expect(rail(invisalign(), { kind: "node", id: "welcome" })).toContain(
+      esc("nothing here writes one for you"),
+    );
+    expect(code).toContain("kind: \"add-block\"");
+    // The words travel with the intent: the rail cannot make the block itself.
+    expect(code).toContain("quote,");
+    expect(code).toContain("attribution,");
+    expect(code).not.toContain("kind: \"testimonial\"");
+    expect(code).not.toContain("starterBlock");
+  });
+
+  it("prints a block's own failures against the box that fixes them", () => {
+    const g = invisalign();
+    const broken = {
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === "welcome"
+          ? { ...n, blocks: [{ kind: "faq", items: [{ q: "Only one", a: "Answer" }] }] }
+          : n,
+      ),
+    } as FlowGraph;
+    const failure = validateFlow(broken).failures.find((f) => f.code === "faq_item_count");
+    expect(failure).toBeTruthy();
+    expect(rail(broken, { kind: "node", id: "welcome" })).toContain(esc(failure!.message));
+  });
+});
+
+describe("pictures on the answer cards", () => {
+  it("is on a question rail only, with a row per answer", () => {
+    const g = invisalign();
+    const html = rail(g, { kind: "node", id: "q-smile_concern" });
+    expect(html).toContain("Pictures on the answers");
+    const rows = optionImageRows(g, "q-smile_concern");
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) expect(html, `no row for ${row.value}`).toContain(esc(row.label));
+    expect(occurrences(html, 'aria-expanded="false"')).toBe(rows.length);
+
+    expect(rail(g, { kind: "node", id: "welcome" })).not.toContain("Pictures on the answers");
+    expect(rail(g, { kind: "node", id: "contact" })).not.toContain("Pictures on the answers");
+  });
+
+  // RULE 14's RELAXATION, SAID ON THE ROW IT APPLIES TO. Every other unpictured
+  // answer says "no picture yet"; the last one says it is allowed.
+  it("says which answer may be left without a picture", () => {
+    const html = rail(invisalign(), { kind: "node", id: "q-smile_concern" });
+    expect(occurrences(html, "No picture, which is allowed on the last answer")).toBe(1);
+    expect(html).toContain("Give every answer a picture, or leave only the last one without");
+  });
+
+  it("shows the picture an answer has, with a way to change it and a way to take it off", () => {
+    const g = invisalign();
+    const pictured = {
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === "q-smile_concern"
+          ? { ...n, optionImages: [{ value: "crowded", image: "conditions/crowded" }] }
+          : n,
+      ),
+    } as FlowGraph;
+    const html = rail(pictured, { kind: "node", id: "q-smile_concern" });
+    const image = assessImage("conditions/crowded")!;
+    expect(html).toContain(`src="${image.path}"`);
+    expect(html).toContain(esc(image.alt));
+    expect(html).toContain(">Change</button>");
+    expect(occurrences(html, 'aria-label="Remove the picture on')).toBe(1);
+    // ...and rule 14's ragged message reaches the section the pictures are in.
+    const ragged = validateFlow(pictured).failures.find((f) => f.code === "option_images_ragged");
+    expect(html).toContain(esc(ragged!.message));
+  });
+
+  // CUT 4 AT THE LAST SURFACE THAT COULD BREAK IT. A picture is PICKED from the
+  // manifest; there is no box to type a reference into, so no URL can reach the
+  // jsonb behind a public page.
+  it("never lets a picture reference be typed", () => {
+    const code = codeOnly(inspectorSource);
+    expect(code).toContain("assessImagesForSlot");
+    expect(code).toContain("image.key");
+    // The one place a reference is written is a click on a manifest entry.
+    expect(code).not.toMatch(/kind: "block-image", index, image: [a-z]*\.target/);
+    expect(code).not.toMatch(/kind: "option-image", value: [^}]*target\.value/);
+    for (const block of ["block-image", "option-image"]) {
+      expect(code, `${block} is emitted from a text box`).not.toMatch(
+        new RegExp(`onBlur[^)]*${block}`),
+      );
+    }
+  });
+});
+
+describe("the rail still decides nothing about a block", () => {
+  const code = codeOnly(inspectorSource);
+
+  // MUTATION: call addBlock/setBlockText/setOptionImage from a handler here and
+  // the rules they carry - which kinds may be added, what a blank line does, which
+  // slot a key must fit - move into a file vitest collects nothing from.
+  it("imports no block WRITE op, only the readers", () => {
+    for (const op of [
+      "addBlock(",
+      "removeBlock(",
+      "moveBlock(",
+      "setBlockText",
+      "setBlockImage",
+      "addBlockChip",
+      "addBlockFaqItem",
+      "removeBlockItem",
+      "setOptionImage",
+      "removeOptionImage",
+    ]) {
+      expect(code, `the rail calls ${op}`).not.toContain(op);
+    }
+    for (const reader of ["addableBlockKinds", "optionImageRows", "questionSwapWarning", "blockIssues"]) {
+      expect(code, `${reader} is not read from the pure layer`).toContain(reader);
+    }
+    // Which screens take blocks is blocksOf/addableBlockKinds' answer, never a
+    // second list of node kinds written here.
+    expect(code).not.toContain("FLOW_BLOCK_KINDS");
+    expect(code).not.toContain("acceptsBlocks");
+  });
+
+  // MUTATION: drop the warning and swapping a question silently deletes the
+  // pictures the owner assigned. There is no confirm dialog in this rail - the
+  // pattern is words - so the words have to be there before the swap.
+  it("says what changing a question would cost, before it is changed", () => {
+    const g = invisalign();
+    const pictured = {
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === "q-smile_concern"
+          ? { ...n, optionImages: [{ value: "crowded", image: "conditions/crowded" }] }
+          : n,
+      ),
+    } as FlowGraph;
+    const warning = questionSwapWarning(pictured, "q-smile_concern");
+    expect(warning).toBeTruthy();
+    expect(rail(pictured, { kind: "node", id: "q-smile_concern" })).toContain(esc(warning!));
+    // ...and nothing is said on a step with no pictures to lose.
+    expect(rail(g, { kind: "node", id: "q-smile_concern" })).not.toContain("Changing the question removes");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 9. THE LIVE MINIS. A block edited in the rail is drawn on the phone beside it.
+ *
+ * The builder holds ONE graph and derives everything from it, so this is a
+ * question about the derivation rather than about React: the edit goes through
+ * applyInspectorEdit onto the draft graph, screenFor projects that graph, and the
+ * mini draws the projection. Each link is checked, plus the memo that makes the
+ * builder recompute the middle one.
+ * ------------------------------------------------------------------------- */
+
+describe("an edited block reaches the phone beside the rail", () => {
+  it("travels intent -> draft graph -> screen -> mini", () => {
+    const before = invisalign();
+    const beforeScreen = screenFor(nodeOf(before, "welcome"), before, {}, 1);
+    expect(beforeScreen.kind === "welcome-question" ? beforeScreen.blocks : ["x"]).toEqual([]);
+
+    const edited = applyInspectorEdit(before, { kind: "node", id: "welcome" }, {
+      kind: "add-block",
+      blockKind: "trust-strip",
+      practiceName: "Vitality Dental",
+    });
+    expect(edited.ok, edited.ok ? "" : edited.reason).toBe(true);
+    if (!edited.ok) return;
+
+    // The projection the builder feeds the strip, off the DRAFT graph.
+    const screen = screenFor(nodeOf(edited.graph, "welcome"), edited.graph, {}, 1);
+    expect(screen.kind).toBe("welcome-question");
+    const blocks = screen.kind === "welcome-question" ? screen.blocks : [];
+    expect(blocks).toEqual([
+      { kind: "trust-strip", practiceName: "Vitality Dental", chips: ["Takes about 30 seconds"] },
+    ]);
+
+    // ...and the mini draws it.
+    const html = strip(edited.graph, { selectedId: "welcome" });
+    expect(html).toContain(esc("Takes about 30 seconds"));
+    expect(strip(before)).not.toContain(esc("Takes about 30 seconds"));
+  });
+
+  it("redraws an answer picture the moment it is picked", () => {
+    const picked = applyInspectorEdit(invisalign(), { kind: "node", id: "q-smile_concern" }, {
+      kind: "option-image",
+      value: "crowded",
+      image: "conditions/crowded",
+    });
+    expect(picked.ok).toBe(true);
+    if (!picked.ok) return;
+    expect(strip(picked.graph)).toContain(`src="${assessImage("conditions/crowded")!.path}"`);
+    expect(strip(invisalign())).not.toContain(`src="${assessImage("conditions/crowded")!.path}"`);
+  });
+
+  // MUTATION: memoise the screens on anything but the graph - the node list, the
+  // campaign copy - and every edit in the rail leaves the phones showing the
+  // funnel as it was, which reads as the edit not having happened.
+  it("recomputes the strip's screens from the draft graph on every edit", () => {
+    const code = codeOnly(builderSource);
+    const at = code.indexOf("const screens = useMemo");
+    expect(at, "the builder no longer memoises the screens").toBeGreaterThan(-1);
+    const memo = code.slice(at, code.indexOf("}, [", at) + 40);
+    expect(memo).toContain("screenFor(");
+    expect(memo).toMatch(/\}, \[[^\]]*\bgraph\b/);
   });
 });
