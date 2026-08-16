@@ -225,6 +225,11 @@ const EXEMPT: Record<string, Exemption> = {
   "smile-assessment/token": { kind: "public", reason: "public quiz: mints the session token" },
   "smile-assessment/next": { kind: "public", reason: "public quiz: serves the next question" },
   "smile-assessment/submit": { kind: "public", reason: "public quiz submit, signed submit token" },
+  "smile-assessment/step-event": {
+    kind: "public",
+    reason:
+      "public quiz: anonymous, PII-free step-view beacon. No session exists (a visitor is the caller); the guards are a payload cap, three api_budget ceilings (per IP, per campaign per minute, per campaign per day) and a strict kill-switch check, and it answers the same opaque 202 for every outcome. Its READ side is a different route entirely (campaign/[slug]/drop-off), which IS module-guarded",
+  },
   "speed-to-lead/intake": { kind: "public", reason: "public lead intake from website / missed call" },
   "prefs": { kind: "public", reason: "patient channel choice + opt-out behind a signed /prefs token" },
 

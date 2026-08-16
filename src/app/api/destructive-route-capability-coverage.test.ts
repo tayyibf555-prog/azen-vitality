@@ -133,6 +133,11 @@ const DESTRUCTIVE_EXEMPT: Record<string, DestructiveExemption> = {
   "fp17/submit": { kind: "public", reason: "public FP17/PR declaration submit, token-bound + budget-guarded" },
   "smile-assessment/next": { kind: "public", reason: "public quiz: serves the next question" },
   "smile-assessment/submit": { kind: "public", reason: "public quiz submit, signed submit token" },
+  "smile-assessment/step-event": {
+    kind: "public",
+    reason:
+      "public quiz: anonymous, PII-free step-view beacon. It writes scalar rows to one telemetry table and nothing else — no message, no lead, no Dentally call — so the authorisation question ('who may do this to whom') has no subject: the caller is a visitor and the row is about a screen, not a person. What bounds it instead is cost and volume: a payload cap, three api_budget ceilings (per IP, per campaign per minute, per campaign per day) and a strict kill-switch check",
+  },
   "speed-to-lead/intake": { kind: "public", reason: "public lead intake from website / missed call" },
   prefs: { kind: "public", reason: "patient channel choice + opt-out behind a signed /prefs token" },
 
