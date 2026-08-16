@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks, LayoutTemplate } from "lucide-react";
+import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks, LayoutTemplate, Radar } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Campaign, AdLibraryItem } from "@/lib/meta-ads/types";
@@ -12,14 +12,20 @@ import { CampaignBuilder } from "./campaign-builder";
 import { AdLibrary } from "./ad-library";
 import { LaunchGuide } from "./launch-guide";
 import { LandingPagesTab } from "./landing-pages";
+import { TrackingPanel } from "./tracking-panel";
 
-type TabKey = "campaigns" | "create" | "landing" | "library" | "guide";
+type TabKey = "campaigns" | "create" | "landing" | "library" | "tracking" | "guide";
 
 const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
   { key: "campaigns", label: "Campaigns", icon: LayoutGrid },
   { key: "create", label: "Create campaign", icon: PlusCircle },
   { key: "landing", label: "Landing pages", icon: LayoutTemplate },
   { key: "library", label: "Ad library", icon: Images },
+  // TRACKING lives here rather than in Settings because it is a decision about
+  // this practice's ADVERTISING: the pixel it reports to is the one behind the
+  // campaigns built two tabs to the left, and an owner setting up ads should not
+  // have to know that "measurement" is filed somewhere else.
+  { key: "tracking", label: "Tracking", icon: Radar },
   { key: "guide", label: "Guide", icon: BookOpen },
 ];
 
@@ -147,6 +153,8 @@ export function MetaAdsWorkspace({
         {tab === "library" ? (
           <AdLibrary clientSlug={clientSlug} onRecreate={handleRecreate} />
         ) : null}
+
+        {tab === "tracking" ? <TrackingPanel clientSlug={clientSlug} /> : null}
 
         {tab === "guide" ? <LaunchGuide /> : null}
       </div>

@@ -529,10 +529,16 @@ describe("the chosen colour scheme reaches the strip", () => {
     expect(stripTag).toContain("practiceName={practiceName}");
   });
 
-  it("encloses the minis in a paletteVars wrapper", () => {
+  // Since 0081 the wrapper resolves through `themeVarsFor`, not `paletteVars`
+  // directly: the picker above the strip now also offers the practice's OWN
+  // schemes, and those have no catalogue key for paletteVars to look up. The
+  // enclosure — and the reason for it — is unchanged; only what resolves the
+  // value moved, so that the one control whose effect is visible from this card
+  // stays visible for exactly the schemes the owner built themselves.
+  it("encloses the minis in a themeVarsFor wrapper", () => {
     const code = codeOnly(panelSource);
-    const wrapperAt = code.indexOf("paletteVars(form.theme)");
-    expect(wrapperAt, "no paletteVars wrapper in the panel").toBeGreaterThan(-1);
+    const wrapperAt = code.indexOf("themeVarsFor(form.theme");
+    expect(wrapperAt, "no theme-vars wrapper in the panel").toBeGreaterThan(-1);
     const stripAt = code.indexOf("<FlowPhoneCanvas");
     expect(stripAt, "the strip is not inside the wrapper").toBeGreaterThan(wrapperAt);
     // ...and it closes AFTER the strip: the enclosure, not just the order.

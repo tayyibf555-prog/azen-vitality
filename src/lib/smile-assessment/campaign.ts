@@ -177,6 +177,25 @@ export interface Campaign {
    * unrecognised value to a style attribute on a public page.
    */
   theme: string | null;
+  /**
+   * THE FOLLOW-UP SETTINGS (0082). Three columns, read as one config by
+   * `followUpConfig` (src/lib/smile-assessment/follow-up.ts) and never
+   * individually anywhere else — because "enabled" is not a field, it is a gate:
+   * an un-enabled campaign's trigger and template are inert, and collapsing them
+   * in one function is what stops each reader having to remember that.
+   *
+   * All three are INTERNAL. They decide who is followed up and what the first
+   * text says, and none of them ever reaches toPublicCampaign: the patient's
+   * browser has no business knowing the practice's contact rules.
+   *
+   * false / null / null is every campaign before 0082, every campaign on a
+   * database where 0082 has not been applied, and every campaign whose owner has
+   * never opened the control — and that combination is defined to be exactly
+   * today's behaviour.
+   */
+  followUpEnabled: boolean;
+  followUpTrigger: string | null;
+  followUpTemplate: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;

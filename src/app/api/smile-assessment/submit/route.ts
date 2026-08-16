@@ -17,7 +17,10 @@ import { clientIp } from "@/lib/http/client-ip";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
+import { followUpConfig, shouldFollowUp } from "@/lib/smile-assessment/follow-up";
 import { verifySubmitToken } from "@/lib/smile-assessment/embed-token";
+import { resolveMetaPixel } from "@/lib/assess/meta-pixel-repository";
+import { sendAssessmentLeadEvent } from "@/lib/assess/meta-capi-send";
 import type { LeadChannel, LeadConsent } from "@/lib/speed-to-lead/types";
 import { isSystemEnabled, isSystemEnabledForSend } from "@/lib/systems/repository";
 
@@ -269,6 +272,68 @@ export async function POST(request: Request): Promise<Response> {
     // benign shape a skipped-bridge submission produces (never reveal it is off).
     const smileEnabled = await isSystemEnabledForSend(client?.id ?? "", "smile-assessment");
 
+    // ------------------------------------------------------------------------
+    // META CONVERSIONS API (0083): tell the practice's ad account that an enquiry
+    // happened. Everything about this block is subordinate to one rule — IT CANNOT
+    // AFFECT THIS SUBMISSION. `sendAssessmentLeadEvent` has no throwing path and
+    // returns a result nobody reads; a practice with tracking off costs nothing at
+    // all (no I/O, no environment read); and every failure — no token, no
+    // migration, a Meta outage, a timeout — is a silent skip.
+    //
+    // WHAT LEAVES: event name, time, page URL, action source, and an opaque id
+    // shared with the browser's own Lead event so Meta counts one conversion
+    // rather than two. The patient's hashed email/phone ride along ONLY when THIS
+    // DEVICE consented to the pixel (body.metaConsent, sent by the quiz and never
+    // inferred here) AND the practice switched advanced matching on. Neither key
+    // alone opens it. No IP, no user agent, no name, no answers, no score.
+    //
+    // BEHIND THE KILL SWITCH, because a call to Facebook about a patient is an
+    // outbound act, and switching the system off has to shut that door too.
+    //
+    // AWAITED IN PLACE rather than fired and forgotten: an unawaited promise in a
+    // serverless function is a promise that may simply be killed when the response
+    // is returned, and an event that reports conversions only sometimes is worse
+    // than one that reports none. The call is time-boxed at 2.5s inside the sender.
+    //
+    // AND IT IS WRAPPED HERE AS WELL AS INSIDE THE SENDER. That is not belt and
+    // braces for its own sake: this whole handler sits in one big try whose catch
+    // answers 500 "could not record your assessment" — a sentence that would be a
+    // lie, because the assessment IS recorded by this point. Anything thrown by
+    // the Meta block would take that path. The sender has no throwing path today
+    // (pinned in meta-pixel-wiring.test.ts); this makes that a property of the
+    // CALL SITE rather than a fact about the callee that a future edit could undo.
+    try {
+      if (smileEnabled && client) {
+        const metaPixel = await resolveMetaPixel(client.id);
+        if (metaPixel.enabled) {
+          // Built from OUR OWN resolved records, never from the caller's strings:
+          // the origin is this request's, and the slugs are the ones the server
+          // matched. The sender strips any query string before sending it on.
+          const origin = new URL(request.url).origin;
+          const path = campaign
+            ? `/assess/${client.slug}/${campaign.slug}`
+            : `/assess/${client.slug}`;
+          await sendAssessmentLeadEvent({
+            clientId: client.id,
+            config: metaPixel,
+            nowMs: Date.now(),
+            sourceUrl: `${origin}${path}`,
+            eventId: str(body.metaEventId),
+            // THE VISITOR'S OWN ANSWER, and the only thing that can unlock a hash.
+            // `=== true` rather than a truthiness check: a missing field, a string,
+            // or anything else at all means "not consented".
+            consented: body.metaConsent === true,
+            email,
+            phone,
+          });
+        }
+      }
+    } catch {
+      // A conversion Meta will not hear about. The patient's submission is
+      // already recorded and is not affected in any way.
+    }
+    // ------------------------------------------------------------------------
+
     // Owner kill-switch, second half: the bridge below creates a Speed-to-lead lead
     // and first-contacts the patient, so it is a SPEED-TO-LEAD send and the
     // Speed-to-lead switch must hold here as well. Without this check an assessment
@@ -286,13 +351,25 @@ export async function POST(request: Request): Promise<Response> {
     const bookingUrl =
       client && bookingEnabled ? `/book/${client.slug}?site=${siteId}` : undefined;
 
-    // BRIDGE: a high score with a reachable contact becomes a Speed-to-lead lead
-    // and is contacted instantly. Consent is implied by submitting the quiz; the
-    // chosen channel must have a deliverable address. If neither phone nor email
-    // is present we simply record the response and skip the bridge.
+    // BRIDGE: a qualifying submission with a reachable contact becomes a
+    // Speed-to-lead lead and is contacted instantly. Consent is implied by
+    // submitting the quiz; the chosen channel must have a deliverable address. If
+    // neither phone nor email is present we simply record the response and skip
+    // the bridge.
+    //
+    // WHO QUALIFIES IS NOW THE CAMPAIGN'S DECISION (0082), and it is the ONLY
+    // thing this feature changes here. `shouldFollowUp` with the OFF config —
+    // which is what every campaign has until an owner switches one on, and what a
+    // campaign-less submission gets by construction — returns exactly
+    // `band === "high"`, the expression this replaced. An owner who chooses "every
+    // submission" widens the band and nothing else: the four conditions beside it,
+    // the consent record built below, the suppression check, the deliverability
+    // check, the guardrail and both kill switches are untouched and still decide
+    // whether a single character reaches anybody.
     let leadCreated = false;
     const hasContact = Boolean(phone || email);
-    if (band === "high" && hasContact && trusted && smileEnabled && speedToLeadEnabled) {
+    const followUp = followUpConfig(campaign);
+    if (shouldFollowUp(followUp, band) && hasContact && trusted && smileEnabled && speedToLeadEnabled) {
       // DEMO DECISION (owner): first contact goes by SMS whenever a phone exists.
       // A "whatsapp" preference never reaches here (it is not in VALID_CHANNELS,
       // so it parses to undefined and falls through to SMS) — the WhatsApp sender

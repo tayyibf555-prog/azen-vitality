@@ -64,6 +64,9 @@ function campaign(theme: string | null): Campaign {
     flowVersion: 0,
     flowPublished: false,
     theme,
+    followUpEnabled: false,
+    followUpTrigger: null,
+    followUpTemplate: null,
     createdBy: null,
     createdAt: "2026-08-14T00:00:00Z",
     updatedAt: "2026-08-14T00:00:00Z",
@@ -145,10 +148,18 @@ describe("the create path sends and validates a scheme", () => {
     // ...and therefore out of the details form entirely.
     expect(picker).toBeLessThan(firstDetailField);
     // Moved, not copied: one mount, and its wiring came with it intact.
+    //
+    // The picker gained ONE prop when custom themes landed (0081) — the practice's
+    // own schemes, for the "Your themes" group after the presets. Asserted field by
+    // field rather than as one string, because the string form made a control that
+    // is deliberately extensible look frozen, and the two facts that actually
+    // matter here are unchanged: it reads the form's theme, and picking one writes
+    // straight back to the same field.
     expect(code.split("<ThemePicker").length - 1).toBe(1);
-    expect(code).toContain(
-      '<ThemePicker value={form.theme} onChange={(key) => set("theme", key)} />',
-    );
+    const mount = code.slice(picker, code.indexOf("/>", picker));
+    expect(mount).toContain("value={form.theme}");
+    expect(mount).toContain('onChange={(key) => set("theme", key)}');
+    expect(mount).toContain("customThemes={customThemes}");
     // The label and the helper line travelled too - a picker with neither is a
     // row of unexplained swatches.
     const card = code.slice(header, strip);
@@ -176,8 +187,17 @@ describe("the create path sends and validates a scheme", () => {
     expect(code).toContain("isPaletteKey(theme)");
     // Presence, not truthiness: an absent status must mean "leave it running",
     // and theme: null must be distinguishable from theme unmentioned.
-    expect(code).toContain('hasOwnProperty.call(body, "status")');
-    expect(code).toContain('hasOwnProperty.call(body, "theme")');
+    //
+    // READ THROUGH THE ROUTE'S OWN HELPER since 0082 gave it five fields to ask
+    // about rather than two. Both halves are still pinned — the helper IS a
+    // hasOwnProperty call (not a truthiness check wearing the name), and status
+    // and theme are both asked through it — so the claim is the same one, and a
+    // helper that quietly became `body.status !== undefined` still fails here.
+    expect(code).toContain(
+      "const has = (key: string) => Object.prototype.hasOwnProperty.call(body, key);",
+    );
+    expect(code).toContain('const hasStatus = has("status");');
+    expect(code).toContain('const hasTheme = has("theme");');
     expect(code).toContain("if (hasStatus) await setCampaignStatus(");
   });
 });

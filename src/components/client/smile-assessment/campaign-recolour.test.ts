@@ -223,14 +223,25 @@ describe("selecting a scheme PATCHes the campaign", () => {
     expect(recolour).toContain(
       "/api/smile-assessment/campaign/${encodeURIComponent(campaign.slug)}?client=${encodeURIComponent(clientSlug)}",
     );
-    // Exactly two PATCHes in the panel, to that one URL: status and theme.
-    expect(occurrences(code, 'method: "PATCH"')).toBe(2);
+    // THREE PATCHes in the panel since 0082, to that ONE URL: status, theme, and
+    // the follow-up settings. The number is the closed list of things a card can
+    // write, and it is checked against the URL count rather than on its own — so
+    // the real claim ("every write on this card goes to the campaign route, by
+    // PATCH, and no fourth client was invented") is what fails if either drifts.
+    const patches = occurrences(code, 'method: "PATCH"');
+    expect(patches).toBe(3);
     expect(
       occurrences(
         code,
         "/api/smile-assessment/campaign/${encodeURIComponent(campaign.slug)}?client=${encodeURIComponent(clientSlug)}",
       ),
-    ).toBe(2);
+    ).toBe(patches);
+    // The panel's ONE non-PATCH write is the create (a different route, a
+    // different act). Named here so "three PATCHes" is a closed list rather than
+    // a number that happens to be true, and so a fourth writer of any method has
+    // to come through this test.
+    expect(occurrences(code, 'method: "POST"')).toBe(1);
+    expect(occurrences(code, 'method: "DELETE"')).toBe(0);
   });
 
   // MUTATION: send `status` alongside, and re-colouring a paused assessment

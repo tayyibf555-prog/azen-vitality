@@ -27,6 +27,12 @@ const h = vi.hoisted(() => ({
   scoreAssessment: vi.fn((..._a: unknown[]) => ({ rawScore: 95, band: "high" as const })),
   // Default: every system on (matches the real fail-open default in tests).
   isSystemEnabled: vi.fn(async (..._a: unknown[]) => true),
+  resolveMetaPixel: vi.fn(async (..._a: unknown[]) => ({
+    enabled: false,
+    pixelId: null as string | null,
+    advancedMatching: false,
+  })),
+  sendAssessmentLeadEvent: vi.fn(async (..._a: unknown[]) => ({ sent: false, reason: "disabled" })),
 }));
 
 vi.mock("@/lib/smile-assessment/repository", () => ({
@@ -53,6 +59,17 @@ vi.mock("@/lib/smile-assessment/scoring", async (orig) => {
   return { ...actual, scoreAssessment: h.scoreAssessment };
 });
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: h.isSystemEnabled, isSystemEnabledForSend: h.isSystemEnabled }));
+
+// META CONVERSIONS API (0083). Mocked at the seam for the same reason every other
+// I/O seam here is: the repository is server-only and the sender talks to Graph.
+// Default OFF, which is what every practice has, so the whole block is a no-op
+// unless a test switches it on.
+vi.mock("@/lib/assess/meta-pixel-repository", () => ({
+  resolveMetaPixel: h.resolveMetaPixel,
+}));
+vi.mock("@/lib/assess/meta-capi-send", () => ({
+  sendAssessmentLeadEvent: h.sendAssessmentLeadEvent,
+}));
 
 import { POST } from "./route";
 
@@ -233,5 +250,108 @@ describe("submit — cross-tenant + rate-limit guards", () => {
     expect(res.status).toBe(500);
     const j = (await res.json()) as { ok: boolean };
     expect(j.ok).toBe(false);
+  });
+});
+
+describe("submit — the Meta conversion event can never reach the patient", () => {
+  const ON = { enabled: true, pixelId: "123456789012345", advancedMatching: false };
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "test"); // trusted, so the whole happy path runs
+  });
+
+  it("sends nothing at all for a practice that has not switched tracking on", async () => {
+    // The default. `enabled: false` is what every practice has, and it must cost
+    // this endpoint nothing beyond one cheap read.
+    const res = await POST(req(GOOD));
+    expect(res.status).toBe(202);
+    expect(h.sendAssessmentLeadEvent).not.toHaveBeenCalled();
+  });
+
+  it("sends the event, with the visitor's own answer, when tracking is on", async () => {
+    h.resolveMetaPixel.mockResolvedValueOnce(ON);
+    const res = await POST(
+      req({ ...GOOD, metaConsent: true, metaEventId: "abcdefgh1234", campaignSlug: undefined }),
+    );
+    expect(res.status).toBe(202);
+    expect(h.sendAssessmentLeadEvent).toHaveBeenCalledTimes(1);
+    const arg = h.sendAssessmentLeadEvent.mock.calls[0]![0] as {
+      clientId: string;
+      consented: boolean;
+      eventId: string;
+      sourceUrl: string;
+      config: unknown;
+    };
+    expect(arg.consented).toBe(true);
+    expect(arg.eventId).toBe("abcdefgh1234");
+    expect(arg.clientId).toBe("vitality");
+    // The page URL is built from the SERVER's resolved slug, not the body's.
+    expect(arg.sourceUrl).toBe("http://localhost/assess/vitality");
+    // The practice's stored config is what decides advanced matching -- the
+    // caller never gets to pass it.
+    expect(arg.config).toEqual(ON);
+  });
+
+  // MUTATION: read the consent flag with a truthiness check, or default it to
+  // true. A submission from an older cached page (no field at all) would then
+  // unlock hashed contact details that nobody agreed to.
+  it.each([
+    ["absent", {}],
+    ["the string 'true'", { metaConsent: "true" }],
+    ["1", { metaConsent: 1 }],
+    ["explicitly false", { metaConsent: false }],
+  ])("treats consent %s as NOT consented", async (_label, extra) => {
+    h.resolveMetaPixel.mockResolvedValueOnce(ON);
+    await POST(req({ ...GOOD, ...extra }));
+    const arg = h.sendAssessmentLeadEvent.mock.calls[0]![0] as { consented: boolean };
+    expect(arg.consented).toBe(false);
+  });
+
+  // MUTATION: put the send outside the kill-switch branch. Switching a system off
+  // has to shut every door, and a call to Facebook about a patient is an outbound
+  // act like any other.
+  it("sends nothing when the smile-assessment system is switched off", async () => {
+    h.resolveMetaPixel.mockResolvedValue(ON);
+    h.isSystemEnabled.mockImplementation(async () => false);
+    const res = await POST(req(GOOD));
+    expect(res.status).toBe(202); // the response is still recorded
+    expect(h.insertResponse).toHaveBeenCalledTimes(1);
+    expect(h.sendAssessmentLeadEvent).not.toHaveBeenCalled();
+    h.resolveMetaPixel.mockResolvedValue({ enabled: false, pixelId: null, advancedMatching: false });
+  });
+
+  // ==========================================================================
+  // THE HEADLINE. The submit handler sits inside one big try whose catch answers
+  // 500 "could not record your assessment" -- a sentence that would be a LIE
+  // here, because the assessment is already recorded by this point. Both of the
+  // following would have taken that path without the block's own try/catch.
+  // ==========================================================================
+  it("still succeeds when the sender throws", async () => {
+    h.resolveMetaPixel.mockResolvedValueOnce(ON);
+    h.sendAssessmentLeadEvent.mockRejectedValueOnce(new Error("graph.facebook.com is unreachable"));
+    const res = await POST(req(GOOD));
+    expect(res.status).toBe(202);
+    const j = (await res.json()) as { ok: boolean; band: string };
+    expect(j.ok).toBe(true);
+    expect(j.band).toBe("high");
+    expect(h.insertResponse).toHaveBeenCalledTimes(1);
+    // ...and the bridge that follows it still ran, so a thrown tracking call
+    // cannot swallow the patient's actual follow-up either.
+    expect(h.insertLead).toHaveBeenCalledTimes(1);
+  });
+
+  it("still succeeds when the config read throws", async () => {
+    h.resolveMetaPixel.mockRejectedValueOnce(new Error("client_meta_pixel is missing"));
+    const res = await POST(req(GOOD));
+    expect(res.status).toBe(202);
+    expect(h.insertResponse).toHaveBeenCalledTimes(1);
+    expect(h.insertLead).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an unsent event as a normal outcome, not an error", async () => {
+    h.resolveMetaPixel.mockResolvedValueOnce(ON);
+    h.sendAssessmentLeadEvent.mockResolvedValueOnce({ sent: false, reason: "no-token" });
+    const res = await POST(req(GOOD));
+    expect(res.status).toBe(202);
   });
 });

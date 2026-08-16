@@ -23,11 +23,39 @@ import {
   GitBranch,
   AlertTriangle,
   Sparkles,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SectionCard, StatusPill, EmptyState, Tabs, type TabItem } from "@/components/primitives";
+import {
+  SectionCard,
+  StatusPill,
+  EmptyState,
+  Tabs,
+  Toggle,
+  type TabItem,
+} from "@/components/primitives";
 import { GOAL_CATALOG, BUDGET_CATALOG, goalLabel } from "@/lib/smile-assessment/campaign";
-import { DEFAULT_PALETTE_KEY, PALETTES, paletteFor, paletteVars } from "@/lib/assess/palette";
+import {
+  DEFAULT_PALETTE_KEY,
+  PALETTES,
+  paletteFor,
+  paletteVars,
+  paletteVarsFrom,
+  type Palette,
+} from "@/lib/assess/palette";
+import { customPaletteFor, customThemePalette, type CustomTheme } from "@/lib/assess/custom-theme";
+import {
+  FOLLOW_UP_TOKENS,
+  FOLLOW_UP_TRIGGERS,
+  MAX_FOLLOW_UP_TEMPLATE,
+  describeFollowUpTemplateFailures,
+  followUpTriggerLabel,
+  isFollowUpTrigger,
+  validateFollowUpTemplate,
+  type FollowUpTrigger,
+} from "@/lib/smile-assessment/follow-up";
 import { groupCampaignsByGoal } from "@/lib/smile-assessment/grouping";
 import { nodeMap, normaliseFlow, type FlowGraph } from "@/lib/smile-assessment/flow";
 import { phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
@@ -51,6 +79,7 @@ import { DropoffSection } from "./dropoff-section";
 import { TemplateGallery } from "./template-gallery";
 import { FlowBuilder } from "./flow-builder";
 import { FlowPhoneCanvas } from "./flow-phone-canvas";
+import { CustomThemePanel } from "./custom-theme-panel";
 
 /**
  * THE ASSESSMENTS PANEL, and the staged create wizard inside it.
@@ -114,6 +143,16 @@ interface AdminCampaign {
    * (palette.ts, paletteFor).
    */
   theme?: string | null;
+  /**
+   * The follow-up settings (0082). OPTIONAL for the same reason `theme` and the
+   * funnel fields are: on a deployment where the migration has not been applied
+   * the columns are not read back at all, and an absent switch and a false switch
+   * must produce the same card — which they do, because the disclosure below
+   * reads all three through one `?? ` chain that spells out the OFF default.
+   */
+  followUpEnabled?: boolean;
+  followUpTrigger?: string | null;
+  followUpTemplate?: string | null;
 }
 
 interface FormState {
@@ -214,6 +253,19 @@ export function CampaignsPanel({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // THE PRACTICE'S OWN COLOUR SCHEMES (0081), held HERE and not inside each
+  // picker. Two controls show them - the create picker and the row on every card -
+  // and a fetch per control would mean a page of eight cards issuing eight
+  // identical requests and, worse, drifting the moment one of them saved.
+  //
+  // A SEPARATE, NEVER-FAILING READ. It is deliberately not folded into `load`:
+  // themes are a garnish on this screen and assessments are its subject, so a
+  // themes read that failed must not be able to take the campaign list down with
+  // it. On any failure the list stays empty, no "Your themes" group is drawn, and
+  // the seven presets work exactly as they always have.
+  const [customThemes, setCustomThemes] = useState<CustomTheme[]>([]);
+  const [themesPending, setThemesPending] = useState(false);
+
   // WHICH SCREEN IS ON, and what carries between them. The transitions are a
   // pure, tested reducer (wizard-state.ts) rather than a handful of booleans, so
   // "details is unreachable without a choice" is a rule something holds.
@@ -248,6 +300,28 @@ export function CampaignsPanel({
     }
   }, [clientSlug]);
 
+  const loadThemes = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/smile-assessment/theme?client=${encodeURIComponent(clientSlug)}`);
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        themes?: CustomTheme[];
+        migrationPending?: boolean;
+      };
+      if (!res.ok || !data.ok) throw new Error("themes unavailable");
+      setCustomThemes(data.themes ?? []);
+      setThemesPending(data.migrationPending === true);
+    } catch {
+      // Silent, and that is the decision: a practice with no custom schemes and a
+      // practice whose themes could not be read look the same on this screen (the
+      // seven presets, no extra group), because in both cases there is nothing
+      // extra to offer. An error banner about colours above the assessment list
+      // would be louder than the fact deserves.
+      setCustomThemes([]);
+      setThemesPending(false);
+    }
+  }, [clientSlug]);
+
   // Reset + refetch whenever the client changes.
   useEffect(() => {
     dispatch({ type: "cancel" });
@@ -257,7 +331,8 @@ export function CampaignsPanel({
     setOpenCanvasFor(null);
     setFlowNote(null);
     void load();
-  }, [load]);
+    void loadThemes();
+  }, [load, loadThemes]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -465,6 +540,7 @@ export function CampaignsPanel({
           <DetailsStage
             clientSlug={clientSlug}
             practiceName={practiceName}
+            customThemes={customThemes}
             choice={wizard.choice}
             lockedGoalKey={locked}
             form={form}
@@ -498,6 +574,20 @@ export function CampaignsPanel({
           </div>
         ) : null}
 
+        {/* YOUR COLOUR SCHEMES (0081), on the list screen only - one screen at a
+            time, the same rule the wizard follows. It sits above the assessments
+            rather than inside a settings page because the only place these schemes
+            are ever used is the two pickers on this screen, and a colour built out
+            of sight of them is a colour built blind. */}
+        {isListVisible(wizard) ? (
+          <CustomThemePanel
+            clientSlug={clientSlug}
+            themes={customThemes}
+            migrationPending={themesPending}
+            onChanged={() => void loadThemes()}
+          />
+        ) : null}
+
         {/* The list, hidden while a wizard screen is up: one screen at a time. */}
         {!isListVisible(wizard) ? null : loadError ? (
           <p className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{loadError}</p>
@@ -520,6 +610,7 @@ export function CampaignsPanel({
           <CampaignTabs
             clientSlug={clientSlug}
             practiceName={practiceName}
+            customThemes={customThemes}
             campaigns={campaigns}
             togglingId={togglingId}
             openCanvasFor={openCanvasFor}
@@ -539,6 +630,7 @@ export function CampaignsPanel({
 function DetailsStage({
   clientSlug,
   practiceName,
+  customThemes,
   choice,
   lockedGoalKey,
   form,
@@ -552,6 +644,8 @@ function DetailsStage({
 }: {
   clientSlug: string;
   practiceName?: string;
+  /** The practice's own colour schemes, for the picker's "Your themes" group. */
+  customThemes: readonly CustomTheme[];
   choice: TemplateChoice;
   lockedGoalKey: string | null;
   form: FormState;
@@ -631,7 +725,11 @@ function DetailsStage({
             the same decision continued, not a new one. */}
         <div className="mt-2.5 border-t border-line pt-2.5">
           <span className={labelClass}>Colour scheme</span>
-          <ThemePicker value={form.theme} onChange={(key) => set("theme", key)} />
+          <ThemePicker
+            value={form.theme}
+            customThemes={customThemes}
+            onChange={(key) => set("theme", key)}
+          />
           <p className="mt-1.5 text-[11px] text-muted">
             Colour only — the questions, the wording and the layout are the same on every
             scheme. Pick the one that matches wherever the link is going.
@@ -649,7 +747,7 @@ function DetailsStage({
             directly above re-themes the whole strip live, with no state and no
             prop threading (palette.ts:5-17). The cast is because paletteVars is
             React-free by design (palette.ts:340). */}
-        <div className="mt-2" style={paletteVars(form.theme) as CSSProperties}>
+        <div className="mt-2" style={themeVarsFor(form.theme, customThemes) as CSSProperties}>
           <FlowPhoneCanvas idPrefix={canvasId} layout={layout} screens={screens} practiceName={practiceName} />
         </div>
       </div>
@@ -846,7 +944,52 @@ function DetailsStage({
  * or an owner would be told a colour was one thing at creation and another
  * afterwards.
  */
-function PaletteChips({ palette }: { palette: (typeof PALETTES)[number] }) {
+/**
+ * THE PRACTICE'S OWN SCHEMES, AS PALETTES (0081).
+ *
+ * `customThemePalette` is the SAME projection the public page's renderer uses, and
+ * it derives its three chips with the SAME function `definePalette` uses for a
+ * preset (palette.ts, swatchFromVars). So the "Your themes" group below is not a
+ * second kind of control that happens to look similar — every button in both
+ * groups is drawn from a `Palette`, and a custom scheme cannot show an owner three
+ * colours the preset row above it would have derived differently.
+ */
+function customPalettes(themes: readonly CustomTheme[]): Palette[] {
+  return themes.map(customThemePalette);
+}
+
+/**
+ * The CSS custom properties for whatever a picker's value names — a preset key or
+ * one of the practice's own schemes.
+ *
+ * The browser-side twin of what the public page does server-side (page.tsx: resolve
+ * the custom theme, else paletteVars). Both fall back to the catalogue, and the
+ * catalogue falls back to the shipped look, so a preview and the page it previews
+ * cannot disagree about an unknown value.
+ */
+function themeVarsFor(key: string, themes: readonly CustomTheme[]): Record<string, string> {
+  const custom = customPaletteFor(key, themes);
+  return custom ? paletteVarsFrom(custom.vars) : paletteVars(key);
+}
+
+/**
+ * WHICH BUTTON IS CHECKED for a stored value — resolved, not compared raw.
+ *
+ * The case this exists for: a campaign whose `theme` is `custom:<uuid>` for a
+ * scheme that is no longer there. Deleting a theme in use is refused by the API,
+ * so this is not supposed to happen — but a row restored from a backup or edited
+ * by hand can produce it, and the public page has a defined answer for it
+ * (resolveCustomTheme returns null, paletteVars falls through to the shipped
+ * default). Comparing the raw string would leave the row with NOTHING checked
+ * while the patient sees the default scheme: a control silently disagreeing with
+ * the page it controls. Resolving it the same way the page does keeps "exactly one
+ * scheme is in force" true, and true about the right one.
+ */
+function themeInForce(value: string, themes: readonly CustomTheme[]): string {
+  return (customPaletteFor(value, themes) ?? paletteFor(value)).key;
+}
+
+function PaletteChips({ palette }: { palette: Palette }) {
   return (
     <span aria-hidden className="flex shrink-0 items-center -space-x-1">
       {palette.swatch.map((colour, i) => (
@@ -866,39 +1009,98 @@ function PaletteChips({ palette }: { palette: (typeof PALETTES)[number] }) {
  * A radiogroup, not a row of toggles: exactly one scheme is in force, and arrow
  * keys should move between them.
  */
-function ThemePicker({ value, onChange }: { value: string; onChange: (key: string) => void }) {
+function ThemePicker({
+  value,
+  customThemes = [],
+  onChange,
+}: {
+  value: string;
+  /** The practice's own schemes (0081). Absent/empty = presets only, as before. */
+  customThemes?: readonly CustomTheme[];
+  onChange: (key: string) => void;
+}) {
+  const mine = customPalettes(customThemes);
+  const inForce = themeInForce(value, customThemes);
+  const named = (palette: Palette) => (
+    <ThemeRadio
+      key={palette.key}
+      palette={palette}
+      selected={palette.key === inForce}
+      onChange={onChange}
+      labelled
+    />
+  );
   return (
-    <div role="radiogroup" aria-label="Colour scheme" className="mt-1.5 flex flex-wrap gap-2">
-      {PALETTES.map((palette) => {
-        const selected = palette.key === value;
-        return (
-          <button
-            key={palette.key}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            title={palette.description}
-            onClick={() => onChange(palette.key)}
-            className={[
-              "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition",
-              selected
-                ? "border-blue-royal bg-tint-royal ring-2 ring-blue-royal/25"
-                : "border-line bg-card hover:border-line-strong",
-            ].join(" ")}
-          >
-            <PaletteChips palette={palette} />
-            <span
-              className={[
-                "text-[11.5px] font-semibold",
-                selected ? "text-status-royal" : "text-ink",
-              ].join(" ")}
-            >
-              {palette.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
+    <>
+      <div role="radiogroup" aria-label="Colour scheme" className="mt-1.5 flex flex-wrap gap-2">
+        {PALETTES.map((palette) => named(palette))}
+      </div>
+      {/* AFTER THE PRESETS, NOT MIXED IN. The seven named schemes are the same on
+          every practice's screen and are how an owner learns what a scheme even is;
+          their own are a shorter, changing list that means something different
+          ("the one we made"). One radiogroup each, so arrow keys stay inside the
+          group a person is reading, and the heading says which is which. */}
+      {mine.length > 0 ? (
+        <>
+          <span className="mt-2 block text-[11px] font-semibold text-muted">Your themes</span>
+          <div role="radiogroup" aria-label="Your colour schemes" className="mt-1 flex flex-wrap gap-2">
+            {mine.map((palette) => named(palette))}
+          </div>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * One scheme as a radio. ONE COMPONENT FOR PRESETS AND CUSTOM SCHEMES ALIKE, for
+ * the same reason PaletteChips is one component for both pickers: a custom theme
+ * that rendered through a second control would be free to look, behave or announce
+ * itself differently from the presets it sits beside.
+ */
+function ThemeRadio({
+  palette,
+  selected,
+  labelled,
+  busy,
+  onChange,
+}: {
+  palette: Palette;
+  selected: boolean;
+  /** Print the scheme's name beside its chips (the create picker) or not (the card). */
+  labelled?: boolean;
+  busy?: boolean;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      // On the unlabelled row the name is carried as the accessible name instead:
+      // a row of bare swatches must still read as "Clinical teal", not "button".
+      aria-label={labelled ? undefined : palette.label}
+      title={labelled ? palette.description : `${palette.label} — ${palette.description}`}
+      disabled={busy}
+      onClick={() => onChange(palette.key)}
+      className={[
+        labelled
+          ? "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition"
+          : "rounded-lg border p-1 transition disabled:opacity-60",
+        selected
+          ? "border-blue-royal bg-tint-royal ring-2 ring-blue-royal/25"
+          : "border-line bg-card hover:border-line-strong",
+      ].join(" ")}
+    >
+      <PaletteChips palette={palette} />
+      {labelled ? (
+        <span
+          className={["text-[11.5px] font-semibold", selected ? "text-status-royal" : "text-ink"].join(" ")}
+        >
+          {palette.label}
+        </span>
+      ) : null}
+    </button>
   );
 }
 
@@ -924,46 +1126,298 @@ function ThemeSwatchRow({
   campaignName,
   value,
   busy,
+  customThemes = [],
   onChange,
 }: {
   /** Names the group, so a page of cards has one distinguishable control each. */
   campaignName: string;
   value: string;
   busy: boolean;
+  /** The practice's own schemes (0081). Absent/empty = presets only, as before. */
+  customThemes?: readonly CustomTheme[];
   onChange: (key: string) => void;
 }) {
+  const mine = customPalettes(customThemes);
+  const inForce = themeInForce(value, customThemes);
+  const swatch = (palette: Palette) => (
+    <ThemeRadio
+      key={palette.key}
+      palette={palette}
+      selected={palette.key === inForce}
+      busy={busy}
+      onChange={onChange}
+    />
+  );
   return (
-    <div
-      role="radiogroup"
-      aria-label={`Colour scheme for ${campaignName}`}
-      className="flex flex-wrap items-center gap-1.5"
-    >
-      {PALETTES.map((palette) => {
-        const selected = palette.key === value;
-        return (
-          <button
-            key={palette.key}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            // The name the picker prints under the chips, carried as the
-            // accessible name instead: a row of unlabelled swatches must still
-            // read as "Clinical teal", not "button".
-            aria-label={palette.label}
-            title={`${palette.label} — ${palette.description}`}
-            disabled={busy}
-            onClick={() => onChange(palette.key)}
-            className={[
-              "rounded-lg border p-1 transition disabled:opacity-60",
-              selected
-                ? "border-blue-royal bg-tint-royal ring-2 ring-blue-royal/25"
-                : "border-line bg-card hover:border-line-strong",
-            ].join(" ")}
-          >
-            <PaletteChips palette={palette} />
-          </button>
-        );
-      })}
+    <>
+      <div
+        role="radiogroup"
+        aria-label={`Colour scheme for ${campaignName}`}
+        className="flex flex-wrap items-center gap-1.5"
+      >
+        {PALETTES.map((palette) => swatch(palette))}
+      </div>
+      {/* THE PRACTICE'S OWN SCHEMES, in their own group after the presets - the
+          same split the create picker makes, and for the same reason. Separated
+          rather than appended so a row of fifteen identical swatches does not
+          hide the line between "one of the seven" and "the one we made". */}
+      {mine.length > 0 ? (
+        <div
+          role="radiogroup"
+          aria-label={`Your colour schemes for ${campaignName}`}
+          className="flex flex-wrap items-center gap-1.5 border-l border-line pl-2"
+        >
+          {mine.map((palette) => swatch(palette))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * THE FOLLOW-UP DISCLOSURE: who this assessment contacts, and in whose words.
+ *
+ * A DISCLOSURE AND NOT A ROW, which is the opposite call to the one the re-colour
+ * control makes two lines above it, and the difference is the point. A colour is
+ * one decision, already made, revisited by eye - so it is a single line of
+ * swatches and nothing is hidden. This is three controls, one of them a paragraph
+ * of patient-facing copy that has to be read before it is trusted, and it is
+ * touched once and then left alone for months. Printed open on every card it would
+ * be the tallest thing on the page for a setting almost nobody is currently
+ * changing. So it collapses - but the SUMMARY LINE still says what is in force,
+ * because "closed" must never mean "you cannot tell whether this is on".
+ *
+ * ONE SAVE FOR THE THREE, deliberately, where the re-colour writes on click. A
+ * swatch is atomic; these are not. Switching the feature on while the box holds
+ * wording that has not been cleared would either send the wording or ignore it,
+ * and both are worse than a button. The PATCH still only carries the fields that
+ * CHANGED (campaign/[slug]/route.ts reads presence, not truthiness), so saving a
+ * trigger never restates a template and saving a template never restates a switch.
+ *
+ * THE SCAN RUNS AS THEY TYPE, and it is the SAME FUNCTION the server refuses with
+ * (validateFollowUpTemplate, follow-up.ts) - not a friendlier browser-side
+ * approximation of it. The server is still the decision; this only means an owner
+ * finds out about a word while they are looking at it rather than after a save.
+ */
+function FollowUpDisclosure({
+  clientSlug,
+  campaign,
+  onCampaignUpdated,
+}: {
+  clientSlug: string;
+  campaign: AdminCampaign;
+  onCampaignUpdated: (id: string, patch: Partial<AdminCampaign>) => void;
+}) {
+  const panelId = useId();
+  const [open, setOpen] = useState(false);
+
+  // The stored state, resolved the same way the server resolves it: an absent
+  // column, a null column and a false column are one thing, and an unrecognised
+  // trigger falls back to the narrower one (follow-up.ts, followUpConfig).
+  const storedEnabled = campaign.followUpEnabled === true;
+  const storedTrigger: FollowUpTrigger = isFollowUpTrigger(campaign.followUpTrigger)
+    ? campaign.followUpTrigger
+    : "high";
+  const storedTemplate = campaign.followUpTemplate ?? "";
+
+  const [enabled, setEnabled] = useState(storedEnabled);
+  const [trigger, setTrigger] = useState<FollowUpTrigger>(storedTrigger);
+  const [template, setTemplate] = useState(storedTemplate);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const typed = template.trim();
+  // Empty is not a failure here, it is the DEFAULT: "let us write it". The
+  // validator says "empty" because to IT an empty template is a request to store
+  // nothing, which is a different question from the one this box is asking.
+  const scan = useMemo(
+    () => (template.trim() === "" ? null : validateFollowUpTemplate(template)),
+    [template],
+  );
+  const problems = scan && !scan.ok ? describeFollowUpTemplateFailures(scan.failures) : null;
+
+  const nextTemplate = typed === "" ? null : template;
+  const templateChanged = (nextTemplate ?? "") !== storedTemplate;
+  const dirty = enabled !== storedEnabled || trigger !== storedTrigger || templateChanged;
+
+  async function save() {
+    if (saving || !dirty) return;
+    // ONLY WHAT CHANGED. Same conventions as the theme and status writes on this
+    // card: the route reads presence off the body, so an omitted field means
+    // "leave it alone" rather than "set it to this".
+    const body: Record<string, unknown> = { clientSlug };
+    if (enabled !== storedEnabled) body.followUpEnabled = enabled;
+    if (trigger !== storedTrigger) body.followUpTrigger = trigger;
+    if (templateChanged) body.followUpTemplate = nextTemplate;
+
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await fetch(
+        `/api/smile-assessment/campaign/${encodeURIComponent(campaign.slug)}?client=${encodeURIComponent(clientSlug)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `The follow-up could not be saved (${res.status}).`);
+      }
+      // NOT optimistic, unlike the re-colour. A colour that reverts is visible on
+      // the card; a contact rule that reverted would leave an owner believing the
+      // practice is texting people it is not. So the card only claims the new
+      // state once the server has agreed to it.
+      onCampaignUpdated(campaign.id, {
+        followUpEnabled: enabled,
+        followUpTrigger: trigger,
+        followUpTemplate: nextTemplate,
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The follow-up could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const summary = storedEnabled
+    ? `${followUpTriggerLabel(storedTrigger)}${storedTemplate ? ", your wording" : ", we write it"}`
+    : "Only a strong match, we write it";
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-left"
+      >
+        <MessageSquare size={13} className="text-muted" />
+        <span className="text-xs font-semibold text-navy">Follow-up</span>
+        <StatusPill tone={storedEnabled ? "success" : "neutral"}>
+          {storedEnabled ? "Configured" : "Default"}
+        </StatusPill>
+        {/* WHAT IS IN FORCE, on the closed row. A disclosure that hides the state
+            it controls is a disclosure an owner has to open to trust. */}
+        <span className="min-w-0 truncate text-[11.5px] text-muted">{summary}</span>
+        <span className="ml-auto text-muted">
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </span>
+      </button>
+
+      {open ? (
+        <div id={panelId} className="mt-3 space-y-3 rounded-xl border border-line bg-card-muted/40 p-3">
+          {/* THE SWITCH. Off is not "no follow-up" - it is the behaviour this
+              assessment has always had, and the label says so, because an owner
+              reading "Off" beside a live campaign would reasonably fear that
+              nobody is being contacted at all.
+
+              THE SHARED PRIMITIVE, not a fourth private copy. There were three
+              hand-rolled switches in this codebase before Toggle was extracted and
+              they had already drifted on size, colour and whether they announced
+              themselves at all (primitives/toggle-usage.test.ts). A new one here
+              would be the drift starting again. */}
+          <div className="flex items-start gap-2.5">
+            <Toggle
+              checked={enabled}
+              onChange={setEnabled}
+              label="Use these follow-up settings for this assessment"
+              busy={saving}
+              className="mt-0.5"
+            />
+            <div className="min-w-0">
+              <span className="block text-xs font-semibold text-navy">
+                Use these settings for this assessment
+              </span>
+              <span className="mt-0.5 block text-[11.5px] text-muted">
+                Off is what every assessment does today: a strong match is contacted straight
+                away, and we write the message.
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <label className={labelClass} htmlFor={`${panelId}-trigger`}>
+              Contact
+            </label>
+            <select
+              id={`${panelId}-trigger`}
+              className={inputClass}
+              value={trigger}
+              disabled={saving || !enabled}
+              onChange={(e) => setTrigger(e.target.value as FollowUpTrigger)}
+            >
+              {FOLLOW_UP_TRIGGERS.map((key) => (
+                <option key={key} value={key}>
+                  {followUpTriggerLabel(key)}
+                </option>
+              ))}
+            </select>
+            {/* Said plainly, because widening this spends money and reaches
+                people. Everything it does NOT change is worth naming too. */}
+            <p className="mt-1 text-[11px] text-muted">
+              Whoever is contacted, the rules do not move: only someone who left a contact
+              detail, has not opted out, and can be reached on that channel.
+            </p>
+          </div>
+
+          <div>
+            <label className={labelClass} htmlFor={`${panelId}-template`}>
+              First message
+            </label>
+            <textarea
+              id={`${panelId}-template`}
+              rows={3}
+              className={inputClass}
+              value={template}
+              disabled={saving || !enabled}
+              maxLength={MAX_FOLLOW_UP_TEMPLATE}
+              placeholder="Leave empty and we will write it for each person."
+              onChange={(e) => setTemplate(e.target.value)}
+            />
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-muted">
+              <span>
+                You can use {FOLLOW_UP_TOKENS.map((t) => `{${t}}`).join(" and ")}.
+              </span>
+              <span className="tabular-nums">
+                {typed.length}/{MAX_FOLLOW_UP_TEMPLATE}
+              </span>
+            </div>
+            {/* THE SCAN'S OWN WORDS, as they come out of the shared validator. Not
+                paraphrased here: a second wording of the rule in a component is a
+                second rule nobody maintains. */}
+            {problems ? (
+              <p className="mt-2 whitespace-pre-line rounded-lg border border-warning/25 bg-tint-amber px-3 py-2 text-[11.5px] text-status-amber">
+                {problems}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={save}
+              disabled={saving || !dirty || (enabled && problems !== null)}
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Save follow-up
+            </Button>
+            {saved && !dirty ? <span className="text-[11.5px] text-muted">Saved</span> : null}
+          </div>
+
+          {error ? (
+            <p className="whitespace-pre-line rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-[11.5px] text-danger">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -997,6 +1451,8 @@ interface ListProps {
   clientSlug: string;
   /** For the funnel builder's phone minis - the practice a patient reads. */
   practiceName?: string;
+  /** The practice's own colour schemes, for each card's re-colour row. */
+  customThemes?: readonly CustomTheme[];
   campaigns: AdminCampaign[];
   togglingId: string | null;
   /** The campaign whose canvas opens on mount, because it was just created. */
@@ -1049,6 +1505,7 @@ function CampaignList({ campaigns, ...rest }: ListProps) {
 export function CampaignCard({
   clientSlug,
   practiceName,
+  customThemes = [],
   campaign,
   togglingId,
   openCanvasFor,
@@ -1057,6 +1514,8 @@ export function CampaignCard({
 }: {
   clientSlug: string;
   practiceName?: string;
+  /** Optional: a card with none of them is the pre-0081 card, exactly. */
+  customThemes?: readonly CustomTheme[];
   campaign: AdminCampaign;
   togglingId: string | null;
   openCanvasFor: string | null;
@@ -1217,6 +1676,7 @@ export function CampaignCard({
           campaignName={campaign.name}
           value={currentTheme}
           busy={themeSaving !== null}
+          customThemes={customThemes}
           onChange={recolour}
         />
         {/* Named ONCE, since the row itself dropped the labels. Resolved through
@@ -1224,7 +1684,7 @@ export function CampaignCard({
             being shown rather than as the key nobody chose. */}
         <span className="inline-flex items-center gap-1.5 text-xs text-muted">
           {themeSaving ? <Loader2 size={12} className="animate-spin" /> : null}
-          {paletteFor(campaign.theme).label}
+          {customPaletteFor(campaign.theme, customThemes)?.label ?? paletteFor(campaign.theme).label}
         </span>
       </div>
 
@@ -1233,6 +1693,18 @@ export function CampaignCard({
           {themeError}
         </p>
       ) : null}
+
+      {/* THE FOLLOW-UP, directly under the re-colour row. Both are settings ABOUT
+          this assessment rather than the assessment itself, and they sit together,
+          above the preview and the builder, for the same reason the link and the
+          colour do: the header says what this assessment is, and everything below
+          the first divider is how it behaves. Collapsed, so the card grows by one
+          line rather than by a form. */}
+      <FollowUpDisclosure
+        clientSlug={clientSlug}
+        campaign={campaign}
+        onCampaignUpdated={onCampaignUpdated}
+      />
 
       {editing ? (
         <FlowBuilder

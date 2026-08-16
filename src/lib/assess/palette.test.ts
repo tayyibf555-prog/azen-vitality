@@ -29,6 +29,20 @@ import {
   paletteVars,
   type PaletteToken,
 } from "./palette";
+// THE CONTRAST MATHS AND THE THRESHOLDS NOW LIVE IN A LIB, not in this file.
+//
+// They were written here, and while the seven authored palettes were the only
+// things being judged that was the right place for them. Custom themes (0081) put
+// the same judgement on a server, at run time, over colours an owner picked in a
+// browser — and a second implementation of "is this readable" would have meant the
+// presets and the owner's own theme were held to two bars that could drift. So
+// contrast.ts owns them and this suite imports them: whatever gates a custom theme
+// is, byte for byte, what gates the catalogue. Every assertion below is unchanged.
+import {
+  contrast,
+  AA_SMALL_TEXT_PAIRS as AA_PAIRS,
+  BOLD_TINT_PAIRS,
+} from "./contrast";
 
 const GLOBALS_PATH = "src/app/globals.css";
 const CLASSIC_QUIZ_PATH = "src/components/assess/assessment-quiz.tsx";
@@ -262,22 +276,6 @@ describe("resolving a stored value", () => {
  * 5. Legibility.
  * ------------------------------------------------------------------------- */
 
-function channels(hex: string): [number, number, number] {
-  const s = hex.replace("#", "");
-  const full = s.length === 3 ? [...s].map((c) => c + c).join("") : s;
-  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) / 255) as [number, number, number];
-}
-
-function relativeLuminance(hex: string): number {
-  const [r, g, b] = channels(hex).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function contrast(a: string, b: string): number {
-  const [hi, lo] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
 /**
  * THE TWO SCHEMES WHOSE VARS ARE A BYTE-SOURCE OF A LIVE SURFACE, and therefore
  * cannot be re-tuned to hit a stricter bar. `default` is a verbatim copy of
@@ -291,48 +289,6 @@ function contrast(a: string, b: string): number {
  */
 const LOCKED_KEYS = new Set(["default", "landing-blue"]);
 const BOLD_PALETTES = PALETTES.filter((p) => !LOCKED_KEYS.has(p.key));
-
-/**
- * Small-text pairs EVERY scheme — shipped or bold — must clear WCAG AA (4.5:1).
- * These are the pairs the shipped default already clears, so no scheme is exempt.
- */
-const AA_PAIRS: [PaletteToken, PaletteToken][] = [
-  ["ink", "card"], // body copy on the question card
-  ["muted", "card"], // helper lines under a question
-  ["navy", "card"], // the question itself
-  ["navy", "cream"], // headings that sit on the page, not the card
-  ["blue-deep", "card"], // the small blue eyebrow
-  ["blue-royal", "card"], // the lead brand colour as small text
-  ["card", "blue-dark"], // the label ON the filled primary button
-  ["on-navy-muted", "navy"], // Guided's secondary copy, on its dark gradient
-];
-
-/**
- * THE LOAD-BEARING GUARD — the WCAG floor that keeps "bold" from becoming
- * "unreadable" on a patient-facing funnel. A bold scheme's --card is a TINTED
- * surface (not white) and its --card-muted is a deeper tint, which pressures
- * exactly the two pairs the shipped design already dips below AA on. So the bold
- * schemes — the ones this build authors and can tune — must clear these on their
- * own tinted surfaces:
- *
- *   --ink on --card             >= 4.5   body copy
- *   --muted on --card           >= 4.5   secondary copy
- *   --muted on --card-muted     >= 4.5   secondary copy on the inset surface
- *   --faint on --card           >= 3.0   meta text (footnotes, helper lines)
- *   --blue-deep on --card       >= 4.5   the small-text blue
- *   --navy on --card            >= 4.5   headings on the card
- *
- * A tinted --card-muted is the pressure point; the thresholds are not relaxed to
- * fit a swatch, the palette is tuned until it passes with headroom.
- */
-const BOLD_TINT_PAIRS: [PaletteToken, PaletteToken, number][] = [
-  ["ink", "card", 4.5],
-  ["muted", "card", 4.5],
-  ["muted", "card-muted", 4.5],
-  ["faint", "card", 3.0],
-  ["blue-deep", "card", 4.5],
-  ["navy", "card", 4.5],
-];
 
 describe("no scheme is less legible than the one that shipped", () => {
   it("computes contrast the way WCAG does", () => {

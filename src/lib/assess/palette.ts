@@ -110,6 +110,20 @@ const SWATCH_TOKENS: readonly [PaletteToken, PaletteToken, PaletteToken] = [
   "cream",
 ];
 
+/**
+ * The three chips that stand for a token map.
+ *
+ * EXPORTED BECAUSE THE CATALOGUE IS NO LONGER THE ONLY THING WEARING CHIPS. An
+ * owner's custom theme (0081) is a token map with no catalogue entry, and its
+ * chips have to be the SAME three tokens in the same order as every preset's, or
+ * the "Your themes" group in the picker would be showing a different fact from the
+ * row above it. Deriving both from this one function is what makes that true by
+ * construction rather than by two developers agreeing.
+ */
+export function swatchFromVars(vars: Record<PaletteToken, string>): [string, string, string] {
+  return [vars[SWATCH_TOKENS[0]], vars[SWATCH_TOKENS[1]], vars[SWATCH_TOKENS[2]]];
+}
+
 function definePalette(
   key: string,
   label: string,
@@ -122,7 +136,7 @@ function definePalette(
     description,
     // Computed, never authored: the chips are the palette, not a hand-kept
     // impression of it.
-    swatch: [vars[SWATCH_TOKENS[0]], vars[SWATCH_TOKENS[1]], vars[SWATCH_TOKENS[2]]],
+    swatch: swatchFromVars(vars),
     vars,
   };
 }
@@ -406,9 +420,28 @@ export function paletteFor(key: string | null | undefined): Palette {
  * this module stays React-free, and the single call site casts (page.tsx).
  */
 export function paletteVars(key: string | null | undefined): Record<string, string> {
-  const palette = paletteFor(key);
+  return paletteVarsFrom(paletteFor(key).vars);
+}
+
+/**
+ * The same map, built from a token map that has no catalogue key.
+ *
+ * THE ONE PLACE `--token: value` IS ASSEMBLED, and that is the point of splitting
+ * it out. An owner's custom theme (0081) is exactly a `vars` map with a name on
+ * it; if the public page built its wrapper for a custom theme by a second route,
+ * that route would be free to emit a token the catalogue does not, or to skip one
+ * the catalogue does — and a half-themed public page is the failure this whole
+ * module is written to make impossible. Presets and custom themes now leave by the
+ * same door.
+ *
+ * CLOSED LIST, ALWAYS. It iterates PALETTE_TOKENS rather than the object's own
+ * keys, so a stored map that somehow carried an extra key cannot put an
+ * unrecognised custom property into a public page's style attribute — whatever the
+ * validator did or did not catch on the way in.
+ */
+export function paletteVarsFrom(vars: Record<PaletteToken, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const token of PALETTE_TOKENS) out[`--${token}`] = palette.vars[token];
+  for (const token of PALETTE_TOKENS) out[`--${token}`] = vars[token];
   return out;
 }
 

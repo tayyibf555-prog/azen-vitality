@@ -17,6 +17,7 @@ import {
   type Campaign,
 } from "@/lib/smile-assessment/campaign";
 import { PALETTE_KEYS, isPaletteKey } from "@/lib/assess/palette";
+import { ownsCustomTheme } from "@/lib/assess/custom-theme-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -116,9 +117,20 @@ export async function POST(request: Request): Promise<Response> {
   // and discovered at render, because the render is a public ad destination.
   // Absent is legitimate and means the default look (the pre-0079 state, and
   // every campaign made before the picker existed).
-  const theme = str(body.theme, 40);
-  if (theme !== undefined && !isPaletteKey(theme)) {
-    return bad(`theme must be one of: ${PALETTE_KEYS.join(", ")}`);
+  //
+  // SINCE 0081 THE COLUMN HAS TWO NAMESPACES: a preset key ('deep-plum'), or a
+  // reference to one of THIS practice's own themes ('custom:<uuid>'). Checked in
+  // that order — the catalogue first, so a preset costs no database read — and the
+  // second half is scoped by client_id, so another practice's theme id is not a
+  // theme this campaign may wear. The re-colour PATCH asks the same two questions
+  // in the same order, so the create path and the edit path cannot disagree about
+  // what a legal theme is.
+  //
+  // 48 rather than 40 characters: `custom:` plus a uuid is 43, and the old cap
+  // would have silently truncated every custom reference into an unknown one.
+  const theme = str(body.theme, 48);
+  if (theme !== undefined && !isPaletteKey(theme) && !(await ownsCustomTheme(client.id, theme))) {
+    return bad(`theme must be one of your own colour schemes, or one of: ${PALETTE_KEYS.join(", ")}`);
   }
 
   // Slug: an explicit one (slugified) wins, else derive from the name.

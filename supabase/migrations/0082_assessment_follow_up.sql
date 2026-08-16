@@ -1,0 +1,88 @@
+-- 0082_assessment_follow_up.sql
+-- THE FIRST TOUCH, PER ASSESSMENT: when a submission is followed up, and in whose
+-- words. Perspective calls this "Messages"; here it is three columns on a campaign
+-- and NOT A SINGLE NEW SEND PATH.
+--
+-- ============================================================================
+-- WRITTEN BUT NOT APPLIED, AND THAT IS THE POINT OF THIS HEADER.
+--
+-- Same reason as 0078, 0079 and 0081, and no other: this repo's convention is that
+-- a migration file is written by the build and applied by a human who has read it.
+-- Do not apply this file to demonstrate the feature. What makes that safe is the
+-- second half of this header.
+--
+-- RUNNING IT CHANGES NOTHING THAT IS LIVE. Three columns on an existing table, one
+-- of them defaulting FALSE and the other two null. No new table, no RLS change (the
+-- parent table is already server-only under 0018), no backfill, no seed. Every
+-- existing campaign lands with follow_up_enabled = false, which
+-- `followUpConfig()` (src/lib/smile-assessment/follow-up.ts) reads as the OFF
+-- config — and the OFF config is defined to be today's behaviour exactly: a HIGH
+-- band with a reachable contact is bridged into Speed-to-lead and its first message
+-- is drafted by Claude, medium and low are recorded and not contacted. That
+-- equivalence is not a comment, it is pinned in follow-up.test.ts ("off is today").
+--
+-- AND UNTIL IT IS APPLIED, THE CODE STILL WORKS — in both directions:
+--
+--   READS   rowToCampaign (src/lib/smile-assessment/campaign-repository.ts)
+--           defaults all three for a row that predates this file, because
+--           select("*") on an un-migrated table simply does not return the keys.
+--           getCampaignFollowUp — the read the SEND path makes — answers with the
+--           OFF config on a missing column rather than throwing, so an un-migrated
+--           database can never break a first contact.
+--   WRITES  setCampaignFollowUp reports the missing columns as a 503 NAMING THIS
+--           FILE, exactly as 0079's setCampaignTheme and 0081's routes do. Here the
+--           follow-up IS the request, so silently succeeding at nothing would be a
+--           lie to an owner watching a toggle that never takes.
+--
+-- So the deploy order is free: the code can ship first, every assessment keeps
+-- behaving exactly as it does today, and nothing changes until someone applies this
+-- and an owner then switches a campaign's follow-up on.
+-- ============================================================================
+--
+-- WHY THE TEMPLATE IS STORED HERE AND THE COMPLIANCE RULES ARE NOT.
+--
+-- follow_up_template is free text a practice types and a PATIENT RECEIVES AS AN
+-- SMS. That makes it the same class of thing as a funnel's authored copy, and it
+-- is gated the same way: at WRITE time, in one place, by the same scan
+-- (scanFlowCopyText, src/lib/smile-assessment/flow-copy.ts) that gates the funnel,
+-- PLUS the send path's own output backstop (checkAgentReply, includePrice:false)
+-- run early so an owner cannot store wording that the sender would later refuse.
+--
+-- That second half matters more than it looks. contactLead treats a guardrail hit
+-- as TERMINAL — it retires the lead to 'lost' — so a template that trips the
+-- backstop would not merely fail to send, it would quietly burn every enquiry the
+-- campaign produced. Refusing it at the door is the difference between an error
+-- message and a silent hole in the practice's pipeline.
+--
+-- WHY NO CHECK CONSTRAINT ON `follow_up_trigger`. The same call 0059 made about
+-- `goal`, 0078 about `flow`, 0079 about `theme` and 0081 about `vars`: the closed
+-- list lives in one place (FOLLOW_UP_TRIGGERS), is enforced at the door and again
+-- on read (followUpConfig falls back to 'high' rather than trusting the row). A
+-- second, weaker copy expressed as a CHECK would only ever drift from the real one.
+
+alter table smile_assessment_campaign
+  -- THE MASTER SWITCH, and the reason this whole file is inert. Default FALSE on
+  -- purpose and not nullable: an existing campaign gaining this column must not
+  -- gain a behaviour, and "unset" and "off" must not be two states an owner has to
+  -- tell apart. Mirrors flow_published (0078), which made the same call for the
+  -- same reason.
+  add column if not exists follow_up_enabled boolean not null default false,
+  -- WHEN a submission is followed up: 'high' (today's behaviour — only a
+  -- high-scoring enquiry is bridged into Speed-to-lead and contacted) or 'all'
+  -- (every submission with a reachable contact). null = 'high', so a row written
+  -- before an owner ever opened the control behaves as it always has.
+  --
+  -- 'all' widens WHO is contacted, never HOW: the same consent record, the same
+  -- suppression list, the same per-contact and per-IP budgets, the same kill
+  -- switches, the same single call to contactLead. There is no second sender here.
+  add column if not exists follow_up_trigger text,
+  -- The owner's own first-touch wording, or null for "let the model write it"
+  -- (today, and every campaign until someone types one). May carry the two tokens
+  -- {name} and {practice} and nothing else — the closed set in follow-up.ts, which
+  -- is checked at write time so an unknown token is refused rather than sent to a
+  -- patient as literal braces.
+  add column if not exists follow_up_template text;
+
+-- NO SEED, and no update. Running this switches nothing on, changes no message and
+-- contacts nobody. The first configured follow-up is an act an owner performs on
+-- purpose, on a campaign they chose, in wording that passed the scan.

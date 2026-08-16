@@ -102,6 +102,13 @@ describe("toPublicCampaign", () => {
       flowVersion: 3,
       flowPublished: true,
       theme: "landing-blue",
+      // Deliberately CONFIGURED rather than defaulted: the assertions below are
+      // only a leak test if there is something to leak. Who the practice follows
+      // up and in what words is internal contact policy, and the patient's
+      // browser has no business with either.
+      followUpEnabled: true,
+      followUpTrigger: "all",
+      followUpTemplate: "Hi {name}, it is {practice}. Shall we find you a time?",
       createdBy: "owner@vitality.co",
       createdAt: "2026-06-27T00:00:00Z",
       updatedAt: "2026-06-27T00:00:00Z",
@@ -129,6 +136,12 @@ describe("toPublicCampaign", () => {
     // it validates. It must never ride along on the campaign payload unchecked.
     expect("flow" in pub).toBe(false);
     expect("flowPublished" in pub).toBe(false);
+    // The follow-up settings (0082) are internal contact policy: who gets
+    // messaged and in whose words. The toEqual above already refuses an extra
+    // key, and these name the three so a future spread cannot quietly add them.
+    expect("followUpEnabled" in pub).toBe(false);
+    expect("followUpTrigger" in pub).toBe(false);
+    expect("followUpTemplate" in pub).toBe(false);
   });
 
   // MUTATION: coerce a null theme to "default" on the way out and the public
@@ -154,6 +167,9 @@ describe("toPublicCampaign", () => {
       flowVersion: 0,
       flowPublished: false,
       theme: null,
+      followUpEnabled: false,
+      followUpTrigger: null,
+      followUpTemplate: null,
       createdBy: null,
       createdAt: "2026-06-27T00:00:00Z",
       updatedAt: "2026-06-27T00:00:00Z",

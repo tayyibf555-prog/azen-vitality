@@ -8,6 +8,8 @@ import { checkAgentReply } from "@/lib/agent/guardrail";
 import { getClient, getSite } from "@/lib/mock/clients";
 import { latestResponseByLead } from "@/lib/smile-assessment/repository";
 import { answerLines } from "@/lib/smile-assessment/summary";
+import { getCampaignFollowUp } from "@/lib/smile-assessment/campaign-repository";
+import { firstTouchOverride, renderFollowUpTemplate } from "@/lib/smile-assessment/follow-up";
 import { draftFirstContact, type CampaignContext } from "./draft";
 import { isWhatsappConfigured } from "@/lib/messaging/providers/twilio";
 import {
@@ -151,25 +153,45 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     }
   }
 
-  const client = getClient(getSite(lead.siteId)?.clientId ?? "");
+  const clientId = getSite(lead.siteId)?.clientId ?? "";
+  const client = getClient(clientId);
 
   // Ground the draft in the lead's own smile-assessment answers when they have
   // one (timeline, readiness, region). Looked up here, not passed in, so EVERY
   // first-contact path gets it: the submit bridge, the intake route, and the SLA
   // sweep. Best-effort: a failed lookup just means a more generic first text.
+  //
+  // THE SAME LOOKUP ANSWERS THE SECOND QUESTION (0082): does the campaign this
+  // enquiry came through have its OWN first-touch wording? Resolved HERE rather
+  // than passed in by the submit route, for exactly the reason the assessment
+  // context is: there are four ways into this function (the submit bridge, the
+  // intake route, the missed-call bridge and the SLA sweep's retry), and an
+  // override that only held on one of them would mean a lead whose first send
+  // failed silently got a different message on the retry from the one its owner
+  // wrote. The response already carries the campaign id, so this costs one scoped
+  // read, and only for a lead that came through an assessment at all.
   let assessment: string[] | undefined;
+  let firstTouch: string | null = null;
   try {
     const response = await latestResponseByLead(lead.id);
     const lines = answerLines(response?.responses);
     if (lines.length > 0) assessment = lines;
+    if (response?.campaignId) {
+      // Never throws: an un-applied 0082, a deleted campaign or a database blip
+      // all resolve to the OFF config, i.e. "draft it", i.e. today.
+      firstTouch = firstTouchOverride(await getCampaignFollowUp(clientId, response.campaignId));
+    }
   } catch {
     /* context only; never block the first contact */
   }
 
-  // Retry cap, checked immediately BEFORE the model call so a doomed lead costs at
-  // most MAX_FAILED_CONTACT_ATTEMPTS drafts rather than one per sweep tick for 48
-  // hours. The lead is deliberately left at 'new' and visible in the worklist: a
-  // delivery problem is something a human should look at, not something to hide.
+  // Retry cap, checked immediately BEFORE the message is composed so a doomed lead
+  // costs at most MAX_FAILED_CONTACT_ATTEMPTS drafts rather than one per sweep tick
+  // for 48 hours. It is checked for an owner-written override too: the cap is about
+  // a contact that cannot be DELIVERED, which is a property of the address and not
+  // of who wrote the words. The lead is deliberately left at 'new' and visible in
+  // the worklist: a delivery problem is something a human should look at, not
+  // something to hide.
   try {
     const priorFailures = (await listAttempts(lead.id)).filter((a) => a.status === "failed").length;
     if (priorFailures >= MAX_FAILED_CONTACT_ATTEMPTS) {
@@ -182,7 +204,23 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     /* best effort only: a failed attempts read must never block a first contact */
   }
 
-  const { body } = await draftFirstContact(lead, lead.channel, client, campaign, assessment);
+  // THE SEAM WHERE THE FIRST MESSAGE'S TEXT IS CHOSEN, and after 0082 it has two
+  // sources rather than one. An override is the practice's OWN wording, cleared at
+  // write time by the same compliance scan the funnel copy goes through PLUS this
+  // path's own output guardrail (follow-up.ts explains why the write gate is a
+  // superset of the send gate), so it is substitution and nothing else — no model
+  // call, no cost, no variance.
+  //
+  // EVERYTHING BELOW THIS LINE IS IDENTICAL FOR BOTH SOURCES, and that is the
+  // point of choosing here rather than earlier. The conversation threading, the
+  // guardrail backstop, the Twilio status callback, the send, the attempt record,
+  // the first-response stamp and the stage advance do not know or care who wrote
+  // the words. Nor do the four gates ABOVE this line: consent, suppression,
+  // deliverability and the retry cap have already been consulted, and an override
+  // cannot reach a patient that a drafted message could not have reached.
+  const body = firstTouch
+    ? renderFollowUpTemplate(firstTouch, { name: lead.name, practice: client?.name })
+    : (await draftFirstContact(lead, lead.channel, client, campaign, assessment)).body;
 
   // Thread an agent conversation keyed `lead:<phone>` so a reply on Twilio's
   // inbound webhook (which keys unknown numbers `lead:${from}`) routes here.

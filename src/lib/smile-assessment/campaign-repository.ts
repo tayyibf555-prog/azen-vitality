@@ -3,6 +3,15 @@ import type { Campaign, CampaignStatus } from "./campaign";
 import type { FlowGraph } from "./flow";
 import { describeFlowFailures, validateFlow, type FlowValidationFailure } from "./flow-validate";
 import { describeFlowCopyHits, scanFlowCopy, type FlowCopyHit } from "./flow-copy";
+import {
+  FOLLOW_UP_OFF,
+  describeFollowUpTemplateFailures,
+  followUpConfig,
+  validateFollowUpTemplate,
+  type FollowUpConfig,
+  type FollowUpTemplateFailure,
+  type FollowUpTrigger,
+} from "./follow-up";
 
 // Server-only CRUD for smile_assessment_campaign (service-role; the public landing
 // reads via a safe-field GET, the internal management UI is requireUser-scoped).
@@ -40,6 +49,11 @@ interface CampaignRow {
   // 0079, optional for exactly the reason the three above are: the migration is
   // written and not applied, so select("*") does not return this key today.
   theme?: string | null;
+  // 0082, optional for the same reason again. All three default to the OFF config
+  // in rowToCampaign, and the OFF config is today's behaviour exactly.
+  follow_up_enabled?: boolean | null;
+  follow_up_trigger?: string | null;
+  follow_up_template?: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -72,6 +86,15 @@ function rowToCampaign(r: CampaignRow): Campaign {
     // Empty string normalises to null too: "" is not a palette key, and letting
     // it through would make paletteFor do the same work again downstream.
     theme: typeof r.theme === "string" && r.theme.trim() !== "" ? r.theme : null,
+    // The pre-0082 defaults, decided once, here — and all three point the same
+    // way: the follow-up is off, which means "only a high score is bridged into
+    // Speed-to-lead, and the model writes the first message". An un-migrated row,
+    // an un-migrated database and an owner who never opened the control are three
+    // roads to the same behaviour. `=== true` rather than a cast, so a missing key
+    // and a false column are indistinguishable to every reader.
+    followUpEnabled: r.follow_up_enabled === true,
+    followUpTrigger: typeof r.follow_up_trigger === "string" ? r.follow_up_trigger : null,
+    followUpTemplate: typeof r.follow_up_template === "string" ? r.follow_up_template : null,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -220,6 +243,132 @@ export async function setCampaignTheme(
 }
 
 // ---------------------------------------------------------------------------
+// The follow-up settings (0082).
+//
+// TWO FUNCTIONS, TWO POSTURES, AND THE SPLIT IS THE SAME ONE 0079 AND 0081 MADE.
+//
+//   setCampaignFollowUp is an OWNER'S SCREEN talking. The follow-up IS the
+//   request, so a missing column is reported by name and a template that cannot be
+//   sent is refused with every reason listed.
+//
+//   getCampaignFollowUp is the SEND PATH asking in passing, while a patient waits
+//   for a text. Nothing there is worth failing a first contact over, so it never
+//   throws: any failure resolves to FOLLOW_UP_OFF, which is the behaviour the path
+//   had before this feature existed.
+// ---------------------------------------------------------------------------
+
+/** Migration 0082 has not been applied to this database yet. */
+export class FollowUpColumnsMissingError extends Error {
+  constructor() {
+    super("Follow-up messages need migration 0082_assessment_follow_up.sql to be applied.");
+    this.name = "FollowUpColumnsMissingError";
+  }
+}
+
+/** The owner's wording cannot be sent to a patient. Carries every reason. */
+export class FollowUpTemplateRejectedError extends Error {
+  constructor(readonly failures: FollowUpTemplateFailure[]) {
+    super(`This follow-up message cannot be saved:\n${describeFollowUpTemplateFailures(failures)}`);
+    this.name = "FollowUpTemplateRejectedError";
+  }
+}
+
+export interface SetCampaignFollowUpInput {
+  /** Omit to leave the switch as it is. */
+  enabled?: boolean;
+  /** Omit to leave the trigger as it is. */
+  trigger?: FollowUpTrigger;
+  /** Omit to leave the wording as it is; null to go back to a drafted message. */
+  template?: string | null;
+}
+
+/**
+ * Write a campaign's follow-up settings. Each field is independently optional —
+ * presence, not truthiness, exactly as the PATCH route reads its body, so an owner
+ * flipping the switch never restates their wording.
+ *
+ * THE TEMPLATE IS SCANNED HERE, NOT ONLY AT THE ROUTE, and that is the choke-point
+ * doctrine updateCampaignFlow follows for a funnel's copy. The route runs the same
+ * validator first so it can answer 400 with the list rather than a 500 — but the
+ * column is written in one place, and that place refuses non-compliant wording on
+ * its own account. "Everyone remembers to call the validator" is a hope, not a
+ * guarantee, and this string is delivered to a patient by SMS.
+ */
+export async function setCampaignFollowUp(
+  id: string,
+  clientId: string,
+  input: SetCampaignFollowUpInput,
+): Promise<void> {
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.enabled !== undefined) patch.follow_up_enabled = input.enabled;
+  if (input.trigger !== undefined) patch.follow_up_trigger = input.trigger;
+  if (input.template !== undefined) {
+    if (input.template === null) {
+      patch.follow_up_template = null;
+    } else {
+      const checked = validateFollowUpTemplate(input.template);
+      if (!checked.ok) throw new FollowUpTemplateRejectedError(checked.failures);
+      patch.follow_up_template = checked.template;
+    }
+  }
+  // Nothing to say. Not an error — the route already refuses an empty body — but a
+  // bare updated_at bump would be a write that claims something changed.
+  if (Object.keys(patch).length === 1) return;
+
+  const db = serviceClient();
+  const { error } = await db
+    .from("smile_assessment_campaign")
+    .update(patch)
+    .eq("id", id)
+    .eq("client_id", clientId); // scope the write to the caller's client
+  if (error) {
+    if (isMissingColumn(error, FOLLOW_UP_COLUMNS)) throw new FollowUpColumnsMissingError();
+    throw error;
+  }
+}
+
+/**
+ * The follow-up config for a campaign, for the SEND path. NEVER THROWS.
+ *
+ * Every failure — 0082 not applied, a deleted campaign, another practice's id, a
+ * transient read error — resolves to FOLLOW_UP_OFF, and the first contact is
+ * drafted exactly as it is today. A configuration read is not worth a patient not
+ * hearing back, and the fallback is the behaviour that was there before, which
+ * means the degradation is invisible rather than wrong.
+ *
+ * SCOPED BY CLIENT, like every other query in this file: the campaign id travels
+ * on a response row, and a row is not an authorisation.
+ */
+export async function getCampaignFollowUp(
+  clientId: string,
+  campaignId: string,
+): Promise<FollowUpConfig> {
+  if (!clientId || !campaignId) return FOLLOW_UP_OFF;
+  try {
+    const db = serviceClient();
+    const { data, error } = await db
+      .from("smile_assessment_campaign")
+      .select("follow_up_enabled, follow_up_trigger, follow_up_template")
+      .eq("id", campaignId)
+      .eq("client_id", clientId)
+      .maybeSingle();
+    if (error || !data) return FOLLOW_UP_OFF;
+    const row = data as {
+      follow_up_enabled?: boolean | null;
+      follow_up_trigger?: string | null;
+      follow_up_template?: string | null;
+    };
+    return followUpConfig({
+      followUpEnabled: row.follow_up_enabled === true,
+      followUpTrigger: typeof row.follow_up_trigger === "string" ? row.follow_up_trigger : null,
+      followUpTemplate: typeof row.follow_up_template === "string" ? row.follow_up_template : null,
+    });
+  } catch {
+    return FOLLOW_UP_OFF;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The authored funnel (0078).
 //
 // THIS FUNCTION IS THE CHOKE POINT, and that is its whole design.
@@ -274,7 +423,8 @@ export class FlowColumnsMissingError extends Error {
  *
  * `columns` narrows the message-text fallback so this cannot swallow a genuine
  * typo somewhere else in the same query. 0078's three flow columns were the
- * original caller; 0079's `theme` is the second.
+ * original caller; 0079's `theme` is the second, and 0082's three follow-up
+ * columns are the third.
  */
 function isMissingColumn(
   error: { code?: string | null; message?: string | null } | null,
@@ -288,6 +438,7 @@ function isMissingColumn(
 
 const FLOW_COLUMNS = ["flow", "flow_version", "flow_published"];
 const THEME_COLUMNS = ["theme"];
+const FOLLOW_UP_COLUMNS = ["follow_up_enabled", "follow_up_trigger", "follow_up_template"];
 
 export interface UpdateCampaignFlowInput {
   id: string;

@@ -33,6 +33,12 @@ const h = vi.hoisted(() => ({
   scoreAssessment: vi.fn((..._a: unknown[]) => ({ rawScore: 95, band: "high" as const })),
   isSystemEnabled: vi.fn(async (..._a: unknown[]) => true),
   isSystemEnabledForSend: vi.fn(async (..._a: unknown[]) => true),
+  resolveMetaPixel: vi.fn(async (..._a: unknown[]) => ({
+    enabled: false,
+    pixelId: null as string | null,
+    advancedMatching: false,
+  })),
+  sendAssessmentLeadEvent: vi.fn(async (..._a: unknown[]) => ({ sent: false, reason: "disabled" })),
 }));
 
 vi.mock("@/lib/smile-assessment/repository", () => ({
@@ -60,6 +66,17 @@ vi.mock("@/lib/smile-assessment/scoring", async (orig) => {
 vi.mock("@/lib/systems/repository", () => ({
   isSystemEnabled: h.isSystemEnabled,
   isSystemEnabledForSend: h.isSystemEnabledForSend,
+}));
+
+// META CONVERSIONS API (0083). Mocked at the seam for the same reason every other
+// I/O seam here is: the repository is server-only and the sender talks to Graph.
+// Default OFF, which is what every practice has, so the whole block is a no-op
+// unless a test switches it on.
+vi.mock("@/lib/assess/meta-pixel-repository", () => ({
+  resolveMetaPixel: h.resolveMetaPixel,
+}));
+vi.mock("@/lib/assess/meta-capi-send", () => ({
+  sendAssessmentLeadEvent: h.sendAssessmentLeadEvent,
 }));
 
 import { POST } from "./route";

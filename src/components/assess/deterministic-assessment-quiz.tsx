@@ -23,6 +23,7 @@ import {
 import type { PublicFlow } from "@/lib/smile-assessment/campaign";
 import { stepNumbering, stepIndexOf } from "@/lib/smile-assessment/step-numbering";
 import { createStepBeacon, type StepBeacon } from "@/lib/smile-assessment/step-beacon";
+import { metaSubmitFields, trackMetaLead } from "@/lib/assess/meta-pixel-consent";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { FunnelBlocks } from "./funnel-blocks";
 import { iconFor } from "./option-icons";
@@ -477,6 +478,12 @@ export function DeterministicAssessmentQuiz({
         .then((r) => (r.ok ? r.json() : null))
         .then((j: { token?: string | null } | null) => j?.token ?? undefined)
         .catch(() => undefined);
+      // META CONVERSION FIELDS (0083). Two values, minted before the post so the
+      // same event id can be given to the browser pixel afterwards and Meta counts
+      // ONE conversion rather than two. `metaConsent` is this device's own answer:
+      // the server never infers it, and without it no contact detail of any kind
+      // reaches the Conversions API. Inert on every practice that runs no pixel.
+      const meta = metaSubmitFields();
       const res = await fetch("/api/smile-assessment/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -489,6 +496,7 @@ export function DeterministicAssessmentQuiz({
           email: email.trim() || undefined,
           responses: answers,
           pageToken,
+          ...meta,
         }),
       });
       const data = (await res.json().catch(() => null)) as
@@ -511,6 +519,10 @@ export function DeterministicAssessmentQuiz({
       });
       setPhase("thanks");
       tracker.track("submitted", { band: data.band });
+      // The browser half of the conversion. A no-op unless this visitor consented
+      // AND the pixel actually loaded; the server-side event is the fallback for
+      // every case where it did not, which is what lets this be best-effort.
+      trackMetaLead(meta.metaEventId);
     } catch {
       setError("Sorry, something went wrong. Please try again in a moment.");
     }

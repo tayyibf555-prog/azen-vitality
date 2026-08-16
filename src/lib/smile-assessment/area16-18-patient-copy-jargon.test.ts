@@ -65,6 +65,11 @@ describe("no NHS/private jargon in the Guided assessment quiz's static copy", ()
   const GUIDED_SOURCES = [
     "src/components/assess/guided-assessment-quiz.tsx",
     "src/components/assess/option-images.ts",
+    // The Meta consent prompt (0083) joins the list for the same reason: it is
+    // hand-written patient-facing JSX on the same public pages, it is the one
+    // thing on them a visitor is asked to agree to, and its wording lives nowhere
+    // a data-driven sweep could reach.
+    "src/components/assess/meta-pixel.tsx",
   ];
 
   for (const path of GUIDED_SOURCES) {

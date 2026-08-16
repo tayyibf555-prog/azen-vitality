@@ -7,7 +7,11 @@ import { toPublicCampaign, toPublicFlow, type PublicFlow } from "@/lib/smile-ass
 import { normaliseAndValidateFlow, describeFlowFailures } from "@/lib/smile-assessment/flow-validate";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { getClient } from "@/lib/mock/clients";
-import { paletteVars } from "@/lib/assess/palette";
+import { paletteVars, paletteVarsFrom } from "@/lib/assess/palette";
+import { resolveCustomTheme } from "@/lib/assess/custom-theme-repository";
+import { resolveMetaPixel } from "@/lib/assess/meta-pixel-repository";
+import { publicMetaPixelId } from "@/lib/assess/meta-pixel";
+import { MetaPixel } from "@/components/assess/meta-pixel";
 
 // Public campaign landing page (/assess/<client>/<slug>). The ad destination for a
 // Smile Assessment CAMPAIGN: it reuses the generic quiz, but framed by the
@@ -151,8 +155,59 @@ export default async function CampaignAssessmentPage({
   // the two, tall enough and wide enough to be the background the patient sees.
   // (The cast is because paletteVars is React-free by design and returns a plain
   // string map; CSS custom properties are not in React's CSSProperties.)
+  //
+  // ---------------------------------------------------------------------------
+  // ...AND SINCE 0081 THE SCHEME MAY BE THE PRACTICE'S OWN.
+  //
+  // `theme` now holds either a catalogue key or `custom:<uuid>`. The prefix is
+  // what makes this cheap: resolveCustomTheme returns null WITHOUT A QUERY for
+  // every preset campaign, so the only page that pays for a database read is one
+  // actually wearing a custom scheme.
+  //
+  // THREE THINGS PROTECT THIS SURFACE, and none of them is the write path:
+  //   1. resolveCustomTheme NEVER THROWS. A missing table (0081 not applied yet), a
+  //      deleted theme, a transient error — all resolve to null, and the page falls
+  //      through to paletteVars exactly as it does for a retired preset key. A
+  //      colour is not worth a 500 on a page ad spend points at.
+  //   2. THE GRAMMAR IS RE-CHECKED ON THE WAY OUT (readbackVars, inside the
+  //      repository). The write path validated these values, but a hand-edited row,
+  //      a restored backup or a later migration are all ways a value changes without
+  //      going through it — and this line is the last thing before a stylesheet.
+  //   3. paletteVarsFrom iterates the CLOSED token list, never the row's own keys,
+  //      so a row carrying an unexpected key cannot add a custom property here.
+  // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // ...AND SINCE 0083 THE PAGE MAY ALSO CARRY THE PRACTICE'S META PIXEL.
+  //
+  // Read HERE, on the server, alongside the theme — and read as a whole config of
+  // which exactly ONE FIELD is sent to the browser (publicMetaPixelId). The
+  // advanced-matching switch stays on the server because it decides whether a
+  // submitter's hashed contact details may leave it, and the Conversions API token
+  // is not in this object at all.
+  //
+  // FOUR THINGS PROTECT THIS SURFACE, and, as with the theme, none of them is the
+  // write path:
+  //   1. resolveMetaPixel NEVER THROWS. A missing table (0083 not applied), a
+  //      deleted row, a transient error — all resolve to "tracking off", and the
+  //      page renders precisely what it renders today.
+  //   2. publicMetaPixelId RETURNS null WHENEVER TRACKING IS OFF, so an id cannot
+  //      reach the browser on a switched-off practice by any route.
+  //   3. THE ID'S GRAMMAR IS RE-CHECKED ON THE WAY OUT (metaPixelConfig, inside the
+  //      repository, and again in metaPixelScript). A hand-edited row cannot put
+  //      anything but digits into a script tag.
+  //   4. PREVIEW MODE TRACKS NOTHING. ?preview=1 is the owner looking at their own
+  //      funnel from the builder; counting that as a visit would teach the ad
+  //      account that staff are patients. The step beacon takes the same line.
+  // ---------------------------------------------------------------------------
+  const [custom, metaPixel] = await Promise.all([
+    resolveCustomTheme(clientRecord.id, pub.theme),
+    resolveMetaPixel(clientRecord.id),
+  ]);
+  const themeVars = custom ? paletteVarsFrom(custom.vars) : paletteVars(pub.theme);
+  const metaPixelId = previewMode ? null : publicMetaPixelId(metaPixel);
+
   return (
-    <div className="min-h-screen w-full bg-cream" style={paletteVars(pub.theme) as CSSProperties}>
+    <div className="min-h-screen w-full bg-cream" style={themeVars as CSSProperties}>
       <AssessmentQuiz
         clientSlug={client}
         campaignSlug={slug}
@@ -169,6 +224,7 @@ export default async function CampaignAssessmentPage({
         // beacon, so this is inert on every adaptive session.
         flowVersion={campaign.flowVersion}
       />
+      <MetaPixel pixelId={metaPixelId} />
     </div>
   );
 }
