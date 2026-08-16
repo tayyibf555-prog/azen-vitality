@@ -51,13 +51,15 @@ function read(path: string): string {
 describe("the catalogue's keys are a stored contract", () => {
   // MUTATION: rename a key and every campaign holding the old one silently
   // re-renders as the default, on a live ad destination, with no error anywhere.
-  it("is exactly these five, in this order", () => {
+  it("is exactly these seven, in this order", () => {
     expect(PALETTE_KEYS).toEqual([
       "default",
       "landing-blue",
       "clinical-teal",
       "warm-sand",
       "deep-plum",
+      "coral-rose",
+      "fresh-emerald",
     ]);
   });
 
@@ -276,27 +278,60 @@ function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Pairs that carry small text and must clear WCAG AA in every scheme. */
+/**
+ * THE TWO SCHEMES WHOSE VARS ARE A BYTE-SOURCE OF A LIVE SURFACE, and therefore
+ * cannot be re-tuned to hit a stricter bar. `default` is a verbatim copy of
+ * globals.css (section 3 above); `landing-blue` is the source of the `.vd-landing`
+ * block every bespoke landing page emits (vitality-invisalign-landing.styles.test
+ * .ts). Both clear 4.5 on every pair the shipped design clears — but the shipped
+ * design itself runs BELOW AA on two pairs (quiet meta text, and secondary text on
+ * an inset surface), so on THOSE two the bar for these two schemes is the shipped
+ * scheme, not a standard the product has never met. The bold schemes get no such
+ * pass: they are tuned here, so they clear the real thresholds with headroom.
+ */
+const LOCKED_KEYS = new Set(["default", "landing-blue"]);
+const BOLD_PALETTES = PALETTES.filter((p) => !LOCKED_KEYS.has(p.key));
+
+/**
+ * Small-text pairs EVERY scheme — shipped or bold — must clear WCAG AA (4.5:1).
+ * These are the pairs the shipped default already clears, so no scheme is exempt.
+ */
 const AA_PAIRS: [PaletteToken, PaletteToken][] = [
   ["ink", "card"], // body copy on the question card
   ["muted", "card"], // helper lines under a question
   ["navy", "card"], // the question itself
   ["navy", "cream"], // headings that sit on the page, not the card
   ["blue-deep", "card"], // the small blue eyebrow
-  ["blue-royal", "card"],
+  ["blue-royal", "card"], // the lead brand colour as small text
   ["card", "blue-dark"], // the label ON the filled primary button
   ["on-navy-muted", "navy"], // Guided's secondary copy, on its dark gradient
 ];
 
 /**
- * Pairs the SHIPPED design already runs below AA on — quiet meta text, and
- * secondary copy on an inset surface. The bar for a new scheme is therefore the
- * shipped scheme, not a standard the product does not meet: no palette may be
- * less legible here than the one already in front of patients.
+ * THE LOAD-BEARING GUARD — the WCAG floor that keeps "bold" from becoming
+ * "unreadable" on a patient-facing funnel. A bold scheme's --card is a TINTED
+ * surface (not white) and its --card-muted is a deeper tint, which pressures
+ * exactly the two pairs the shipped design already dips below AA on. So the bold
+ * schemes — the ones this build authors and can tune — must clear these on their
+ * own tinted surfaces:
+ *
+ *   --ink on --card             >= 4.5   body copy
+ *   --muted on --card           >= 4.5   secondary copy
+ *   --muted on --card-muted     >= 4.5   secondary copy on the inset surface
+ *   --faint on --card           >= 3.0   meta text (footnotes, helper lines)
+ *   --blue-deep on --card       >= 4.5   the small-text blue
+ *   --navy on --card            >= 4.5   headings on the card
+ *
+ * A tinted --card-muted is the pressure point; the thresholds are not relaxed to
+ * fit a swatch, the palette is tuned until it passes with headroom.
  */
-const NO_WORSE_THAN_DEFAULT_PAIRS: [PaletteToken, PaletteToken][] = [
-  ["faint", "card"],
-  ["muted", "card-muted"],
+const BOLD_TINT_PAIRS: [PaletteToken, PaletteToken, number][] = [
+  ["ink", "card", 4.5],
+  ["muted", "card", 4.5],
+  ["muted", "card-muted", 4.5],
+  ["faint", "card", 3.0],
+  ["blue-deep", "card", 4.5],
+  ["navy", "card", 4.5],
 ];
 
 describe("no scheme is less legible than the one that shipped", () => {
@@ -306,9 +341,22 @@ describe("no scheme is less legible than the one that shipped", () => {
     expect(contrast("#fff", "#000")).toBeCloseTo(21, 1);
   });
 
+  // If this drifts, the bold-tint loop below is scanning the wrong set — a green
+  // legibility suite guarding nothing, which is the failure this file exists to
+  // prevent.
+  it("is tuning the five bold schemes, and holding the two live-surface ones apart", () => {
+    expect(BOLD_PALETTES.map((p) => p.key)).toEqual([
+      "clinical-teal",
+      "warm-sand",
+      "deep-plum",
+      "coral-rose",
+      "fresh-emerald",
+    ]);
+  });
+
   // MUTATION: a hand-picked palette that looks lovely in a swatch row and puts
   // 3:1 grey on a tinted card is how a funnel loses answers it never sees.
-  it("clears AA on every pair that carries small text", () => {
+  it("clears AA on every pair that carries small text, in every scheme", () => {
     for (const p of PALETTES) {
       for (const [fg, bg] of AA_PAIRS) {
         const ratio = contrast(p.vars[fg], p.vars[bg]);
@@ -317,9 +365,32 @@ describe("no scheme is less legible than the one that shipped", () => {
     }
   });
 
+  // MUTATION: lower any bold scheme's --ink (or --muted, or --faint) toward its
+  // tinted --card and this is the assertion that goes red for that exact pair.
+  // The bold schemes are held to the real thresholds on their tinted surfaces,
+  // with no "shipped is the floor" escape hatch — they were built to clear these.
+  it("keeps every bold scheme AA-readable on its tinted surfaces", () => {
+    for (const p of BOLD_PALETTES) {
+      for (const [fg, bg, min] of BOLD_TINT_PAIRS) {
+        const ratio = contrast(p.vars[fg], p.vars[bg]);
+        expect(
+          ratio,
+          `${p.key}: --${fg} on --${bg} is ${ratio.toFixed(2)}:1, below ${min}:1`,
+        ).toBeGreaterThanOrEqual(min);
+      }
+    }
+  });
+
+  // The two live-surface schemes cannot be tuned, so on the two pairs the shipped
+  // design itself runs below AA, the bar for them is the shipped default: no
+  // scheme may be LESS legible here than the one already in front of patients.
+  // (The bold schemes clear these outright above; this pins landing-blue too.)
   it("is never worse than the default on the pairs the default already fails", () => {
     const base = PALETTES[0];
-    for (const [fg, bg] of NO_WORSE_THAN_DEFAULT_PAIRS) {
+    for (const [fg, bg] of [["faint", "card"], ["muted", "card-muted"]] as [
+      PaletteToken,
+      PaletteToken,
+    ][]) {
       const floor = contrast(base.vars[fg], base.vars[bg]);
       for (const p of PALETTES.slice(1)) {
         const ratio = contrast(p.vars[fg], p.vars[bg]);
