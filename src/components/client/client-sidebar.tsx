@@ -185,7 +185,7 @@ export function ClientSidebar({
             gradient at every breakpoint, with no white tile behind it. */}
         <div
           className={cn(
-            "flex h-14 shrink-0 items-center gap-2.5 border-b border-white/10 px-3",
+            "flex h-14 shrink-0 items-center gap-2.5 px-3",
             collapsed && "lg:justify-center lg:px-0",
           )}
         >
