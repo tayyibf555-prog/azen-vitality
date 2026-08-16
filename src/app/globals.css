@@ -294,10 +294,15 @@ body[data-diary-dragging] {
   background: color-mix(in srgb, var(--card) 82%, transparent);
   -webkit-backdrop-filter: blur(10px) saturate(1.4);
   backdrop-filter: blur(10px) saturate(1.4);
-  /* A DEFINITE rule, not a hairline. The working area is full bleed now, so this
-     is the only thing separating the session chrome from the page's own content;
-     against white on white, --line disappeared. */
-  border-bottom: 1px solid var(--line-strong);
+  /* Separation without a rule. This started life as a 1px --line-strong border,
+     because the working area is full bleed and against white on white the bar
+     simply vanished. On a wide monitor that border read as a stray line drawn
+     across the entire screen — the eye caught the geometry, not the chrome.
+     A diffuse shadow does the same job: it has no edge to trace, so it never
+     resolves into a line, but it still lifts the bar off whatever scrolls
+     beneath it. Deliberately barely perceptible — if you can point at it, it is
+     too strong. */
+  box-shadow: 0 8px 18px -12px rgb(11 32 73 / 0.35);
 }
 @media (prefers-reduced-transparency: reduce) {
   .topbar-material {
