@@ -118,6 +118,44 @@ describe("the create path sends and validates a scheme", () => {
     expect(panelSource).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
 
+  // WHERE THE PICKER LIVES, pinned - because it moved, and because the reason it
+  // moved is invisible to every other assertion in this file. The scheme belongs
+  // to the CHOICE, next to the template's name and its question count, on the
+  // summary card at the top of the details screen - and it is the one control on
+  // that card whose effect is visible from it, since the preview strip directly
+  // below wears paletteVars(form.theme) and repaints as the scheme is picked.
+  //
+  // MUTATION: slide it back down among the details fields and the owner is once
+  // again choosing a colour several fields away from the only thing on screen
+  // that shows what the colour does.
+  it("puts the picker on the template summary card, above the strip it repaints", () => {
+    const code = codeOnly(panelSource);
+    // The summary card's own back-link is the first "Change template" in the
+    // file; the second belongs to the locked goal, further down the grid.
+    const header = code.indexOf("Change template");
+    const picker = code.indexOf("<ThemePicker");
+    const strip = code.indexOf("<FlowPhoneCanvas");
+    const firstDetailField = code.indexOf('id="ca-name"');
+    for (const [what, at] of Object.entries({ header, picker, strip, firstDetailField })) {
+      expect(at, `${what} not found in the panel`).toBeGreaterThan(-1);
+    }
+    // Inside the card: after the name/description row, before the strip.
+    expect(picker).toBeGreaterThan(header);
+    expect(picker).toBeLessThan(strip);
+    // ...and therefore out of the details form entirely.
+    expect(picker).toBeLessThan(firstDetailField);
+    // Moved, not copied: one mount, and its wiring came with it intact.
+    expect(code.split("<ThemePicker").length - 1).toBe(1);
+    expect(code).toContain(
+      '<ThemePicker value={form.theme} onChange={(key) => set("theme", key)} />',
+    );
+    // The label and the helper line travelled too - a picker with neither is a
+    // row of unexplained swatches.
+    const card = code.slice(header, strip);
+    expect(card).toContain("Colour scheme");
+    expect(card).toContain("Colour only");
+  });
+
   // MUTATION: skip the check and an arbitrary string is stored, then spread into
   // a style attribute on a public, paid ad destination.
   it("rejects a key the catalogue does not know, the way a bad goal is rejected", () => {

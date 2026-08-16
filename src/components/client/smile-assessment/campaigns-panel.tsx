@@ -613,6 +613,21 @@ function DetailsStage({
             <ChevronLeft size={13} /> Change template
           </Button>
         </div>
+        {/* THE SCHEME, ON THE CARD THAT NAMES THE TEMPLATE - not down among the
+            details fields. It belongs to the choice, the way the template's name
+            and its question count do, and it is the only control here whose
+            effect is visible on this card: the strip immediately below repaints
+            as it is picked. A divider rather than a second card, because it is
+            the same decision continued, not a new one. */}
+        <div className="mt-2.5 border-t border-line pt-2.5">
+          <span className={labelClass}>Colour scheme</span>
+          <ThemePicker value={form.theme} onChange={(key) => set("theme", key)} />
+          <p className="mt-1.5 text-[11px] text-muted">
+            Colour only — the questions, the wording and the layout are the same on every
+            scheme. Pick the one that matches wherever the link is going.
+          </p>
+        </div>
+
         {/* The funnel itself, every screen readable: this is the confirmation
             that what was picked is what is about to be attached. Its own scroll
             box, capped, so a nine-step funnel never pushes the form it belongs to
@@ -620,10 +635,10 @@ function DetailsStage({
 
             THE SCHEME IS WORN HERE. paletteVars re-declares the raw tokens on
             this wrapper, and because globals.css maps them with @theme inline,
-            every `text-navy` and `bg-card` beneath it repaints - so picking a
-            colour scheme three inches below re-themes the whole strip live, with
-            no state and no prop threading (palette.ts:5-17). The cast is because
-            paletteVars is React-free by design (palette.ts:340). */}
+            every `text-navy` and `bg-card` beneath it repaints - so the picker
+            directly above re-themes the whole strip live, with no state and no
+            prop threading (palette.ts:5-17). The cast is because paletteVars is
+            React-free by design (palette.ts:340). */}
         <div className="mt-2" style={paletteVars(form.theme) as CSSProperties}>
           <FlowPhoneCanvas idPrefix={canvasId} layout={layout} screens={screens} practiceName={practiceName} />
         </div>
@@ -765,15 +780,6 @@ function DetailsStage({
             placeholder="Answer a few quick questions and we will tell you if you are a good fit."
             className={inputClass}
           />
-        </div>
-
-        <div className="sm:col-span-2">
-          <span className={labelClass}>Colour scheme</span>
-          <ThemePicker value={form.theme} onChange={(key) => set("theme", key)} />
-          <p className="mt-1.5 text-[11px] text-muted">
-            Colour only — the questions, the wording and the layout are the same on every
-            scheme. Pick the one that matches wherever the link is going.
-          </p>
         </div>
 
         <div className="sm:col-span-2">
