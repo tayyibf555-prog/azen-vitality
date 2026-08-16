@@ -12,7 +12,7 @@ import {
   scanFlowCopy,
   scanFlowCopyText,
 } from "./flow-copy";
-import { FLOW_SCHEMA_VERSION, type FlowGraph } from "./flow";
+import { FLOW_SCHEMA_VERSION, type FlowBlock, type FlowGraph } from "./flow";
 import { FLOW_TEMPLATES, buildScratchFlow } from "./flow-templates";
 
 /** A tiny graph with one of every copy-carrying field. Not a valid funnel; the
@@ -140,6 +140,113 @@ describe("scanFlowCopy reports every offending string at once", () => {
 
   it("passes a graph with no authored copy at all", () => {
     expect(scanFlowCopy(graphWithCopy({}))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONTENT BLOCKS (A2). A block is where a practice writes about ITSELF rather
+// than about the next question, which is exactly the copy that gets a UK dental
+// practice into trouble. If the scan does not reach into blocks, the gate has a
+// hole shaped like the most dangerous field on the screen.
+// ---------------------------------------------------------------------------
+
+/** The base copy graph with blocks on the welcome screen. */
+function graphWithBlocks(blocks: FlowBlock[]): FlowGraph {
+  const g = graphWithCopy({});
+  g.nodes[0] = { id: "w", kind: "welcome", blocks };
+  return g;
+}
+
+const compliantBlocks = (): FlowBlock[] => [
+  { kind: "trust-strip", practiceName: "Vitality Dental", chips: ["Open Saturdays", "Free parking"] },
+  {
+    kind: "testimonial",
+    quote: "The team explained every step and I never felt rushed.",
+    attribution: "Hannah, Enfield",
+  },
+  {
+    kind: "faq",
+    items: [
+      { q: "How long does it take?", a: "The team will talk you through the timings at your visit." },
+      { q: "What happens first?", a: "You will have a chat with a clinician about what you would like to change." },
+    ],
+  },
+  { kind: "image", image: "screens/aligners", alt: "A pair of clear aligners" },
+];
+
+describe("the scan reaches into content blocks", () => {
+  it("collects every authored string in every block kind, and names it", () => {
+    const fields = collectFlowCopy(graphWithBlocks(compliantBlocks()));
+    expect(fields.map((f) => f.where)).toEqual([
+      'node "w".blocks[0].practiceName',
+      'node "w".blocks[0].chips[0]',
+      'node "w".blocks[0].chips[1]',
+      'node "w".blocks[1].quote',
+      'node "w".blocks[1].attribution',
+      'node "w".blocks[2].items[0].q',
+      'node "w".blocks[2].items[0].a',
+      'node "w".blocks[2].items[1].q',
+      'node "w".blocks[2].items[1].a',
+      'node "w".blocks[3].alt',
+    ]);
+  });
+
+  it("collects blocks on a result screen too, not only the welcome", () => {
+    const g = graphWithCopy({});
+    g.nodes[3] = { id: "r", kind: "outcome", band: "high", blocks: [compliantBlocks()[1]!] };
+    expect(collectFlowCopy(g).map((f) => f.where)).toEqual([
+      'node "r".blocks[0].quote',
+      'node "r".blocks[0].attribution',
+    ]);
+  });
+
+  it("does not treat the picture reference as copy: a key is not a sentence", () => {
+    const fields = collectFlowCopy(graphWithBlocks([compliantBlocks()[3]!]));
+    expect(fields.map((f) => f.text)).toEqual(["A pair of clear aligners"]);
+  });
+
+  it("lets a real, plainly written testimonial through", () => {
+    expect(describeFlowCopyHits(scanFlowCopy(graphWithBlocks(compliantBlocks())))).toBe("");
+  });
+
+  it.each([
+    // A quote is not exempt because a patient said it: publishing it is the claim.
+    ["testimonial", { kind: "testimonial", quote: "Honestly the best dentist in London", attribution: "R" }],
+    ["testimonial", { kind: "testimonial", quote: "It was completely pain free", attribution: "R" }],
+    ["testimonial", { kind: "testimonial", quote: "Lovely people", attribution: "Read our 5 star reviews" }],
+    ["trust strip chip", { kind: "trust-strip", practiceName: "V", chips: ["Rated 4.9 out of 5"] }],
+    ["trust strip name", { kind: "trust-strip", practiceName: "The No 1 practice", chips: ["Parking"] }],
+    ["faq answer", {
+      kind: "faq",
+      items: [
+        { q: "Do you take NHS patients?", a: "Yes, ask the team." },
+        { q: "Is there parking?", a: "Yes, at the front." },
+      ],
+    }],
+    ["faq answer with a promise", {
+      kind: "faq",
+      items: [
+        { q: "Will it work?", a: "We guarantee you will be happy with it." },
+        { q: "Is there parking?", a: "Yes, at the front." },
+      ],
+    }],
+    ["image alt", { kind: "image", image: "screens/aligners", alt: "Our award winning practice" }],
+  ])("catches non-compliant copy in a %s", (_label, block) => {
+    const hits = scanFlowCopy(graphWithBlocks([block as FlowBlock]));
+    expect(hits.length, JSON.stringify(block)).toBeGreaterThan(0);
+  });
+
+  it("reports a block hit alongside the ordinary copy hits, in one pass", () => {
+    const g = graphWithCopy({ welcomeIntro: "Our NHS list is open" });
+    g.nodes[3] = {
+      id: "r",
+      kind: "outcome",
+      band: "high",
+      blocks: [{ kind: "testimonial", quote: "The best in town", attribution: "R" }],
+    };
+    const wheres = scanFlowCopy(g).map((h) => h.where);
+    expect(wheres).toContain('node "w".intro');
+    expect(wheres).toContain('node "r".blocks[0].quote');
   });
 });
 

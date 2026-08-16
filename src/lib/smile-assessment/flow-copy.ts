@@ -2,12 +2,14 @@
 //
 // A funnel graph carries five kinds of free text an owner (or the generator) can
 // put in front of a patient: welcome.headline, welcome.intro, question.transition,
-// edge.transition and outcome.headline. Everything ELSE a patient reads on the
-// deterministic funnel comes from QUIZ_QUESTIONS, and QUIZ_QUESTIONS is already
-// walked by area16-18-patient-copy-jargon.test.ts.
+// edge.transition and outcome.headline - plus, since A2, every string inside a
+// CONTENT BLOCK (a trust strip's chips, a testimonial's quote, a faq's answers, a
+// picture's alt text). Everything ELSE a patient reads on the deterministic funnel
+// comes from QUIZ_QUESTIONS, and QUIZ_QUESTIONS is already walked by
+// area16-18-patient-copy-jargon.test.ts.
 //
-// WHICH IS EXACTLY THE PROBLEM THIS MODULE EXISTS FOR. That walk cannot see these
-// five, because they are not in the bank: they are rows in a database, written
+// WHICH IS EXACTLY THE PROBLEM THIS MODULE EXISTS FOR. That walk cannot see them,
+// because they are not in the bank: they are rows in a database, written
 // after the test ran, by a person or by a model. A suite can only prove things
 // about code. So the check has to happen at WRITE time, on the way into the row,
 // and it has to happen in ONE place that every write path goes through
@@ -33,7 +35,7 @@
 // env (flow-copy.test.ts) and the route just reports what this returns.
 
 import { scanBannedText, type BannedTextHit } from "@/lib/landing/compliance";
-import type { FlowGraph } from "./flow";
+import { blockCopyFields, blocksOf, type FlowGraph } from "./flow";
 
 /**
  * The absolute patient-copy ban. Kept as a literal copy of the list in
@@ -84,6 +86,26 @@ export function collectFlowCopy(graph: FlowGraph): FlowCopyField[] {
     }
     // A contact node carries no authored copy: the contact screen's wording is
     // hand-written JSX in the runtime component, which the jargon suite can read.
+
+    // CONTENT BLOCKS (A2). Every string in a block is typed by a practice and
+    // rendered to a patient, so every string in a block is scanned - including
+    // the picture's ALT, which a screen reader says out loud like any other
+    // sentence on the page.
+    //
+    // THE TESTIMONIAL QUOTE IS SCANNED LIKE EVERYTHING ELSE, and it is worth
+    // being explicit about why, because "it is a real quote from a real patient"
+    // is exactly the argument that would exempt it. It cannot be exempt: the
+    // practice is the PUBLISHER here, and the ASA/GDC rules do not care who
+    // originally said "they are the best in London" or "it was totally pain
+    // free" - publishing it is the claim. So a quote a practice genuinely holds
+    // can still be refused, and the honest answer is to quote a different part
+    // of it. The picture keys are NOT scanned: a key is not copy, and rule 13
+    // already holds it to the curated manifest.
+    for (const [i, b] of blocksOf(n).entries()) {
+      for (const f of blockCopyFields(b)) {
+        push(`node "${n.id}".blocks[${i}].${f.field}`, f.text);
+      }
+    }
   }
 
   for (const e of graph.edges) {

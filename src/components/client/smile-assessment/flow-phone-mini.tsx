@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Mail, MessageSquare } from "lucide-react";
 import { iconFor } from "@/components/assess/option-icons";
-import type { PhoneField, PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
+import type { PhoneBlock, PhoneField, PhoneOption, PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 
 /**
  * ONE STEP OF A FUNNEL, DRAWN AS THE PHONE SCREEN IT ACTUALLY IS.
@@ -129,6 +129,9 @@ function Screen({ screen }: { screen: PhoneScreen }) {
           hero={false}
           prompt={screen.prompt}
           options={screen.options}
+          // A question step carries no furniture and cannot be given any
+          // (flow.ts, FLOW_BLOCK_SCREEN_KINDS).
+          blocks={NO_BLOCKS}
         />
       );
 
@@ -148,6 +151,7 @@ function Screen({ screen }: { screen: PhoneScreen }) {
           hero
           prompt={screen.prompt}
           options={screen.options}
+          blocks={screen.blocks}
         />
       );
 
@@ -155,7 +159,7 @@ function Screen({ screen }: { screen: PhoneScreen }) {
       return <ContactScreen screen={screen} />;
 
     case "outcome":
-      return <OutcomeScreen headline={screen.headline} body={screen.body} />;
+      return <OutcomeScreen headline={screen.headline} body={screen.body} blocks={screen.blocks} />;
 
     case "error":
       return <BrokenScreen title={screen.title} detail={screen.detail} />;
@@ -176,6 +180,7 @@ function QuestionScreen({
   hero,
   prompt,
   options,
+  blocks,
 }: {
   chip: string;
   canGoBack: boolean;
@@ -184,7 +189,8 @@ function QuestionScreen({
   intro: string | null;
   hero: boolean;
   prompt: string;
-  options: readonly { value: string; label: string }[];
+  options: readonly PhoneOption[];
+  blocks: readonly PhoneBlock[];
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -222,7 +228,13 @@ function QuestionScreen({
           patient's device, not this mini's 300px width. A patient on a phone -
           the audience this preview depicts - sees one column, so one column is
           what this screen genuinely renders, not a simplification of it. */}
-      <div className="grid gap-1">
+      {/* The grid is allowed to CLIP only when there is furniture under it. A
+          screen with none renders the class string it always did, so a funnel
+          drawn before A2 draws the mini it always drew (baseline test). With
+          furniture, min-h-0 lets the answers give up the room, because the row of
+          chips at the bottom is the thing the owner is here to check - and on a
+          real phone the answers are what you scroll past to reach it. */}
+      <div className={blocks.length > 0 ? "grid min-h-0 gap-1 overflow-hidden" : "grid gap-1"}>
         {options.map((o) => {
           const Icon = iconFor(o.value);
           return (
@@ -230,9 +242,28 @@ function QuestionScreen({
               key={o.value}
               className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-1.5 py-1"
             >
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-blue-dark/10 text-blue-dark">
-                <Icon size={11} strokeWidth={2} />
-              </span>
+              {o.image ? (
+                // The real tile, at the icon chip's size. These are the 360x270
+                // WebP derivatives (4-5KB), so a strip of ten minis can afford
+                // them - which is exactly why a screen PICTURE is a stand-in
+                // (flow-phone-screen.ts, PhoneBlock) and an answer tile is not.
+                <span className="flex h-5 w-5 shrink-0 overflow-hidden rounded-md bg-card-muted">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={o.image.src}
+                    alt={o.image.alt}
+                    width={o.image.width}
+                    height={o.image.height}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
+                </span>
+              ) : (
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-blue-dark/10 text-blue-dark">
+                  <Icon size={11} strokeWidth={2} />
+                </span>
+              )}
               <span className="flex-1 text-[0.6rem] font-medium leading-tight text-ink">
                 {o.label}
               </span>
@@ -241,8 +272,81 @@ function QuestionScreen({
           );
         })}
       </div>
+
+      {/* Pinned to the bottom of the screen, which is also where it is on the
+          page: the runtime draws the welcome step's furniture UNDER the answers
+          (deterministic-assessment-quiz.tsx, FunnelBlocks). */}
+      <BlockRow blocks={blocks} className="mt-auto" />
     </div>
   );
+}
+
+/* ---------------------------------------------------------------------------
+ * Content blocks, at 300px. Each line is finished in flow-phone-screen.ts; this
+ * is the strip that holds them.
+ * ------------------------------------------------------------------------- */
+
+/** A stable empty list, so a screen with no furniture allocates nothing per render. */
+const NO_BLOCKS: readonly PhoneBlock[] = [];
+
+/**
+ * Renders NOTHING for an empty list - not an empty div, and above all not a
+ * border-top. Every funnel on the platform has no furniture today, and each of
+ * them must draw the mini it drew before this file grew a block strip.
+ */
+function BlockRow({ blocks, className }: { blocks: readonly PhoneBlock[]; className?: string }) {
+  if (blocks.length === 0) return null;
+  return (
+    <div className={["shrink-0 space-y-1 border-t border-line pt-1.5", className ?? ""].join(" ").trim()}>
+      {blocks.map((block, i) => (
+        <BlockLine key={i} block={block} />
+      ))}
+    </div>
+  );
+}
+
+function BlockLine({ block }: { block: PhoneBlock }) {
+  switch (block.kind) {
+    case "trust-strip":
+      return (
+        <div>
+          <p className="text-[0.48rem] font-semibold uppercase tracking-[0.15em] text-blue-deep">
+            {block.practiceName}
+          </p>
+          <div className="mt-0.5 flex flex-wrap gap-0.5">
+            {block.chips.map((chip, i) => (
+              <span
+                key={i}
+                className="rounded-full bg-card-muted px-1 py-px text-[0.45rem] font-medium text-ink"
+              >
+                {chip}
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+
+    case "testimonial":
+      // Two lines and then an ellipsis: the quote is up to 240 characters and the
+      // whole screen is 470px tall. Clamped rather than truncated in the model,
+      // because the model must carry the words the practice actually holds.
+      return <p className="line-clamp-2 text-[0.5rem] leading-snug text-muted">{block.line}</p>;
+
+    case "faq":
+      return <p className="text-[0.5rem] font-medium leading-snug text-ink">{block.line}</p>;
+
+    case "image":
+      // A STAND-IN, on purpose, exactly like FauxField below: the screen pictures
+      // are 1000px heroes and a strip renders ten minis at once. The plate says
+      // "a picture goes here" and the caption says which one, which is what an
+      // owner is checking at this size.
+      return (
+        <div className="flex items-center gap-1">
+          <span className="h-4 w-5 shrink-0 rounded-sm border border-line bg-card-muted" aria-hidden />
+          <p className="line-clamp-1 text-[0.5rem] leading-snug text-muted">{block.alt}</p>
+        </div>
+      );
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -334,7 +438,15 @@ function FauxField({ field }: { field: PhoneField }) {
  * Result. deterministic-assessment-quiz.tsx:805-822.
  * ------------------------------------------------------------------------- */
 
-function OutcomeScreen({ headline, body }: { headline: string; body: string }) {
+function OutcomeScreen({
+  headline,
+  body,
+  blocks,
+}: {
+  headline: string;
+  body: string;
+  blocks: readonly PhoneBlock[];
+}) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center">
       {/* Green on every scheme, on purpose: --success is semantic, not brand, and
@@ -344,6 +456,9 @@ function OutcomeScreen({ headline, body }: { headline: string; body: string }) {
       </span>
       <p className="text-[0.85rem] leading-tight text-navy [text-wrap:balance]">{headline}</p>
       <p className="text-[0.6rem] leading-snug text-muted">{body}</p>
+      {/* Under the result copy, which is where the runtime puts it (ThankYou),
+          and left-aligned because a wrapped chip row set centre-ragged is a mess. */}
+      <BlockRow blocks={blocks} className="w-full text-left" />
     </div>
   );
 }

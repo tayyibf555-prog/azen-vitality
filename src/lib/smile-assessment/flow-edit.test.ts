@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FLOW_BANDS, FLOW_LIMITS, type FlowGraph } from "./flow";
+import { FLOW_BANDS, FLOW_LIMITS, type FlowBlock, type FlowGraph } from "./flow";
 import { validateFlow } from "./flow-validate";
 import { FLOW_TEMPLATES, buildScratchFlow, templateForGoal } from "./flow-templates";
 import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
@@ -343,6 +343,61 @@ describe("editing patient-facing copy", () => {
     expect(setQuestionTransition(g, "contact", "hello").ok).toBe(false);
     expect(setOutcomeHeadline(g, `q-${Q_TIMELINE}`, "hello").ok).toBe(false);
     expect(setWelcomeCopy(g, "contact", "a", "b").ok).toBe(false);
+  });
+
+  // Each editor REBUILDS its node field by field rather than spreading, which is
+  // what stops a removed field surviving in a stored row - and is exactly what
+  // would quietly delete an owner's content blocks when they later fix a typo on
+  // the same screen. The save would report success. Nothing would say otherwise.
+  it("keeps the content blocks on a screen whose copy is edited", () => {
+    const strip: FlowBlock = {
+      kind: "trust-strip",
+      practiceName: "Vitality Dental",
+      chips: ["Open Saturdays"],
+    };
+    const quote: FlowBlock = {
+      kind: "testimonial",
+      quote: "The team explained every step and I never felt rushed.",
+      attribution: "Hannah, Enfield",
+    };
+
+    const g = invisalign();
+    const withFurniture: FlowGraph = {
+      ...g,
+      nodes: g.nodes.map((n) => {
+        if (n.id === "welcome" && n.kind === "welcome") return { ...n, blocks: [strip] };
+        if (n.id === "result-high" && n.kind === "outcome") return { ...n, blocks: [quote] };
+        return n;
+      }),
+    };
+
+    const edited = must(setWelcomeCopy(withFurniture, "welcome", "A warm hello", "One or two questions."));
+    const welcome = edited.nodes.find((n) => n.id === "welcome")!;
+    expect(welcome.kind === "welcome" && welcome.blocks).toEqual([strip]);
+
+    const after = must(setOutcomeHeadline(edited, "result-high", "You look ready to get started."));
+    const result = after.nodes.find((n) => n.id === "result-high")!;
+    expect(result.kind === "outcome" && result.blocks).toEqual([quote]);
+    expect(validateFlow(after).ok).toBe(true);
+  });
+
+  it("keeps the answer pictures on a question whose lead-in is edited", () => {
+    const optionImages = [
+      { value: "asap", image: "conditions/crowded" },
+      { value: "1_2_months", image: "conditions/gaps" },
+      { value: "3_6_months", image: "conditions/overbite" },
+      { value: "researching", image: "conditions/underbite" },
+    ];
+    const g = invisalign();
+    const pictured: FlowGraph = {
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === `q-${Q_TIMELINE}` && n.kind === "question" ? { ...n, optionImages } : n,
+      ),
+    };
+    const edited = must(setQuestionTransition(pictured, `q-${Q_TIMELINE}`, "Nearly there."));
+    const node = edited.nodes.find((n) => n.id === `q-${Q_TIMELINE}`)!;
+    expect(node.kind === "question" && node.optionImages).toEqual(optionImages);
   });
 });
 

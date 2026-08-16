@@ -13,14 +13,16 @@ import {
   CORE_FLOW_QUESTION_IDS,
 } from "./flow-validate";
 import {
+  FLOW_LIMITS,
   FLOW_SCHEMA_VERSION,
   normaliseFlow,
   type FlowBand,
+  type FlowBlock,
   type FlowEdge,
   type FlowGraph,
   type FlowNode,
 } from "./flow";
-import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
+import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT, questionById } from "./quiz";
 
 // ---------------------------------------------------------------------------
 // Builders. Terse on purpose: every test below should read as "the base funnel,
@@ -628,5 +630,266 @@ describe("normaliseFlow", () => {
     const { graph, result } = normaliseAndValidateFlow(JSON.parse(JSON.stringify(base())));
     expect(result.ok).toBe(true);
     expect(graph?.entry).toBe("welcome");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RULE 12 - content blocks (A2). Same doctrine as everything above: the base
+// funnel with one thing wrong with its furniture.
+// ---------------------------------------------------------------------------
+
+/** A compliant, valid block of each kind, for breaking one at a time. */
+const trustStrip = (): FlowBlock => ({
+  kind: "trust-strip",
+  practiceName: "Vitality Dental",
+  chips: ["Open Saturdays", "Free parking"],
+});
+const testimonial = (): FlowBlock => ({
+  kind: "testimonial",
+  quote: "The team explained every step and I never felt rushed.",
+  attribution: "Hannah, Enfield",
+});
+const faq = (): FlowBlock => ({
+  kind: "faq",
+  items: [
+    { q: "How long does it take?", a: "The team will talk you through the timings at your visit." },
+    { q: "Can I ask about the cost?", a: "Yes, and you will have the figures in writing first." },
+  ],
+});
+const imageBlock = (): FlowBlock => ({
+  kind: "image",
+  image: "screens/aligners",
+  alt: "A pair of clear aligners",
+});
+
+/** The base funnel with `blocks` on its welcome screen. */
+function withBlocks(blocks: FlowBlock[]): FlowGraph {
+  const g = base();
+  g.nodes[0] = { id: "welcome", kind: "welcome", blocks };
+  return g;
+}
+
+describe("rule 12: content blocks", () => {
+  it("accepts one of every kind on a welcome screen", () => {
+    const g = withBlocks([trustStrip(), testimonial(), faq(), imageBlock()]);
+    expect(describeFlowFailures(validateFlow(g).failures)).toBe("");
+  });
+
+  it("accepts blocks on a result screen", () => {
+    const g = base();
+    const at = g.nodes.findIndex((n) => n.id === "out-high");
+    g.nodes[at] = { id: "out-high", kind: "outcome", band: "high", blocks: [testimonial()] };
+    expect(describeFlowFailures(validateFlow(g).failures)).toBe("");
+  });
+
+  it("rejects blocks on a question screen", () => {
+    const g = base();
+    g.nodes[1] = { ...g.nodes[1]!, blocks: [testimonial()] } as FlowNode;
+    expect(codes(g)).toContain("blocks_wrong_screen");
+  });
+
+  it("rejects blocks on the contact screen", () => {
+    const g = base();
+    const at = g.nodes.findIndex((n) => n.id === "contact");
+    g.nodes[at] = { id: "contact", kind: "contact", blocks: [faq()] } as FlowNode;
+    expect(codes(g)).toContain("blocks_wrong_screen");
+  });
+
+  it("rejects more blocks on one screen than the limit", () => {
+    const g = withBlocks(Array.from({ length: FLOW_LIMITS.blocksPerNode + 1 }, testimonial));
+    expect(codes(g)).toContain("blocks_too_many");
+  });
+
+  it("rejects the same kind of block twice on one screen", () => {
+    expect(codes(withBlocks([faq(), faq()]))).toContain("block_duplicate_kind");
+  });
+
+  it("rejects a block kind this build cannot render", () => {
+    const g = withBlocks([{ kind: "video", src: "x" } as unknown as FlowBlock]);
+    expect(codes(g)).toContain("block_kind_unknown");
+  });
+
+  it("rejects a blank string inside a block", () => {
+    const block = trustStrip();
+    if (block.kind !== "trust-strip") throw new Error("builder changed");
+    block.chips = ["Open Saturdays", "   "];
+    expect(codes(withBlocks([block]))).toContain("block_text_empty");
+  });
+
+  it("rejects a string over its own cap, naming the field", () => {
+    const block = testimonial();
+    if (block.kind !== "testimonial") throw new Error("builder changed");
+    block.quote = "x".repeat(FLOW_LIMITS.quote + 1);
+    const failure = validateFlow(withBlocks([block])).failures.find((f) => f.code === "block_text_too_long");
+    expect(failure?.where).toBe('node "welcome".blocks[0].quote');
+  });
+
+  it("rejects a trust strip with no chips, and one with too many", () => {
+    for (const chips of [[], Array.from({ length: FLOW_LIMITS.chips + 1 }, (_, i) => `chip ${i}`)]) {
+      const block = trustStrip();
+      if (block.kind !== "trust-strip") throw new Error("builder changed");
+      block.chips = chips;
+      expect(codes(withBlocks([block])), `${chips.length} chips`).toContain("trust_strip_chip_count");
+    }
+  });
+
+  it("rejects a faq with fewer than two questions, and one with too many", () => {
+    const one = [{ q: "How long?", a: "The team will say at your visit." }];
+    const many = Array.from({ length: FLOW_LIMITS.faqItems + 1 }, (_, i) => ({ q: `q${i}?`, a: `a${i}` }));
+    for (const items of [[], one, many]) {
+      const block = faq();
+      if (block.kind !== "faq") throw new Error("builder changed");
+      block.items = items;
+      expect(codes(withBlocks([block])), `${items.length} items`).toContain("faq_item_count");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RULE 13 - a picture is a key in the curated manifest, fit for its slot.
+// ---------------------------------------------------------------------------
+
+describe("rule 13: picture references", () => {
+  it("rejects a reference that is not in the library", () => {
+    const g = withBlocks([{ kind: "image", image: "screens/does-not-exist", alt: "A picture" }]);
+    expect(codes(g)).toContain("image_unknown");
+  });
+
+  it("rejects a raw URL, which is the whole reason references are keys", () => {
+    for (const image of ["https://example.com/x.jpg", "/assess/conditions/crowded.webp", "../../secret.png"]) {
+      const g = withBlocks([{ kind: "image", image, alt: "A picture" }]);
+      expect(codes(g), image).toContain("image_unknown");
+    }
+  });
+
+  it("rejects an answer tile stretched across a screen", () => {
+    const g = withBlocks([{ kind: "image", image: "conditions/crowded", alt: "Crowded teeth" }]);
+    expect(codes(g)).toContain("image_wrong_slot");
+  });
+
+  it("rejects a screen picture squeezed onto an answer card", () => {
+    const g = base();
+    g.nodes[1] = {
+      id: Q_T,
+      kind: "question",
+      questionId: Q_TREATMENT,
+      optionImages: treatmentPictures().map((o) => ({ ...o, image: "screens/aligners" })),
+    };
+    expect(codes(g)).toContain("image_wrong_slot");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RULE 14 - answer-card pictures: complete, real, and no ragged grids.
+// ---------------------------------------------------------------------------
+
+/** Every option of the treatment question, pictured. Seven options, seven tiles. */
+function treatmentPictures(): { value: string; image: string }[] {
+  const tiles = [
+    "conditions/crowded",
+    "conditions/gaps",
+    "conditions/open-bite",
+    "conditions/overbite",
+    "conditions/underbite",
+    "conditions/crossbite",
+    "conditions/even-bite",
+  ];
+  return questionById(Q_TREATMENT)!.options.map((o, i) => ({ value: o.value, image: tiles[i]! }));
+}
+
+/** The base funnel with pictures on the treatment question's answers. */
+function withPictures(optionImages: { value: string; image: string }[]): FlowGraph {
+  const g = base();
+  g.nodes[1] = { id: Q_T, kind: "question", questionId: Q_TREATMENT, optionImages };
+  return g;
+}
+
+describe("rule 14: answer-card pictures", () => {
+  it("accepts a question where every answer has a picture", () => {
+    expect(describeFlowFailures(validateFlow(withPictures(treatmentPictures())).failures)).toBe("");
+  });
+
+  it("accepts the escape-hatch relaxation: only the LAST answer without a picture", () => {
+    // quiz.ts smile_concern is the reason this relaxation exists at all: seven
+    // conditions we have a render of, and "I'm not sure", which has no picture and
+    // never will. Every escape hatch in the bank is written last.
+    const all = treatmentPictures();
+    expect(all[all.length - 1]!.value).toBe("other");
+    expect(validateFlow(withPictures(all.slice(0, -1))).ok).toBe(true);
+  });
+
+  it("rejects a hole anywhere else: that is the ragged grid", () => {
+    const missingMiddle = treatmentPictures().filter((o) => o.value !== "veneers");
+    expect(codes(withPictures(missingMiddle))).toContain("option_images_ragged");
+  });
+
+  it("rejects two answers unpictured, even when one of them is the last", () => {
+    expect(codes(withPictures(treatmentPictures().slice(0, -2)))).toContain("option_images_ragged");
+  });
+
+  it("rejects one lonely picture on an eight-answer question", () => {
+    expect(codes(withPictures([treatmentPictures()[0]!]))).toContain("option_images_ragged");
+  });
+
+  it("rejects more answer pictures than the limit", () => {
+    // Coercion caps the stored shape at the same number; this is the in-memory
+    // path (the builder, the generator), which never goes through coercion.
+    const flooded = Array.from({ length: FLOW_LIMITS.optionImages + 1 }, () => ({
+      value: "invisalign",
+      image: "conditions/crowded",
+    }));
+    expect(codes(withPictures(flooded))).toContain("option_images_too_many");
+  });
+
+  it("rejects a picture for an answer that question does not have", () => {
+    const bogus = [...treatmentPictures(), { value: "sedation", image: "conditions/gaps" }];
+    expect(codes(withPictures(bogus))).toContain("option_image_unknown_option");
+  });
+
+  it("rejects the same answer pictured twice", () => {
+    const dupe = [...treatmentPictures(), { value: "invisalign", image: "conditions/gaps" }];
+    expect(codes(withPictures(dupe))).toContain("option_image_duplicate");
+  });
+
+  it("rejects answer pictures on a screen that has no answers", () => {
+    const g = base();
+    g.nodes[0] = { id: "welcome", kind: "welcome", optionImages: treatmentPictures() } as unknown as FlowNode;
+    expect(codes(g)).toContain("option_images_wrong_screen");
+  });
+
+  it("stays quiet about pictures when the question itself is unknown (rule 2 owns that)", () => {
+    const g = base();
+    g.nodes[1] = { id: Q_T, kind: "question", questionId: "invented", optionImages: treatmentPictures() };
+    const hit = codes(g);
+    expect(hit).toContain("unknown_question");
+    expect(hit).not.toContain("option_images_ragged");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RULE 1, the second half: a graph may not use newer content under an older
+// version number.
+// ---------------------------------------------------------------------------
+
+describe("rule 1: a version that can carry what the funnel holds", () => {
+  it("still accepts a stored v1 funnel, because a bump must not take one offline", () => {
+    expect(validateFlow({ ...base(), schemaVersion: 1 }).ok).toBe(true);
+  });
+
+  it("rejects blocks smuggled into a graph that declares v1", () => {
+    const g = { ...withBlocks([testimonial()]), schemaVersion: 1 };
+    expect(codes(g)).toContain("schema_version_too_old");
+  });
+
+  it("rejects answer pictures smuggled into a graph that declares v1", () => {
+    const g = { ...withPictures(treatmentPictures()), schemaVersion: 1 };
+    expect(codes(g)).toContain("schema_version_too_old");
+  });
+
+  it("reports a version from another era once, not twice", () => {
+    const g = { ...withBlocks([testimonial()]), schemaVersion: FLOW_SCHEMA_VERSION + 1 };
+    const hit = codes(g);
+    expect(hit).toContain("schema_version");
+    expect(hit).not.toContain("schema_version_too_old");
   });
 });

@@ -17,7 +17,7 @@ import { describe, it, expect, vi } from "vitest";
 import { validateFlow } from "./flow-validate";
 import { templateForGoal } from "./flow-templates";
 import { scanFlowCopy } from "./flow-copy";
-import type { FlowGraph } from "./flow";
+import type { FlowBlock, FlowGraph } from "./flow";
 import {
   buildFlowPrompt,
   generateFlow,
@@ -344,6 +344,57 @@ describe("generateFlow — compliance: regenerate once, then strip", () => {
     expect(hits.some((h) => h.where.includes("result-high"))).toBe(true);
     expect(hits.some((h) => h.matched.toLowerCase() === "best")).toBe(true);
     expect(scanFlowCopy(stripFlowCopy(dirty))).toEqual([]);
+  });
+
+  // A2 blocks. stripFlowCopy promises that what comes out passes the write gate,
+  // so a block whose wording failed has to go the same way an unclean transition
+  // does - and a block that is fine has to survive a rebuild caused by a sibling
+  // field, or the strip silently deletes an owner's furniture.
+  it("drops a whole block whose wording failed, and keeps the ones that passed", () => {
+    const clean: FlowBlock = {
+      kind: "trust-strip",
+      practiceName: "Vitality Dental",
+      chips: ["Open Saturdays"],
+    };
+    const dirtyBlock: FlowBlock = {
+      kind: "testimonial",
+      quote: "Honestly the best in London",
+      attribution: "R",
+    };
+    const template = templateForGoal("general").build();
+    const dirty: FlowGraph = {
+      ...template,
+      nodes: template.nodes.map((n) =>
+        n.kind === "welcome" ? { ...n, headline: "We are the finest", blocks: [clean, dirtyBlock] } : n,
+      ),
+    };
+
+    const out = stripFlowCopy(dirty);
+    const welcome = out.nodes.find((n) => n.kind === "welcome")!;
+    expect(welcome.kind === "welcome" && welcome.blocks).toEqual([clean]);
+    expect(welcome.kind === "welcome" && "headline" in welcome).toBe(false);
+    expect(scanFlowCopy(out)).toEqual([]);
+    expect(validateFlow(out).ok).toBe(true);
+  });
+
+  it("keeps a clean block when the sibling headline is the thing being stripped", () => {
+    const clean: FlowBlock = {
+      kind: "testimonial",
+      quote: "The team explained every step and I never felt rushed.",
+      attribution: "Hannah, Enfield",
+    };
+    const template = templateForGoal("general").build();
+    const dirty: FlowGraph = {
+      ...template,
+      nodes: template.nodes.map((n) =>
+        n.kind === "outcome" && n.band === "high"
+          ? { ...n, headline: "Private patients only", blocks: [clean] }
+          : n,
+      ),
+    };
+    const result = stripFlowCopy(dirty).nodes.find((n) => n.kind === "outcome" && n.band === "high")!;
+    expect(result.kind === "outcome" && result.blocks).toEqual([clean]);
+    expect(result.kind === "outcome" && "headline" in result).toBe(false);
   });
 });
 

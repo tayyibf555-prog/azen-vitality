@@ -25,7 +25,13 @@ import { GOAL_CATALOG, GOAL_KEYS, goalTreatment } from "./campaign";
 import { scoreAssessment } from "./scoring";
 import { MAX_QUESTIONS } from "./funnel";
 import { questionById, Q_TREATMENT, type QuizOption, type QuizQuestion } from "./quiz";
-import type { FlowGraph } from "./flow";
+import {
+  SUPPORTED_FLOW_SCHEMA_VERSIONS,
+  blocksOf,
+  flowUsesV2Content,
+  optionImagesOf,
+  type FlowGraph,
+} from "./flow";
 import { scanBannedText } from "@/lib/landing/compliance";
 
 // Mirrors area16-18-patient-copy-jargon.test.ts:17 - the project rule that
@@ -194,6 +200,40 @@ describe.each(FLOW_TEMPLATES.map((t) => [t.key, t] as const))("template: %s", (_
       for (const re of FORBIDDEN) {
         expect(re.test(text), `${where} -> "${text}" contains forbidden jargon ${re}`).toBe(false);
       }
+    }
+  });
+});
+
+describe("the templates ship without content blocks, and are valid BY ABSENCE", () => {
+  // A2 added blocks and answer-card pictures. The seven templates deliberately do
+  // not use either: a starting funnel that arrived pre-furnished would be an
+  // opinion about a practice we have never met (its name, its chips, a quote it
+  // never gave us), and the whole point of a testimonial block is that it is
+  // practice-entered. So the pin is that they stay bare AND that bare still
+  // validates under the new rules - rules 12 to 14 must never make an empty screen
+  // an invalid one.
+  it.each([
+    ...FLOW_TEMPLATES.map((t) => [t.key, t.build] as const),
+    [SCRATCH_FLOW_KEY, buildScratchFlow] as const,
+  ])("%s carries no blocks and no answer pictures", (_key, build) => {
+    const graph = build();
+    expect(flowUsesV2Content(graph)).toBe(false);
+    for (const n of graph.nodes) {
+      expect(blocksOf(n)).toEqual([]);
+      expect(optionImagesOf(n)).toEqual([]);
+    }
+  });
+
+  it.each([
+    ...FLOW_TEMPLATES.map((t) => [t.key, t.build] as const),
+    [SCRATCH_FLOW_KEY, buildScratchFlow] as const,
+  ])("%s still passes every rule with the content rules in place", (_key, build) => {
+    expect(describeFlowFailures(validateFlow(build()).failures)).toBe("");
+  });
+
+  it("declares a schema version this build reads, whatever that version is today", () => {
+    for (const t of FLOW_TEMPLATES) {
+      expect(SUPPORTED_FLOW_SCHEMA_VERSIONS, t.key).toContain(t.build().schemaVersion);
     }
   });
 });

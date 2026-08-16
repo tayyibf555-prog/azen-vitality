@@ -24,7 +24,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { FLOW_BANDS, FLOW_SCHEMA_VERSION, type FlowEdge, type FlowGraph, type FlowNode } from "@/lib/smile-assessment/flow";
 import { templateForGoal } from "@/lib/smile-assessment/flow-templates";
-import { phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
+import { phoneFlowLayout, phoneMetrics } from "@/lib/smile-assessment/flow-phone-layout";
 import { screenFor, type PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 import { questionById } from "@/lib/smile-assessment/quiz";
 import { iconFor } from "@/components/assess/option-icons";
@@ -511,6 +511,220 @@ describe("the chosen colour scheme reaches the strip", () => {
     expect(codeOnly(miniSource)).not.toContain("theme");
     expect(codeOnly(canvasSource)).not.toContain("theme");
     expect(codeOnly(miniSource)).not.toContain("palette");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 5b. A2: content blocks and answer pictures, at 300px.
+ *
+ * A mini is 300x470 and EVERY mini is exactly that (flow-phone-layout.ts). So the
+ * question a block has to answer here is not "does it look like the page" - it
+ * cannot - but "is it TRUE about the page, in the room there is". A chip row is
+ * the chips; a quote line is the quote and who said it; a count line is how many
+ * questions the accordion answers; a stand-in plate is a picture that is there.
+ * ------------------------------------------------------------------------- */
+
+describe("a funnel with no furniture draws the mini it drew before A2", () => {
+  const BASELINE = JSON.parse(
+    readFileSync(join(HERE, "baselines", "phone-minis-no-blocks.json"), "utf8"),
+  ) as Record<string, string>;
+
+  const g = templateForGoal("invisalign").build();
+  const { screens } = preview(g, {
+    headline: "Is Invisalign right for you?",
+    intro: "Two minutes, no wrong answers.",
+  });
+
+  // MUTATION: render the block strip's wrapper (or its border-top) for an empty
+  // list, or add a class to the options grid unconditionally, and every campaign
+  // preview on the platform moves for a feature none of them uses.
+  it("renders byte-for-byte the markup captured before the feature existed", () => {
+    expect(Object.keys(BASELINE).length).toBe(screens.size);
+    for (const [id, screen] of screens) {
+      expect(render(screen, "Vitality Dental"), id).toBe(BASELINE[id]);
+    }
+  });
+
+  it("the baseline really is a no-furniture funnel, or the test above proves nothing", () => {
+    for (const [id, screen] of screens) {
+      if (screen.kind === "welcome-question" || screen.kind === "outcome") {
+        expect(screen.blocks, id).toEqual([]);
+      }
+      if (screen.kind === "question" || screen.kind === "welcome-question") {
+        for (const o of screen.options) expect(o.image, `${id}/${o.value}`).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("the furniture on a screen is drawn as what fits", () => {
+  const TRUST = {
+    kind: "trust-strip" as const,
+    practiceName: "Vitality Dental",
+    chips: ["Open Saturdays", "Free parking", "Wheelchair access"],
+  };
+  const TESTIMONIAL = {
+    kind: "testimonial" as const,
+    quote: "The team explained every step and I never felt rushed.",
+    attribution: "Hannah, Enfield",
+  };
+  const FAQ = {
+    kind: "faq" as const,
+    items: [
+      { q: "How long does it take?", a: "The team will talk you through it." },
+      { q: "Can I ask about cost?", a: "Yes, in writing, first." },
+      { q: "Do you see nervous patients?", a: "Every day." },
+    ],
+  };
+  const IMAGE = { kind: "image" as const, image: "screens/aligners", alt: "A pair of clear aligners" };
+
+  function decorated(): FlowGraph {
+    const g = funnel();
+    g.nodes[0] = { id: "w", kind: "welcome", headline: "Is Invisalign right for you?", intro: "Two minutes.", blocks: [TRUST, TESTIMONIAL, FAQ, IMAGE] };
+    g.nodes[4] = { id: "hot", kind: "outcome", band: "high", headline: "You are a great fit", blocks: [TESTIMONIAL, FAQ] };
+    return g;
+  }
+
+  const hero = render(screenOf(decorated(), "w"));
+  const outcome = render(screenOf(decorated(), "hot"));
+
+  // MUTATION: summarise the chips as "3 reassurances" and the one thing an owner
+  // opened the preview to check - that the strip says "Open Saturdays" - is gone.
+  it("draws the trust strip as the practice name and its chips, verbatim", () => {
+    expect(hero).toContain(esc(TRUST.practiceName));
+    for (const chip of TRUST.chips) expect(hero, `missing chip ${chip}`).toContain(esc(chip));
+  });
+
+  // MUTATION: print the quote without the attribution and the drawing shows a
+  // testimonial the page does not have - one from nobody.
+  it("draws the testimonial as one line: the quote and who said it", () => {
+    expect(hero).toContain(esc(`“${TESTIMONIAL.quote}” — ${TESTIMONIAL.attribution}`));
+    // Clamped, not cut: the model carries the practice's own words in full.
+    expect(hero).toContain("line-clamp-2");
+  });
+
+  // MUTATION: draw the FAQ's questions and answers in full and the 470px screen
+  // is a wall of clipped text with the answers below the cut.
+  it("draws the faq as a count of what it answers", () => {
+    expect(hero).toContain("3 questions answered");
+    expect(hero).not.toContain(esc(FAQ.items[0]!.a));
+  });
+
+  // MUTATION: draw the real hero and a strip of ten minis fetches a megabyte of
+  // 1000px JPEGs to show them at 20 pixels wide.
+  it("draws a screen picture as a stand-in captioned with what it shows", () => {
+    expect(hero).toContain(esc(IMAGE.alt));
+    expect(hero).not.toContain("/landing/invisalign/aligners.jpg");
+  });
+
+  it("draws a result step's own furniture too", () => {
+    expect(outcome).toContain(esc(`“${TESTIMONIAL.quote}” — ${TESTIMONIAL.attribution}`));
+    expect(outcome).toContain("3 questions answered");
+  });
+
+  // MUTATION: let the block strip sit in the flow and a screen with eight answers
+  // pushes it out of a box that cannot grow - the furniture an owner just added is
+  // then invisible in the preview of the screen they added it to.
+  it("keeps the strip on screen and lets the answers give up the room instead", () => {
+    expect(hero).toContain("shrink-0 space-y-1 border-t border-line pt-1.5 mt-auto");
+    expect(hero).toContain("grid min-h-0 gap-1 overflow-hidden");
+  });
+
+  // MUTATION: grow the box for a screen with furniture and the strip stops being a
+  // row of identical handsets - the wires, drawn at the layout's coordinates, then
+  // point at the wrong edges (flow-phone-layout.ts, uniform cards).
+  it("changes not one coordinate: every box is still PHONE_METRICS.minH", () => {
+    const plain = phoneFlowLayout(funnel());
+    const rich = phoneFlowLayout(decorated());
+    expect(rich.nodes.map((n) => [n.id, n.x, n.y, n.w, n.h])).toEqual(
+      plain.nodes.map((n) => [n.id, n.x, n.y, n.w, n.h]),
+    );
+    for (const n of rich.nodes) expect(n.h, n.id).toBe(phoneMetrics().minH);
+  });
+
+  // MUTATION: reach for a token outside the AA-checked inks (text-faint is the
+  // tempting one: it is meta ink for footnotes) and the furniture is the one part
+  // of the screen a patient cannot read.
+  it("sets the furniture's words in the AA-checked inks only", () => {
+    // The four the quiz already sets COPY in. text-blue-dark is deliberately not
+    // among them: it is the action colour and the icon-chip glyph, and palette.ts
+    // calls blue-DEEP "the AA-contrast small-text blue on a light card".
+    const AA_INK = ["text-navy", "text-ink", "text-muted", "text-blue-deep"];
+    const NOT_A_COLOUR = ["text-left", "text-wrap"];
+    // Scoped to the block strip, which is the last thing on the screen (mt-auto),
+    // so this is reading the furniture's own words rather than the chrome around
+    // it - a whole-mini scan would be satisfied by the option rows' own inks.
+    const at = hero.indexOf("shrink-0 space-y-1 border-t border-line pt-1.5");
+    expect(at, "the block strip is not in this render").toBeGreaterThan(-1);
+    const strip = hero.slice(at);
+    const inks = new Set([...strip.matchAll(/\btext-(?!\[)[a-z][a-z0-9-]*/g)].map((m) => m[0]));
+    expect(inks.size, "no ink at all is a vacuous assertion").toBeGreaterThan(2);
+    for (const ink of inks) {
+      expect([...AA_INK, ...NOT_A_COLOUR], `${ink} is not an AA-checked ink`).toContain(ink);
+    }
+  });
+});
+
+describe("an answer with a picture is drawn with it", () => {
+  const bank = questionById("timeline")!;
+  const KEYS = ["conditions/crowded", "conditions/gaps", "conditions/overbite", "conditions/underbite"];
+
+  function pictured(bare: number): FlowGraph {
+    const g = funnel();
+    g.nodes[2] = {
+      id: "q2",
+      kind: "question",
+      questionId: "timeline",
+      transition: "Good to know.",
+      optionImages: bank.options
+        .slice(0, bank.options.length - bare)
+        .map((o, i) => ({ value: o.value, image: KEYS[i % KEYS.length]! })),
+    };
+    return g;
+  }
+
+  const html = render(screenOf(pictured(0), "q2"));
+
+  // MUTATION: keep the icon chip and the pictures an owner chose never appear -
+  // which is the whole feature.
+  it("puts the shipped tile where the icon chip was", () => {
+    expect(html).toContain('src="/assess/conditions/crowded.webp"');
+    expect(html).toContain('width="360"');
+    expect(html).toContain('height="270"');
+  });
+
+  // MUTATION: alt="" and the small-screen LIST rendering - which is not role="img"
+  // - announces nothing at all for the answer's picture.
+  it("gives every tile the manifest's own alt text", () => {
+    expect(html).toContain('alt="Crowded teeth 3D model"');
+    // Scoped to the answers: the lockup's logo IS decorative and carries alt=""
+    // on purpose, so a whole-document scan would be reading that instead.
+    const grid = html.slice(html.indexOf('class="grid'));
+    expect(grid).not.toContain('alt=""');
+    expect((grid.match(/<img /g) ?? []).length).toBe(bank.options.length);
+  });
+
+  // MUTATION: drop the icon fallback and the one answer rule 14 lets an owner
+  // leave bare is a hole in the row.
+  it("keeps the icon on an answer with no picture", () => {
+    const mixed = render(screenOf(pictured(1), "q2"));
+    const last = bank.options[bank.options.length - 1]!;
+    const at = mixed.indexOf(esc(last.label));
+    expect(at).toBeGreaterThan(-1);
+    const row = mixed.slice(mixed.lastIndexOf("<div class=\"flex items-center gap-1.5", at), at);
+    expect(row).toContain("<svg");
+    expect(row).not.toContain("<img");
+  });
+
+  // MUTATION: mount an <img> per answer at its intrinsic 360px and a strip of ten
+  // minis lays out ten full-size tiles it then scales to 20 pixels.
+  it("draws the tile at the chip's size, with the box reserved", () => {
+    expect(html).toContain("h-5 w-5 shrink-0 overflow-hidden rounded-md bg-card-muted");
+    expect(html).toContain('loading="lazy"');
+  });
+
+  it("ships no scoring weight, pictures or not", () => {
+    expect(html).not.toMatch(/weight/i);
   });
 });
 

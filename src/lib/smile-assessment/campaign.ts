@@ -7,7 +7,7 @@
 // the submit endpoint, the scoring engine and the internal management UI.
 
 import { Q_TREATMENT, questionById } from "./quiz";
-import type { FlowGraph } from "./flow";
+import { cloneFlowGraph, type FlowGraph } from "./flow";
 
 // ---------------------------------------------------------------------------
 // Goal catalogue. A goal maps to the Q_TREATMENT option value it targets (or null
@@ -244,6 +244,15 @@ export interface PublicFlowQuestion {
  * graph (ids, authored copy, option values) plus the wording for exactly the
  * questions this funnel asks. A question in the bank that this funnel never asks
  * is not sent either.
+ *
+ * CONTENT BLOCKS AND ANSWER-CARD PICTURES TRAVEL ON THE GRAPH, not on the
+ * questions. That is deliberate: they are per-NODE authoring (the same bank
+ * question can appear on two branches wearing different pictures), while a
+ * PublicFlowQuestion is per-QUESTION and is byte-for-byte the shape the adaptive
+ * funnel already sends. Widening it would fork the two modes' payloads for a
+ * cosmetic field and reopen the question of which one wins on a shared question.
+ * So the renderer reads node.blocks / node.optionImages and resolves picture keys
+ * through src/lib/assess/image-library.ts, which carries no weights either.
  */
 export interface PublicFlow {
   graph: FlowGraph;
@@ -276,15 +285,10 @@ export function toPublicFlow(graph: FlowGraph): PublicFlow | null {
     });
   }
   // A fresh graph, so nothing downstream can mutate the campaign row's copy of it.
-  return {
-    graph: {
-      schemaVersion: graph.schemaVersion,
-      entry: graph.entry,
-      nodes: graph.nodes.map((n) => ({ ...n })),
-      edges: graph.edges.map((e) => ({ ...e })),
-    },
-    questions,
-  };
+  // cloneFlowGraph rather than a per-node spread: a spread shares the `blocks` and
+  // `optionImages` ARRAYS with the stored graph, which would make that promise
+  // quietly false for exactly the fields added in A2.
+  return { graph: cloneFlowGraph(graph), questions };
 }
 
 export { Q_TREATMENT };

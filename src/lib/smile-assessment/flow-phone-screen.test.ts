@@ -416,7 +416,14 @@ describe("what a screen is not allowed to carry", () => {
     for (const { id, screen } of EVERY_SCREEN) {
       expect(JSON.stringify(screen), id).not.toMatch(/"weight"/);
       if (screen.kind === "question" || screen.kind === "welcome-question") {
-        for (const o of screen.options) expect(Object.keys(o).sort(), id).toEqual(["label", "value"]);
+        // The picture is the ONLY field A2 was allowed to add. Naming both shapes
+        // rather than allowing "anything except weight" is what keeps the next
+        // field off an answer row until somebody changes this line on purpose.
+        for (const o of screen.options) {
+          expect(Object.keys(o).sort(), id).toEqual(
+            o.image ? ["image", "label", "value"] : ["label", "value"],
+          );
+        }
       }
     }
   });
@@ -485,6 +492,182 @@ describe("resolving a screen changes nothing", () => {
 });
 
 /* ---------------------------------------------------------------------------
+ * A2: the furniture and the answer pictures, compressed to mini size.
+ * ------------------------------------------------------------------------- */
+
+describe("a screen carries the furniture its step has", () => {
+  const TRUST = {
+    kind: "trust-strip" as const,
+    practiceName: "Vitality Dental",
+    chips: ["Open Saturdays", "Free parking"],
+  };
+  const TESTIMONIAL = {
+    kind: "testimonial" as const,
+    quote: "The team explained every step",
+    attribution: "Hannah, Enfield",
+  };
+  const IMAGE = { kind: "image" as const, image: "screens/aligners", alt: "Clear aligners on a tray" };
+  const faq = (n: number) => ({
+    kind: "faq" as const,
+    items: Array.from({ length: n }, (_, i) => ({ q: `Question ${i}?`, a: `Answer ${i}.` })),
+  });
+
+  function decorated(): FlowGraph {
+    const g = linear();
+    g.nodes[0] = { id: "w", kind: "welcome", blocks: [TRUST, TESTIMONIAL, faq(3), IMAGE] };
+    g.nodes[4] = { id: "r", kind: "outcome", band: "high", blocks: [TESTIMONIAL] };
+    return g;
+  }
+
+  // MUTATION: read the blocks off the QUESTION the hero screen shows and the
+  // welcome step's furniture never appears on the one screen it belongs to,
+  // because a question node cannot carry any.
+  it("puts the WELCOME step's furniture on the first screen", () => {
+    const g = decorated();
+    const screen = screenFor(nodeOf(g, "w"), g, {}, 1);
+    if (screen.kind !== "welcome-question") throw new Error("fixture drifted");
+    expect(screen.blocks.map((b) => b.kind)).toEqual(["trust-strip", "testimonial", "faq", "image"]);
+  });
+
+  // MUTATION: summarise the chips as a count too and the one thing an owner is
+  // checking - that the strip says "Open Saturdays" - stops being on the picture.
+  it("carries the authored strings verbatim, and only summarises what cannot fit", () => {
+    const g = decorated();
+    const screen = screenFor(nodeOf(g, "w"), g, {}, 1);
+    if (screen.kind !== "welcome-question") throw new Error("fixture drifted");
+    expect(screen.blocks[0]).toEqual({
+      kind: "trust-strip",
+      practiceName: "Vitality Dental",
+      chips: ["Open Saturdays", "Free parking"],
+    });
+    expect(screen.blocks[1]).toEqual({
+      kind: "testimonial",
+      line: "“The team explained every step” — Hannah, Enfield",
+    });
+    expect(screen.blocks[3]).toEqual({ kind: "image", alt: "Clear aligners on a tray" });
+  });
+
+  // MUTATION: hardcode the plural and a one-question FAQ reads "1 questions".
+  it("counts the faq, and counts it in English", () => {
+    const g = linear();
+    for (const [n, line] of [
+      [1, "1 question answered"],
+      [2, "2 questions answered"],
+      [6, "6 questions answered"],
+    ] as const) {
+      g.nodes[0] = { id: "w", kind: "welcome", blocks: [faq(n)] };
+      const screen = screenFor(nodeOf(g, "w"), g, {}, 1);
+      if (screen.kind !== "welcome-question") throw new Error("fixture drifted");
+      expect(screen.blocks[0]).toEqual({ kind: "faq", line });
+    }
+  });
+
+  // MUTATION: carry the picture's src and the strip fetches a 1000px hero once per
+  // welcome and per result step, ten minis at a time.
+  it("carries a screen picture's ALT and never its src", () => {
+    const g = decorated();
+    const screen = screenFor(nodeOf(g, "w"), g, {}, 1);
+    expect(JSON.stringify(screen)).not.toContain("/landing/");
+    expect(JSON.stringify(screen)).toContain("Clear aligners on a tray");
+  });
+
+  it("carries a result step's own furniture", () => {
+    const g = decorated();
+    const screen = screenFor(nodeOf(g, "r"), g, {}, 4);
+    if (screen.kind !== "outcome") throw new Error("fixture drifted");
+    expect(screen.blocks.map((b) => b.kind)).toEqual(["testimonial"]);
+  });
+
+  // MUTATION: default `blocks` to undefined instead of [] and every consumer needs
+  // a null check that half of them will not have.
+  it("is an empty list, never absent, on a step with no furniture", () => {
+    const g = linear();
+    const hero = screenFor(nodeOf(g, "w"), g, {}, 1);
+    const outcome = screenFor(nodeOf(g, "r"), g, {}, 4);
+    expect(hero.kind === "welcome-question" && hero.blocks).toEqual([]);
+    expect(outcome.kind === "outcome" && outcome.blocks).toEqual([]);
+  });
+});
+
+describe("a screen carries the pictures on its own answers", () => {
+  function pictured(): FlowGraph {
+    const g = linear();
+    const bank = questionById("timeline")!;
+    g.nodes[2] = {
+      id: "q2",
+      kind: "question",
+      questionId: "timeline",
+      transition: "Good to know.",
+      optionImages: bank.options.map((o, i) => ({
+        value: o.value,
+        image: ["conditions/crowded", "conditions/gaps", "conditions/overbite", "conditions/underbite"][i % 4]!,
+      })),
+    };
+    return g;
+  }
+
+  // MUTATION: resolve the pictures off the QUESTION id rather than the node and
+  // the same bank question on two branches has to wear the same art.
+  it("hangs each picture on the answer the step named", () => {
+    const g = pictured();
+    const screen = screenFor(nodeOf(g, "q2"), g, {}, 2);
+    if (screen.kind !== "question") throw new Error("fixture drifted");
+    expect(screen.options[0]!.image).toEqual({
+      src: "/assess/conditions/crowded.webp",
+      alt: "Crowded teeth 3D model",
+      width: 360,
+      height: 270,
+    });
+    for (const o of screen.options) expect(o.image, o.value).toBeTruthy();
+  });
+
+  // MUTATION: set `image: undefined` on an unpictured answer and a funnel drawn
+  // before A2 stops being byte-identical in JSON - which is what the mini's own
+  // no-furniture baseline is comparing.
+  it("omits the key entirely on a step with no pictures", () => {
+    const g = linear();
+    const screen = screenFor(nodeOf(g, "q2"), g, {}, 2);
+    if (screen.kind !== "question") throw new Error("fixture drifted");
+    for (const o of screen.options) expect("image" in o, o.value).toBe(false);
+  });
+
+  // MUTATION: resolve answer tiles in the hero slot and a 1000px JPEG is drawn
+  // once per answer card.
+  it("refuses a picture the manifest cannot vouch for, and keeps the answer", () => {
+    const g = linear();
+    g.nodes[2] = {
+      id: "q2",
+      kind: "question",
+      questionId: "timeline",
+      optionImages: [
+        { value: questionById("timeline")!.options[0]!.value, image: "screens/aligners" },
+        { value: questionById("timeline")!.options[1]!.value, image: "conditions/not-a-picture" },
+      ],
+    };
+    const screen = screenFor(nodeOf(g, "q2"), g, {}, 2);
+    if (screen.kind !== "question") throw new Error("fixture drifted");
+    expect(screen.options).toHaveLength(questionById("timeline")!.options.length);
+    for (const o of screen.options) expect(o.image, o.value).toBeUndefined();
+  });
+
+  // MUTATION: resolve the first screen's pictures off the welcome node and the
+  // opening question's answer cards lose their art.
+  it("reads the first screen's pictures off the question the walk lands on", () => {
+    const g = linear();
+    const bank = questionById("treatment_interest")!;
+    g.nodes[1] = {
+      id: "q1",
+      kind: "question",
+      questionId: "treatment_interest",
+      optionImages: [{ value: bank.options[0]!.value, image: "conditions/crowded" }],
+    };
+    const screen = screenFor(nodeOf(g, "w"), g, {}, 1);
+    if (screen.kind !== "welcome-question") throw new Error("fixture drifted");
+    expect(screen.options[0]!.image?.src).toBe("/assess/conditions/crowded.webp");
+  });
+});
+
+/* ---------------------------------------------------------------------------
  * The boundary.
  * ------------------------------------------------------------------------- */
 
@@ -495,9 +678,20 @@ describe("what the screen model is allowed to import", () => {
   // MUTATION: import flow-edit "just for describeNode" and the builder strings
   // are one keystroke away from the patient's screen again; import React and the
   // copy rules stop being testable in a node environment at all.
-  it("imports the graph, the runtime walk, the bank and the result copy - nothing else", () => {
+  //
+  // ./flow-block-view is A2's resolution layer: it is what turns a stored picture
+  // KEY into a path and an alt (flow-block-view.ts), and it is deliberately the
+  // SAME module the public quiz resolves through, so a mini cannot draw a picture
+  // the live page refuses - or refuse one the live page draws.
+  it("imports the graph, the runtime walk, the bank, the result copy and the picture resolver - nothing else", () => {
     const specifiers = [...SOURCE.matchAll(IMPORTS)].map((m) => m[1]!);
-    expect(specifiers.sort()).toEqual(["./flow", "./flow-runtime", "./quiz", "./result-copy"]);
+    expect(specifiers.sort()).toEqual([
+      "./flow",
+      "./flow-block-view",
+      "./flow-runtime",
+      "./quiz",
+      "./result-copy",
+    ]);
   });
 
   // MUTATION: pull in a server module and the builder panel - a "use client"

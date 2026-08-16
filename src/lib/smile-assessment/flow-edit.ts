@@ -24,6 +24,7 @@
 import {
   FLOW_BANDS,
   FLOW_LIMITS,
+  cloneFlowBlock,
   edgesFrom,
   isFlowBand,
   nodeMap,
@@ -327,6 +328,9 @@ export function setQuestionTransition(graph: FlowGraph, nodeId: string, text: st
   const transition = trimmed(text, FLOW_LIMITS.transition);
   const next: FlowNode = { id: node.id, kind: "question", questionId: node.questionId };
   if (transition) next.transition = transition;
+  if (node.optionImages) {
+    next.optionImages = node.optionImages.map((o) => ({ value: o.value, image: o.image }));
+  }
   return ok(replaceNode(graph, nodeId, next));
 }
 
@@ -339,12 +343,20 @@ export function setEdgeTransition(graph: FlowGraph, edgeIndex: number, text: str
   return ok(withParts(graph, graph.nodes, graph.edges.map((x, i) => (i === edgeIndex ? next : x))));
 }
 
+// EVERY EDITOR BELOW REBUILDS ITS NODE FIELD BY FIELD rather than spreading, so
+// that a field removed from the type cannot survive in a stored row. The cost of
+// that choice is that a field ADDED to the type is silently dropped by every
+// editor that does not carry it, which for A2's `blocks` would mean: an owner adds
+// a testimonial, later fixes a typo in the same screen's headline, and the
+// testimonial is gone with the save reporting success. So the carry is explicit.
+
 export function setOutcomeHeadline(graph: FlowGraph, nodeId: string, text: string): FlowEditResult {
   const node = nodeMap(graph).get(nodeId);
   if (!node || node.kind !== "outcome") return no("That result step is no longer there.");
   const headline = trimmed(text, FLOW_LIMITS.headline);
   const next: FlowNode = { id: node.id, kind: "outcome", band: node.band };
   if (headline) next.headline = headline;
+  if (node.blocks) next.blocks = node.blocks.map(cloneFlowBlock);
   return ok(replaceNode(graph, nodeId, next));
 }
 
@@ -361,6 +373,7 @@ export function setWelcomeCopy(
   const i = trimmed(intro, FLOW_LIMITS.intro);
   if (h) next.headline = h;
   if (i) next.intro = i;
+  if (node.blocks) next.blocks = node.blocks.map(cloneFlowBlock);
   return ok(replaceNode(graph, nodeId, next));
 }
 

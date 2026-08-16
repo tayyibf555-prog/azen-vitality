@@ -34,7 +34,16 @@
 
 import { QUIZ_QUESTIONS, Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
 import { budgetLabel, goalLabel } from "./campaign";
-import { FLOW_LIMITS, FLOW_SCHEMA_VERSION, type FlowEdge, type FlowGraph, type FlowNode } from "./flow";
+import {
+  FLOW_LIMITS,
+  FLOW_SCHEMA_VERSION,
+  blockCopyFields,
+  cloneFlowBlock,
+  type FlowBlock,
+  type FlowEdge,
+  type FlowGraph,
+  type FlowNode,
+} from "./flow";
 import {
   MAX_FLOW_QUESTION_DEPTH,
   describeFlowFailures,
@@ -101,6 +110,22 @@ function isCleanLine(text: string | undefined): boolean {
 }
 
 /**
+ * Content blocks minus any block carrying a line that failed the scan. A block is
+ * dropped WHOLE, not line by line: half a faq is a faq that answers a question
+ * nobody asked, and a testimonial without its attribution is an anonymous claim.
+ * `undefined` when the node had none, so the key stays absent.
+ *
+ * A dropped block cannot invalidate the graph: blocks are optional (rule 12 has no
+ * minimum), so what comes out still validates, which is the promise stripFlowCopy
+ * makes below.
+ */
+function cleanBlocks(blocks: FlowBlock[] | undefined): FlowBlock[] | undefined {
+  if (!blocks) return undefined;
+  const kept = blocks.filter((b) => blockCopyFields(b).every((f) => isCleanLine(f.text)));
+  return kept.length > 0 ? kept.map(cloneFlowBlock) : undefined;
+}
+
+/**
  * Drop only the lines that failed the scan, keeping the rest of the funnel. This
  * is the "then strip" half of regenerate-once-then-strip (copilot/tools.ts:
  * 1277-1282): a second non-compliant reply costs the patient a warm lead-in on
@@ -113,16 +138,26 @@ function isCleanLine(text: string | undefined): boolean {
 export function stripFlowCopy(graph: FlowGraph): FlowGraph {
   const nodes: FlowNode[] = graph.nodes.map((n) => {
     if (n.kind === "question") {
-      return isCleanLine(n.transition) ? n : { id: n.id, kind: "question", questionId: n.questionId };
+      if (isCleanLine(n.transition)) return n;
+      const node: FlowNode = { id: n.id, kind: "question", questionId: n.questionId };
+      if (n.optionImages) node.optionImages = n.optionImages.map((o) => ({ ...o }));
+      return node;
     }
     if (n.kind === "welcome") {
       const node: FlowNode = { id: n.id, kind: "welcome" };
       if (isCleanLine(n.headline)) node.headline = n.headline;
       if (isCleanLine(n.intro)) node.intro = n.intro;
+      const blocks = cleanBlocks(n.blocks);
+      if (blocks) node.blocks = blocks;
       return node;
     }
     if (n.kind === "outcome") {
-      return isCleanLine(n.headline) ? n : { id: n.id, kind: "outcome", band: n.band };
+      const blocks = cleanBlocks(n.blocks);
+      if (isCleanLine(n.headline) && blocks?.length === n.blocks?.length) return n;
+      const node: FlowNode = { id: n.id, kind: "outcome", band: n.band };
+      if (isCleanLine(n.headline)) node.headline = n.headline;
+      if (blocks) node.blocks = blocks;
+      return node;
     }
     return n;
   });

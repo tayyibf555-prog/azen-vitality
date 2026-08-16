@@ -7,9 +7,16 @@
 // pass quotes the whole list back to the model, and an owner fixing a funnel by
 // hand should see all of it in one go rather than playing whack-a-mole.
 //
-// The rules are numbered 1-11 and the numbers are part of the contract (the tests
+// The rules are numbered 1-14 and the numbers are part of the contract (the tests
 // and the repair prompt cite them). Rule 0 is reserved for "the blob was not even
-// readable as a graph" (see normaliseAndValidateFlow at the bottom).
+// readable as a graph" (see normaliseAndValidateFlow at the bottom). A NEW RULE
+// TAKES THE NEXT NUMBER: renumbering would silently rewrite what every existing
+// test and every stored repair prompt is talking about.
+//
+// 1-11 are the ROUTING rules: is this a funnel a patient can walk, and does it
+// collect what a lead needs. 12-14 are the CONTENT rules added with A2: content
+// blocks (12), picture references (13) and answer-card pictures (14). The content
+// rules are node-local, so they never depend on the routing being fixable first.
 //
 // TWO RULES ARE LOAD-BEARING AND SILENT IF BROKEN:
 //
@@ -35,14 +42,24 @@ import {
 import { MAX_QUESTIONS } from "./funnel";
 import {
   FLOW_BANDS,
-  FLOW_SCHEMA_VERSION,
+  FLOW_BLOCK_KINDS,
+  FLOW_LIMITS,
+  FLOW_SCHEMA_VERSION_BLOCKS,
+  SUPPORTED_FLOW_SCHEMA_VERSIONS,
+  acceptsBlocks,
+  blockCopyFields,
+  blocksOf,
+  flowUsesV2Content,
   isFlowBand,
+  isFlowBlockKind,
   nodeMap,
   normaliseFlow,
+  optionImagesOf,
   type FlowEdge,
   type FlowGraph,
   type FlowNode,
 } from "./flow";
+import { assessImage, type AssessImageSlot } from "@/lib/assess/image-library";
 
 /** The trio scoring.ts:98-105 demands before a lead may band "high". */
 export const CORE_FLOW_QUESTION_IDS: readonly string[] = [Q_TREATMENT, Q_TIMELINE, Q_BUDGET];
@@ -56,7 +73,7 @@ export const CORE_FLOW_QUESTION_IDS: readonly string[] = [Q_TREATMENT, Q_TIMELIN
 export const MAX_FLOW_QUESTION_DEPTH = MAX_QUESTIONS + 2;
 
 export interface FlowValidationFailure {
-  /** 1-11, or 0 for an unreadable blob. Cited by the tests and the repair prompt. */
+  /** 1-14, or 0 for an unreadable blob. Cited by the tests and the repair prompt. */
   rule: number;
   /** Stable machine code, e.g. "core_missing". */
   code: string;
@@ -99,6 +116,208 @@ interface NodeFacts {
   depth: number;
 }
 
+type Fail = (rule: number, code: string, where: string, message: string) => void;
+
+/**
+ * RULE 12 - content blocks: where they may sit, how many, and what each kind must
+ * carry. RULE 13's image half rides along for block pictures, because it is the
+ * same walk.
+ *
+ * BELT AND BRACES ON PLACEMENT. FlowNode's type will not let a question or contact
+ * node carry `blocks`, and normaliseFlow REFUSES a stored one that does. This
+ * check exists for the third path: a graph assembled in memory (the builder, the
+ * generator, a future importer) and handed straight to validateFlow. It reads the
+ * property off the raw object for that reason.
+ */
+function checkBlocks(node: FlowNode, fail: Fail): void {
+  const raw = (node as { blocks?: unknown }).blocks;
+  if (!acceptsBlocks(node.kind)) {
+    if (Array.isArray(raw) && raw.length > 0) {
+      fail(
+        12,
+        "blocks_wrong_screen",
+        node.id,
+        `"${node.id}" is a ${node.kind} step; content blocks belong on the welcome and result screens only`,
+      );
+    }
+    return;
+  }
+
+  const blocks = blocksOf(node);
+  if (blocks.length === 0) return;
+
+  if (blocks.length > FLOW_LIMITS.blocksPerNode) {
+    fail(
+      12,
+      "blocks_too_many",
+      node.id,
+      `"${node.id}" carries ${blocks.length} content blocks; the limit is ${FLOW_LIMITS.blocksPerNode}`,
+    );
+  }
+
+  const kindsSeen = new Set<string>();
+  blocks.forEach((b, i) => {
+    const where = `node "${node.id}".blocks[${i}]`;
+
+    if (!isFlowBlockKind(b.kind)) {
+      fail(
+        12,
+        "block_kind_unknown",
+        where,
+        `"${String(b.kind)}" is not a content block this build can render (${FLOW_BLOCK_KINDS.join(", ")})`,
+      );
+      return;
+    }
+    if (kindsSeen.has(b.kind)) {
+      // Each kind is a SECTION of the screen. Two trust strips or two faqs is an
+      // authoring slip, and it renders as one, so say so rather than draw it.
+      fail(12, "block_duplicate_kind", where, `"${node.id}" already has a ${b.kind} block`);
+    }
+    kindsSeen.add(b.kind);
+
+    for (const s of blockCopyFields(b)) {
+      if (s.text.trim() === "") {
+        fail(12, "block_text_empty", `${where}.${s.field}`, "this is blank, so it would render as a gap");
+      } else if (s.text.length > s.max) {
+        fail(
+          12,
+          "block_text_too_long",
+          `${where}.${s.field}`,
+          `${s.text.length} characters; the limit is ${s.max}`,
+        );
+      }
+    }
+
+    if (b.kind === "trust-strip") {
+      if (b.chips.length < 1 || b.chips.length > FLOW_LIMITS.chips) {
+        fail(
+          12,
+          "trust_strip_chip_count",
+          where,
+          `a trust strip needs 1 to ${FLOW_LIMITS.chips} chips, found ${b.chips.length}`,
+        );
+      }
+    } else if (b.kind === "faq") {
+      if (b.items.length < 2 || b.items.length > FLOW_LIMITS.faqItems) {
+        fail(
+          12,
+          "faq_item_count",
+          where,
+          `a faq needs 2 to ${FLOW_LIMITS.faqItems} questions, found ${b.items.length}`,
+        );
+      }
+    } else if (b.kind === "image") {
+      checkImageRef(b.image, "hero", `${where}.image`, fail);
+    }
+  });
+}
+
+/**
+ * RULE 13 - a picture reference must resolve in the curated manifest, and must be
+ * fit for the slot it is used in.
+ *
+ * The manifest is the ONLY way a picture reaches a public funnel (flow.ts CUT 4),
+ * so an unknown key is not a cosmetic problem: it is either a typo, a key that was
+ * renamed out from under a saved funnel, or someone trying to put a URL in a jsonb
+ * field. All three get the same answer.
+ */
+function checkImageRef(key: string, slot: AssessImageSlot, where: string, fail: Fail): void {
+  const image = assessImage(key);
+  if (!image) {
+    fail(
+      13,
+      "image_unknown",
+      where,
+      `"${key}" is not a picture in the library. A funnel can only use the curated pictures, never a link.`,
+    );
+    return;
+  }
+  if (image.slot !== slot) {
+    fail(
+      13,
+      "image_wrong_slot",
+      where,
+      `"${key}" is a ${image.slot} picture (${image.width}x${image.height}) and this is a ${slot} picture`,
+    );
+  }
+}
+
+/**
+ * RULE 14 - answer-card pictures are complete and real.
+ *
+ * NO RAGGED GRIDS. A grid where some cards have a picture and some do not does not
+ * read as "these two have no picture", it reads as broken. So a question that uses
+ * pictures uses them for every option.
+ *
+ * WITH ONE DOCUMENTED RELAXATION, because the strict rule would ban the exact
+ * question this feature was built for. quiz.ts `smile_concern` has eight options
+ * and seven of them are conditions we have a render of; the eighth is "I'm not
+ * sure", and there is no honest picture of not being sure. That option is not a
+ * comparable alternative, it is the escape hatch, and every escape hatch in the
+ * bank ("unsure", "other") is written LAST. So: the final option may be left
+ * without a picture, and nothing else may. A hole anywhere earlier is the ragged
+ * grid the rule exists to stop.
+ */
+function checkOptionImages(node: FlowNode, fail: Fail): void {
+  const rawImages = (node as { optionImages?: unknown }).optionImages;
+  if (node.kind !== "question") {
+    if (Array.isArray(rawImages) && rawImages.length > 0) {
+      fail(
+        14,
+        "option_images_wrong_screen",
+        node.id,
+        `"${node.id}" is a ${node.kind} step and has no answers to put pictures on`,
+      );
+    }
+    return;
+  }
+
+  const images = optionImagesOf(node);
+  if (images.length === 0) return;
+
+  const q = questionById(node.questionId);
+  if (!q) return; // rule 2 already reports the unknown question; nothing to check against
+
+  if (images.length > FLOW_LIMITS.optionImages) {
+    fail(
+      14,
+      "option_images_too_many",
+      node.id,
+      `"${node.id}" has ${images.length} answer pictures; the limit is ${FLOW_LIMITS.optionImages}`,
+    );
+  }
+
+  const optionValues = q.options.map((o) => o.value);
+  const known = new Set(optionValues);
+  const pictured = new Set<string>();
+  images.forEach((img, i) => {
+    const where = `node "${node.id}".optionImages[${i}]`;
+    if (!known.has(img.value)) {
+      fail(
+        14,
+        "option_image_unknown_option",
+        where,
+        `"${img.value}" is not an option of "${node.questionId}"`,
+      );
+    } else if (pictured.has(img.value)) {
+      fail(14, "option_image_duplicate", where, `"${img.value}" already has a picture`);
+    }
+    pictured.add(img.value);
+    checkImageRef(img.image, "answer", `${where}.image`, fail);
+  });
+
+  const missing = optionValues.filter((v) => !pictured.has(v));
+  const lastValue = optionValues[optionValues.length - 1];
+  if (missing.length > 1 || (missing.length === 1 && missing[0] !== lastValue)) {
+    fail(
+      14,
+      "option_images_ragged",
+      node.id,
+      `"${node.questionId}" has pictures on some answers but not on ${missing.map((m) => `"${m}"`).join(", ")}. Give every answer a picture, or leave only the last one ("${lastValue}") without.`,
+    );
+  }
+}
+
 export function validateFlow(graph: FlowGraph): FlowValidationResult {
   const failures: FlowValidationFailure[] = [];
   const fail = (rule: number, code: string, where: string, message: string): void => {
@@ -109,12 +328,23 @@ export function validateFlow(graph: FlowGraph): FlowValidationResult {
   // RULE 1 - structure: schema version, a real single entry, unique node ids,
   // edges that point at nodes that exist.
   // -------------------------------------------------------------------------
-  if (graph.schemaVersion !== FLOW_SCHEMA_VERSION) {
+  if (!SUPPORTED_FLOW_SCHEMA_VERSIONS.includes(graph.schemaVersion)) {
     fail(
       1,
       "schema_version",
       "flow",
-      `schemaVersion must be ${FLOW_SCHEMA_VERSION}, got ${graph.schemaVersion}`,
+      `schemaVersion must be one of ${SUPPORTED_FLOW_SCHEMA_VERSIONS.join(", ")}, got ${graph.schemaVersion}`,
+    );
+  } else if (graph.schemaVersion < FLOW_SCHEMA_VERSION_BLOCKS && flowUsesV2Content(graph)) {
+    // A funnel that USES v2 content while claiming v1. Rejected rather than
+    // shrugged at: an older deployed reader coerces the unknown keys away and
+    // would serve this funnel silently stripped of every block the owner added.
+    // Editors run withRequiredSchemaVersion (flow.ts) so this never reaches them.
+    fail(
+      1,
+      "schema_version_too_old",
+      "flow",
+      `this funnel uses content blocks or answer-card pictures, which need schemaVersion ${FLOW_SCHEMA_VERSION_BLOCKS}, but it declares ${graph.schemaVersion}`,
     );
   }
 
@@ -261,6 +491,19 @@ export function validateFlow(graph: FlowGraph): FlowValidationResult {
     } else {
       // outcome: terminal. Reported under rule 7 below.
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // RULES 12, 13 + 14 - CONTENT BLOCKS AND ANSWER-CARD PICTURES (A2).
+  //
+  // Node-local and routing-free on purpose, so they are reported even when the
+  // graph has no usable entry: an owner who has broken their routing AND typed a
+  // seven-word chip should be told both things in the same pass, not one now and
+  // one after they fix the other.
+  // -------------------------------------------------------------------------
+  for (const n of graph.nodes) {
+    checkBlocks(n, fail);
+    checkOptionImages(n, fail);
   }
 
   // Nothing further is meaningful without a real entry to walk from.

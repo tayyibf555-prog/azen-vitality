@@ -32,6 +32,7 @@
 // DOM even by accident - pinned by a test.
 
 import { type FlowBand, type FlowGraph, type FlowNode } from "./flow";
+import { blockViews, optionImageViews, type ImageView } from "./flow-block-view";
 import { walkFlow, welcomeNode, type WelcomeNode } from "./flow-runtime";
 import { questionById, type QuizQuestion } from "./quiz";
 import { resultCopy } from "./result-copy";
@@ -44,7 +45,48 @@ import { resultCopy } from "./result-copy";
 export interface PhoneOption {
   value: string;
   label: string;
+  /**
+   * The answer-card picture, when the step has one for this answer. ABSENT rather
+   * than null when it does not, so a screen resolved from a funnel drawn before A2
+   * is the same object it was - which is what lets the mini keep its icon row
+   * untouched (and what the no-furniture baseline in flow-phone-mini.test.ts pins).
+   */
+  image?: ImageView;
 }
+
+// ---------------------------------------------------------------------------
+// CONTENT BLOCKS, COMPRESSED TO WHAT FITS.
+//
+// A mini is 300px wide and exactly as tall as PHONE_METRICS.minH says (470px, and
+// uniform - flow-phone-layout.ts). A two-to-six item accordion of 240-character
+// answers does not go in there, and neither does a 1000px hero. So a block is
+// carried here as the SHORTEST TRUE STATEMENT of what the patient's screen has on
+// it, and the mini draws that.
+//
+// THIS IS THE ONE PLACE THIS MODULE INVENTS A WORD, and the header's rule (nothing
+// invented, every string read off the graph or the runtime) is bent on purpose
+// rather than by accident. A count line - "3 questions answered" - describes a
+// block truthfully at a size the block itself cannot be drawn at; the alternative
+// is a phone with a wall of clipped text in it, which says less about the funnel
+// than the count does. Everything an owner AUTHORED still travels verbatim: the
+// practice name, every chip, the quote, the attribution and the alt text are the
+// stored strings, not summaries of them.
+//
+// A PICTURE IS NOT FETCHED FOR A BLOCK. Answer tiles are 360x270 WebP at 4-5KB and
+// are drawn for real; a screen picture is a 1000px JPEG and there can be one on
+// every welcome and every result step, on a strip that renders ten minis at once.
+// So the block carries its ALT and the mini draws a stand-in, the same way it
+// draws a stand-in for the contact form's inputs rather than rendering them.
+// ---------------------------------------------------------------------------
+
+export type PhoneBlock =
+  | { kind: "trust-strip"; practiceName: string; chips: string[] }
+  /** The quote and who said it, on one line. */
+  | { kind: "testimonial"; line: string }
+  /** "3 questions answered". */
+  | { kind: "faq"; line: string }
+  /** What the picture shows, for the stand-in's caption. */
+  | { kind: "image"; alt: string };
 
 /** One input on the contact screen. `type` is the real input type it renders. */
 export interface PhoneField {
@@ -107,6 +149,8 @@ export type PhoneScreen =
       intro: string;
       prompt: string;
       options: PhoneOption[];
+      /** The welcome step's furniture, compressed. Empty for a funnel with none. */
+      blocks: PhoneBlock[];
       progress: number;
     }
   | {
@@ -130,6 +174,8 @@ export type PhoneScreen =
       band: FlowBand;
       headline: string;
       body: string;
+      /** This result step's furniture, compressed. Empty for a step with none. */
+      blocks: PhoneBlock[];
       progress: number;
     }
   | {
@@ -212,9 +258,47 @@ function trimmedOrNull(value: string | null | undefined): string | null {
   return s === "" ? null : s;
 }
 
-/** { value, label } only: the option WEIGHT never leaves the bank. */
-function publicOptions(question: QuizQuestion): PhoneOption[] {
-  return question.options.map((o) => ({ value: o.value, label: o.label }));
+/**
+ * { value, label } and, where the STEP has one, the answer's picture. The option
+ * WEIGHT never leaves the bank: the fields are named one at a time, never spread,
+ * for exactly the reason toPublicFlow names them one at a time (campaign.ts:236).
+ *
+ * The pictures come from the NODE, not the question, because that is where they
+ * are authored - the same bank question can appear on two branches wearing
+ * different art (flow.ts, FlowOptionImage).
+ */
+function publicOptions(question: QuizQuestion, node: FlowNode): PhoneOption[] {
+  const images = optionImageViews(node);
+  return question.options.map((o) => {
+    const image = images.get(o.value);
+    // The key is OMITTED, not set to undefined: a screen from a funnel with no
+    // pictures must be the object it was before A2, byte for byte in JSON.
+    return image ? { value: o.value, label: o.label, image } : { value: o.value, label: o.label };
+  });
+}
+
+/**
+ * A block as the shortest true statement of itself. See the PhoneBlock note above
+ * for why a count line is allowed to be a sentence this module wrote.
+ */
+export function phoneBlocks(node: FlowNode): PhoneBlock[] {
+  return blockViews(node).map((b): PhoneBlock => {
+    switch (b.kind) {
+      case "trust-strip":
+        return { kind: "trust-strip", practiceName: b.practiceName, chips: [...b.chips] };
+      case "testimonial":
+        // Curly quotes and an em dash, because this is the line as it reads, and a
+        // straight quote next to a straight apostrophe inside the quote is soup.
+        return { kind: "testimonial", line: `“${b.quote}” — ${b.attribution}` };
+      case "faq":
+        return {
+          kind: "faq",
+          line: `${b.items.length} question${b.items.length === 1 ? "" : "s"} answered`,
+        };
+      case "image":
+        return { kind: "image", alt: b.image.alt };
+    }
+  });
 }
 
 function errorScreen(nodeId: string, title: string, detail: string): PhoneScreen {
@@ -262,7 +346,7 @@ export function screenFor(
     case "question": {
       const q = questionById(node.questionId);
       if (!q) return unknownQuestion(node.id, node.questionId);
-      const options = publicOptions(q);
+      const options = publicOptions(q, node);
 
       // A funnel may open straight on a question, with no welcome step at all.
       // The hero block still renders, because the runtime keys it off "this is
@@ -273,6 +357,10 @@ export function screenFor(
           questionId: node.questionId,
           prompt: q.prompt,
           options,
+          // No furniture: a question node cannot carry blocks (flow.ts,
+          // FLOW_BLOCK_SCREEN_KINDS), so a funnel that opens on one has none to
+          // draw on its first screen.
+          blocks: [],
           ownHeadline: null,
           ownIntro: null,
           campaign,
@@ -331,6 +419,7 @@ export function screenFor(
         // online booking on. The three bands still read differently from each
         // other, which is the whole reason a funnel has three result steps.
         body: resultCopy(node.band, node.band === "high", false),
+        blocks: phoneBlocks(node),
         progress: 100,
       };
   }
@@ -345,6 +434,8 @@ function heroScreen(input: {
   questionId: string;
   prompt: string;
   options: PhoneOption[];
+  /** The welcome step's furniture. Never the question node's - it can carry none. */
+  blocks: PhoneBlock[];
   /** The welcome step's own headline, when it has one. */
   ownHeadline: string | null;
   ownIntro: string | null;
@@ -357,6 +448,7 @@ function heroScreen(input: {
     questionId: input.questionId,
     step: input.step,
     chip: stepChip(input.step),
+    blocks: input.blocks,
     // The step's line wins over the campaign's - two sources of the same words on
     // one screen is how they end up contradicting each other (:206-212).
     headline: input.ownHeadline ?? trimmedOrNull(input.campaign.headline),
@@ -410,7 +502,11 @@ function welcomeScreen(
     nodeId: node.id,
     questionId: walk.node.questionId,
     prompt: q.prompt,
-    options: publicOptions(q),
+    // TWO NODES, ONE SCREEN, and each contributes exactly what it owns: the
+    // answers and their pictures come from the QUESTION the walk landed on, the
+    // furniture from the WELCOME step whose copy sits above it.
+    options: publicOptions(q, walk.node),
+    blocks: phoneBlocks(node),
     ownHeadline: trimmedOrNull(node.headline),
     ownIntro: trimmedOrNull(node.intro),
     campaign,

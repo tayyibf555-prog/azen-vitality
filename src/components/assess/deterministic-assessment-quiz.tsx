@@ -14,8 +14,15 @@ import { Button } from "@/components/ui/button";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
 import { resultCopy } from "@/lib/smile-assessment/result-copy";
 import { outcomeNodeFor, walkFlow, welcomeNode } from "@/lib/smile-assessment/flow-runtime";
+import {
+  blockViews,
+  optionImageViews,
+  type BlockView,
+  type ImageView,
+} from "@/lib/smile-assessment/flow-block-view";
 import type { PublicFlow } from "@/lib/smile-assessment/campaign";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
+import { FunnelBlocks } from "./funnel-blocks";
 import { iconFor } from "./option-icons";
 
 // The DETERMINISTIC Smile Assessment funnel: the same screens as the Classic
@@ -62,6 +69,17 @@ interface Step {
   question: FunnelQuestion;
   /** The warm lead-in above this question (absent on the first screen). */
   transition?: string;
+  /**
+   * The answer-card pictures for THIS step, keyed by option value, or absent when
+   * the step has none - which is every step of every funnel drawn before A2, and
+   * the degraded adaptive path, which routes by the bank alone and has no node to
+   * read a picture off.
+   *
+   * Per-STEP rather than per-question because the pictures hang off the node
+   * (flow.ts, FlowOptionImage): the same bank question can appear on two branches
+   * wearing different art, and `flow.questions` is per-question by construction.
+   */
+  images?: ReadonlyMap<string, ImageView>;
 }
 
 interface NextResponse {
@@ -153,7 +171,13 @@ export function DeterministicAssessmentQuiz({
       console.warn(`[assess] funnel asks for "${walk.node.questionId}", which was not published with it`);
       return "stuck";
     }
-    return { question: q, transition: walk.transition ?? undefined };
+    // Absent rather than an empty Map when the step has no art: a funnel with no
+    // pictures must render the answer rows it rendered before A2, and the
+    // difference between "no images" and "an empty images map" is what decides it.
+    const images = optionImageViews(walk.node);
+    const step: Step = { question: q, transition: walk.transition ?? undefined };
+    if (images.size > 0) step.images = images;
+    return step;
   }
 
   // The funnel's own opening screen. Computed once, at mount, and it decides which
@@ -210,6 +234,13 @@ export function DeterministicAssessmentQuiz({
   const welcome = useMemo(() => welcomeNode(flow.graph), [flow.graph]);
   const heroHeadline = welcome?.headline ?? headline;
   const heroIntro = welcome?.intro ?? intro;
+
+  // The welcome step's furniture, drawn UNDER the first screen's answers - the
+  // same place the hero copy's screen is, because there is no separate welcome
+  // screen in this runtime (see the note on heroHeadline above). Empty for a
+  // funnel that opens straight on a question: a question node cannot carry blocks
+  // (flow.ts, FLOW_BLOCK_SCREEN_KINDS), so there is nothing to draw.
+  const welcomeBlocks = useMemo(() => (welcome ? blockViews(welcome) : []), [welcome]);
 
   const progress = useMemo(() => {
     if (phase === "question") return Math.min(0.9, step / 6) * 100;
@@ -394,7 +425,12 @@ export function DeterministicAssessmentQuiz({
   // The authored result heading for the band we actually got. Only the HEADING:
   // the body stays resultCopy(), which is derived from band + leadCreated +
   // bookingUrl, so nothing here can promise a callback that is not going to happen.
-  const outcomeHeadline = result ? (outcomeNodeFor(flow.graph, result.band)?.headline ?? null) : null;
+  const outcome = result ? outcomeNodeFor(flow.graph, result.band) : null;
+  const outcomeHeadline = outcome?.headline ?? null;
+  // The result step's own furniture, for the band this patient actually got. Read
+  // off the SAME node the headline came from, so a practice cannot end up with the
+  // hot screen's headline above the cold screen's reassurance.
+  const outcomeBlocks = outcome ? blockViews(outcome) : [];
 
   const name = practiceName?.trim() || "Smile Assessment";
 
@@ -433,7 +469,7 @@ export function DeterministicAssessmentQuiz({
 
         <div className="p-5 sm:p-6">
           {phase === "thanks" && result ? (
-            <ThankYou result={result} outcomeHeadline={outcomeHeadline} />
+            <ThankYou result={result} outcomeHeadline={outcomeHeadline} blocks={outcomeBlocks} />
           ) : phase === "contact" ? (
             <ContactStep
               animKey={animKey}
@@ -458,6 +494,8 @@ export function DeterministicAssessmentQuiz({
               step={step}
               question={current.question}
               transition={current.transition}
+              images={current.images}
+              blocks={welcomeBlocks}
               headline={heroHeadline}
               intro={heroIntro}
               answers={answers}
@@ -490,6 +528,8 @@ function QuestionStep({
   step,
   question,
   transition,
+  images,
+  blocks,
   headline,
   intro,
   answers,
@@ -503,6 +543,10 @@ function QuestionStep({
   step: number;
   question: FunnelQuestion;
   transition?: string;
+  /** Answer-card pictures for this step, keyed by option value. Usually absent. */
+  images?: ReadonlyMap<string, ImageView>;
+  /** The welcome step's furniture. Drawn on the FIRST screen only, under the answers. */
+  blocks: readonly BlockView[];
   headline?: string | null;
   intro?: string | null;
   answers: Record<string, string>;
@@ -514,6 +558,12 @@ function QuestionStep({
 }) {
   const isFirst = step === 1;
   const selected = pendingValue ?? answers[question.id] ?? null;
+  // ONE STEP, ONE SHAPE. As soon as any answer on this step has a picture, every
+  // answer on it is drawn as a card, so a question with art on three of eight
+  // options is not half a list and half a gallery. A step with no art at all keeps
+  // the row layout exactly as it shipped - the branch below is what makes that
+  // byte-identical rather than merely similar.
+  const cards = (images?.size ?? 0) > 0;
 
   const regionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -561,10 +611,105 @@ function QuestionStep({
         <legend className="mb-3 text-lg font-bold leading-snug text-navy [text-wrap:balance] sm:text-xl">
           {question.prompt}
         </legend>
-        <div className={["grid gap-2", question.options.length > 3 ? "sm:grid-cols-2" : ""].join(" ")}>
+        <div
+          className={
+            cards
+              ? // Two up, at every width. A picture card is square-ish, and one
+                // per row on a phone would put the second answer below the fold.
+                "grid grid-cols-2 gap-2"
+              : ["grid gap-2", question.options.length > 3 ? "sm:grid-cols-2" : ""].join(" ")
+          }
+        >
           {question.options.map((o) => {
             const checked = selected === o.value;
             const Icon = iconFor(o.value);
+            const image = images?.get(o.value) ?? null;
+
+            // AN ANSWER AS AN IMAGE CARD: the picture on top, the answer's own
+            // words under it. SAME CONTROL, SAME SEMANTICS - the same <button
+            // aria-pressed> firing the same onChoose, so the keyboard, the
+            // screen-reader announcement, the selected state and the pending
+            // spinner are unchanged. A picture is a bigger target, not a
+            // different interaction.
+            //
+            // AN ANSWER WITH NO PICTURE KEEPS ITS ICON, exactly as the Guided
+            // style handles the same gap (guided-assessment-quiz.tsx:601-628): a
+            // card with a hole where the art should be reads as broken, while the
+            // icon chip reads as an answer that did not need a photograph. That is
+            // what lets an owner picture the answers worth picturing and leave
+            // "I'm not sure" alone (rule 14 allows exactly the last one bare).
+            //
+            // NO CHEVRON. On a row it points along the reading direction; under a
+            // label it would point at nothing. The tick and the spinner stay, in a
+            // reserved slot, so choosing does not resize the grid under a thumb.
+            if (cards) {
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  aria-pressed={checked}
+                  onClick={() => onChoose(o.value)}
+                  disabled={thinking}
+                  className={[
+                    "group flex min-h-28 flex-col items-center gap-2 rounded-xl border px-2 py-2.5 text-center transition duration-150 ease-out",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+                    checked
+                      ? "border-blue-dark bg-blue-dark/[0.08] shadow-[0_3px_14px_rgba(43,138,192,0.14)]"
+                      : "border-line bg-card hover:border-blue-dark/40 hover:bg-card-muted motion-safe:hover:-translate-y-0.5",
+                    thinking ? "cursor-default" : "cursor-pointer",
+                  ].join(" ")}
+                >
+                  {image ? (
+                    // width/height are the asset's intrinsic size, so the grid is
+                    // the right shape before the lazy tile lands and no card jumps.
+                    <span
+                      className={[
+                        "block w-full overflow-hidden rounded-lg bg-card-muted ring-1 transition-colors",
+                        checked ? "ring-blue-dark/40" : "ring-transparent",
+                      ].join(" ")}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={image.src}
+                        alt={image.alt}
+                        width={image.width}
+                        height={image.height}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-auto w-full object-cover"
+                      />
+                    </span>
+                  ) : (
+                    <span
+                      className={[
+                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors",
+                        checked
+                          ? "bg-blue-dark text-white"
+                          : "bg-blue-dark/10 text-blue-dark group-hover:bg-blue-dark/15",
+                      ].join(" ")}
+                      aria-hidden
+                    >
+                      <Icon size={16} strokeWidth={2} />
+                    </span>
+                  )}
+                  <span className={["text-sm font-medium leading-snug", checked ? "text-navy" : "text-ink"].join(" ")}>
+                    {o.label}
+                  </span>
+                  <span className="mt-auto flex h-4 shrink-0 items-center" aria-hidden>
+                    {checked && thinking ? (
+                      <Loader2 size={16} className="text-blue-dark motion-safe:animate-spin" />
+                    ) : checked ? (
+                      <CheckCircle2 size={16} className="text-blue-dark" />
+                    ) : null}
+                  </span>
+                </button>
+              );
+            }
+
+            // THE ROW, UNCHANGED. Every class, every icon and the order they are
+            // in are what shipped before A2 - which is what makes a funnel with no
+            // answer pictures render the page it rendered before, down to the byte
+            // (funnel-blocks.test.ts holds it against a captured baseline).
             return (
               <button
                 key={o.value}
@@ -609,6 +754,12 @@ function QuestionStep({
           })}
         </div>
       </fieldset>
+
+      {/* The welcome step's furniture, under the answers and on the first screen
+          only - the same screen its headline and intro are on, because that is the
+          only screen a welcome step has (see the hero block above). Renders
+          nothing at all when there is none. */}
+      {isFirst ? <FunnelBlocks blocks={blocks} /> : null}
 
       {/* Only ever shown on the degraded path: a drawn funnel has nothing to wait
           for, so the next screen is already there. */}
@@ -802,7 +953,16 @@ function ContactStep({
  * Thank-you screen
  * ------------------------------------------------------------------------- */
 
-function ThankYou({ result, outcomeHeadline }: { result: SubmitResult; outcomeHeadline: string | null }) {
+function ThankYou({
+  result,
+  outcomeHeadline,
+  blocks,
+}: {
+  result: SubmitResult;
+  outcomeHeadline: string | null;
+  /** This band's result step's furniture. Empty for a funnel that has none. */
+  blocks: readonly BlockView[];
+}) {
   return (
     <div className="flex flex-col items-center gap-3 py-4 text-center motion-safe:[animation:assessEnter_240ms_ease-out]">
       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-success/10 text-success">
@@ -817,6 +977,12 @@ function ThankYou({ result, outcomeHeadline }: { result: SubmitResult; outcomeHe
           <a href={result.bookingUrl}>Book your appointment now</a>
         </Button>
       ) : null}
+      {/* BELOW the booking button on purpose. The button is the next step this
+          patient was just promised; furniture that pushed it down the screen would
+          be reassurance getting in the way of the thing it is reassuring them
+          about. Left-aligned inside a centred column, because a wrapped FAQ answer
+          set centre-ragged is unreadable. */}
+      <FunnelBlocks blocks={blocks} className="w-full text-left" />
     </div>
   );
 }
