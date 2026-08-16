@@ -393,10 +393,19 @@ describe("the panel stages the create without forking it", () => {
     // values the icons are chosen by.
     expect(panelSource).toContain("screenFor(node, choice.graph,");
     expect(codeOnly(panelSource)).not.toContain("describeNode");
-    // The abstract canvas is gone from stage 2 - but NOT from the repo: the edit
-    // canvas on stage 3 still draws cards, which is the right drawing for wiring.
+    // The abstract canvas is gone from stage 2 - and, since A1's parity pass, from
+    // stage 3 as well. PIN CHANGED: this used to require the builder to KEEP
+    // "<FlowCanvas" ("the edit canvas lost its cards"), on the argument that cards
+    // were the right drawing for wiring. They are not the only one: the strip draws
+    // the same routed wires from the same layout engine, and every connection is a
+    // row in its step's rail. The file itself stays in the repo - the thumbnails
+    // below still take their kind colours from it - so this now pins that NEITHER
+    // stage mounts it, which is the claim that could regress.
     expect(codeOnly(panelSource)).not.toContain("<FlowCanvas");
-    expect(builderSource, "the edit canvas lost its cards").toContain("<FlowCanvas");
+    expect(codeOnly(builderSource), "the abstract canvas is back").not.toContain("<FlowCanvas");
+    expect(gallerySource, "the thumbnails still read its colours").toContain(
+      'import { NODE_ACCENT } from "./flow-canvas"',
+    );
     // Gone, not merely unrendered: the single static mockup stays dead.
     expect(panelSource).not.toContain("AssessmentPreview");
     expect(panelSource).not.toContain("FlowShapeThumbnail");

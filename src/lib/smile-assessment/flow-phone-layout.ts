@@ -234,3 +234,62 @@ export function phoneFlowLayout(graph: FlowGraph, opts: PhoneLayoutOptions = {})
 export function phoneMetrics(overrides: Partial<LayoutMetrics> = {}): LayoutMetrics {
   return { ...DEFAULT_LAYOUT_METRICS, ...PHONE_METRICS, ...overrides };
 }
+
+// ---------------------------------------------------------------------------
+// WHERE A "+" GOES.
+// ---------------------------------------------------------------------------
+
+/** The box an "add a screen after this one" control occupies, in layout pixels. */
+export interface PhoneAddPoint {
+  /** The screen it sits after. The control's meaning; the strip never derives it. */
+  nodeId: string;
+  x: number;
+  y: number;
+  /** Square: the same number is its width and its height. */
+  size: number;
+}
+
+/**
+ * The control's own edge length, in the same pixels as everything else here.
+ * Comfortably inside the 88px gutter it centres in.
+ *
+ * EXPORTED because the small-screen list draws the same control with no layout to
+ * consult (it is a row between two stacked screens, not a dot in a gutter), and a
+ * second number there would be a + that is one size on a desktop and another on a
+ * phone - or, worse, one the fit check below is no longer measuring.
+ */
+export const PHONE_ADD_SIZE = 28;
+const ADD_SIZE = PHONE_ADD_SIZE;
+
+/**
+ * The + between one screen and the next: centred in the gutter the wire leaves
+ * through, level with the middle of the screen it belongs to.
+ *
+ * IT IS HERE AND NOT IN THE COMPONENT for the reason the header gives: a position
+ * computed in JSX is a position no test can reach, and this one has two ways to be
+ * subtly wrong (off-centre in the gutter, or outside the box the SVG and the minis
+ * share, which would silently widen the scroll region). The strip renders
+ * `left: x, top: y, width: size, height: size` and computes nothing.
+ *
+ * A SCREEN WITH NO WIRE OUT GETS NO +, and both reasons are load-bearing. There is
+ * nothing to add a screen TO - insertQuestionOnEdge splices into a WIRE, so a
+ * terminal step has no insertion point and planScreenInsertion refuses in words.
+ * And a terminal step is in the last column, where the gutter is outside
+ * `layout.width`: a control drawn there would hang off the diagram's own box.
+ * Belt and braces, because the second is geometry this module can actually see:
+ * the fit is checked rather than assumed.
+ */
+export function insertionPoints(
+  layout: PhoneFlowLayout,
+  metrics: LayoutMetrics = phoneMetrics(),
+): PhoneAddPoint[] {
+  const leaves = new Set(layout.edges.map((e) => e.from));
+  const out: PhoneAddPoint[] = [];
+  for (const n of layout.nodes) {
+    if (!leaves.has(n.id)) continue;
+    const x = round3(n.x + n.w + (metrics.gutterX - ADD_SIZE) / 2);
+    if (x < 0 || x + ADD_SIZE > layout.width) continue;
+    out.push({ nodeId: n.id, x, y: round3(n.y + (n.h - ADD_SIZE) / 2), size: ADD_SIZE });
+  }
+  return out;
+}

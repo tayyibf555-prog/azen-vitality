@@ -1,26 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { FLOW_BANDS, FLOW_LIMITS, type FlowBlock, type FlowGraph } from "./flow";
+import { FLOW_BANDS, FLOW_LIMITS, type FlowBlock, type FlowEdge, type FlowGraph } from "./flow";
 import { validateFlow } from "./flow-validate";
+import { nextNode } from "./flow-runtime";
 import { FLOW_TEMPLATES, buildScratchFlow, templateForGoal } from "./flow-templates";
 import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
 import {
   addEdge,
+  connectableTargets,
+  defaultEdgeOf,
   defaultTargetOf,
   describeEdge,
   describeNode,
+  moveEdge,
+  outgoingEdges,
+  planScreenInsertion,
   routableAnswers,
+  routedAnswers,
   insertQuestionOnEdge,
   insertableQuestions,
+  insertableQuestionsAfter,
   nextNodeId,
   removeEdge,
   removeNode,
   setEdgeAnswer,
   setEdgeTarget,
   setEdgeTransition,
+  setNodeQuestion,
   setOutcomeHeadline,
   setQuestionTransition,
   setWelcomeCopy,
-  uncoveredOptions,
+  swappableQuestions,
+  uncoveredAnswers,
   usedQuestionIds,
 } from "./flow-edit";
 
@@ -32,6 +42,14 @@ function must(result: { ok: boolean; graph?: FlowGraph; reason?: string }): Flow
 const invisalign = (): FlowGraph => templateForGoal("invisalign").build();
 const edgeIndexOf = (g: FlowGraph, from: string, to: string): number =>
   g.edges.findIndex((e) => e.from === from && e.to === to);
+
+/** Order-independent identity of a wire, for comparing two edge lists as SETS. */
+const wireKey = (e: FlowEdge): string => `${e.from}|${e.to}|${e.answer ?? ""}`;
+const byWire = (a: FlowEdge, b: FlowEdge): number => wireKey(a).localeCompare(wireKey(b));
+
+/** Where these answers actually land a patient, through the real runtime. */
+const walkTo = (graph: FlowGraph, answers: Record<string, string>): string | null =>
+  nextNode(graph, answers)?.id ?? null;
 
 describe("node ids", () => {
   it("names a new step after its question, and never reuses a taken id", () => {
@@ -58,9 +76,24 @@ describe("reading the graph", () => {
     };
     expect(defaultTargetOf(g, "a")).toBe("c");
     expect(defaultTargetOf(g, "b")).toBeNull();
+    // The WIRE, not merely its destination: "add a screen after this one" splices
+    // into an edge index, so the fallback rule has to hand one back.
+    expect(defaultEdgeOf(g, "a")?.index).toBe(1);
+    expect(defaultEdgeOf(g, "b")).toBeNull();
   });
 
-  it("lists the options no wire covers, and nothing once there is a default", () => {
+  // MUTATION: take the first wire rather than the "anything else" one and every
+  // insertion on a branched step lands on the branch instead of the trunk.
+  it("falls back to the first wire only when there is no “anything else” one", () => {
+    const g = invisalign();
+    // q-treatment_interest routes "invisalign" first, then the default.
+    const branched = outgoingEdges(g, "q-treatment_interest");
+    expect(branched[0]!.edge.answer).toBe("invisalign");
+    expect(defaultEdgeOf(g, "q-treatment_interest")!.index).toBe(branched[1]!.index);
+    expect(defaultTargetOf(g, "q-treatment_interest")).toBe("q-timeline");
+  });
+
+  it("lists the answers no wire covers, and nothing once there is a default", () => {
     const g: FlowGraph = {
       schemaVersion: 1,
       entry: "a",
@@ -70,13 +103,52 @@ describe("reading the graph", () => {
       ],
       edges: [{ from: "a", to: "b", answer: "asap" }],
     };
-    expect(uncoveredOptions(g, "a").map((o) => o.value)).toEqual([
+    expect(uncoveredAnswers(g, "a").map((o) => o.value)).toEqual([
       "1_2_months",
       "3_6_months",
       "researching",
     ]);
     const withDefault = must(addEdge(g, "a", "b", null));
-    expect(uncoveredOptions(withDefault, "a")).toEqual([]);
+    expect(uncoveredAnswers(withDefault, "a")).toEqual([]);
+  });
+
+  /**
+   * THE HOLE WITH NO FLOOR UNDER IT, before A1's parity pass: this returned
+   * question options only, so deleting a band route out of the contact step left
+   * rule 3 shouting in the banner with no control anywhere that could put the wire
+   * back - and the rail's Trash button is what deleted it.
+   *
+   * MUTATION: scope this to `kind === "question"` again and the funnel below can be
+   * broken from the rail and repaired from nowhere.
+   */
+  it("lists an uncovered BAND on the contact step, exactly as rule 3 reports it", () => {
+    const g = invisalign();
+    const high = g.edges.findIndex((e) => e.from === "contact" && e.answer === "high");
+    const broken = must(removeEdge(g, high));
+
+    const failures = validateFlow(broken).failures;
+    expect(failures.some((f) => f.code === "band_uncovered" && f.where === "contact")).toBe(true);
+
+    expect(uncoveredAnswers(broken, "contact").map((a) => a.value)).toEqual(["high"]);
+    // ...and routing it is a real repair: the band failure goes.
+    const routed = must(addEdge(broken, "contact", defaultTargetOf(broken, "contact")!, "high"));
+    expect(validateFlow(routed).failures.some((f) => f.code === "band_uncovered")).toBe(false);
+  });
+
+  it("offers no uncovered answers on the kinds that route on none", () => {
+    const g = invisalign();
+    expect(uncoveredAnswers(g, "welcome")).toEqual([]);
+    expect(uncoveredAnswers(g, "result-high")).toEqual([]);
+    expect(uncoveredAnswers(g, "nope")).toEqual([]);
+  });
+
+  // MUTATION: drop the self filter in one of the three destination pickers and a
+  // control offers a step a route to itself, which setEdgeTarget then refuses.
+  it("offers every step but this one as a destination", () => {
+    const g = invisalign();
+    const ids = connectableTargets(g, "contact").map((n) => n.id);
+    expect(ids).not.toContain("contact");
+    expect(ids).toHaveLength(g.nodes.length - 1);
   });
 
   it("reports which bank questions the funnel already uses", () => {
@@ -179,6 +251,161 @@ describe("the question picker", () => {
 
   it("returns nothing for a wire that does not exist", () => {
     expect(insertableQuestions(invisalign(), -1)).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * CHANGING THE QUESTION A STEP ASKS (A1). The move the phone-canvas inspector is
+ * built around: the screen stays where it is, the ask on it changes.
+ * ------------------------------------------------------------------------- */
+
+describe("swapping the question on a step", () => {
+  // MUTATION: implement the swap as remove-then-insert and the step loses its
+  // place - removeNode re-points everything that led to it and drops everything
+  // it led to, which is precisely what the owner did NOT ask to change.
+  it("keeps the step's id, its wires and its lead-in line", () => {
+    const g = must(setQuestionTransition(invisalign(), "q-smile_concern", "One more about your smile."));
+    const next = must(setNodeQuestion(g, "q-smile_concern", "align_detail"));
+    const node = next.nodes.find((n) => n.id === "q-smile_concern");
+
+    expect(node?.kind === "question" ? node.questionId : null).toBe("align_detail");
+    expect(node?.kind === "question" ? node.transition : null).toBe("One more about your smile.");
+    expect(next.edges).toEqual(g.edges);
+    expect(validateFlow(next).ok).toBe(true);
+  });
+
+  // MUTATION: carry `optionImages` across "so nothing is lost". Every one of them
+  // names an option VALUE of the question that just left, so rule 14 fails on all
+  // of them and the answer grid renders ragged until the owner finds out why.
+  it("drops answer-card pictures, which belong to the question that left", () => {
+    const g = invisalign();
+    const withImages: FlowGraph = {
+      ...g,
+      schemaVersion: 2,
+      nodes: g.nodes.map((n) =>
+        n.id === "q-smile_concern"
+          ? { id: n.id, kind: "question", questionId: "smile_concern", optionImages: [{ value: "crooked", image: "conditions/crooked" }] }
+          : n,
+      ),
+    };
+    const next = must(setNodeQuestion(withImages, "q-smile_concern", "align_detail"));
+    const node = next.nodes.find((n) => n.id === "q-smile_concern");
+    expect(node?.kind === "question" ? node.optionImages : "n/a").toBeUndefined();
+  });
+
+  // MUTATION: allow the swap on a branched step. Every wire out of it carries an
+  // option value of the OLD question, so the funnel is instantly rule-2 broken -
+  // and the two "obvious" repairs (drop those wires, or collapse them onto one
+  // target) both destroy routing the owner built by hand.
+  it("refuses on a step whose answers are routed one by one, and says what to do", () => {
+    const g = invisalign();
+    // The treatment step sends "invisalign" its own way.
+    expect(routedAnswers(g, "q-treatment_interest").length).toBe(1);
+    const result = setNodeQuestion(g, "q-treatment_interest", "motivation");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("Point it the same way");
+    // ...and the picker offers nothing but the question it already asks.
+    expect(swappableQuestions(g, "q-treatment_interest")).toEqual(["treatment_interest"]);
+  });
+
+  it("refuses an unknown question, a step that is not a question, and a step that has gone", () => {
+    const g = invisalign();
+    expect(setNodeQuestion(g, "q-timeline", "how_much_can_you_afford").ok).toBe(false);
+    expect(setNodeQuestion(g, "contact", "motivation").ok).toBe(false);
+    expect(setNodeQuestion(g, "nope", "motivation").ok).toBe(false);
+  });
+
+  it("is a no-op for the question already there, and never mutates its input", () => {
+    const g = invisalign();
+    const before = JSON.stringify(g);
+    expect(must(setNodeQuestion(g, "q-timeline", Q_TIMELINE))).toEqual(g);
+    setNodeQuestion(g, "q-smile_concern", "align_detail");
+    expect(JSON.stringify(g)).toBe(before);
+  });
+});
+
+describe("the swap picker", () => {
+  // MUTATION: derive the list ("every bank question not already used") instead of
+  // asking the validator, and it offers a treatment-specific question on the
+  // trunk, or one that makes the funnel too long - the same second copy of the
+  // rules insertableQuestions exists to avoid.
+  it("offers only swaps that leave the funnel publishable", () => {
+    for (const template of FLOW_TEMPLATES) {
+      const g = template.build();
+      for (const node of g.nodes) {
+        if (node.kind !== "question") continue;
+        for (const questionId of swappableQuestions(g, node.id)) {
+          const next = must(setNodeQuestion(g, node.id, questionId));
+          const result = validateFlow(next);
+          expect(result.ok, `${template.key}/${node.id} -> ${questionId}: ${JSON.stringify(result.failures)}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  // MUTATION: leave the current question out and the picker renders showing
+  // somebody else's question as this step's own.
+  it("always includes the question the step already asks", () => {
+    const g = invisalign();
+    for (const node of g.nodes) {
+      if (node.kind !== "question") continue;
+      expect(swappableQuestions(g, node.id), node.id).toContain(node.questionId);
+    }
+  });
+
+  it("never offers a question the path already asks", () => {
+    const g = invisalign();
+    const offered = swappableQuestions(g, "q-readiness");
+    for (const asked of usedQuestionIds(g)) {
+      if (asked === "readiness") continue; // its own, which must be there
+      expect(offered, `offered "${asked}" twice on one path`).not.toContain(asked);
+    }
+    // ...and it really does offer alternatives, or this proves nothing.
+    expect(offered.length).toBeGreaterThan(1);
+  });
+
+  it("offers nothing for a step that is not a question, or is not there", () => {
+    expect(swappableQuestions(invisalign(), "contact")).toEqual([]);
+    expect(swappableQuestions(invisalign(), "nope")).toEqual([]);
+  });
+});
+
+describe("reading a step's wires", () => {
+  // MUTATION: re-derive the index in the component with a second findIndex and
+  // the first two wires out of one step that share a target become the same
+  // wire - so editing one re-points the other.
+  it("carries the index into graph.edges with every outgoing wire", () => {
+    const g = invisalign();
+    const out = outgoingEdges(g, "q-treatment_interest");
+    expect(out.length).toBe(2);
+    for (const { index, edge } of out) expect(g.edges[index]).toBe(edge);
+    // Declaration order, which is what makes the walk deterministic.
+    expect(out.map(({ edge }) => edge.answer)).toEqual(["invisalign", null]);
+    expect(outgoingEdges(g, "result-high")).toEqual([]);
+
+    // THE CASE THE SECOND findIndex GETS WRONG: two answers out of one step,
+    // pointed at the SAME screen. Matching on from+to hands back the first
+    // index twice, so editing the second row re-points the first.
+    const shared: FlowGraph = {
+      ...g,
+      edges: [
+        { from: "q-timeline", to: "contact", answer: "asap" },
+        { from: "q-timeline", to: "contact", answer: null },
+      ],
+    };
+    const rows = outgoingEdges(shared, "q-timeline");
+    expect(rows.map(({ index }) => index)).toEqual([0, 1]);
+    for (const { index, edge } of rows) expect(shared.edges[index]).toBe(edge);
+  });
+
+  it("separates the answers routed on their own from the default route", () => {
+    const g = invisalign();
+    expect(routedAnswers(g, "q-treatment_interest").map(({ edge }) => edge.answer)).toEqual([
+      "invisalign",
+    ]);
+    expect(routedAnswers(g, "q-timeline")).toEqual([]);
+    // The contact step routes all three bands one by one.
+    expect(routedAnswers(g, "contact").map(({ edge }) => edge.answer)).toEqual([...FLOW_BANDS]);
   });
 });
 
@@ -303,6 +530,175 @@ describe("editing wires", () => {
     expect(added.edges).toHaveLength(g.edges.length + 1);
     expect(must(removeEdge(added, added.edges.length - 1)).edges).toHaveLength(g.edges.length);
     expect(removeEdge(g, 999).ok).toBe(false);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * REORDERING THE BRANCHES OUT OF A STEP.
+ * ------------------------------------------------------------------------- */
+
+describe("moving a wire among its siblings", () => {
+  it("swaps it with the neighbouring wire out of the SAME step, and moves nothing else", () => {
+    const g = invisalign();
+    const before = outgoingEdges(g, `q-${Q_TREATMENT}`);
+    expect(before.map(({ edge }) => edge.answer)).toEqual(["invisalign", null]);
+
+    const moved = must(moveEdge(g, before[0]!.index, +1));
+    expect(outgoingEdges(moved, `q-${Q_TREATMENT}`).map(({ edge }) => edge.answer)).toEqual([
+      null,
+      "invisalign",
+    ]);
+    // Same wires, same count: a reorder is not a rewrite.
+    expect(moved.edges).toHaveLength(g.edges.length);
+    expect([...moved.edges].sort(byWire)).toEqual([...g.edges].sort(byWire));
+    // And every OTHER step's wires are where they were.
+    for (const id of ["welcome", "contact", `q-${Q_TIMELINE}`]) {
+      expect(outgoingEdges(moved, id)).toEqual(outgoingEdges(g, id));
+    }
+    expect(g.edges[before[0]!.index]!.answer, "the input was mutated").toBe("invisalign");
+  });
+
+  // MUTATION: let it walk past the ends and the last row's "down" silently swaps
+  // with a wire out of a DIFFERENT step - which re-points two branches at once.
+  it("refuses at either end, in words", () => {
+    const g = invisalign();
+    const [first, last] = outgoingEdges(g, `q-${Q_TREATMENT}`);
+    const up = moveEdge(g, first!.index, -1);
+    const down = moveEdge(g, last!.index, +1);
+    expect(up.ok).toBe(false);
+    expect(down.ok).toBe(false);
+    if (!up.ok) expect(up.reason).toContain("first");
+    if (!down.ok) expect(down.reason).toContain("last");
+    expect(moveEdge(g, 999, +1).ok).toBe(false);
+  });
+
+  /**
+   * WHAT REORDERING MEANS, held so the claim in the op's header cannot rot: the
+   * picture and the fallback change, the ROUTE a patient takes does not.
+   * routeFor matches the answer exactly before it falls back (flow-runtime.ts:64).
+   */
+  it("changes the fallback wire but never which answer wins", () => {
+    const g: FlowGraph = {
+      schemaVersion: 1,
+      entry: "a",
+      nodes: [
+        { id: "a", kind: "question", questionId: Q_TIMELINE },
+        { id: "b", kind: "contact" },
+        { id: "c", kind: "contact" },
+      ],
+      // No default wire at all, so defaultEdgeOf falls back to the FIRST.
+      edges: [
+        { from: "a", to: "b", answer: "asap" },
+        { from: "a", to: "c", answer: "researching" },
+      ],
+    };
+    expect(defaultTargetOf(g, "a")).toBe("b");
+    const moved = must(moveEdge(g, 0, +1));
+    expect(defaultTargetOf(moved, "a")).toBe("c");
+    // Both orders still route both answers the same way.
+    for (const graph of [g, moved]) {
+      expect(walkTo(graph, { [Q_TIMELINE]: "asap" })).toBe("b");
+      expect(walkTo(graph, { [Q_TIMELINE]: "researching" })).toBe("c");
+    }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * "ADD A SCREEN AFTER THIS ONE" - the + on the strip, resolved.
+ * ------------------------------------------------------------------------- */
+
+describe("planning a screen insertion", () => {
+  it("lands on the step's fallback wire and names the step it will create", () => {
+    const g = invisalign();
+    const plan = planScreenInsertion(g, `q-${Q_TIMELINE}`, "experience");
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(g.edges[plan.edgeIndex]).toEqual({
+      from: `q-${Q_TIMELINE}`,
+      to: `q-${Q_BUDGET}`,
+      answer: null,
+    });
+    expect(plan.nodeId).toBe("q-experience");
+
+    // THE PLAN IS THE EDIT. The id it promised is the id the op creates, because
+    // both call nextNodeId on this same graph - which is the whole reason the
+    // builder can select the new screen without re-reading the result.
+    const next = must(insertQuestionOnEdge(g, plan.edgeIndex, plan.questionId));
+    expect(next.nodes.some((n) => n.id === plan.nodeId)).toBe(true);
+  });
+
+  it("takes the first question it may offer when none is named", () => {
+    const g = invisalign();
+    const offered = insertableQuestionsAfter(g, `q-${Q_TIMELINE}`);
+    expect(offered.length).toBeGreaterThan(0);
+    const plan = planScreenInsertion(g, `q-${Q_TIMELINE}`);
+    expect(plan.ok && plan.questionId).toBe(offered[0]);
+  });
+
+  // MUTATION: skip the membership check and the one-click + can drop a question
+  // that rule 8, 9 or 10 forbids straight into the funnel - the picker's rule
+  // exists precisely because the + has no picker to show it in.
+  it("refuses a question the validator would not offer here, and says why", () => {
+    const g = invisalign();
+    const offered = insertableQuestionsAfter(g, `q-${Q_TIMELINE}`);
+    // Already asked on this route: rule 8.
+    expect(offered).not.toContain(Q_TIMELINE);
+    const plan = planScreenInsertion(g, `q-${Q_TIMELINE}`, Q_TIMELINE);
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.reason).toContain("already asked");
+    // Not in the bank at all.
+    expect(planScreenInsertion(g, `q-${Q_TIMELINE}`, "not_a_question").ok).toBe(false);
+  });
+
+  /**
+   * RULE 10 REACHES THE + WITHOUT THE + KNOWING IT EXISTS. Swapping a core question
+   * away is refused by the swap picker; ADDING must equally never be the thing that
+   * takes the funnel below the core three. The insertion list is the validator's
+   * answer, so this holds whatever rule 10 becomes.
+   */
+  it("never offers an insertion that introduces a new kind of failure", () => {
+    const g = invisalign();
+    const clean = validateFlow(g);
+    expect(clean.ok).toBe(true);
+    for (const node of g.nodes) {
+      for (const qid of insertableQuestionsAfter(g, node.id)) {
+        const plan = planScreenInsertion(g, node.id, qid);
+        expect(plan.ok, `${node.id} offered ${qid} and then refused it`).toBe(true);
+        if (!plan.ok) continue;
+        const next = must(insertQuestionOnEdge(g, plan.edgeIndex, plan.questionId));
+        expect(validateFlow(next).ok, `${qid} after ${node.id} broke the funnel`).toBe(true);
+      }
+    }
+  });
+
+  it("refuses on a dead end, pointing at the connection that is missing", () => {
+    const g = invisalign();
+    // A result step is terminal by rule 7, so it has no wire to splice into.
+    const terminal = planScreenInsertion(g, "result-high");
+    expect(terminal.ok).toBe(false);
+    if (!terminal.ok) expect(terminal.reason).toContain("Connect it first");
+    expect(insertableQuestionsAfter(g, "result-high")).toEqual([]);
+    expect(planScreenInsertion(g, "gone").ok).toBe(false);
+  });
+
+  // Keep adding after the opening screen until the picker has nothing left - which
+  // it always reaches, because every question it may add is one it may not add
+  // twice (rule 8) and the funnel has a length cap (rule 4b).
+  it("refuses when the route is full, rather than offering an empty picker", () => {
+    let full = invisalign();
+    let added = 0;
+    for (let guard = 0; guard < FLOW_LIMITS.nodes; guard++) {
+      const plan = planScreenInsertion(full, "welcome");
+      if (!plan.ok) break;
+      full = must(insertQuestionOnEdge(full, plan.edgeIndex, plan.questionId));
+      added++;
+    }
+    expect(added, "nothing was ever insertable, so this proves nothing").toBeGreaterThan(0);
+    expect(insertableQuestionsAfter(full, "welcome")).toEqual([]);
+
+    const plan = planScreenInsertion(full, "welcome");
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.reason).toContain("Nothing left to add");
   });
 });
 

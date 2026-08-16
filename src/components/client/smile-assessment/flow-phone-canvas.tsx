@@ -1,5 +1,11 @@
+import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { PhoneEdge, PhoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
+import {
+  PHONE_ADD_SIZE,
+  insertionPoints,
+  type PhoneEdge,
+  type PhoneFlowLayout,
+} from "@/lib/smile-assessment/flow-phone-layout";
 import type { PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 import { PhoneMini } from "./flow-phone-mini";
 
@@ -36,10 +42,31 @@ import { PhoneMini } from "./flow-phone-mini";
  * screen 4" would be noise - so the small-screen reading is the SCREENS in order,
  * and the branch shape stays a thing you open on a wider display.
  *
- * ACCESSIBILITY. The strip is role="img" with a label, which makes it a leaf for a
- * screen reader exactly like the canvas's <svg role="img">; the ordered list is
- * the readable rendering. Nothing in either is focusable: this is a picture of a
- * funnel, and the editor is stage 3.
+ * ACCESSIBILITY, AND THE ONE THING THAT CHANGES WHEN IT BECOMES EDITABLE. Read-
+ * only, the strip is role="img" with a label, which makes it a leaf for a screen
+ * reader exactly like the canvas's <svg role="img">, and nothing in it is
+ * focusable: it is a picture of a funnel. Hand it an `onSelect` and it is no
+ * longer a picture - each screen becomes a real <button> and the wrapper becomes
+ * a role="group", because a control inside a role="img" is a control no screen
+ * reader can reach. The read-only rendering is byte-for-byte what it always was
+ * (the wizard's stage-2 preview passes no callback and must not grow tab stops).
+ *
+ * IT STILL DECIDES NOTHING. Selection is the BUILDER's state: this file is handed
+ * `selectedId` and calls `onSelect` with a node id. It does not know what a
+ * selection opens, it does not know what is wrong with a step - `faultyNodeIds`
+ * arrives finished from validateFlow - and it does not write the label on a
+ * button, because that would mean reading the question bank (describeNode), which
+ * is exactly the import this file is pinned against.
+ *
+ * THE SAME GOES FOR THE +. `onAddAfter` gives the strip a second interaction - add
+ * a screen after this one - and it is the same shape as the first: a node id
+ * handed back, nothing decided. WHERE each + sits and WHICH screens get one are
+ * insertionPoints' answer (flow-phone-layout.ts, where the arithmetic and the
+ * "does it fit in the box" check are testable); WHAT gets added, and whether
+ * anything can be, is planScreenInsertion's (flow-edit.ts, against the validator).
+ * The control is therefore never disabled: a step that cannot take an insertion
+ * gets a refusal in words from the builder, which is the house rule about clicks
+ * that appear to do nothing.
  */
 
 export interface FlowPhoneCanvasProps {
@@ -49,6 +76,39 @@ export interface FlowPhoneCanvasProps {
   screens: ReadonlyMap<string, PhoneScreen>;
   /** The practice's name for the header lockup. Never the campaign's name. */
   practiceName?: string;
+  /** The step wearing the selection ring, or null. */
+  selectedId?: string | null;
+  /**
+   * Present = editable. Absent = a picture, with nothing focusable in it. There
+   * is no third state: a strip that highlights a step nobody can select is a
+   * strip that looks broken.
+   */
+  onSelect?: (id: string) => void;
+  /** Steps a validation failure named, ringed in the danger colour. */
+  faultyNodeIds?: ReadonlySet<string>;
+  /**
+   * The accessible name for each step's button, by node id. FINISHED STRINGS, as
+   * data: naming a step means reading the question bank, and this file may not
+   * (flow-phone-mini.test.ts pins the import ban). A step with no entry falls
+   * back to the words on its own screen, which is what a button's content gives
+   * it anyway.
+   */
+  selectLabels?: ReadonlyMap<string, string>;
+  /**
+   * ADD A SCREEN AFTER THIS ONE. Present = the strip grows a + in the gutter after
+   * every screen that has a wire out of it; absent = it does not, which is what the
+   * wizard's read-only preview gets. It hands back a NODE ID and nothing else: which
+   * wire that lands on, which question it asks and what the new step is called are
+   * all planScreenInsertion's answer (flow-edit.ts), not this file's.
+   */
+  onAddAfter?: (nodeId: string) => void;
+  /**
+   * The accessible name for each +, by the node it follows. Finished strings, for
+   * the same reason as selectLabels: naming a step means reading the question bank.
+   * Without one the control still says what it does, just not which screen it
+   * follows.
+   */
+  addLabels?: ReadonlyMap<string, string>;
   /** Unique within the document: several strips can be on one page. */
   idPrefix: string;
   className?: string;
@@ -69,12 +129,26 @@ export function FlowPhoneCanvas({
   layout,
   screens,
   practiceName,
+  selectedId,
+  onSelect,
+  faultyNodeIds,
+  selectLabels,
+  onAddAfter,
+  addLabels,
   idPrefix,
   className,
   viewportClassName,
 }: FlowPhoneCanvasProps) {
   const arrow = `${idPrefix}-parrow`;
   const arrowBad = `${idPrefix}-parrow-bad`;
+  const label = onSelect
+    ? `Funnel: the ${layout.nodes.length} screens a patient sees, in order. Choose one to edit it.`
+    : `Funnel preview: the ${layout.nodes.length} screens a patient sees, in order`;
+  // Positions, and which screens may take one at all, arrive finished from the
+  // layout module - the same numbers the minis and the wires are drawn at. The
+  // SMALL-SCREEN list reads the same set (the ids), so the two renderings cannot
+  // offer different operations on one funnel.
+  const adds = onAddAfter ? insertionPoints(layout) : [];
 
   return (
     <div className={cn("rounded-xl border border-line bg-card", className)}>
@@ -82,8 +156,8 @@ export function FlowPhoneCanvas({
         <div
           className="relative"
           style={{ width: layout.width, height: layout.height }}
-          role="img"
-          aria-label={`Funnel preview: the ${layout.nodes.length} screens a patient sees, in order`}
+          role={onSelect ? "group" : "img"}
+          aria-label={label}
         >
           <svg
             width={layout.width}
@@ -114,26 +188,165 @@ export function FlowPhoneCanvas({
                 className="absolute"
                 style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
               >
-                <PhoneMini screen={screen} practiceName={practiceName} />
+                <Frame
+                  nodeId={n.id}
+                  selected={selectedId === n.id}
+                  faulty={faultyNodeIds?.has(n.id) ?? false}
+                  label={selectLabels?.get(n.id)}
+                  onSelect={onSelect}
+                >
+                  <PhoneMini screen={screen} practiceName={practiceName} />
+                </Frame>
               </div>
             );
           })}
+
+          {/* THE + BETWEEN THE SCREENS. Drawn after the minis so it sits over the
+              wire it stands on, and positioned at the layout's own numbers like
+              everything else here. */}
+          {onAddAfter
+            ? adds.map((p) => (
+                <div
+                  key={`add-${p.nodeId}`}
+                  className="absolute"
+                  style={{ left: p.x, top: p.y, width: p.size, height: p.size }}
+                >
+                  <AddButton
+                    nodeId={p.nodeId}
+                    label={addLabels?.get(p.nodeId)}
+                    onAddAfter={onAddAfter}
+                  />
+                </div>
+              ))
+            : null}
         </div>
       </div>
 
-      {/* The small-screen reading: the same minis, the same sizes, downwards. */}
+      {/* The small-screen reading: the same minis, the same sizes, downwards -
+          and selectable in exactly the same way, because a practice manager
+          reading this on a phone is reading the only rendering they get. The +
+          comes with them, as a row between the screens rather than a dot in a
+          gutter this rendering does not have. */}
       <ol className="space-y-3 p-3 sm:hidden">
         {layout.nodes.map((n) => {
           const screen = screens.get(n.id);
           if (!screen) return null;
           return (
-            <li key={n.id} className="mx-auto w-full" style={{ maxWidth: n.w, height: n.h }}>
-              <PhoneMini screen={screen} practiceName={practiceName} />
+            <li key={n.id} className="mx-auto w-full" style={{ maxWidth: n.w }}>
+              <div style={{ height: n.h }}>
+                <Frame
+                  nodeId={n.id}
+                  selected={selectedId === n.id}
+                  faulty={faultyNodeIds?.has(n.id) ?? false}
+                  label={selectLabels?.get(n.id)}
+                  onSelect={onSelect}
+                >
+                  <PhoneMini screen={screen} practiceName={practiceName} />
+                </Frame>
+              </div>
+              {onAddAfter && adds.some((p) => p.nodeId === n.id) ? (
+                <div className="flex justify-center pt-3">
+                  <div style={{ width: PHONE_ADD_SIZE, height: PHONE_ADD_SIZE }}>
+                    <AddButton nodeId={n.id} label={addLabels?.get(n.id)} onAddAfter={onAddAfter} />
+                  </div>
+                </div>
+              ) : null}
             </li>
           );
         })}
       </ol>
     </div>
+  );
+}
+
+/**
+ * ONE SCREEN MORE, HERE. It carries a node id and calls back; it does not know
+ * what will be added, or whether anything can be - planScreenInsertion decides
+ * that against the validator, and the builder shows the refusal in words if the
+ * answer is no. A control that grey-mattered itself out would be a second copy of
+ * that rule, in the file no test can reach.
+ *
+ * Square by the layout's numbers on the strip and by its own class in the list, so
+ * the two renderings agree on what it is without the list needing coordinates.
+ */
+function AddButton({
+  nodeId,
+  label,
+  onAddAfter,
+}: {
+  nodeId: string;
+  label?: string;
+  onAddAfter: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onAddAfter(nodeId)}
+      aria-label={label ?? "Add a screen after this one"}
+      title={label ?? "Add a screen after this one"}
+      className={cn(
+        "flex h-full w-full items-center justify-center rounded-full border border-line-strong bg-card text-muted shadow-sm transition",
+        "hover:border-blue-royal hover:bg-tint-royal hover:text-status-royal",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
+      )}
+    >
+      <Plus size={14} aria-hidden />
+    </button>
+  );
+}
+
+/**
+ * THE SELECTION RING, and the click target under it.
+ *
+ * WITH NO `onSelect` THIS RENDERS ITS CHILD AND NOTHING ELSE - not a wrapper div,
+ * not a class, not an element. The wizard's stage-2 preview goes through here on
+ * every render, and "the read-only strip is exactly what it was" is a promise
+ * that has to be structural rather than remembered.
+ *
+ * THE RING IS THE BUTTON'S OWN, drawn at the mini's outer radius so it hugs the
+ * handset instead of boxing it. A ring rather than a border, because a border
+ * would move the mini by 2px and the wires - drawn at the layout's coordinates on
+ * a layer that knows nothing about selection - would no longer meet its edge.
+ *
+ * SELECTED WINS OVER FAULTY. A step can be both, and the ring's job while you are
+ * standing on a step is to say WHICH step you are standing on; the failure is
+ * spelled out in words in the rail beside it, which is more use than a colour.
+ */
+function Frame({
+  nodeId,
+  selected,
+  faulty,
+  label,
+  onSelect,
+  children,
+}: {
+  nodeId: string;
+  selected: boolean;
+  faulty: boolean;
+  label?: string;
+  onSelect?: (id: string) => void;
+  children: React.ReactNode;
+}) {
+  if (!onSelect) return <>{children}</>;
+
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      aria-label={label}
+      onClick={() => onSelect(nodeId)}
+      className={cn(
+        "block h-full w-full rounded-[1.75rem] text-left transition",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40",
+        selected
+          ? "ring-2 ring-blue-royal ring-offset-2 ring-offset-card"
+          : faulty
+            ? "ring-2 ring-danger"
+            : "hover:ring-2 hover:ring-line-strong",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

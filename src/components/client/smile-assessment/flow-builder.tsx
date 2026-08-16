@@ -1,48 +1,56 @@
 import { useCallback, useId, useMemo, useState } from "react";
-import { AlertTriangle, Check, Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Toggle } from "@/components/primitives";
 import { cn } from "@/lib/utils";
-import {
-  FLOW_LIMITS,
-  nodeMap,
-  type FlowEdge,
-  type FlowGraph,
-  type FlowNode,
-} from "@/lib/smile-assessment/flow";
+import { nodeMap, type FlowGraph } from "@/lib/smile-assessment/flow";
 import { validateFlow, type FlowValidationFailure } from "@/lib/smile-assessment/flow-validate";
-import { layoutFlow } from "@/lib/smile-assessment/flow-layout";
+import { phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
+import { screenFor, type PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
+import { describeNode, type FlowEditResult } from "@/lib/smile-assessment/flow-edit";
 import {
-  addEdge,
-  defaultTargetOf,
-  describeEdge,
-  describeNode,
-  insertQuestionOnEdge,
-  insertableQuestions,
-  removeEdge,
-  removeNode,
-  routableAnswers,
-  setEdgeAnswer,
-  setEdgeTarget,
-  setEdgeTransition,
-  setOutcomeHeadline,
-  setQuestionTransition,
-  setWelcomeCopy,
-  uncoveredOptions,
-  type FlowEditResult,
-} from "@/lib/smile-assessment/flow-edit";
-import { questionById } from "@/lib/smile-assessment/quiz";
-import { FlowCanvas } from "./flow-canvas";
+  applyInspectorEdit,
+  selectionAfterEdit,
+  stepAfter,
+  type FlowSelection,
+  type InspectorEdit,
+} from "@/lib/smile-assessment/flow-inspect";
+import { FlowPhoneCanvas } from "./flow-phone-canvas";
+import { FlowInspector } from "./flow-inspector";
 
 /**
- * THE FUNNEL BUILDER: the canvas, an inspector for whatever is selected, and the
- * save control.
+ * THE FUNNEL BUILDER: the funnel as the screens a patient sees, an inspector rail
+ * for whatever is selected, and the save control.
  *
- * IT OWNS NO RULES. Every edit goes through flow-edit.ts and every judgement
- * through flow-validate.ts, both of which are pure .ts with tests beside them.
- * This file decides what is on screen and nothing else. When an edit is refused
- * it shows the refusal - a click that silently does nothing is the worst outcome
- * available here, because the owner walks away believing the funnel changed.
+ * CLICK THE SCREEN, EDIT THE SCREEN (A1). The editing surface is the phone strip -
+ * the same minis the wizard previews a template with, the same layout engine, now
+ * selectable. Picking one opens its rail: what it asks, what it says, where each
+ * answer goes and in what order, what follows it, and whether it is still here at
+ * all. A + in the gutter after every screen adds the next one.
+ *
+ * THE ABSTRACT CARD CANVAS IS GONE FROM HERE, and this is the decision the A1
+ * charter deferred until it could be proven rather than argued. What it offered
+ * was: pick a step, pick a CONNECTION, and read the branch shape at a glance. The
+ * first two are on the strip - a screen is a button, and every wire out of a step
+ * is a row in that step's rail, which is a shorter path to a branch than hunting
+ * for a 1.5px line. The third it did not have alone: the strip draws the SAME
+ * routed wires from the same layout engine, so the shape is on both pictures.
+ * Keeping it would have meant two drawings of one funnel, one of which nothing
+ * could be done from that the other could not do better. The file stays in the
+ * repo: the template gallery's thumbnails still draw its kind colours.
+ *
+ * WHAT WAS ACTUALLY MISSING was never the drawing - it was two operations with no
+ * control anywhere: connecting a step that leads nowhere (the old empty branch
+ * list pointed at the wiring view, which could not do it either), and putting back
+ * a band route deleted out of the contact step. Both are now in the rail, which is
+ * what made the retirement honest rather than merely tidy.
+ *
+ * IT OWNS NO RULES. Every edit goes through flow-inspect.ts (what a control means)
+ * onto flow-edit.ts (what it does to the graph) and every judgement through
+ * flow-validate.ts - all pure .ts with tests beside them. This file decides what
+ * is on screen and nothing else. When an edit is refused it shows the refusal - a
+ * click that silently does nothing is the worst outcome available here, because
+ * the owner walks away believing the funnel changed.
  *
  * A BROKEN FUNNEL CANNOT BE PUBLISHED, and the control says so rather than
  * failing at the server: the publish switch is unavailable until the banner is
@@ -51,14 +59,10 @@ import { FlowCanvas } from "./flow-canvas";
  * time, so fixing a funnel is not whack-a-mole.
  *
  * THE SERVER IS STILL THE GATE. Nothing here is a security or compliance check.
- * The authored transition lines and result headlines below are patient-facing
- * copy: this component only caps their length, and the PUT route is what runs
- * the compliance scan and the real validation before anything reaches a patient.
+ * The authored transition lines and result headlines are patient-facing copy:
+ * this component only caps their length, and the PUT route is what runs the
+ * compliance scan and the real validation before anything reaches a patient.
  */
-
-const inputClass =
-  "mt-1 w-full rounded-lg border border-line bg-card px-2.5 py-1.5 text-[12.5px] text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30";
-const labelClass = "block text-[11px] font-semibold text-navy";
 
 export interface FlowSaveOutcome {
   published: boolean;
@@ -69,6 +73,15 @@ export interface FlowBuilderProps {
   clientSlug: string;
   campaignSlug: string;
   campaignName: string;
+  /**
+   * The PRACTICE's name, for the minis' branded header. Never the campaign's own
+   * name, which is an internal source label ("Instagram bio").
+   */
+  practiceName?: string;
+  /** The campaign's public hero copy, which the first screen reads when the
+   *  welcome step does not override it. */
+  campaignHeadline?: string | null;
+  campaignIntro?: string | null;
   /** The graph to open with. */
   graph: FlowGraph;
   /** True when the stored flow could not be read and this is a starter instead. */
@@ -84,6 +97,9 @@ export function FlowBuilder({
   clientSlug,
   campaignSlug,
   campaignName,
+  practiceName,
+  campaignHeadline,
+  campaignIntro,
   graph: initialGraph,
   unreadable,
   published: initialPublished,
@@ -93,9 +109,7 @@ export function FlowBuilder({
 }: FlowBuilderProps) {
   const canvasId = useId().replace(/:/g, "");
   const [graph, setGraph] = useState<FlowGraph>(initialGraph);
-  const [selected, setSelected] = useState<
-    { kind: "node"; id: string } | { kind: "edge"; index: number } | null
-  >(null);
+  const [selected, setSelected] = useState<FlowSelection | null>(null);
   const [publish, setPublish] = useState(initialPublished);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -110,11 +124,39 @@ export function FlowBuilder({
   );
 
   const validation = useMemo(() => validateFlow(graph), [graph]);
-  const layout = useMemo(
-    () => layoutFlow(graph, { content: describeNode, edgeLabel: describeEdge }),
-    [graph],
-  );
   const byId = useMemo(() => nodeMap(graph), [graph]);
+
+  // THE SAME GRAPH AT PHONE METRICS. phoneFlowLayout IS layoutFlow with a phone's
+  // numbers and no text (flow-phone-layout.ts), so the strip and the card canvas
+  // below it cannot draw two different funnels.
+  const phone = useMemo(() => phoneFlowLayout(graph), [graph]);
+  const screens = useMemo(() => {
+    const out = new Map<string, PhoneScreen>();
+    for (const n of phone.nodes) {
+      const node = byId.get(n.id);
+      if (!node) continue;
+      out.set(
+        n.id,
+        screenFor(node, graph, { headline: campaignHeadline, intro: campaignIntro }, n.step),
+      );
+    }
+    return out;
+  }, [phone, byId, graph, campaignHeadline, campaignIntro]);
+
+  // The minis' accessible names, as finished strings: naming a step means reading
+  // the question bank, and the strip may not (flow-phone-canvas.tsx). The +
+  // between two screens is named the same way, off the same card, so the control
+  // and the screen it follows cannot come to say different things.
+  const { selectLabels, addLabels } = useMemo(() => {
+    const select = new Map<string, string>();
+    const add = new Map<string, string>();
+    for (const n of graph.nodes) {
+      const card = describeNode(n);
+      select.set(n.id, `${card.eyebrow}: ${card.title}`);
+      add.set(n.id, `Add a screen after “${card.title}”`);
+    }
+    return { selectLabels: select, addLabels: add };
+  }, [graph]);
 
   // A failure's `where` is a node id when it names one; everything else ("flow",
   // an edge description) has no card to mark, which is what the banner is for.
@@ -136,10 +178,31 @@ export function FlowBuilder({
     }
   }, []);
 
-  const selectedNode: FlowNode | null =
-    selected?.kind === "node" ? (byId.get(selected.id) ?? null) : null;
-  const selectedEdge: FlowEdge | null =
-    selected?.kind === "edge" ? (graph.edges[selected.index] ?? null) : null;
+  /**
+   * ONE LINE FROM A CONTROL TO THE DRAFT GRAPH. The rail emits what the owner
+   * meant; flow-inspect.ts turns that into a pure edit result against the graph as
+   * it stands; `apply` commits it or says why not. Nothing in between.
+   *
+   * THE SELECTION MOVES ONLY WHEN THE EDIT LANDED. A refused edit leaves it
+   * exactly where it was, because clearing it here would clear the refusal with
+   * it - and a destructive button that silently does nothing is the one outcome
+   * this builder must never have.
+   */
+  const onEdit = useCallback(
+    (edit: InspectorEdit) => {
+      const result = applyInspectorEdit(graph, selected, edit);
+      apply(result);
+      // Against the graph the edit was computed on, never the result: that is what
+      // lets an insertion be answered with the step it just made.
+      if (result.ok) setSelected((current) => selectionAfterEdit(current, edit, graph));
+    },
+    [apply, graph, selected],
+  );
+
+  const select = useCallback((next: FlowSelection | null) => {
+    setRefusal(null);
+    setSelected(next);
+  }, []);
 
   // Publishing a funnel that does not validate is the one thing that must be
   // impossible from here, so the switch is not merely disabled - the value is
@@ -234,13 +297,26 @@ export function FlowBuilder({
   }
 
   return (
-    <div className="mt-3 rounded-xl border border-line-strong bg-card-muted/40 p-3">
+    // ESCAPE DESELECTS, from anywhere in the builder - the strip, the wiring view
+    // or a field in the rail. On the container rather than on `document`, so a
+    // builder open inside some future dialog cannot swallow that dialog's own
+    // Escape; and stopped only when there WAS a selection to clear, for the same
+    // reason.
+    <div
+      className="mt-3 rounded-xl border border-line-strong bg-card-muted/40 p-3"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || selected === null) return;
+        event.stopPropagation();
+        select(null);
+      }}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[13px] font-semibold text-navy">Funnel for {campaignName}</p>
           <p className="mt-0.5 text-[11px] text-muted">
-            Pick a step or a connection to change it. The public link only uses this funnel once it
-            is switched on below; until then it runs the adaptive one.
+            Pick a screen to change what it asks, what it says and where each answer goes. The
+            public link only uses this funnel once it is switched on below; until then it runs the
+            adaptive one.
           </p>
         </div>
         {onClose ? (
@@ -262,45 +338,55 @@ export function FlowBuilder({
 
       {refusal ? <Banner tone="warning">{refusal}</Banner> : null}
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <FlowCanvas
-          idPrefix={canvasId}
-          layout={layout}
-          selectedNodeId={selected?.kind === "node" ? selected.id : null}
-          selectedEdgeIndex={selected?.kind === "edge" ? selected.index : null}
-          faultyNodeIds={faultyNodeIds}
-          onSelectNode={(id) => {
-            setRefusal(null);
-            setSelected({ kind: "node", id });
-          }}
-          onSelectEdge={(index) => {
-            setRefusal(null);
-            setSelected({ kind: "edge", index });
-          }}
-        />
+      <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-3">
+          {/* THE EDITING SURFACE. Left/right arrows walk the strip in reading
+              order - and the handler is on the strip's own wrapper, not on the
+              builder, so an arrow key inside a field in the rail still moves the
+              cursor rather than the selection. */}
+          <div
+            onKeyDown={(event) => {
+              const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+              if (delta === 0) return;
+              event.preventDefault();
+              const next = stepAfter(
+                phone.nodes.map((n) => n.id),
+                selected?.kind === "node" ? selected.id : null,
+                delta,
+              );
+              if (next) select({ kind: "node", id: next });
+            }}
+          >
+            <FlowPhoneCanvas
+              idPrefix={`${canvasId}-p`}
+              layout={phone}
+              screens={screens}
+              practiceName={practiceName}
+              selectedId={selected?.kind === "node" ? selected.id : null}
+              onSelect={(id) => select({ kind: "node", id })}
+              onAddAfter={(id) => onEdit({ kind: "add-screen", nodeId: id })}
+              faultyNodeIds={faultyNodeIds}
+              selectLabels={selectLabels}
+              addLabels={addLabels}
+              // The strip inherits the room the wiring view gave back. Its own
+              // default is the short window a PREVIEW wants; the editing surface
+              // wants most of the screen, the way the card canvas did.
+              viewportClassName="max-h-[70vh]"
+            />
+          </div>
+        </div>
 
-        <div className="rounded-xl border border-line bg-card p-3">
-          {selectedNode ? (
-            <NodeInspector
-              graph={graph}
-              node={selectedNode}
-              apply={apply}
-              onSelectNothing={() => setSelected(null)}
-            />
-          ) : selectedEdge && selected?.kind === "edge" ? (
-            <EdgeInspector
-              graph={graph}
-              edge={selectedEdge}
-              index={selected.index}
-              apply={apply}
-              onSelectNothing={() => setSelected(null)}
-            />
-          ) : (
-            <p className="text-[12px] text-muted">
-              Nothing selected. Choose a step to rename its lead-in or remove it, or a connection to
-              add a question part-way through.
-            </p>
-          )}
+        {/* The rail. Sticky, because the strip beside it is taller than the
+            viewport on any funnel with three result screens, and an inspector you
+            have to scroll back up to is an inspector you stop using. */}
+        <div className="lg:sticky lg:top-3 lg:self-start">
+          <FlowInspector
+            graph={graph}
+            selection={selected}
+            failures={validation.failures}
+            onEdit={onEdit}
+            onSelect={select}
+          />
         </div>
       </div>
 
@@ -386,304 +472,6 @@ function ValidationBanner({ failures }: { failures: FlowValidationFailure[] }) {
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Inspectors.
-// ---------------------------------------------------------------------------
-
-function InspectorHead({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <div className="border-b border-line pb-2">
-      <p className="text-[9.5px] font-bold uppercase tracking-wide text-muted">{eyebrow}</p>
-      <p className="mt-0.5 text-[12.5px] font-semibold text-navy">{title}</p>
-    </div>
-  );
-}
-
-function NodeInspector({
-  graph,
-  node,
-  apply,
-  onSelectNothing,
-}: {
-  graph: FlowGraph;
-  node: FlowNode;
-  apply: (result: FlowEditResult) => void;
-  onSelectNothing: () => void;
-}) {
-  const card = describeNode(node);
-  const uncovered = uncoveredOptions(graph, node.id);
-  const target = defaultTargetOf(graph, node.id);
-
-  return (
-    <div className="space-y-3">
-      <InspectorHead eyebrow={card.eyebrow} title={card.title} />
-
-      {node.kind === "question" ? (
-        <>
-          <div>
-            <label className={labelClass} htmlFor={`tr-${node.id}`}>
-              Lead-in line (optional)
-            </label>
-            <input
-              id={`tr-${node.id}`}
-              type="text"
-              defaultValue={node.transition ?? ""}
-              maxLength={FLOW_LIMITS.transition}
-              placeholder="That helps. Now, when you would like to get started."
-              onBlur={(e) => apply(setQuestionTransition(graph, node.id, e.target.value))}
-              className={inputClass}
-            />
-            <p className="mt-1 text-[10.5px] text-muted">
-              Shown above this question. Leave it empty for no lead-in. A connection into this step
-              can carry its own line, which wins over this one.
-            </p>
-          </div>
-
-          {uncovered.length > 0 ? (
-            <div>
-              <p className={labelClass}>Answers that lead nowhere</p>
-              <ul className="mt-1 space-y-1">
-                {uncovered.map((o) => (
-                  <li key={o.value} className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink">{o.label}</span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="h-6 px-2 text-[11px]"
-                      disabled={!target}
-                      onClick={() => (target ? apply(addEdge(graph, node.id, target, o.value)) : undefined)}
-                    >
-                      <Plus size={12} /> Route it
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1 text-[10.5px] text-muted">
-                Routing sends this answer the same way as the rest for now; pick the connection
-                afterwards to send it somewhere else.
-              </p>
-            </div>
-          ) : null}
-
-          <div className="border-t border-line pt-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                apply(removeNode(graph, node.id));
-                onSelectNothing();
-              }}
-            >
-              <Trash2 size={13} /> Remove this question
-            </Button>
-            <p className="mt-1 text-[10.5px] text-muted">
-              Anything that led here will lead to {target ? `“${target}”` : "wherever this step led"}{" "}
-              instead.
-            </p>
-          </div>
-        </>
-      ) : null}
-
-      {node.kind === "outcome" ? (
-        <div>
-          <label className={labelClass} htmlFor={`hl-${node.id}`}>
-            Result headline (optional)
-          </label>
-          <input
-            id={`hl-${node.id}`}
-            type="text"
-            defaultValue={node.headline ?? ""}
-            maxLength={FLOW_LIMITS.headline}
-            onBlur={(e) => apply(setOutcomeHeadline(graph, node.id, e.target.value))}
-            className={inputClass}
-          />
-          <p className="mt-1 text-[10.5px] text-muted">
-            About how ready the enquiry is, never about the treatment: a clinician decides what is
-            suitable, always.
-          </p>
-        </div>
-      ) : null}
-
-      {node.kind === "welcome" ? (
-        <>
-          <div>
-            <label className={labelClass} htmlFor={`wh-${node.id}`}>
-              Opening headline (optional)
-            </label>
-            <input
-              id={`wh-${node.id}`}
-              type="text"
-              defaultValue={node.headline ?? ""}
-              maxLength={FLOW_LIMITS.headline}
-              onBlur={(e) => apply(setWelcomeCopy(graph, node.id, e.target.value, node.intro ?? ""))}
-              className={inputClass}
-            />
-          </div>
-          <div>
-            <label className={labelClass} htmlFor={`wi-${node.id}`}>
-              Opening line (optional)
-            </label>
-            <textarea
-              id={`wi-${node.id}`}
-              rows={2}
-              defaultValue={node.intro ?? ""}
-              maxLength={FLOW_LIMITS.intro}
-              onBlur={(e) => apply(setWelcomeCopy(graph, node.id, node.headline ?? "", e.target.value))}
-              className={inputClass}
-            />
-            <p className="mt-1 text-[10.5px] text-muted">
-              Leave both empty to use the assessment&apos;s own headline and intro.
-            </p>
-          </div>
-        </>
-      ) : null}
-
-      {node.kind === "contact" ? (
-        <p className="text-[11.5px] text-muted">
-          Where the enquiry is captured. Every funnel has exactly one, and every result comes after
-          it, so no one reaches an answer without leaving their details.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function EdgeInspector({
-  graph,
-  edge,
-  index,
-  apply,
-  onSelectNothing,
-}: {
-  graph: FlowGraph;
-  edge: FlowEdge;
-  index: number;
-  apply: (result: FlowEditResult) => void;
-  onSelectNothing: () => void;
-}) {
-  const from = nodeMap(graph).get(edge.from);
-  const label = from ? describeEdge(edge, from) : edge.answer;
-  const answers = from ? routableAnswers(from) : [];
-  const insertable = useMemo(() => insertableQuestions(graph, index), [graph, index]);
-  const [pick, setPick] = useState("");
-
-  return (
-    <div className="space-y-3">
-      <InspectorHead eyebrow="Connection" title={label ?? "Straight on"} />
-
-      <div>
-        <label className={labelClass} htmlFor={`ea-${index}`}>
-          Taken when the answer is
-        </label>
-        <select
-          id={`ea-${index}`}
-          value={edge.answer ?? ""}
-          onChange={(e) => apply(setEdgeAnswer(graph, index, e.target.value || null))}
-          className={inputClass}
-        >
-          <option value="">Anything else</option>
-          {answers.map((a) => (
-            <option key={a.value} value={a.value}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className={labelClass} htmlFor={`et-${index}`}>
-          Then go to
-        </label>
-        <select
-          id={`et-${index}`}
-          value={edge.to}
-          onChange={(e) => apply(setEdgeTarget(graph, index, e.target.value))}
-          className={inputClass}
-        >
-          {graph.nodes
-            .filter((n) => n.id !== edge.from)
-            .map((n) => (
-              <option key={n.id} value={n.id}>
-                {describeNode(n).title}
-              </option>
-            ))}
-        </select>
-      </div>
-
-      <div>
-        <label className={labelClass} htmlFor={`etr-${index}`}>
-          Lead-in for this answer (optional)
-        </label>
-        <input
-          id={`etr-${index}`}
-          type="text"
-          defaultValue={edge.transition ?? ""}
-          maxLength={FLOW_LIMITS.transition}
-          placeholder="Thank you. A quick one about what you would like to change."
-          onBlur={(e) => apply(setEdgeTransition(graph, index, e.target.value))}
-          className={inputClass}
-        />
-        <p className="mt-1 text-[10.5px] text-muted">
-          Shown on the next step, tailored to the answer just given.
-        </p>
-      </div>
-
-      <div className="border-t border-line pt-2">
-        <label className={labelClass} htmlFor={`ins-${index}`}>
-          Add a question here
-        </label>
-        {insertable.length === 0 ? (
-          <p className="mt-1 text-[10.5px] text-muted">
-            Nothing left to add on this route: every remaining question is either already asked on
-            it, is about a different treatment, or would make the funnel too long.
-          </p>
-        ) : (
-          <div className="mt-1 flex items-center gap-2">
-            <select
-              id={`ins-${index}`}
-              value={pick}
-              onChange={(e) => setPick(e.target.value)}
-              className={cn(inputClass, "mt-0 flex-1")}
-            >
-              <option value="">Choose a question...</option>
-              {insertable.map((id) => (
-                <option key={id} value={id}>
-                  {questionById(id)?.prompt ?? id}
-                </option>
-              ))}
-            </select>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!pick}
-              onClick={() => {
-                apply(insertQuestionOnEdge(graph, index, pick));
-                setPick("");
-                onSelectNothing();
-              }}
-            >
-              <Plus size={13} /> Add
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <div className="border-t border-line pt-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => {
-            apply(removeEdge(graph, index));
-            onSelectNothing();
-          }}
-        >
-          <Trash2 size={13} /> Remove this connection
-        </Button>
-      </div>
     </div>
   );
 }

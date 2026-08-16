@@ -5,6 +5,18 @@ import type { FlowNodeKind } from "@/lib/smile-assessment/flow";
 /**
  * THE FUNNEL CANVAS. Draws a laid-out funnel and computes NOTHING.
  *
+ * NOT MOUNTED ANYWHERE, as of A1's parity pass. The builder drew this beside the
+ * phone strip while the strip could not yet do everything it did; once every
+ * operation was reachable from a screen and its rail - including the two that had
+ * never been reachable from EITHER canvas (connecting a stranded step, and putting
+ * back a band route deleted off the contact step) - two drawings of one funnel was
+ * one too many, and this is the one a patient never sees. The file stays because
+ * NODE_ACCENT below is live: the template gallery's flow-shape thumbnails colour
+ * their steps from it, and that seam is pinned (create-experience-shell.test.ts).
+ * `FlowCanvas` itself is kept intact rather than deleted piecemeal - it is the
+ * whole of the wiring view, should one ever be wanted again - but nothing renders
+ * it today, so do not read a change in here as a change on anyone's screen.
+ *
  * Every coordinate, every wrapped line, every baseline and the viewBox itself
  * arrive from flow-layout.ts - and so does the card's chrome: the header strip's
  * path, the kind bar's rect and the hairline above each option row. That split is

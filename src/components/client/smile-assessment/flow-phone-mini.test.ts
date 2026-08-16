@@ -379,17 +379,52 @@ describe("the mini is presentational, structurally", () => {
   });
 
   // MUTATION: give a mini state or an effect and a preview strip starts doing
-  // work - on a component rendered ten times over, inside a form.
-  it("holds no state, runs no effect, fetches nothing", () => {
-    const code = codeOnly(miniSource) + codeOnly(canvasSource);
+  // work - on a component rendered ten times over, inside a form. The mini is the
+  // half of the pair that stayed a picture outright: A1 made the STRIP selectable
+  // and left the screen inside it untouched, which is what keeps one funnel
+  // rendering shared by the read-only wizard preview and the editor.
+  it("the mini holds no state, runs no effect, fetches nothing, and has nothing to click", () => {
+    const code = codeOnly(miniSource);
     for (const banned of ["useState", "useEffect", "useMemo", "fetch(", "onClick", "onChange"]) {
       expect(code, `found ${banned}`).not.toContain(banned);
     }
   });
 
+  // THE STRIP HAS EXACTLY TWO INTERACTIONS, and both are the same shape: a click
+  // that hands a NODE ID back to the builder. Selecting a screen (A1's
+  // click-to-edit) and adding one after it (A1's parity pass, once the abstract
+  // canvas came down and the strip became the only canvas). It still decides
+  // nothing - no state, no effect, no fetch, and no handler that does anything but
+  // call the callback it was given.
+  //
+  // PIN CHANGED, deliberately: this used to require EXACTLY ONE onClick. It now
+  // requires exactly two, named, so a third arriving unannounced still goes red.
+  //
+  // MUTATION: let the strip hold the selection itself ("it is only one useState")
+  // and the ring on the phone and the rail beside it become two answers to "what
+  // am I editing". MUTATION: decide in here whether a + can do anything - whether
+  // a question may be added on that route is the validator's answer
+  // (planScreenInsertion), and a control that greys itself out on a rule written
+  // in JSX is a rule no test can hold.
+  it("the canvas forwards its two clicks and holds nothing", () => {
+    const code = codeOnly(canvasSource);
+    for (const banned of ["useState", "useEffect", "useMemo", "fetch(", "onChange"]) {
+      expect(code, `found ${banned}`).not.toContain(banned);
+    }
+    expect(code).toContain("onClick={() => onSelect(nodeId)}");
+    expect(code).toContain("onClick={() => onAddAfter(nodeId)}");
+    expect(code.split("onClick").length - 1, "an unnamed third handler").toBe(2);
+    // The + never disables itself: the refusal is the builder's, in words.
+    expect(code).not.toContain("disabled");
+  });
+
   // MUTATION: make the option rows buttons "so they look right". Ten screens of
   // eight answers is eighty tab stops on a picture.
-  it("renders nothing focusable", () => {
+  //
+  // Rendered WITHOUT `onSelect`, which is the read-only strip the wizard's stage 2
+  // mounts. MUTATION: make the buttons unconditional and that preview - of a
+  // funnel with no campaign to be saved against - grows a tab stop per screen.
+  it("renders nothing focusable when it is not editable", () => {
     const { layout, screens } = preview(funnel());
     const html = renderToStaticMarkup(
       createElement(FlowPhoneCanvas, { layout, screens, idPrefix: "t" }),

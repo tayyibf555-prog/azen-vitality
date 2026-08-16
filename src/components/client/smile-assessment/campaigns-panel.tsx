@@ -518,6 +518,7 @@ export function CampaignsPanel({
         ) : (
           <CampaignTabs
             clientSlug={clientSlug}
+            practiceName={practiceName}
             campaigns={campaigns}
             togglingId={togglingId}
             openCanvasFor={openCanvasFor}
@@ -993,6 +994,8 @@ function choiceLabel(choice: TemplateChoice): string {
 
 interface ListProps {
   clientSlug: string;
+  /** For the funnel builder's phone minis - the practice a patient reads. */
+  practiceName?: string;
   campaigns: AdminCampaign[];
   togglingId: string | null;
   /** The campaign whose canvas opens on mount, because it was just created. */
@@ -1044,6 +1047,7 @@ function CampaignList({ campaigns, ...rest }: ListProps) {
  *  scheme. Nothing else imports it. */
 export function CampaignCard({
   clientSlug,
+  practiceName,
   campaign,
   togglingId,
   openCanvasFor,
@@ -1051,6 +1055,7 @@ export function CampaignCard({
   onCampaignUpdated,
 }: {
   clientSlug: string;
+  practiceName?: string;
   campaign: AdminCampaign;
   togglingId: string | null;
   openCanvasFor: string | null;
@@ -1233,6 +1238,12 @@ export function CampaignCard({
           clientSlug={clientSlug}
           campaignSlug={campaign.slug}
           campaignName={campaign.name}
+          // The practice's name and the campaign's own hero copy, so the minis in
+          // the builder read as the page a patient lands on rather than as the
+          // generic fallback.
+          practiceName={practiceName}
+          campaignHeadline={campaign.headline}
+          campaignIntro={campaign.intro}
           graph={stored.graph ?? templateForGoal(campaign.goal).build()}
           unreadable={stored.unreadable}
           published={published}

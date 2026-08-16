@@ -18,6 +18,7 @@ import {
   PHONE_CONTENT,
   PHONE_EDGE_LABEL,
   PHONE_METRICS,
+  insertionPoints,
   phoneFlowLayout,
   phoneMetrics,
 } from "./flow-phone-layout";
@@ -405,6 +406,101 @@ describe("the same graph produces identical numbers", () => {
     expect(JSON.stringify(phoneFlowLayout(templateForGoal("invisalign").build()))).not.toBe(
       JSON.stringify(phoneFlowLayout(buildScratchFlow())),
     );
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * WHERE THE "+" GOES. A1's add-a-screen affordance, on the strip itself.
+ * ------------------------------------------------------------------------- */
+
+describe("the add-a-screen points", () => {
+  // MUTATION: compute this in the component "because it is only x + w + 44" and
+  // every one of the checks below becomes unreachable - which is how a control
+  // ends up half a gutter off, or hanging outside the scroll box.
+  it("centres the control in the gutter, level with the middle of its screen", () => {
+    const layout = phoneFlowLayout(templateForGoal("invisalign").build());
+    const points = insertionPoints(layout);
+    const welcome = layout.nodes.find((n) => n.id === "welcome")!;
+    const point = points.find((p) => p.nodeId === "welcome")!;
+
+    // Equal gutter on both sides of it, and it does not touch either screen.
+    expect(point.x - (welcome.x + welcome.w)).toBeCloseTo(
+      welcome.x + welcome.w + M.gutterX - (point.x + point.size),
+      3,
+    );
+    expect(point.x).toBeGreaterThan(welcome.x + welcome.w);
+    expect(point.x + point.size).toBeLessThan(welcome.x + welcome.w + M.gutterX);
+    // Vertically centred on the screen it belongs to.
+    expect(point.y + point.size / 2).toBeCloseTo(welcome.y + welcome.h / 2, 3);
+  });
+
+  // MUTATION: emit a point for every node and the last column's controls hang off
+  // the right edge of the box the SVG and the minis share, widening the scroll
+  // region past the diagram - on steps that cannot take an insertion anyway.
+  it("gives one to every screen with a wire out, and none to a dead end", () => {
+    for (const { name, graph: g } of EVERY_GRAPH) {
+      const layout = phoneFlowLayout(g);
+      const points = insertionPoints(layout);
+      const leaves = new Set(layout.edges.map((e) => e.from));
+
+      expect(points.map((p) => p.nodeId).sort(), name).toEqual([...leaves].sort());
+      for (const p of points) {
+        expect(p.x, `${name}: ${p.nodeId} starts left of the box`).toBeGreaterThanOrEqual(0);
+        expect(p.x + p.size, `${name}: ${p.nodeId} hangs off the box`).toBeLessThanOrEqual(
+          layout.width,
+        );
+        expect(p.y + p.size, `${name}: ${p.nodeId} hangs off the bottom`).toBeLessThanOrEqual(
+          layout.height,
+        );
+      }
+      // Every result step is terminal (rule 7), so none of them offers one.
+      for (const n of g.nodes) {
+        if (n.kind !== "outcome") continue;
+        expect(points.some((p) => p.nodeId === n.id), `${name}: a + on ${n.id}`).toBe(false);
+      }
+    }
+  });
+
+  /**
+   * THE DEAD END THAT IS NOT IN THE LAST COLUMN, which is the only case where the
+   * two conditions come apart. On every template a step with no wire out is also a
+   * step in the final column, so the fit check alone would look sufficient - and a
+   * mutation removing the "has a wire out" rule passes the corpus. Here `x` is
+   * stranded halfway through, where the gutter is real: without the rule it gets a
+   * + that planScreenInsertion can only ever refuse.
+   */
+  it("gives none to a step that leads nowhere from the middle of the funnel", () => {
+    const g = graph(
+      [
+        { id: "w", kind: "welcome" },
+        { id: "q", kind: "question", questionId: "timeline" },
+        { id: "x", kind: "question", questionId: "budget_readiness" },
+        { id: "c", kind: "contact" },
+        { id: "r", kind: "outcome", band: "high" },
+      ],
+      [edge("w", "q"), edge("q", "x", "asap"), edge("q", "c"), edge("c", "r", "high")],
+    );
+    const layout = phoneFlowLayout(g);
+    const stranded = layout.nodes.find((n) => n.id === "x")!;
+    // It really is mid-funnel: there is a gutter to its right, inside the box.
+    expect(stranded.x + stranded.w + M.gutterX).toBeLessThanOrEqual(layout.width);
+
+    const points = insertionPoints(layout);
+    expect(points.some((p) => p.nodeId === "x")).toBe(false);
+    expect(points.map((p) => p.nodeId).sort()).toEqual(["c", "q", "w"]);
+  });
+
+  it("is a real touch target, and square", () => {
+    const layout = phoneFlowLayout(templateForGoal("implants").build());
+    for (const p of insertionPoints(layout)) {
+      expect(p.size).toBeGreaterThanOrEqual(24);
+      expect(p.size).toBeLessThan(M.gutterX);
+    }
+  });
+
+  it("says nothing about a funnel with no wires at all", () => {
+    const lone = graph([{ id: "a", kind: "welcome" }], []);
+    expect(insertionPoints(phoneFlowLayout(lone))).toEqual([]);
   });
 });
 
