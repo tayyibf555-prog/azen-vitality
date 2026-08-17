@@ -45,7 +45,16 @@ function at(marker: string): number {
 
 describe("the public campaign page enforces the system kill switch", () => {
   it("reads the switch from the systems repository", () => {
-    expect(source).toContain('import { isSystemEnabled } from "@/lib/systems/repository"');
+    // A REGEX RATHER THAN toContain, and consciously so: the page now imports
+    // `isSystemEnabledStrict` from the same module for its Meta-pixel gate, so the
+    // exact one-name import statement this used to assert no longer exists. The
+    // WORD BOUNDARY is what keeps the assertion honest — `\bisSystemEnabled\b` does
+    // not match `isSystemEnabledStrict`, so an import list that kept only the
+    // strict reader (i.e. a page that had quietly changed how the door works) still
+    // fails here.
+    expect(source).toMatch(
+      /import \{[^}]*\bisSystemEnabled\b[^}]*\} from "@\/lib\/systems\/repository";/,
+    );
   });
 
   it("names a system that actually exists and is switchable", () => {
@@ -80,9 +89,26 @@ describe("the public campaign page enforces the system kill switch", () => {
 
   it("is the page's check, not a metadata-only one", () => {
     // generateMetadata deliberately degrades to a generic title instead of
-    // throwing, so it is not, and must not become, the enforcement point.
+    // throwing, so it is not, and must not become, the enforcement point. The
+    // substring catches BOTH readers, which is what is wanted here: neither belongs
+    // above the page component.
     expect(metadataBody).not.toContain("isSystemEnabled");
+
+    // ONE DOOR, and the count is of the FAIL-OPEN reader alone. The regex needs the
+    // open paren immediately after the name, so `isSystemEnabledStrict(` is not a
+    // match — and that discrimination is deliberate rather than a lucky accident of
+    // the pattern. The page makes two systems reads on purpose and they do
+    // different jobs, so each is counted on its own terms: a second fail-open call
+    // would mean a second door, or a gate that has drifted down the page.
     expect(pageBody.match(/isSystemEnabled\(/g)).toHaveLength(1);
+
+    // ...AND ONE STRICT READ, the Meta-pixel gate. The door fails OPEN so a toggle
+    // blip cannot 404 a live funnel; the pixel fails CLOSED so the same blip cannot
+    // put a third-party script on a page whose system may be off. Losing the strict
+    // call — or having the pixel ride on the door's answer, which is what this page
+    // used to do — is a silent regression, so the count is pinned here too.
+    // meta-pixel-wiring.test.ts owns what that read then decides.
+    expect(pageBody.match(/isSystemEnabledStrict\(/g)).toHaveLength(1);
   });
 
   it("still checks the practice exists first, so an unknown client 404s either way", () => {

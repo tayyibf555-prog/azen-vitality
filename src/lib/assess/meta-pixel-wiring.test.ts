@@ -318,16 +318,44 @@ describe("both public pages send the browser one field, and nothing in preview",
     // Strict, not the fail-open reader: a systems read that errors must mean "no
     // pixel", never "a third-party request nobody sanctioned".
     expect(genericPage).not.toContain("isSystemEnabled(clientRecord.id");
-    // ...and the campaign page needs none, because it already shut the door.
+  });
+
+  // MUTATION: gate the campaign page's pixel on the answer the DOOR already got.
+  // That is what this page did until the two were compared, and the divergence is
+  // invisible except in one state: the systems read ERRORS while a practice has
+  // tracking configured on and this visitor has consented. `isSystemEnabled` fails
+  // OPEN — deliberately, because a toggle-table blip must not 404 a live funnel
+  // that ad spend points at — so riding on it means an unreadable switch still
+  // yields a pixel. Tracking is the class of thing that fails CLOSED (the house
+  // doctrine in src/lib/systems/repository.ts), so the pixel asks again, strictly,
+  // exactly as the generic page above does. Two readers, two failure directions,
+  // one page.
+  it("the campaign page gates its pixel STRICTLY too, not on the door's answer", () => {
+    // The door itself is unchanged, and stays the fail-open reader.
     expect(campaignPage).toContain(
       'if (!(await isSystemEnabled(clientRecord.id, "smile-assessment"))) notFound();',
+    );
+    // The pixel gets its own, strict, answer...
+    expect(campaignPage).toContain(
+      'isSystemEnabledStrict(clientRecord.id, "smile-assessment")',
+    );
+    // ...and THAT is the answer the id is computed from. Presence alone would pass
+    // for a page that read the switch strictly and then ignored it, so the binding
+    // is pinned at both ends: where the value comes from, and where it decides.
+    expect(campaignPage).toMatch(
+      /const \[custom, metaPixel, switchProvablyOn\] = await Promise\.all\(\[/,
+    );
+    expect(campaignPage).toContain(
+      "previewMode || !switchProvablyOn ? null : publicMetaPixelId(metaPixel)",
     );
   });
 
   // MUTATION: fetch the theme and the pixel one after the other. Two serial round
-  // trips on a force-dynamic page that paid traffic lands on, for no reason.
-  it("the campaign page reads the theme and the pixel together", () => {
-    expect(campaignPage).toContain("const [custom, metaPixel] = await Promise.all([");
+  // trips on a force-dynamic page that paid traffic lands on, for no reason. (The
+  // strict switch read joined them rather than adding a third trip, which is why
+  // this now allows extra names in the destructuring.)
+  it("the campaign page reads the theme, the pixel and the switch together", () => {
+    expect(campaignPage).toMatch(/const \[custom, metaPixel[^\]]*\] = await Promise\.all\(\[/);
   });
 
   it("the component is the only thing the pages mount, and it is gated on the id", () => {

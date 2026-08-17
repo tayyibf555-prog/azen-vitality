@@ -5,7 +5,7 @@ import { AssessmentQuiz } from "@/components/assess/assessment-quiz";
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { toPublicCampaign, toPublicFlow, type PublicFlow } from "@/lib/smile-assessment/campaign";
 import { normaliseAndValidateFlow, describeFlowFailures } from "@/lib/smile-assessment/flow-validate";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabled, isSystemEnabledStrict } from "@/lib/systems/repository";
 import { getClient, getSite } from "@/lib/mock/clients";
 import { paletteVars, paletteVarsFrom } from "@/lib/assess/palette";
 import { resolveCustomTheme } from "@/lib/assess/custom-theme-repository";
@@ -185,7 +185,7 @@ export default async function CampaignAssessmentPage({
   // submitter's hashed contact details may leave it, and the Conversions API token
   // is not in this object at all.
   //
-  // FOUR THINGS PROTECT THIS SURFACE, and, as with the theme, none of them is the
+  // FIVE THINGS PROTECT THIS SURFACE, and, as with the theme, none of them is the
   // write path:
   //   1. resolveMetaPixel NEVER THROWS. A missing table (0083 not applied), a
   //      deleted row, a transient error — all resolve to "tracking off", and the
@@ -198,13 +198,25 @@ export default async function CampaignAssessmentPage({
   //   4. PREVIEW MODE TRACKS NOTHING. ?preview=1 is the owner looking at their own
   //      funnel from the builder; counting that as a visit would teach the ad
   //      account that staff are patients. The step beacon takes the same line.
+  //   5. THE KILL SWITCH IS RE-READ, STRICTLY, and this is the one decision on the
+  //      page that deliberately does NOT ride on the door gate above. That gate
+  //      fails OPEN, which is right for what it guards: a toggle-table blip must
+  //      not 404 a live funnel that ad spend points at. The failure mode HERE is
+  //      the opposite — a third-party script on a page whose owner may have just
+  //      switched the system off — and tracking is exactly the class of thing that
+  //      fails CLOSED. So the pixel asks again with the strict reader, and an
+  //      unreadable switch means no pixel while the funnel still serves. It costs
+  //      no latency: the read rides in the same Promise.all as the theme and the
+  //      config. The generic /assess/<client> page gates its own pixel on the same
+  //      reader for the same reason; this is the two pages agreeing.
   // ---------------------------------------------------------------------------
-  const [custom, metaPixel] = await Promise.all([
+  const [custom, metaPixel, switchProvablyOn] = await Promise.all([
     resolveCustomTheme(clientRecord.id, pub.theme),
     resolveMetaPixel(clientRecord.id),
+    isSystemEnabledStrict(clientRecord.id, "smile-assessment"),
   ]);
   const themeVars = custom ? paletteVarsFrom(custom.vars) : paletteVars(pub.theme);
-  const metaPixelId = previewMode ? null : publicMetaPixelId(metaPixel);
+  const metaPixelId = previewMode || !switchProvablyOn ? null : publicMetaPixelId(metaPixel);
 
   // ---------------------------------------------------------------------------
   // ...AND SINCE C1 THE RESULT SCREEN MAY EMBED THE PRACTICE'S BOOKING CALENDAR.
@@ -219,9 +231,10 @@ export default async function CampaignAssessmentPage({
   // IT IS NOT A PERMISSION AND IT IS NOT THE KILL SWITCH. Passing a site says only
   // "this is which diary, if a calendar is ever mounted". Whether one may be is
   // decided by /api/smile-assessment/submit, which mints `bookingUrl` only while
-  // the owner's `online-booking` system is on — so this page still makes exactly
-  // ONE isSystemEnabled call, the smile-assessment one at the top, and the booking
-  // switch is never read in the browser. bookingEmbed then refuses to mount
+  // the owner's `online-booking` system is on — so this page still reads exactly
+  // ONE system, `smile-assessment` (the door gate at the top, and the strict
+  // re-read behind the pixel), never `online-booking`, and the booking switch is
+  // never read in the browser. bookingEmbed then refuses to mount
   // anything unless the site below is the one that came back in that URL.
   const campaignSite = getSite(campaign.siteId);
   // ---------------------------------------------------------------------------
