@@ -56,6 +56,22 @@ export interface MockPatient {
    * nothing rather than to a guessed default.
    */
   payment_plan_id?: number;
+  /**
+   * What a REGISTRATION actually wrote, for a patient created through POST
+   * /v1/patients rather than seeded in the fixture table below.
+   *
+   * These three exist so the mock can echo back what it was given instead of
+   * answering from the fixture generators (dobForPatient / genderForPatient), which
+   * know nothing about an id they have never seen and would return null — making a
+   * just-registered patient read back with no date of birth and no sex, which is not
+   * what live Dentally does with a payload it has just accepted.
+   *
+   * `gender` is a BOOLEAN because that is the live encoding (probe 2026-08-17: 800
+   * real records, 100% boolean, true = male).
+   */
+  date_of_birth?: string;
+  gender?: boolean;
+  title?: string;
 }
 
 export interface MockTreatmentPlan {

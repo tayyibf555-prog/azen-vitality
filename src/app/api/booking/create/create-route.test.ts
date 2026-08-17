@@ -30,7 +30,14 @@ const h = vi.hoisted(() => ({
   createAppointment: vi.fn(async (..._a: unknown[]) => ({ appointment: { id: "appt-1" } })),
 }));
 
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: h.isSystemEnabled }));
+// The create route reads the kill switch through isSystemEnabledStrict (FAIL
+// CLOSED): it is the only public endpoint that writes a real patient record, so a
+// switch it cannot read is treated as off. Both names resolve to the same stub
+// here so a test can drive either route.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: h.isSystemEnabled,
+  isSystemEnabledStrict: h.isSystemEnabled,
+}));
 vi.mock("@/lib/dentally/write", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {

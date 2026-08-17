@@ -1,5 +1,5 @@
 import { getClient, getSites, dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabledStrict } from "@/lib/systems/repository";
 import {
   isDentallyWriteEnabled,
   dentallyAgentClient,
@@ -100,7 +100,21 @@ const TREATMENT_REASONS: Record<string, string> = {
 function knownTreatment(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const cleaned = value.replace(/\s+/g, " ").trim();
-  return cleaned.toLowerCase() in TREATMENT_REASONS ? cleaned : undefined;
+  // Object.hasOwn, NOT `in`. `in` walks the prototype chain, so `"constructor" in
+  // TREATMENT_REASONS` is true and this returned "constructor" as if a patient had
+  // chosen it — putting a word nobody offered into a real clinical note, which is
+  // the exact thing this whitelist exists to stop.
+  return Object.hasOwn(TREATMENT_REASONS, cleaned.toLowerCase()) ? cleaned : undefined;
+}
+
+/**
+ * The reason for a whitelisted treatment, never a value inherited from
+ * Object.prototype. Same reason knownTreatment uses Object.hasOwn: a plain
+ * `TREATMENT_REASONS[key]` lookup answers `Object` for "constructor".
+ */
+function reasonForTreatment(treatment: string): string {
+  const key = treatment.toLowerCase();
+  return Object.hasOwn(TREATMENT_REASONS, key) ? TREATMENT_REASONS[key]! : "Other";
 }
 
 /** Free text bound for a Dentally note: single line and length capped, because
@@ -118,7 +132,15 @@ function safeNote(value: string): string {
  * re-checked here, because this endpoint is public and unauthenticated.
  * ------------------------------------------------------------------------- */
 
-/** The only titles this practice uses, and the only ones the booking page offers. */
+/**
+ * The only titles this practice uses, and the only ones the booking page offers.
+ *
+ * PROBE 2026-08-17 (GET /v1/patients, 800 real records: the 500 most recently
+ * created + the 300 oldest). Every one of these five appears in live data, and
+ * together they are 99.6% of it. The tail is `Dr` (2) and `Rev` (1), and both are
+ * DELIBERATELY absent here — see genderFromTitle for why adding them would be a
+ * clinical-data regression, not a courtesy.
+ */
 const TITLES = ["Mr", "Mrs", "Miss", "Ms", "Master"] as const;
 type Title = (typeof TITLES)[number];
 
@@ -135,8 +157,28 @@ function knownTitle(value: string | undefined): Title | undefined {
 
 /**
  * Dentally carries sex as a BOOLEAN on the patient record, true = male and
- * false = female (proven against 200 real records for this practice: Mr and
- * Master are true, Miss, Ms and Mrs are false), and it is required to register.
+ * false = female, and it is required to register.
+ *
+ * A DEFAULT DERIVED FROM THE TITLE, AND NOT A FACT ABOUT THE PATIENT. The earlier
+ * comment here claimed this was "proven against 200 real records"; the wider probe
+ * below disproves the word "proven", so it is gone.
+ *
+ * PROBE 2026-08-17 (GET /v1/patients, 800 real records for this practice):
+ *   Mr     -> true  227 / false 5      (232)
+ *   Master -> true   23 / false 0       (23)
+ *   Mrs    -> true    0 / false 58      (58)
+ *   Miss   -> true    0 / false 157    (157)
+ *   Ms     -> true    0 / false 172    (172)
+ * The female titles are exact. `Mr` is right 227 times in 232 and WRONG 5 times —
+ * about 2% — so this is a good starting value, not a derivation that cannot err.
+ * That is the honest basis for the decision below, and it is enough for one: the
+ * practice corrects the record in Dentally, and nothing clinical keys off it.
+ *
+ * `Dr` and `Rev` are excluded from TITLES for exactly this reason. Live data gives
+ * Dr -> true once and Dr -> false once, and Rev -> true once: those titles carry no
+ * sex signal at all, so admitting them would mean writing a coin-flip into a real
+ * patient record. If the practice ever asks for them, ASK the patient for sex on
+ * the form instead of extending this function.
  *
  * DELIBERATE DECISION, not an oversight: we derive it from the chosen title
  * rather than asking. This form is the end of a public marketing funnel, and
@@ -154,12 +196,47 @@ function genderFromTitle(title: Title): boolean {
  * How the patient asked to be seen, mapped to THIS practice's own Dentally
  * payment plan ids. Whitelisted like the title: an unrecognised value is refused
  * rather than passed through.
+ *
+ * PROBE 2026-08-17 (GET /v1/payment_plans, all 15 active plans): id 1 IS "NHS" and
+ * id 2 IS "Private", so the two ids below are confirmed against the live practice
+ * rather than assumed.
+ *
+ * WHAT THE PROBE ALSO SHOWS, and what we are deliberately not doing about it: the
+ * practice's third plan, "UDC" (id 47752), is 37% of its 500 most recent
+ * registrations — more than Private's 8%. The booking page offers NHS and Private
+ * only, so a walk-in urgent-care patient booking through the funnel is registered
+ * on one of those two. That is a FUNNEL COPY decision for the owner, not a silent
+ * code default: adding 47752 here without adding the option to the form would map
+ * nothing to it, and adding the option changes what patients are asked. Left as
+ * two until the owner chooses. See docs/runbooks/booking-live-calibration.md.
+ *
+ * NULL-PROTOTYPE, and that is load-bearing — see knownPaymentPlanId.
  */
-const FUNDING_PLAN_IDS: Record<string, number> = { nhs: 1, private: 2 };
+const FUNDING_PLAN_IDS: Record<string, number> = Object.assign(Object.create(null), {
+  nhs: 1,
+  private: 2,
+});
 
+/**
+ * THIS IS THE MOCK-VS-LIVE TRAP THE CALIBRATION EXISTS TO CATCH.
+ *
+ * The lookup used to be a bare index into an object literal, so every key on
+ * Object.prototype answered it: `funding: "constructor"` returned the Object
+ * constructor, which is not `undefined`, so it sailed through the caller's
+ * `=== undefined` guard and became `payment_plan_id: <function>` on the payload.
+ * JSON.stringify then DROPS a function value silently, so what left the building
+ * was a registration with no payment_plan at all — precisely the field live
+ * Dentally 422s on ("payment_plan: seems to be missing", DENTALLY.md), while the
+ * local mock accepted it happily. A public, unauthenticated caller could reach it
+ * with one word.
+ *
+ * Two independent belts now: the map has a null prototype, and the answer must be
+ * a number before it is returned. Either alone would fix it; both are cheap.
+ */
 function knownPaymentPlanId(value: string | undefined): number | undefined {
   if (!value) return undefined;
-  return FUNDING_PLAN_IDS[value.replace(/\s+/g, " ").trim().toLowerCase()];
+  const id = FUNDING_PLAN_IDS[value.replace(/\s+/g, " ").trim().toLowerCase()];
+  return typeof id === "number" ? id : undefined;
 }
 
 /**
@@ -204,7 +281,20 @@ export async function POST(request: Request): Promise<Response> {
 
     // (b) Owner kill switch. Availability stays viewable (GET route), but no
     // appointment is created while the system is off.
-    if (!(await isSystemEnabled(client.id, "online-booking"))) {
+    //
+    // STRICT, i.e. FAIL CLOSED — this route was reading the switch with the
+    // fail-OPEN isSystemEnabled, and that is the wrong direction for the only
+    // public endpoint that writes to a real patient record. isSystemEnabledStrict
+    // exists for precisely this case and says so in its own docstring: under the
+    // staged configuration the owner actually runs (real Dentally writes, simulated
+    // texts), a transient Supabase read error would re-arm a switch the owner had
+    // just turned off, and a stranger's booking would land in a real diary.
+    //
+    // The asymmetry with /api/booking/hold below is deliberate. A hold writes only
+    // to our own table and can be abandoned harmlessly, so it keeps the fail-open
+    // read; an appointment in a clinician's diary cannot be un-written by a retry.
+    // A refused booking self-heals the moment the switch reads cleanly again.
+    if (!(await isSystemEnabledStrict(client.id, "online-booking"))) {
       return bad(UNAVAILABLE, 503);
     }
 
@@ -377,7 +467,7 @@ export async function POST(request: Request): Promise<Response> {
           start_time: liveSlot.start,
           finish_time: liveSlot.finish,
           practitioner_id: liveSlot.practitionerId ?? "",
-          reason: treatment ? TREATMENT_REASONS[treatment.toLowerCase()] ?? "Other" : "Exam",
+          reason: treatment ? reasonForTreatment(treatment) : "Exam",
           notes: treatment
             ? `Booked online via Smile Assessment. Patient interest: ${safeNote(treatment)}`
             : "Booked online via Smile Assessment",

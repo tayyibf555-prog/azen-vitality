@@ -25,8 +25,19 @@ export function isDentallyWriteEnabled(): boolean {
   );
 }
 
-// The `reason` values real Dentally accepts on POST /v1/appointments (calibrated
-// against developer.dentally.co). Anything else is rejected with a 422.
+// The `reason` values real Dentally accepts on POST /v1/appointments.
+//
+// PROBE 2026-08-17 (GET /v1/appointment_reasons — the practice's OWN reason list,
+// 16 rows, none deleted). These seven are positions 1-7 of that list, spelled
+// exactly as below, ampersand and all: "Exam", "Scale & Polish", "Exam + Scale &
+// Polish", "Continuing Treatment", "Emergency", "Review", "Other". So this set is
+// confirmed against the live practice, not just against developer.dentally.co.
+//
+// The other nine are the practice's own additions ("NuSmile", "Air Flow Hygiene",
+// "UDC", and diary markers like "BANK HOLIDAY" and "DENTIST OFF "). They are
+// deliberately NOT here: a public funnel must not be able to file an appointment
+// under a diary-blocking marker, and the trailing spaces in some of those names
+// are exactly the sort of thing that turns into an unreproducible 422.
 const BOOKING_REASONS = new Set([
   "Exam",
   "Scale & Polish",
