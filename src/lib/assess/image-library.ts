@@ -164,8 +164,8 @@ export const ASSESS_IMAGES: readonly AssessImage[] = [
 
   // --- Screen pictures. ------------------------------------------------------
   // Two to start with, both already shipped and already signed off on a public
-  // landing page. The curated Higgsfield set lands in this same list later; the
-  // picker and the validator do not change when it does.
+  // landing page. The curated Higgsfield set lands in this same list below; the
+  // picker and the validator did not change when it did.
   {
     key: "screens/aligners",
     path: "/landing/invisalign/aligners.jpg",
@@ -183,6 +183,161 @@ export const ASSESS_IMAGES: readonly AssessImage[] = [
     height: 747,
     slot: "hero",
     group: "Practice",
+  },
+
+  // --- The curated library. --------------------------------------------------
+  // Fourteen commissioned pictures, ours to use, under /assess/library so they
+  // are assess-owned rather than borrowed off a landing page whose sign-off was
+  // for that page. WebP derivatives of the raw renders: 1280x720 for the screen
+  // pictures, 720x540 for the answer tiles and the lifestyle shots.
+  //
+  // APPENDED, NEVER INSERTED. flow-edit's "give this block a picture" default and
+  // two of its tests take assessImagesForSlot("hero")[0], so the manifest's head
+  // is load-bearing order. New entries go on the end.
+  //
+  // THE TILES ARE UNDER 14KB against the suite's 20KB ceiling, which is headroom
+  // on purpose: eight of them can land on one answer grid, on a phone, on a paid
+  // click. Quality was searched down to that budget per picture rather than set
+  // to one number, because a crown on woven cloth costs far more bits than a
+  // smile against a plain wall.
+  //
+  // THE ALT TEXT SAYS WHAT IS IN THE FRAME AND STOPS. No treatment named as a
+  // result, no "after", no adjective doing persuasion: an alt string is copy on a
+  // public ad-destination page and the sibling test scans it like copy.
+  {
+    key: "library/reception-morning",
+    path: "/assess/library/reception-morning.webp",
+    alt: "A practice reception area in morning light",
+    width: 1280,
+    height: 720,
+    slot: "hero",
+    group: "Practice",
+  },
+  {
+    key: "library/natural-smile",
+    path: "/assess/library/natural-smile.webp",
+    alt: "A woman smiling and looking out of a window",
+    width: 1280,
+    height: 720,
+    slot: "hero",
+    group: "People",
+  },
+  {
+    key: "library/aligner-light",
+    path: "/assess/library/aligner-light.webp",
+    alt: "A clear aligner held up to the light",
+    width: 1280,
+    height: 720,
+    slot: "hero",
+    group: "Treatment",
+  },
+  {
+    key: "library/aligner-case",
+    path: "/assess/library/aligner-case.webp",
+    alt: "A clear aligner in its storage case",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "Treatment",
+  },
+  {
+    key: "library/ceramic-crown",
+    path: "/assess/library/ceramic-crown.webp",
+    alt: "A ceramic crown resting on a folded cloth",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "Treatment",
+  },
+  {
+    key: "library/confident-smile",
+    path: "/assess/library/confident-smile.webp",
+    alt: "A close view of a woman smiling",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "People",
+  },
+  {
+    key: "library/shade-match",
+    path: "/assess/library/shade-match.webp",
+    alt: "A dentist holding a shade guide beside a patient's teeth",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "Treatment",
+  },
+  {
+    key: "library/whitening-guide",
+    path: "/assess/library/whitening-guide.webp",
+    alt: "A tooth shade guide on a worktop beside a mirror",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "Treatment",
+  },
+  {
+    key: "library/clean-tray",
+    path: "/assess/library/clean-tray.webp",
+    alt: "Dental instruments on a tray with a sprig of mint",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "Practice",
+  },
+  {
+    key: "library/front-desk-welcome",
+    path: "/assess/library/front-desk-welcome.webp",
+    alt: "A receptionist greeting a patient at the front desk",
+    width: 720,
+    height: 540,
+    slot: "answer",
+    group: "Practice",
+  },
+  // The lifestyle pictures below take the hero slot because that is the slot an
+  // image BLOCK draws in (flow-block-view's imageViewFor asks for "hero"), not
+  // because they are 1280 wide. They are not: they are tile-sized, and a screen
+  // that stretches one edge to edge is showing a 720px picture, which is the
+  // trade the size was chosen for.
+  {
+    key: "library/waiting-corner",
+    path: "/assess/library/waiting-corner.webp",
+    alt: "An armchair and side table in a waiting area",
+    width: 720,
+    height: 540,
+    slot: "hero",
+    group: "Practice",
+  },
+  {
+    key: "library/gentle-care",
+    path: "/assess/library/gentle-care.webp",
+    alt: "A clinician adjusting the overhead light above a treatment chair",
+    width: 720,
+    height: 540,
+    slot: "hero",
+    group: "Practice",
+  },
+  {
+    key: "library/stepping-out",
+    path: "/assess/library/stepping-out.webp",
+    alt: "A woman at the door of a dental practice on a high street",
+    width: 720,
+    height: 540,
+    slot: "hero",
+    group: "People",
+  },
+  // An abstract macro, so it is the one picture here with nobody in it and no
+  // procedure being done: the screen to reach for when the copy above it is
+  // doing the work and the picture should only set a tone. Same hero-slot,
+  // tile-sized trade as the three above it.
+  {
+    key: "library/aligner-detail",
+    path: "/assess/library/aligner-detail.webp",
+    alt: "A close view of a clear aligner resting on a soft surface",
+    width: 720,
+    height: 540,
+    slot: "hero",
+    group: "Treatment",
   },
 ];
 

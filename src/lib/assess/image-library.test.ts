@@ -216,3 +216,56 @@ describe("the default alt text is patient-facing copy and is held to it", () => 
     }
   });
 });
+
+// THE COMMISSIONED SET, BY NAME.
+//
+// Everything above holds the manifest to a rule and would stay green if all
+// fourteen of these entries were deleted tomorrow: the file-exists test iterates
+// what IS listed, the slot-coverage test only wants one of each. So a picture
+// silently dropped from the picker, or quietly reassigned from an answer tile to
+// a hero, is a change no other test in this file can see.
+//
+// This one names them. The keys are the stored value in owner-authored jsonb, so
+// they are frozen the moment a funnel references one; the slot is what rule 13
+// enforces at write time, and flipping it orphans every funnel that used the key
+// in the other position. Both belong in a list somebody has to edit on purpose.
+describe("the curated library ships all fourteen pictures, in the slot each was cut for", () => {
+  const LIBRARY: readonly (readonly [string, "hero" | "answer"])[] = [
+    // Screen pictures, 1280x720.
+    ["library/reception-morning", "hero"],
+    ["library/natural-smile", "hero"],
+    ["library/aligner-light", "hero"],
+    // Answer tiles, 720x540, one per option of the "what brings you in" question.
+    ["library/aligner-case", "answer"],
+    ["library/ceramic-crown", "answer"],
+    ["library/confident-smile", "answer"],
+    ["library/shade-match", "answer"],
+    ["library/whitening-guide", "answer"],
+    ["library/clean-tray", "answer"],
+    ["library/front-desk-welcome", "answer"],
+    // Lifestyle, 720x540, drawn by an image block, which asks for the hero slot.
+    ["library/waiting-corner", "hero"],
+    ["library/gentle-care", "hero"],
+    ["library/stepping-out", "hero"],
+    ["library/aligner-detail", "hero"],
+  ];
+
+  it.each(LIBRARY)("%s resolves and is fit for the %s slot", (key, slot) => {
+    expect(isAssessImageKey(key), key).toBe(true);
+    expect(assessImageFitsSlot(key, slot), key).toBe(true);
+    expect(assessImagePath(key)).toBe(`/assess/${key}.webp`);
+  });
+
+  it("keeps them assess-owned, so no landing page's sign-off is being borrowed", () => {
+    for (const [key] of LIBRARY) {
+      expect(assessImage(key)?.path, key).toMatch(/^\/assess\/library\//);
+    }
+  });
+
+  // MUTATION: prepend one of these to ASSESS_IMAGES instead of appending and this
+  // goes red. flow-edit's setBlockImage default is assessImagesForSlot("hero")[0],
+  // so the head of the manifest is the picture every new image block starts as.
+  it("leaves the head of the hero list where flow-edit's default already points", () => {
+    expect(assessImagesForSlot("hero")[0]?.key).toBe("screens/aligners");
+  });
+});
