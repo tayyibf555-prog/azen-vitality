@@ -6,7 +6,7 @@ import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-reposit
 import { toPublicCampaign, toPublicFlow, type PublicFlow } from "@/lib/smile-assessment/campaign";
 import { normaliseAndValidateFlow, describeFlowFailures } from "@/lib/smile-assessment/flow-validate";
 import { isSystemEnabled } from "@/lib/systems/repository";
-import { getClient } from "@/lib/mock/clients";
+import { getClient, getSite } from "@/lib/mock/clients";
 import { paletteVars, paletteVarsFrom } from "@/lib/assess/palette";
 import { resolveCustomTheme } from "@/lib/assess/custom-theme-repository";
 import { resolveMetaPixel } from "@/lib/assess/meta-pixel-repository";
@@ -206,6 +206,26 @@ export default async function CampaignAssessmentPage({
   const themeVars = custom ? paletteVarsFrom(custom.vars) : paletteVars(pub.theme);
   const metaPixelId = previewMode ? null : publicMetaPixelId(metaPixel);
 
+  // ---------------------------------------------------------------------------
+  // ...AND SINCE C1 THE RESULT SCREEN MAY EMBED THE PRACTICE'S BOOKING CALENDAR.
+  //
+  // THE SITE IS RESOLVED HERE, FROM THE CAMPAIGN, AND NOWHERE ELSE. This campaign
+  // runs at one practice; a patient who finishes this funnel must be offered THAT
+  // diary. The public /book page is allowed to fall back to the client's first site
+  // for an unknown ?site= because it is only labelling a page — an embedded
+  // calendar doing the same thing would take a lead the practice paid for and book
+  // it into another building.
+  //
+  // IT IS NOT A PERMISSION AND IT IS NOT THE KILL SWITCH. Passing a site says only
+  // "this is which diary, if a calendar is ever mounted". Whether one may be is
+  // decided by /api/smile-assessment/submit, which mints `bookingUrl` only while
+  // the owner's `online-booking` system is on — so this page still makes exactly
+  // ONE isSystemEnabled call, the smile-assessment one at the top, and the booking
+  // switch is never read in the browser. bookingEmbed then refuses to mount
+  // anything unless the site below is the one that came back in that URL.
+  const campaignSite = getSite(campaign.siteId);
+  // ---------------------------------------------------------------------------
+
   return (
     <div className="min-h-screen w-full bg-cream" style={themeVars as CSSProperties}>
       <AssessmentQuiz
@@ -223,6 +243,10 @@ export default async function CampaignAssessmentPage({
         // different saves. Absent flow means no deterministic runtime and no
         // beacon, so this is inert on every adaptive session.
         flowVersion={campaign.flowVersion}
+        // The campaign's own site, for the embedded booking calendar (C1). Null
+        // when the campaign names a site this build does not know, which is the
+        // honest answer: no embedded calendar, and the plain /book link instead.
+        bookingSite={campaignSite ? { id: campaignSite.id, name: campaignSite.name } : null}
       />
       <MetaPixel pixelId={metaPixelId} />
     </div>

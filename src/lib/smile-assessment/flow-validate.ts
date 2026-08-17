@@ -43,11 +43,14 @@ import { MAX_QUESTIONS } from "./funnel";
 import {
   FLOW_BANDS,
   FLOW_BLOCK_KINDS,
+  FLOW_BLOCK_KIND_SCREENS,
   FLOW_LIMITS,
   FLOW_SCHEMA_VERSION_BLOCKS,
   SUPPORTED_FLOW_SCHEMA_VERSIONS,
+  acceptsBlockKind,
   acceptsBlocks,
   blockCopyFields,
+  blockKindsForScreen,
   blocksOf,
   flowUsesV2Content,
   isFlowBand,
@@ -58,6 +61,7 @@ import {
   type FlowEdge,
   type FlowGraph,
   type FlowNode,
+  type FlowNodeKind,
 } from "./flow";
 import { assessImage, type AssessImageSlot } from "@/lib/assess/image-library";
 
@@ -119,6 +123,19 @@ interface NodeFacts {
 type Fail = (rule: number, code: string, where: string, message: string) => void;
 
 /**
+ * What an OWNER calls each screen. "outcome" and "welcome" are the model's words;
+ * the builder, the drop-off chart and every message in here say "result" and
+ * "opening", and a rule that told them to move a block to the "outcome screen"
+ * would be naming a screen they cannot find.
+ */
+const SCREEN_NAME: Readonly<Record<FlowNodeKind, string>> = {
+  welcome: "opening",
+  question: "question",
+  contact: "contact",
+  outcome: "result",
+};
+
+/**
  * RULE 12 - content blocks: where they may sit, how many, and what each kind must
  * carry. RULE 13's image half rides along for block pictures, because it is the
  * same walk.
@@ -128,6 +145,12 @@ type Fail = (rule: number, code: string, where: string, message: string) => void
  * check exists for the third path: a graph assembled in memory (the builder, the
  * generator, a future importer) and handed straight to validateFlow. It reads the
  * property off the raw object for that reason.
+ *
+ * PLACEMENT IS TWO QUESTIONS, NOT ONE (C1). "Does this screen take blocks at all"
+ * is acceptsBlocks, below. "Does it take THIS kind" is acceptsBlockKind, and it is
+ * a different answer for exactly one kind: a `booking` invitation is legal on a
+ * result screen and on no other. Neither check is the type system's job, because
+ * FlowBlock says nothing about which node it hangs off.
  */
 function checkBlocks(node: FlowNode, fail: Fail): void {
   const raw = (node as { blocks?: unknown }).blocks;
@@ -167,6 +190,31 @@ function checkBlocks(node: FlowNode, fail: Fail): void {
         `"${String(b.kind)}" is not a content block this build can render (${FLOW_BLOCK_KINDS.join(", ")})`,
       );
       return;
+    }
+    // C1's clause. A kind may be legal on SOME screen without being legal on
+    // THIS one: `booking` belongs on a result and nowhere else, because on the
+    // welcome screen it is a button inviting the visitor to skip the funnel the
+    // practice paid for the click on (flow.ts, FLOW_BLOCK_KIND_SCREENS).
+    //
+    // SEPARATE FROM blocks_wrong_screen above, which is about a screen that takes
+    // no blocks at all. This one is about a screen that takes blocks but not this
+    // one, and the remedy is different: move the block, do not move the section.
+    if (!acceptsBlockKind(node.kind, b.kind)) {
+      const allowed = blockKindsForScreen(node.kind);
+      const homes = (FLOW_BLOCK_KIND_SCREENS[b.kind] ?? []).map((k) => SCREEN_NAME[k]);
+      fail(
+        12,
+        "block_kind_wrong_screen",
+        where,
+        `a ${b.kind} block belongs on the ${
+          homes.length > 0 ? homes.join(" or ") : "no"
+        } screen; the ${SCREEN_NAME[node.kind]} screen takes ${
+          allowed.length > 0 ? allowed.join(", ") : "no blocks"
+        }`,
+      );
+      // NO early return, unlike the unknown-kind branch above: the kind is one
+      // this build renders, so its lines can still be checked, and an owner who
+      // moves the block should not then discover its copy is too long.
     }
     if (kindsSeen.has(b.kind)) {
       // Each kind is a SECTION of the screen. Two trust strips or two faqs is an

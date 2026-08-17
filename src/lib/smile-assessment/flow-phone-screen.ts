@@ -86,7 +86,17 @@ export type PhoneBlock =
   /** "3 questions answered". */
   | { kind: "faq"; line: string }
   /** What the picture shows, for the stand-in's caption. */
-  | { kind: "image"; alt: string };
+  | { kind: "image"; alt: string }
+  /**
+   * The booking invitation (C1). Both authored strings travel verbatim, because
+   * the headline IS the words on the button and the blurb IS the line under it -
+   * the two things an owner opens the preview to read back. What the mini CANNOT
+   * draw is the calendar itself: it is a screen of live practice availability
+   * behind the button, and the strip renders ten minis at once. So the drawing is
+   * the button and a stand-in row of times, the same way a picture block is drawn
+   * as a plate and the contact form as faux fields.
+   */
+  | { kind: "booking"; headline: string; blurb: string };
 
 /** One input on the contact screen. `type` is the real input type it renders. */
 export interface PhoneField {
@@ -297,6 +307,8 @@ export function phoneBlocks(node: FlowNode): PhoneBlock[] {
         };
       case "image":
         return { kind: "image", alt: b.image.alt };
+      case "booking":
+        return { kind: "booking", headline: b.headline, blurb: b.blurb };
     }
   });
 }

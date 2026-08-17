@@ -922,6 +922,11 @@ const BLOCK_FIELD_LABELS: Readonly<Record<string, string>> = {
   quote: "The quote, in their words",
   attribution: "Who gave it",
   alt: "What the picture shows",
+  // C1's booking block. Named for what each string DOES on the patient's screen,
+  // because they are one control apart and "headline"/"blurb" would not say which
+  // is the button.
+  headline: "The words on the button",
+  blurb: "The line under it",
 };
 
 function blockFieldLabel(field: string): string {
@@ -1069,6 +1074,14 @@ function BlockCard({
         </p>
       ) : null}
 
+      {block.kind === "booking" ? (
+        <p className={helpClass}>
+          A button on this result screen that opens the practice&apos;s own booking calendar without
+          leaving the funnel, showing live times from the diary. It only appears for patients if
+          online booking is switched on for this practice, and it is disabled in this preview.
+        </p>
+      ) : null}
+
       {block.kind === "image" ? (
         <ImagePicker
           nodeId={nodeId}
@@ -1091,7 +1104,11 @@ function BlockCard({
             field={field.field}
             text={field.text}
             max={field.max}
-            long={field.field === "quote" || /^items\[\d+\]\.a$/.test(field.field)}
+            long={
+              field.field === "quote" ||
+              field.field === "blurb" ||
+              /^items\[\d+\]\.a$/.test(field.field)
+            }
             removable={/^chips\[\d+\]$/.test(field.field) || /^items\[\d+\]\.q$/.test(field.field)}
             issues={issues}
             onEdit={onEdit}

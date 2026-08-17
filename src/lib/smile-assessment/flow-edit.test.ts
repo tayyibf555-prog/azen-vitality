@@ -4,6 +4,7 @@ import {
   FLOW_BLOCK_KINDS,
   FLOW_LIMITS,
   blockCopyFields,
+  blockKindsForScreen,
   normaliseFlow,
   type FlowBlock,
   type FlowEdge,
@@ -1034,7 +1035,11 @@ describe("adding a content block", () => {
 
   it("stops offering kinds once the screen is full", () => {
     let g = invisalign();
-    for (const kind of FLOW_BLOCK_KINDS) {
+    // The kinds the OPENING screen may carry, which since C1 is not every kind
+    // there is: `booking` belongs on a result screen and addBlock refuses it here.
+    // Reading the same list the picker reads keeps this about the CAP rather than
+    // about placement, which is the test two below.
+    for (const kind of blockKindsForScreen("welcome")) {
       const block =
         kind === "testimonial"
           ? ({ kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." } as FlowBlock)

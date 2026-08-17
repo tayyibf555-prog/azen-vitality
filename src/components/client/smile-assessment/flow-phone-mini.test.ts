@@ -706,6 +706,56 @@ describe("the furniture on a screen is drawn as what fits", () => {
   });
 });
 
+describe("a booking invitation is drawn as the button and what opens behind it", () => {
+  const BOOKING = {
+    kind: "booking" as const,
+    headline: "Book your appointment now",
+    blurb: "Pick a time that suits you and we will hold it for you.",
+  };
+
+  function bookable(): FlowGraph {
+    const g = funnel();
+    g.nodes[4] = { id: "hot", kind: "outcome", band: "high", headline: "You are a great fit", blocks: [BOOKING] };
+    return g;
+  }
+
+  const outcome = render(screenOf(bookable(), "hot"));
+
+  // MUTATION: summarise it ("a booking button") and the two things the owner
+  // opened the preview to read back - the words on the button and the line under
+  // it - are the two things the preview does not show.
+  it("prints both authored lines verbatim", () => {
+    expect(outcome).toContain(esc(BOOKING.headline));
+    expect(outcome).toContain(esc(BOOKING.blurb));
+  });
+
+  // MUTATION: print plausible times ("9:00 9:30 10:00") and the preview invents
+  // appointments out of a diary it has not read, on the screen an owner is using
+  // to decide what to publish.
+  it("stands in for the calendar without inventing a single time", () => {
+    expect(outcome).not.toMatch(/\b\d{1,2}:\d{2}\b/);
+    // The plate row, drawn the same way the contact form's inputs are.
+    expect(outcome).toContain("h-2.5 flex-1 rounded-sm border border-line bg-card-muted");
+  });
+
+  // MUTATION: draw it as a <button> and the strip stops being a picture: ten
+  // minis on one canvas become ten tab stops that open ten real calendars.
+  it("stays a picture: nothing here is a control", () => {
+    expect(outcome).not.toContain("<button");
+    expect(outcome).not.toContain("<a ");
+    // It IS the primary button on the real screen, so it wears the primary
+    // button's own fill rather than a block's flat card.
+    expect(outcome).toContain("bg-blue-royal");
+  });
+
+  it("draws nothing at all on a result screen with no booking block", () => {
+    // Vacuity guard, and the promise every funnel drawn before C1 relies on.
+    const plain = render(screenOf(funnel(), "hot"));
+    expect(plain).not.toContain(esc(BOOKING.headline));
+    expect(plain).not.toContain("border-t border-line pt-1.5");
+  });
+});
+
 describe("an answer with a picture is drawn with it", () => {
   const bank = questionById("timeline")!;
   const KEYS = ["conditions/crowded", "conditions/gaps", "conditions/overbite", "conditions/underbite"];

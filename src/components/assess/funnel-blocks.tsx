@@ -125,5 +125,16 @@ function Block({ block }: { block: BlockView }) {
           />
         </span>
       );
+
+    case "booking":
+      // NOT DRAWN HERE, and the empty case is the point rather than an oversight.
+      // A booking invitation is a button and a whole screen of live practice
+      // availability behind it; the runtime mounts it as a PHASE, on demand, and
+      // never through this `.map()` (deterministic-assessment-quiz.tsx). The
+      // renderer is handed inlineBlockViews, which has already left it out, so
+      // this branch is unreachable from the funnel - it is here so that a future
+      // caller passing raw blockViews draws nothing rather than crashing, and so
+      // the switch stays exhaustive over BlockView.
+      return null;
   }
 }

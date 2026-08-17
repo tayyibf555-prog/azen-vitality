@@ -255,8 +255,13 @@ describe("the result step's furniture is wired to the band the patient got", () 
   it("resolves the blocks from the same node as the headline", () => {
     expect(QUIZ_SOURCE).toMatch(/const outcome = result \? outcomeNodeFor\(flow\.graph, result\.band\) : null;/);
     expect(QUIZ_SOURCE).toMatch(/const outcomeHeadline = outcome\?\.headline \?\? null;/);
-    expect(QUIZ_SOURCE).toMatch(/const outcomeBlocks = outcome \? blockViews\(outcome\) : \[\];/);
-    expect(QUIZ_SOURCE).toContain("outcomeHeadline={outcomeHeadline} blocks={outcomeBlocks}");
+    // inlineBlockViews since C1, NOT blockViews: the booking block is authored in
+    // the same list but is not a section of this screen, it is the button to the
+    // next one. Everything else about the wiring is unchanged, and the two calls
+    // return the same list for every funnel that has no booking block.
+    expect(QUIZ_SOURCE).toMatch(/const outcomeBlocks = outcome \? inlineBlockViews\(outcome\) : \[\];/);
+    expect(QUIZ_SOURCE).toContain("outcomeHeadline={outcomeHeadline}");
+    expect(QUIZ_SOURCE).toContain("blocks={outcomeBlocks}");
   });
 
   it("draws an outcome step's own blocks", () => {

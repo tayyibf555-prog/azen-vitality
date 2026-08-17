@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Loader2,
+  CalendarDays,
   CheckCircle2,
   ArrowLeft,
   ChevronRight,
@@ -11,15 +12,23 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BookingCalendar } from "@/components/book/booking-calendar";
 import { FIRST_QUESTION_ID, questionById } from "@/lib/smile-assessment/quiz";
 import { resultCopy } from "@/lib/smile-assessment/result-copy";
 import { outcomeNodeFor, walkFlow, welcomeNode } from "@/lib/smile-assessment/flow-runtime";
 import {
   blockViews,
+  bookingBlockView,
+  inlineBlockViews,
   optionImageViews,
   type BlockView,
   type ImageView,
 } from "@/lib/smile-assessment/flow-block-view";
+import {
+  bookingEmbed,
+  type BookingEmbed,
+  type BookingEmbedTarget,
+} from "@/lib/smile-assessment/booking-embed";
 import type { PublicFlow } from "@/lib/smile-assessment/campaign";
 import { stepNumbering, stepIndexOf } from "@/lib/smile-assessment/step-numbering";
 import { createStepBeacon, type StepBeacon } from "@/lib/smile-assessment/step-beacon";
@@ -57,8 +66,60 @@ import { iconFor } from "./option-icons";
 // arrives already stripped to { id, prompt, options: [{ value, label }] } by
 // toPublicFlow (campaign.ts).
 
+// C1 - BOOKING WITHOUT LEAVING THE PAGE.
+//
+// The result screen has always been able to offer a link to /book. When the funnel
+// carries a `booking` block (flow.ts) and everything below lines up, that link
+// becomes a FOURTH PHASE instead: the same public <BookingCalendar> the /book page
+// mounts, in place, reading live practice availability.
+//
+// WHOLESALE REUSE, LITERALLY. The calendar is imported and handed its three
+// existing props. Nothing about holds, confirms, Dentally, the write gate or the
+// patient-create fields is re-implemented or wrapped here, so every guard on
+// /api/booking/hold and /api/booking/create applies to this surface unchanged and
+// cannot drift from the /book page's.
+//
+// MOUNTED ON DEMAND, NEVER ON ARRIVAL. <BookingCalendar> fetches availability in a
+// mount effect. Rendering it on the thank-you screen would put a Dentally
+// availability read behind EVERY completed assessment, whether or not the patient
+// wanted a time - so it is mounted by the click, not by the result.
+//
+// THE COST OF THE STATIC IMPORT, said out loud because it is a real trade. The
+// calendar's code ships in the /assess bundle for every campaign, including the
+// ones with no booking block. It is bought with a plain conditional render rather
+// than next/dynamic: laziness of the DENTALLY READ is what the risk register asks
+// for, this build has no other dynamic import to follow, and a loading boundary
+// between a patient's click and a calendar is a worse screen than a few KB.
+//
+// AND IT IS UNREACHABLE IN PREVIEW. See bookingEmbed: an owner clicking through
+// their own funnel in the builder's iframe must not be able to hold a slot or
+// write a real appointment into a real diary.
+//
+// THE TWO FUNNEL TRACKERS, AND WHY THEY STAY TWO. Once the calendar mounts, this
+// page has two createFunnelTracker instances live: this component's
+// ({surface:"assessment"}) and the calendar's own ({surface:"booking"}), each with
+// its own session id. That was considered and kept, rather than threading one
+// tracker into <BookingCalendar>:
+//
+//   NOTHING REGRESSES. Today a patient who follows the link to /book starts a
+//   fresh booking session there too, so the two halves are already unjoinable at
+//   session level. Reusing the module changes nothing about that either way.
+//
+//   THE TWO REPORTS KEEP MEANING WHAT THEY MEAN. funnelSummary(surface:"booking")
+//   answers "of everyone who reached a calendar, how many booked", and that
+//   question does not care which door they came in by; merging the embedded
+//   sessions into it is the CORRECT arithmetic, not pollution.
+//   funnelSummary(surface:"assessment") answers "of everyone who started the quiz,
+//   how many finished", and is untouched.
+//
+//   THE JOIN THAT WAS ACTUALLY MISSING IS CHEAPER THAN A SHARED SESSION. The
+//   number a practice wants is "how many completers wanted a time", and that is a
+//   step on THIS funnel, not on the booking one - so openBooking() records
+//   "booking_opened" on the assessment tracker, campaign-attributed like every
+//   other step it emits. Zero lines changed in the booking module.
+
 type Channel = "sms" | "email" | "whatsapp";
-type Phase = "question" | "contact" | "thanks";
+type Phase = "question" | "contact" | "thanks" | "booking";
 /** "flow" walks the authored funnel; "adaptive" is the degraded fallback above. */
 type Mode = "flow" | "adaptive";
 
@@ -129,6 +190,22 @@ interface Props {
    * exactly as ClassicAssessmentQuiz honours it (assessment-quiz.tsx:89-96, 320).
    */
   previewMode?: boolean;
+  /**
+   * THE CAMPAIGN'S OWN SITE (C1), resolved on the server from `campaign.siteId`
+   * and passed down, for the embedded booking calendar only.
+   *
+   * EXPLICIT, BECAUSE THE ALTERNATIVE BOOKS THE WRONG DIARY. The public /book page
+   * falls back to the practice's FIRST site when it cannot resolve `?site=`
+   * (book/[client]/page.tsx) - harmless there, because that page is only ever
+   * DISPLAYING a name and the booking APIs re-validate the id. Here the patient
+   * came through a campaign that runs at one specific practice, and a fallback
+   * would offer them times in another town. bookingEmbed refuses to mount anything
+   * unless this site is the one the server put in `bookingUrl`.
+   *
+   * Absent means no embedded calendar and the plain link instead - which is what
+   * every surface that does not supply it gets, and what every funnel got before C1.
+   */
+  bookingSite?: { id: string; name: string } | null;
 }
 
 /**
@@ -176,6 +253,7 @@ export function DeterministicAssessmentQuiz({
   flow,
   flowVersion,
   previewMode,
+  bookingSite,
 }: Props) {
   // The question wording, by id. Built once: the funnel only ever asks questions
   // that are in here, because toPublicFlow refuses to build a payload otherwise.
@@ -331,9 +409,16 @@ export function DeterministicAssessmentQuiz({
       return;
     }
 
-    // "thanks": the result screen, which every band shares. FLUSHED here rather
-    // than left to the debounce — the last screen a session saw is the one the
-    // whole chart is about, and this is the moment we know there will be no more.
+    // "thanks", and "booking" with it. The result screen is the last STEP of the
+    // authored funnel; the booking screen is not a step at all - it is a block on
+    // the result screen (flow.ts), it adds no node, and step-numbering.ts is over
+    // nodes. So a session that goes on to book is still a session that reached the
+    // result, and the chart says exactly what it said before C1. What booking adds
+    // is a funnel-tracker event ("booking_opened"), not a step ordinal.
+    //
+    // FLUSHED here rather than left to the debounce — the last screen a session saw
+    // is the one the whole chart is about, and this is the moment we know there
+    // will be no more. The beacon de-duplicates, so arriving twice costs nothing.
     if (numbering.outcomeStep !== null) beacon.view(numbering.outcomeStep);
     beacon.flush();
   }, [phase, current, mode, numbering, beacon]);
@@ -537,7 +622,33 @@ export function DeterministicAssessmentQuiz({
   // The result step's own furniture, for the band this patient actually got. Read
   // off the SAME node the headline came from, so a practice cannot end up with the
   // hot screen's headline above the cold screen's reassurance.
-  const outcomeBlocks = outcome ? blockViews(outcome) : [];
+  //
+  // INLINE furniture only: the booking invitation is on the same list but is not a
+  // section of this screen, it is the button to the next one (flow-block-view.ts).
+  const outcomeBlocks = outcome ? inlineBlockViews(outcome) : [];
+
+  // WHETHER THIS PATIENT MAY BOOK IN PLACE, decided in one pure call rather than as
+  // a chain of `&&` in the JSX below - it is the gate on a real write into a real
+  // practice diary, and vitest cannot read a rule that lives inside a render.
+  // Every refusal, including preview mode's, is booking-embed.ts's.
+  const booking: BookingEmbed = bookingEmbed({
+    bookingUrl: result?.bookingUrl,
+    block: outcome ? bookingBlockView(outcome) : null,
+    site: bookingSite ?? null,
+    previewMode,
+  });
+  // The ONLY way into the fourth phase. Guarded here as well as by the button's
+  // own disabled state: the status object is what <BookingCalendar> is built from,
+  // so a phase reached any other way has nothing to mount.
+  function openBooking() {
+    if (booking.status !== "ready") return;
+    // THE HANDOFF, recorded on the ASSESSMENT surface (see the tracker note in the
+    // header): this is the assessment's own last step, and it is the one number
+    // that says how many completers wanted a time.
+    tracker.track("booking_opened");
+    setPhase("booking");
+    setAnimKey((k) => k + 1);
+  }
 
   const name = practiceName?.trim() || "Smile Assessment";
 
@@ -563,58 +674,83 @@ export function DeterministicAssessmentQuiz({
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-[1.25rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
-        <div className="h-1 w-full bg-card-muted" aria-hidden>
-          <div
-            className={[
-              "h-full rounded-r-full bg-blue-dark transition-[width] duration-300 ease-out",
-              thinking ? "motion-safe:animate-pulse" : "",
-            ].join(" ")}
-            style={{ width: `${progress}%` }}
-          />
-        </div>
+      {/* THE BOOKING PHASE REPLACES THE CARD, it does not sit inside it. The
+          calendar brings its own card (booking-calendar.tsx), and a card inside a
+          card is two borders and two shadows around one thing. The header above
+          and the GDC line below stay: the patient is still in the same funnel. */}
+      {phase === "booking" && booking.status === "ready" ? (
+        <BookingStep
+          animKey={animKey}
+          clientSlug={clientSlug}
+          booking={booking}
+          onBack={() => {
+            setPhase("thanks");
+            setAnimKey((k) => k + 1);
+          }}
+        />
+      ) : (
+        <div className="overflow-hidden rounded-[1.25rem] border border-line bg-card shadow-[0_8px_40px_rgba(10,14,26,0.08)]">
+          <div className="h-1 w-full bg-card-muted" aria-hidden>
+            <div
+              className={[
+                "h-full rounded-r-full bg-blue-dark transition-[width] duration-300 ease-out",
+                thinking ? "motion-safe:animate-pulse" : "",
+              ].join(" ")}
+              style={{ width: `${progress}%` }}
+            />
+          </div>
 
-        <div className="p-5 sm:p-6">
-          {phase === "thanks" && result ? (
-            <ThankYou result={result} outcomeHeadline={outcomeHeadline} blocks={outcomeBlocks} />
-          ) : phase === "contact" ? (
-            <ContactStep
-              animKey={animKey}
-              firstName={firstName}
-              setFirstName={setFirstName}
-              channel={channel}
-              setChannel={setChannel}
-              phone={phone}
-              setPhone={setPhone}
-              email={email}
-              setEmail={setEmail}
-              canSubmit={canSubmit}
-              busy={busy}
-              error={error}
-              previewMode={previewMode}
-              onSubmit={submit}
-              onBack={backFromContact}
-            />
-          ) : (
-            <QuestionStep
-              animKey={animKey}
-              step={step}
-              question={current.question}
-              transition={current.transition}
-              images={current.images}
-              blocks={welcomeBlocks}
-              headline={heroHeadline}
-              intro={heroIntro}
-              answers={answers}
-              pendingValue={pendingValue}
-              thinking={thinking}
-              canGoBack={history.length > 1}
-              onChoose={choose}
-              onBack={back}
-            />
-          )}
+          <div className="p-5 sm:p-6">
+            {/* "booking" reaches here only when the embed refused to be ready -
+                the result screen is then what it always was, plain link and all,
+                rather than a phase with nothing in it. */}
+            {(phase === "thanks" || phase === "booking") && result ? (
+              <ThankYou
+                result={result}
+                outcomeHeadline={outcomeHeadline}
+                blocks={outcomeBlocks}
+                booking={booking}
+                onBook={openBooking}
+              />
+            ) : phase === "contact" ? (
+              <ContactStep
+                animKey={animKey}
+                firstName={firstName}
+                setFirstName={setFirstName}
+                channel={channel}
+                setChannel={setChannel}
+                phone={phone}
+                setPhone={setPhone}
+                email={email}
+                setEmail={setEmail}
+                canSubmit={canSubmit}
+                busy={busy}
+                error={error}
+                previewMode={previewMode}
+                onSubmit={submit}
+                onBack={backFromContact}
+              />
+            ) : (
+              <QuestionStep
+                animKey={animKey}
+                step={step}
+                question={current.question}
+                transition={current.transition}
+                images={current.images}
+                blocks={welcomeBlocks}
+                headline={heroHeadline}
+                intro={heroIntro}
+                answers={answers}
+                pendingValue={pendingValue}
+                thinking={thinking}
+                canGoBack={history.length > 1}
+                onChoose={choose}
+                onBack={back}
+              />
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* GDC/ASA-safe trust + the required suitability line. Never testimonials. */}
       <p className="mt-3 px-2 text-center text-[0.65rem] leading-relaxed text-ink">
@@ -1064,11 +1200,20 @@ function ThankYou({
   result,
   outcomeHeadline,
   blocks,
+  booking,
+  onBook,
 }: {
   result: SubmitResult;
   outcomeHeadline: string | null;
   /** This band's result step's furniture. Empty for a funnel that has none. */
   blocks: readonly BlockView[];
+  /**
+   * Whether this screen may offer a booking calendar IN PLACE, and with what
+   * words. "off" keeps the plain link this screen has always had - which is what
+   * every funnel drawn before C1 gets, byte for byte.
+   */
+  booking: BookingEmbed;
+  onBook: () => void;
 }) {
   return (
     <div className="flex flex-col items-center gap-3 py-4 text-center motion-safe:[animation:assessEnter_240ms_ease-out]">
@@ -1079,7 +1224,32 @@ function ThankYou({
       <p className="max-w-sm text-sm text-muted">
         {resultCopy(result.band, result.leadCreated, Boolean(result.bookingUrl))}
       </p>
-      {result.bookingUrl ? (
+      {/* THREE SHAPES OF THE SAME OFFER, and the middle one is the one that
+          matters. "ready" opens the calendar here, without leaving the page.
+          "preview" draws the owner exactly what a patient would see and refuses
+          to do it, so a click-through of their own funnel cannot hold a slot or
+          write an appointment into a real diary. Anything else falls back to the
+          link this screen has always carried. */}
+      {booking.status === "ready" ? (
+        <div className="w-full">
+          <Button type="button" variant="primary" className="w-full sm:w-auto" onClick={onBook}>
+            <CalendarDays size={16} />
+            {booking.headline}
+          </Button>
+          <p className="mt-1.5 text-[0.75rem] leading-snug text-muted">{booking.blurb}</p>
+        </div>
+      ) : booking.status === "preview" ? (
+        <div className="w-full">
+          <Button type="button" variant="primary" className="w-full sm:w-auto" disabled>
+            <CalendarDays size={16} />
+            {booking.headline}
+          </Button>
+          <p className="mt-1.5 text-[0.75rem] leading-snug text-muted">{booking.blurb}</p>
+          <p className="mt-1 text-[0.7rem] font-semibold leading-snug text-blue-deep">
+            Preview mode. Booking is disabled here.
+          </p>
+        </div>
+      ) : result.bookingUrl ? (
         <Button asChild variant="primary" className="w-full sm:w-auto">
           <a href={result.bookingUrl}>Book your appointment now</a>
         </Button>
@@ -1090,6 +1260,79 @@ function ThankYou({
           about. Left-aligned inside a centred column, because a wrapped FAQ answer
           set centre-ragged is unreadable. */}
       <FunnelBlocks blocks={blocks} className="w-full text-left" />
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Booking screen (C1)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * THE FOURTH PHASE: the practice's own public booking calendar, in the funnel.
+ *
+ * IT HOLDS NO RULE AND NO STATE. The site was decided by bookingEmbed, the words
+ * were authored by the practice, and everything the calendar does - availability,
+ * the hold, the confirm, the Dentally write and every gate on it - is
+ * <BookingCalendar>'s, unchanged from /book. This component is a heading, a Back
+ * link and a mount point.
+ *
+ * IT CAN ONLY BE BUILT FROM A "ready" TARGET. That is the preview gate made
+ * structural rather than remembered: there is no prop here to pass a headline
+ * without a site, so a caller holding a "preview" or "off" status has nothing to
+ * render this with.
+ */
+function BookingStep({
+  animKey,
+  clientSlug,
+  booking,
+  onBack,
+}: {
+  animKey: number;
+  clientSlug: string;
+  booking: BookingEmbedTarget;
+  onBack: () => void;
+}) {
+  // The screen changed under the patient, so the reading position has to move with
+  // it - exactly as QuestionStep and ContactStep do it. Without this, a screen
+  // reader is still on the result screen's button while a calendar has replaced
+  // the page, which is the version of this feature that is unusable rather than
+  // merely awkward.
+  const regionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    regionRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      key={animKey}
+      ref={regionRef}
+      tabIndex={-1}
+      className="outline-none motion-safe:[animation:assessEnter_240ms_ease-out]"
+    >
+      <button
+        type="button"
+        onClick={onBack}
+        className="-mx-2 mb-2 inline-flex min-h-11 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-muted transition-colors hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+      >
+        <ArrowLeft size={14} />
+        Back to my result
+      </button>
+
+      <div className="mb-3 text-center">
+        <h1 className="text-lg font-bold leading-snug text-navy [text-wrap:balance] sm:text-xl">
+          {booking.headline}
+        </h1>
+        <p className="mt-1 text-[0.8rem] leading-snug text-muted">{booking.blurb}</p>
+      </div>
+
+      {/* The public booking module, reused whole: three props, no wrapper around
+          its behaviour, so its write gates are the same ones /book runs under. */}
+      <BookingCalendar
+        clientSlug={clientSlug}
+        siteId={booking.siteId}
+        siteName={booking.siteName}
+      />
     </div>
   );
 }

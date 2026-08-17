@@ -23,10 +23,11 @@
 
 import {
   FLOW_BANDS,
-  FLOW_BLOCK_KINDS,
   FLOW_LIMITS,
+  acceptsBlockKind,
   acceptsBlocks,
   blockCopyFields,
+  blockKindsForScreen,
   blocksOf,
   cloneFlowBlock,
   edgesFrom,
@@ -702,6 +703,7 @@ export const BLOCK_LABELS: Readonly<Record<FlowBlockKind, string>> = {
   testimonial: "testimonial",
   faq: "questions and answers",
   image: "picture",
+  booking: "book an appointment",
 };
 
 /**
@@ -722,6 +724,15 @@ const STARTER_CHIP = "Takes about 30 seconds";
  * follow-up is its consent line (:234). Neither says anything about a practice
  * that a practice has not said.
  */
+/**
+ * The starter booking invitation. The headline is the words already on the
+ * thank-you screen's link today (deterministic-assessment-quiz.tsx), so an owner
+ * who adds the block and changes nothing gets the button they already had, now
+ * opening in place. The blurb says only what the screen behind it does.
+ */
+const BOOKING_HEADLINE = "Book your appointment now";
+const BOOKING_BLURB = "Pick a time that suits you and we will hold it for you.";
+
 const STARTER_FAQ: readonly { q: string; a: string }[] = [
   { q: "How long does this take?", a: "About 30 seconds. A few quick questions, then where to send your answer." },
   { q: "What happens after I send it?", a: "The practice gets in touch about your enquiry, using the details you leave." },
@@ -791,16 +802,27 @@ export function starterBlock(kind: FlowBlockKind, practiceName?: string): FlowBl
       const first = assessImagesForSlot("hero")[0];
       return first ? { kind: "image", image: first.key, alt: first.alt } : null;
     }
+    case "booking":
+      // The ONLY starter that describes a mechanism rather than a practice, which
+      // is why it is allowed to be a starter at all: it says what the button does
+      // (opens the practice's own diary and holds a time), and it promises nothing
+      // about when a time will be free, what the appointment involves or what it
+      // costs. An owner rewording it is editing an invitation, not a claim.
+      return { kind: "booking", headline: BOOKING_HEADLINE, blurb: BOOKING_BLURB };
   }
 }
 
 /**
- * The kinds this screen could still take: the ones it does not already have.
- * Empty for a screen that cannot carry blocks at all, and for one at the cap.
+ * The kinds this screen could still take: the ones it may carry at all, minus the
+ * ones it already has. Empty for a screen that cannot carry blocks, and for one at
+ * the cap.
  *
  * IT IS RULE 12 READ BACK, not a second copy of it: block_duplicate_kind is the
- * failure this list makes unreachable from the rail, and blocksPerNode is the
- * other one. A picker that offered a kind addBlock would refuse is a picker that
+ * failure this list makes unreachable from the rail, blocksPerNode is the second,
+ * and block_kind_wrong_screen is the third - which is why the source list is
+ * blockKindsForScreen and not FLOW_BLOCK_KINDS. A picker that offered `booking` on
+ * the opening screen would be offering a button the validator then refuses to
+ * publish, and a picker that offers a kind addBlock would refuse is a picker that
  * lies.
  */
 export function addableBlockKinds(graph: FlowGraph, nodeId: string): FlowBlockKind[] {
@@ -808,7 +830,7 @@ export function addableBlockKinds(graph: FlowGraph, nodeId: string): FlowBlockKi
   if (!site.ok) return [];
   if (site.blocks.length >= FLOW_LIMITS.blocksPerNode) return [];
   const taken = new Set(site.blocks.map((b) => b.kind));
-  return FLOW_BLOCK_KINDS.filter((k) => !taken.has(k));
+  return blockKindsForScreen(site.node.kind).filter((k) => !taken.has(k));
 }
 
 export function addBlock(graph: FlowGraph, nodeId: string, block: FlowBlock): FlowEditResult {
@@ -816,6 +838,15 @@ export function addBlock(graph: FlowGraph, nodeId: string, block: FlowBlock): Fl
   if (!site.ok) return no(site.reason);
   if (!isFlowBlockKind(block.kind)) {
     return no(`“${String(block.kind)}” is not a content block this build can render.`);
+  }
+  // Rule 12's block_kind_wrong_screen, refused before the row is built rather than
+  // after the save comes back. `booking` is the only kind this can fire for today:
+  // an invitation to book on the OPENING screen is a button asking the visitor to
+  // skip the funnel the practice paid for the click on.
+  if (!acceptsBlockKind(site.node.kind, block.kind)) {
+    return no(
+      `A ${BLOCK_LABELS[block.kind]} block belongs on a result screen, not on the opening screen. Add it to the screen a patient sees after they leave their details.`,
+    );
   }
   if (site.blocks.some((b) => b.kind === block.kind)) {
     return no(
@@ -919,6 +950,10 @@ function withBlockField(block: FlowBlock, field: string, value: string): FlowBlo
       // The picture REFERENCE is not copy (flow.ts:184-186), so it is not writable
       // from here. setBlockImage holds it, against the manifest.
       if (field === "alt") return { kind: "image", image: block.image, alt: value };
+      return null;
+    case "booking":
+      if (field === "headline") return { kind: "booking", headline: value, blurb: block.blurb };
+      if (field === "blurb") return { kind: "booking", headline: block.headline, blurb: value };
       return null;
   }
 }

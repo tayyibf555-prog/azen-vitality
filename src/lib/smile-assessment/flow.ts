@@ -94,7 +94,39 @@ export function isFlowBand(value: unknown): value is FlowBand {
 // patient-facing sentence.
 // ---------------------------------------------------------------------------
 
-export const FLOW_BLOCK_KINDS = ["trust-strip", "testimonial", "faq", "image"] as const;
+// ---------------------------------------------------------------------------
+// AND ONE BLOCK THAT IS NOT FURNITURE: `booking` (C1).
+//
+// WHAT IT IS. Two authored strings that say "you can book here", added to a
+// RESULT screen. The patient who taps it books a real appointment in the practice
+// diary without leaving the funnel - the deterministic runtime mounts the existing
+// public booking calendar in place (deterministic-assessment-quiz.tsx).
+//
+// WHY IT IS A BLOCK AND NOT A NODE. A booking screen after a result would break
+// two things that are load-bearing and silent: rule 7 (an outcome is terminal, and
+// a dead end is an outcome) and step-numbering.ts, which pushes the collapsed
+// result slot last unconditionally - so a node whose path is LONGER than the
+// outcome's would be charted before the result it comes after, and completionPct
+// would quietly stop meaning "reached a result". A block changes neither: the
+// numbering is over NODES, and this adds none.
+//
+// IT IS THE ONE BLOCK KIND THAT IS NOT COSMETIC, and that is exactly why the two
+// halves are split. The AUTHORED half is these two strings, which is what the
+// builder edits, what rule 12 checks, what the compliance scan reads and what the
+// phone mini draws. The BEHAVING half - the calendar, its state, its network calls
+// and the write - is a PHASE of the runtime, mounted only when the patient asks
+// for it, never through the block `.map()` that draws the furniture. So the model
+// stays what flow-blocks.test.ts proves it is (a funnel scores identically with
+// and without every block on it), and the stateful component stays out of a list
+// comprehension.
+//
+// ITS ONLY LEGAL SCREEN IS A RESULT, which is FLOW_BLOCK_KIND_SCREENS below rather
+// than a sentence in a comment: an invitation to book sitting on the screen BEFORE
+// a patient has answered anything is an invitation to skip the funnel the practice
+// paid for.
+// ---------------------------------------------------------------------------
+
+export const FLOW_BLOCK_KINDS = ["trust-strip", "testimonial", "faq", "image", "booking"] as const;
 export type FlowBlockKind = (typeof FLOW_BLOCK_KINDS)[number];
 
 export function isFlowBlockKind(value: unknown): value is FlowBlockKind {
@@ -115,7 +147,13 @@ export type FlowBlock =
   /** The two to six things a patient asks before they will leave a number. */
   | { kind: "faq"; items: FlowFaqItem[] }
   /** A picture from the curated manifest (src/lib/assess/image-library.ts). */
-  | { kind: "image"; image: string; alt: string };
+  | { kind: "image"; image: string; alt: string }
+  /**
+   * "Book here." `headline` is the words on the button the patient taps AND the
+   * heading of the booking screen it opens; `blurb` is the line under both. Result
+   * screens only - see FLOW_BLOCK_KIND_SCREENS.
+   */
+  | { kind: "booking"; headline: string; blurb: string };
 
 /**
  * A picture for one answer card. `value` is an OPTION VALUE of the node's own
@@ -157,6 +195,38 @@ export const FLOW_BLOCK_SCREEN_KINDS: readonly FlowNodeKind[] = ["welcome", "out
  */
 export function acceptsBlocks(kind: FlowNodeKind): boolean {
   return FLOW_BLOCK_SCREEN_KINDS.includes(kind);
+}
+
+/**
+ * WHICH SCREENS EACH KIND MAY SIT ON, which is a narrower question than "does this
+ * screen take blocks at all" and needs its own answer for exactly one kind.
+ *
+ * The four A2 kinds are furniture: a practice may reassure a patient before the
+ * first question or after the last one, and both are the same decision. `booking`
+ * is not furniture - it is the offer at the END - and on the WELCOME screen it
+ * would be a button inviting the visitor to skip the funnel the practice bought
+ * the click for. So it is legal on a result screen and nowhere else.
+ *
+ * THE ONE LIST. Rule 12 refuses a misplaced kind at write time, addableBlockKinds
+ * refuses to offer one, and both read this - never a second copy of it.
+ */
+export const FLOW_BLOCK_KIND_SCREENS: Readonly<Record<FlowBlockKind, readonly FlowNodeKind[]>> = {
+  "trust-strip": FLOW_BLOCK_SCREEN_KINDS,
+  testimonial: FLOW_BLOCK_SCREEN_KINDS,
+  faq: FLOW_BLOCK_SCREEN_KINDS,
+  image: FLOW_BLOCK_SCREEN_KINDS,
+  booking: ["outcome"],
+};
+
+/** May a block of this kind sit on a screen of this kind? */
+export function acceptsBlockKind(nodeKind: FlowNodeKind, blockKind: FlowBlockKind): boolean {
+  const screens = FLOW_BLOCK_KIND_SCREENS[blockKind];
+  return !!screens && screens.includes(nodeKind);
+}
+
+/** The kinds this screen may carry at all, in catalogue order. */
+export function blockKindsForScreen(nodeKind: FlowNodeKind): FlowBlockKind[] {
+  return FLOW_BLOCK_KINDS.filter((k) => acceptsBlockKind(nodeKind, k));
 }
 
 /** The blocks on a node, or an empty list for a kind that cannot carry any. */
@@ -203,6 +273,16 @@ export function blockCopyFields(block: FlowBlock): { field: string; text: string
       ]);
     case "image":
       return [{ field: "alt", text: block.alt, max: FLOW_LIMITS.imageAlt }];
+    case "booking":
+      // BOTH strings, because both are read by a patient: the headline is the
+      // button they tap and the heading they land on, and the blurb is the
+      // sentence under it. A booking invitation is where a practice is most
+      // tempted to promise something ("guaranteed same-day"), so it goes through
+      // the same write-time scan as every other authored line.
+      return [
+        { field: "headline", text: block.headline, max: FLOW_LIMITS.bookingHeadline },
+        { field: "blurb", text: block.blurb, max: FLOW_LIMITS.bookingBlurb },
+      ];
     default:
       // Unreachable for a typed block. It is here so that a cast-in or hostile
       // block makes a caller say no, rather than throw on the way to saying it.
@@ -336,6 +416,10 @@ export const FLOW_LIMITS = {
   faqItems: 6,
   imageRef: 64,
   imageAlt: 120,
+  /** The booking button's words, which are also the booking screen's heading. */
+  bookingHeadline: 60,
+  /** The one line under it. Longer than a chip, shorter than a faq answer. */
+  bookingBlurb: 160,
   /** Answer-card pictures on one question. The longest bank question has 8 options. */
   optionImages: 12,
 } as const;
@@ -432,6 +516,18 @@ function normaliseBlock(raw: unknown): FlowBlock | null {
       const alt = reqStr(raw.alt, FLOW_LIMITS.imageAlt);
       if (!image || !alt) return null;
       return { kind: "image", image, alt };
+    }
+    case "booking": {
+      const headline = reqStr(raw.headline, FLOW_LIMITS.bookingHeadline);
+      const blurb = reqStr(raw.blurb, FLOW_LIMITS.bookingBlurb);
+      // Both required: a button with no words is not a button, and a booking
+      // invitation with no sentence under it is a button with nothing behind it.
+      if (!headline || !blurb) return null;
+      // NOTE what is NOT checked here, exactly as for the other kinds: that this
+      // block is on a RESULT screen. Shape is this function's job; placement is
+      // rule 12's, which says it in words an owner can act on and reports it
+      // alongside everything else wrong with the funnel.
+      return { kind: "booking", headline, blurb };
     }
     default:
       return null;
@@ -635,6 +731,8 @@ export function cloneFlowBlock(b: FlowBlock): FlowBlock {
       return { kind: "faq", items: b.items.map((i) => ({ q: i.q, a: i.a })) };
     case "image":
       return { kind: "image", image: b.image, alt: b.alt };
+    case "booking":
+      return { kind: "booking", headline: b.headline, blurb: b.blurb };
   }
 }
 

@@ -115,6 +115,14 @@ interface Props {
    * from. Ignored by Classic and Guided, which have no authored funnel to version.
    */
   flowVersion?: number;
+  /**
+   * The campaign's own site (C1), for the deterministic runtime's embedded booking
+   * calendar. Resolved on the SERVER from campaign.siteId and never guessed here,
+   * because the alternative to knowing the site is booking a patient into another
+   * practice's diary (deterministic-assessment-quiz.tsx). Ignored by Classic and
+   * Guided, which have no result screen a booking block can sit on.
+   */
+  bookingSite?: { id: string; name: string } | null;
 }
 
 /** Normalise the first deterministic question into a FunnelQuestion. */

@@ -1,4 +1,12 @@
-import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Mail, MessageSquare } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CalendarDays,
+  CheckCircle2,
+  ChevronRight,
+  Mail,
+  MessageSquare,
+} from "lucide-react";
 import { iconFor } from "@/components/assess/option-icons";
 import type { PhoneBlock, PhoneField, PhoneOption, PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 
@@ -344,6 +352,37 @@ function BlockLine({ block }: { block: PhoneBlock }) {
         <div className="flex items-center gap-1">
           <span className="h-4 w-5 shrink-0 rounded-sm border border-line bg-card-muted" aria-hidden />
           <p className="line-clamp-1 text-[0.5rem] leading-snug text-muted">{block.alt}</p>
+        </div>
+      );
+
+    case "booking":
+      // THE BOOKING INVITATION (C1), drawn as what it is: the button, its line,
+      // and a stand-in row of times for the calendar that opens behind it.
+      //
+      // THE CHIPS ARE PLATES, NOT TIMES, and that is the honest drawing. The real
+      // screen shows LIVE availability read from the practice diary; a mini that
+      // printed "9:00  9:30  10:00" would be inventing appointments that may not
+      // exist, on a preview an owner is using to decide what to publish. Blank
+      // plates say "a row of times goes here" without claiming which.
+      //
+      // The button is a <span>, like every other control in this file: a picture
+      // of a form must not be tabbable, and this one would open a real calendar.
+      //
+      // bg-blue-royal, like the contact step's submit below and unlike every other
+      // block here: on the real screen this is a <Button variant="primary">, and
+      // the mini's whole contract is that it is that screen at 76%.
+      return (
+        <div className="space-y-1">
+          <span className="flex items-center justify-center gap-1 rounded-lg bg-blue-royal px-1.5 py-1 text-[0.55rem] font-semibold text-white">
+            <CalendarDays size={10} aria-hidden />
+            <span className="line-clamp-1">{block.headline}</span>
+          </span>
+          <p className="line-clamp-2 text-[0.5rem] leading-snug text-muted">{block.blurb}</p>
+          <div className="flex gap-0.5" aria-hidden>
+            {[0, 1, 2, 3].map((i) => (
+              <span key={i} className="h-2.5 flex-1 rounded-sm border border-line bg-card-muted" />
+            ))}
+          </div>
         </div>
       );
   }

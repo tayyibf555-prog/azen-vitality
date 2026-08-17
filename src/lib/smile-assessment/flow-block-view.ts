@@ -55,7 +55,20 @@ export type BlockView =
   | { kind: "trust-strip"; practiceName: string; chips: string[] }
   | { kind: "testimonial"; quote: string; attribution: string }
   | { kind: "faq"; items: FlowFaqItem[] }
-  | { kind: "image"; image: ImageView };
+  | { kind: "image"; image: ImageView }
+  | BookingBlockView;
+
+/**
+ * The booking invitation, resolved. Two strings, like the block it comes from:
+ * everything that makes it BEHAVE (the site, the calendar, the write) is decided
+ * by the runtime, not here, because this module is reachable from the browser and
+ * knows nothing about practices or diaries.
+ */
+export interface BookingBlockView {
+  kind: "booking";
+  headline: string;
+  blurb: string;
+}
 
 /**
  * THE ALT RULE, on its own so it can be tested on its own.
@@ -115,6 +128,8 @@ function blockView(block: FlowBlock): BlockView | null {
       const image = imageViewFor(block.image, "hero", block.alt);
       return image ? { kind: "image", image } : null;
     }
+    case "booking":
+      return { kind: "booking", headline: block.headline, blurb: block.blurb };
     default:
       return null;
   }
@@ -133,6 +148,45 @@ export function blockViews(node: FlowNode): BlockView[] {
     if (view) out.push(view);
   }
   return out;
+}
+
+/**
+ * THE SPLIT (C1). Everything on this screen that is DRAWN WHERE IT SITS, which is
+ * everything except the booking invitation.
+ *
+ * A booking block is authored in the block list like any other and is drawn from
+ * the same projection everywhere it is only a PICTURE of itself - the phone mini,
+ * the flow canvas. But on the live funnel it is not a section of the result
+ * screen: it is a button, and a whole screen behind the button (the calendar,
+ * with its own state and its own network calls). So the public renderer takes
+ * these for its block strip and bookingBlockView for the button, and the 1390-line
+ * stateful component never ends up inside the `.map()` that draws the furniture.
+ *
+ * IDENTICAL TO blockViews FOR EVERY FUNNEL WITHOUT ONE, which is every funnel
+ * drawn before C1 - the filter is the only difference and it removes nothing.
+ */
+export function inlineBlockViews(node: FlowNode): BlockView[] {
+  return blockViews(node).filter((v) => v.kind !== "booking");
+}
+
+/**
+ * The booking invitation authored on this screen, or null.
+ *
+ * FIRST WINS on the impossible pair (rule 12's block_duplicate_kind refuses a
+ * second at write time), matching nodeMap and optionImageViews: a stored list is
+ * authored, and a second of anything is a mistake rather than an override.
+ *
+ * PRESENCE IS NOT PERMISSION. This says the owner asked for a booking screen.
+ * Whether one may actually be mounted is booking-embed.ts's answer, and it needs
+ * three more things this module cannot see: the practice's online-booking switch,
+ * the site to book into, and whether this is a live patient or an owner clicking
+ * through a preview.
+ */
+export function bookingBlockView(node: FlowNode): BookingBlockView | null {
+  for (const v of blockViews(node)) {
+    if (v.kind === "booking") return v;
+  }
+  return null;
 }
 
 /**
