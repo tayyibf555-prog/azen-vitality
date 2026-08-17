@@ -48,6 +48,16 @@ const FIGURE_SIZES: Record<FigureSize, string> = {
 };
 
 /**
+ * The shared treatment of every rendered numeral, and the reason it holds
+ * whitespace-nowrap: a browser is allowed to break a line after a hyphen, and
+ * these figures are money. "-£17,033.00" wrapping into a lone minus sign above
+ * "£17,033.00" does not read as a broken layout, it reads as a POSITIVE balance,
+ * and this is the panel a practice manager chases debt from. Tabular numerals
+ * are for the same reason a column of them has to align.
+ */
+const FIGURE_BASE = "font-bold tabular-nums whitespace-nowrap text-navy";
+
+/**
  * A panel heading: sentence case, hairline under it. Numbers are the content.
  *
  * Navy rather than muted, because the sub-headings inside a panel now share the
@@ -107,7 +117,7 @@ export function Count({
 }) {
   if (metric.value === null) return <Unavailable reason={metric.reason} className={className} />;
   return (
-    <span className={cn("font-bold tabular-nums text-navy", FIGURE_SIZES[size], className)}>
+    <span className={cn(FIGURE_BASE, FIGURE_SIZES[size], className)}>
       {num(metric.value)}
     </span>
   );
@@ -129,7 +139,7 @@ export function Money({
   if (metric.value === null) return <Unavailable reason={metric.reason} className={className} />;
   const pence = negative ? -Math.abs(metric.value) : metric.value;
   return (
-    <span className={cn("font-bold tabular-nums text-navy", FIGURE_SIZES[size], className)}>
+    <span className={cn(FIGURE_BASE, FIGURE_SIZES[size], className)}>
       {formatPenceGbp(pence)}
     </span>
   );
@@ -139,7 +149,7 @@ export function Money({
 export function Uda({ metric, className }: { metric: Metric; className?: string }) {
   if (metric.value === null) return <Unavailable reason={metric.reason} className={className} />;
   return (
-    <span className={cn("font-bold tabular-nums text-navy", FIGURE_SIZES.data, className)}>
+    <span className={cn(FIGURE_BASE, FIGURE_SIZES.data, className)}>
       {metric.value.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
     </span>
   );

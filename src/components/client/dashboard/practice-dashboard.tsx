@@ -161,8 +161,32 @@ export function PracticeDashboard({
       {/* The band bleeds by exactly the shell's gutter at every breakpoint. It used
           to bleed a flat -mx-4 while the gutter grew to px-5 and px-6, so above sm
           the band stopped short of the edge it is supposed to reach - 8px on each
-          side at lg, visible against every rule under it. */}
-      <div className="-mx-4 grid grid-cols-1 border-y border-line sm:-mx-5 md:grid-cols-2 lg:-mx-6 xl:grid-cols-4 2xl:grid-cols-[1.15fr_1fr_1fr_1.15fr]">
+          side at lg, visible against every rule under it.
+
+          TWO WEIGHTS OF RULE, NOT ONE. The band's own top and bottom are --line-strong
+          and everything drawn inside it - the rules between the columns, the hairline
+          under each panel heading, the dividers in the debtor list - stays --line. It
+          was all one weight, so a screen whose whole job is to read as one instrument
+          with four panels in it drew its outer boundary in exactly the same ink as a
+          divider between two rows of a list, and nothing said where the instrument
+          ended. One step of the existing scale, not a heavier line: this is the
+          hierarchy the flat language was missing, not a return to boxes.
+
+          AND IT IS SET INLINE, WHICH IS NOT A STYLE CHOICE. globals.css carries a bare
+          `* { border-color: var(--line) }` OUTSIDE any @layer, and an unlayered rule
+          beats every layered one whatever the specificity, so it wins over the whole
+          of Tailwind's utilities layer. `border-line-strong` here rendered as --line,
+          measured in the browser - and so does every other border colour in the app:
+          620 utilities across 159 files (border-danger, border-navy, border-blue-dark,
+          the status tint lines) all paint the same grey hairline today. The one-line
+          fix is to move that default into @layer base, but doing it repaints borders
+          on every screen in the product and that is not this lane's change to make.
+          Until it is made, a class here would say one thing and draw another, which is
+          worse than a style attribute that says exactly what it does. */}
+      <div
+        style={{ borderTopColor: "var(--line-strong)", borderBottomColor: "var(--line-strong)" }}
+        className="-mx-4 grid grid-cols-1 border-y sm:-mx-5 md:grid-cols-2 lg:-mx-6 xl:grid-cols-4 2xl:grid-cols-[1.15fr_1fr_1fr_1.15fr]"
+      >
         <div className={bandCell(0)}>
           <AppointmentsDonut
             panel={panels.appointments}

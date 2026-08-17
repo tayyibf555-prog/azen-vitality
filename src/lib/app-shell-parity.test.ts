@@ -251,7 +251,16 @@ describe("the owner home page renders the same dashboard the practice does", () 
     // (marker encloses the dashboard, re-cap encloses everything else); this proves
     // the two trees agree about it.
     const MARKER = "<div data-wide className=";
-    const RECAP = 'className="mx-auto max-w-[1400px] space-y-4"';
+    // UPDATED 2026-08-17 with the re-cap itself: it was `mx-auto max-w-[1400px]
+    // space-y-4` and the centring is gone. The parity property this asserts is
+    // unchanged - the two trees carry the IDENTICAL wrapper, character for
+    // character - and both files moved together, which is the whole point of
+    // pinning it in one place. Why the centring went: mx-auto gave each page two
+    // left rules, the dashboard's at the shell gutter and the re-capped block's
+    // wherever the leftover width halved to, so "Next actions" and the whole owner
+    // console started 88px inside every figure above them on a 1680 screen. See
+    // dashboard-width.test.ts, which now also bans mx-auto from this wrapper.
+    const RECAP = 'className="max-w-[1400px] space-y-4"';
     for (const [name, source] of [["/c", client], ["/owner", owner]] as const) {
       expect(source, `${name} home does not open the shell's width hatch for the dashboard`).toContain(
         MARKER,

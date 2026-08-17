@@ -68,8 +68,21 @@ const PRACTICE_DASHBOARD = resolve(DASHBOARD_DIR, "practice-dashboard.tsx");
 const TAKINGS_STRIP = resolve(DASHBOARD_DIR, "takings-strip.tsx");
 const APPOINTMENT_LIST = resolve(DASHBOARD_DIR, "appointment-list.tsx");
 
-/** The re-cap the non-dashboard children of both pages must wear, character for character. */
-const RECAP = 'className="mx-auto max-w-[1400px] space-y-4"';
+/**
+ * The re-cap the non-dashboard children of both pages must wear, character for character.
+ *
+ * UPDATED 2026-08-17, deliberately: this read `mx-auto max-w-[1400px] space-y-4` and the
+ * centring is gone. The property this constant exists to pin has not changed - exactly one
+ * re-cap, the same one in both trees, opening after the dashboard, with every other child
+ * inside it - and all of that is still asserted below. What changed is that mx-auto gave
+ * the page TWO LEFT RULES: the dashboard ran from the shell's gutter while "Next actions"
+ * (and, on /owner, the entire management console) started wherever the leftover width
+ * happened to halve to - 88px inside every figure above it on a 1680 screen, and moving as
+ * the window resized. The measure the cap buys is unchanged; only the slack moved to the
+ * right, where nothing has to line up against it. `notCentred` below is the new half of
+ * the pin, so a paste cannot put mx-auto back without saying so here.
+ */
+const RECAP = 'className="max-w-[1400px] space-y-4"';
 
 const read = (path: string) => readFileSync(path, "utf8");
 
@@ -254,6 +267,29 @@ describe("the dashboard takes the viewport and nothing else on the page does", (
           `${tree.name}: <${name}> is rendered outside the re-cap, so it goes full-bleed with the dashboard`,
         ).toBeGreaterThan(slice.indexOf(RECAP));
       }
+    });
+
+    it("leaves the re-capped block on the page's own left rule, rather than centring it", () => {
+      // ONE LEFT RULE FROM THE TOP OF THE PAGE TO THE BOTTOM. Every heading, figure
+      // and row in the dashboard starts on the shell's gutter; the block underneath
+      // has to start there too or the page reads as two pages stacked. Centring is
+      // the only way it can fail, so centring is what is banned - and it is banned in
+      // the re-cap's own class string rather than anywhere in the file, because the
+      // dashboard's own internals are free to centre whatever they like.
+      //
+      // Read out of the PAGE, not out of RECAP. Asserting against the constant would
+      // be circular - it would only prove the constant says what the constant says -
+      // and the constant is exactly what a future edit would change first. Comments
+      // are stripped by the helper, so the /owner page's paragraph explaining the cap
+      // cannot be what satisfies this.
+      const classes = quotedStringContaining(page, "max-w-[1400px]").split(/\s+/);
+      expect(
+        classes,
+        `${tree.name}: the re-cap centres itself again, so the block below the dashboard starts inside every figure above it`,
+      ).not.toContain("mx-auto");
+      // And the cap itself is still there: left-aligned AND uncapped would be a
+      // 2500px line of body copy, which is the other failure this wrapper prevents.
+      expect(classes, `${tree.name}: the re-cap lost its measure`).toContain("max-w-[1400px]");
     });
 
     it("bleeds its bands by exactly the gutter the shell sets, at every breakpoint", () => {

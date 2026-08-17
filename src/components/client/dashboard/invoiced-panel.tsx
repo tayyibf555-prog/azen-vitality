@@ -25,9 +25,25 @@ import { Money, PanelTitle, Unavailable } from "./parts";
 //
 // The axis arithmetic lives in lib/dashboard/chart.ts with tests, because an
 // axis maximum below the tallest bar clips it silently and this is a money panel.
+//
+// THE PLOT FILLS THE PANEL, and that is a correction to a real defect. It used to
+// be a fixed 104px block pinned to the foot of the cell with mt-auto, while the
+// band's row height is set by whichever column has the most in it - Accounts with
+// ten debtors, or Patients and plans with six figures and a contract line. So on
+// a 1440 screen this panel rendered a headline, a caption, roughly a hundred and
+// fifty pixels of nothing, and then a small chart: the emptiest thing on the
+// screen, in a house style whose whole rule is that width and height get spent on
+// information rather than on margin. The plot is now the flexible part of the
+// column and grows into whatever the band's row height turns out to be, with
+// MIN_PLOT_HEIGHT as its floor so it can never collapse below what it was.
+//
+// Every measurement in it was already proportional - the ticks and the gridlines
+// position by percentage against axis.max - so only the bars had to change, from
+// pixels computed against a constant to a percentage of the plot box.
 // ---------------------------------------------------------------------------
 
-const PLOT_HEIGHT = 104;
+/** The floor, and the height the plot used to be fixed at. Never shorter. */
+const MIN_PLOT_HEIGHT = 104;
 
 function Column({
   label,
@@ -41,16 +57,28 @@ function Column({
   tone: string;
 }) {
   const fraction = barFraction(pence, axisMax);
-  // A non-zero amount always draws at least a visible sliver: an unpaid balance
-  // of forty pounds against a ten thousand pound axis is a real debt and must
-  // not round away to an empty column that reads as "nothing outstanding".
-  const height = pence > 0 ? Math.max(2, Math.round(fraction * PLOT_HEIGHT)) : 0;
   return (
-    <div className="flex min-w-0 flex-1 flex-col items-center justify-end">
+    // The PERCENTAGE lives on this element rather than on the bar inside it. Its
+    // parent is the absolutely positioned plot box, which has a definite height,
+    // so a percentage resolves against the plot; the bar's own parent would be
+    // auto-height and the percentage would resolve to nothing.
+    //
+    // A non-zero amount always draws at least a visible sliver: an unpaid balance
+    // of forty pounds against a ten thousand pound axis is a real debt and must
+    // not round away to an empty column that reads as "nothing outstanding".
+    <div
+      className="flex min-w-0 flex-1 justify-center"
+      style={{ height: `${fraction * 100}%`, minHeight: pence > 0 ? 2 : 0 }}
+    >
+      {/* 84px, up from 54. The cap is a proportion in disguise: at 54 against a
+          plot that now runs 250px tall the bars drew as two narrow stripes, which
+          reads as a gauge rather than as the column chart Dentally puts here. The
+          columns still have room either side of them at every width the panel is
+          rendered at, so this widens the mark without crowding the pair. */}
       <div
         title={`${label}: ${formatPenceGbp(pence)}`}
-        className="w-full max-w-[54px] rounded-t-[2px]"
-        style={{ height, background: tone }}
+        className="h-full w-full max-w-[84px] rounded-t-[2px]"
+        style={{ background: tone }}
       />
     </div>
   );
@@ -100,20 +128,32 @@ export function InvoicedPanelView({
           <Unavailable reason={panel.totalPence.reason} />
         </div>
       ) : (
-        <div className="mt-auto pt-3">
-          <div className="flex gap-1.5">
+        // min-h-0 so the flex child may actually shrink to its share; without it
+        // a flex item's automatic minimum size is its content and the column
+        // would overflow the band on a short row instead of filling a tall one.
+        <div className="mt-3 flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-1 gap-1.5" style={{ minHeight: MIN_PLOT_HEIGHT }}>
             {/* The value axis. aria-hidden because the figures themselves are
                 announced in the labelled list underneath; a screen reader
-                reading six tick marks aloud is noise, not information. */}
-            <div
-              aria-hidden
-              className="relative w-[22px] shrink-0"
-              style={{ height: PLOT_HEIGHT }}
-            >
+                reading six tick marks aloud is noise, not information.
+
+                No height of its own any more: it is a stretch item beside the
+                plot, so the two are the same height by construction rather than
+                by two call sites agreeing on a constant. */}
+            <div aria-hidden className="relative w-[22px] shrink-0">
               {axis.ticks.map((tick) => (
+                // translate-y-1/2, POSITIVE, and that is a sign correction. `bottom`
+                // puts the label's BOTTOM edge on its gridline, so centring it on that
+                // line means moving DOWN by half its height; it moved up instead, and
+                // every label on the axis therefore sat a full 12.5px clear above the
+                // line it names - close enough to the NEXT line up to be read against
+                // the wrong one. Nobody saw it while the plot was a fixed 104px block
+                // pinned to the foot of the panel, because the whole axis was adrift
+                // by the same amount and there was empty panel above it to be adrift
+                // into. Filling the panel put the top label into the caption.
                 <span
                   key={tick}
-                  className="absolute right-0 -translate-y-1/2 text-[9px] font-medium tabular-nums text-faint"
+                  className="absolute right-0 translate-y-1/2 text-[9px] font-medium tabular-nums text-faint"
                   style={{ bottom: `${(tick / axis.max) * 100}%` }}
                 >
                   {axisTickLabel(tick)}
@@ -121,7 +161,7 @@ export function InvoicedPanelView({
               ))}
             </div>
 
-            <div className="relative min-w-0 flex-1" style={{ height: PLOT_HEIGHT }}>
+            <div className="relative min-w-0 flex-1">
               {axis.ticks.map((tick) => (
                 <span
                   key={tick}
@@ -130,7 +170,14 @@ export function InvoicedPanelView({
                   style={{ bottom: `${(tick / axis.max) * 100}%` }}
                 />
               ))}
-              <div className="absolute inset-0 flex items-end gap-3 px-2">
+              {/* NO px- HERE. The figures underneath are laid out on the same two
+                  tracks (pl-[28px] clears the axis column and its gap, then the same
+                  gap-3), so any padding on this row alone shifts the bars inward and
+                  the pair stop registering with their own labels: 4px outward each,
+                  measured, which on a two-column chart reads as the labels belonging
+                  to nothing in particular. The bars are capped well inside their
+                  tracks, so flush against the plot edge costs no room. */}
+              <div className="absolute inset-0 flex items-end gap-3">
                 <Column label="Paid" pence={paid} axisMax={axis.max} tone="var(--status-green)" />
                 <Column
                   label="Unpaid"

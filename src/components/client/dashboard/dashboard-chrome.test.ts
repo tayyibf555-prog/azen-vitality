@@ -50,6 +50,8 @@ import { fileURLToPath } from "node:url";
 vi.mock("next/navigation", () => ({ usePathname: () => "/c/vitality" }));
 
 import { PracticeDashboard } from "./practice-dashboard";
+import { InvoicedPanelView } from "./invoiced-panel";
+import type { InvoicedPanel } from "@/lib/dashboard/view";
 import { EmptyState } from "@/components/primitives";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import {
@@ -465,6 +467,117 @@ describe("an empty worklist reads as good news", () => {
 });
 
 /* ---------------------------------------------------------------------------
+ * 3b. THE INVOICED PANEL SPENDS ITS COLUMN, AND ITS AXIS TELLS THE TRUTH.
+ *
+ * PRODUCT.md:45 - "Dense is correct... Do not remove a figure to make a screen
+ * calmer" - and the standard at :64, that the screen must show its information
+ * with better execution, never less of it: a panel that leaves its column as
+ * blank margin is spending width on nothing. This panel was the screen's worst
+ * offender in both directions at once:
+ *
+ *   THE PLOT WAS A CONSTANT. 104px, pinned to the foot of the cell with mt-auto,
+ *   while the band's row height is set by whichever column has the most in it -
+ *   ten debtors, or six counts and a contract line. On a 1440 screen that left a
+ *   headline, a caption, ~150px of nothing, and then a small chart.
+ *
+ *   THE AXIS WAS OFF BY A WHOLE LABEL. `bottom` puts a label's BOTTOM edge on its
+ *   gridline, so centring on that line means translating DOWN by half; the code
+ *   translated UP, and every label sat 12.5px clear above the line it named -
+ *   measured in the browser, and close enough to the next line up to be read
+ *   against the wrong one. It hid inside the dead space until the plot filled it.
+ *
+ *   THE BARS DID NOT REGISTER WITH THEIR LABELS. The bar row carried px-2 and the
+ *   figures underneath did not, so the pair splayed 4px outward from their own
+ *   captions.
+ *
+ * The properties pinned here are the three fixes, as markup rather than as
+ * pixels: vitest runs environment:"node", so a rendered height cannot be
+ * measured, but "the height is a percentage of the plot" and "each label sits at
+ * the same offset as its own gridline" are both visible in the static markup and
+ * are the things that actually broke.
+ * ------------------------------------------------------------------------- */
+
+/** A period with real money in it, both bars non-zero, so the axis has work to do. */
+const INVOICED: InvoicedPanel = {
+  totalPence: { value: 4_004_000, reason: null },
+  paidPence: { value: 3_588_800, reason: null },
+  unpaidPence: { value: 415_200, reason: null },
+  invoiceCount: { value: 125, reason: null },
+  undatedInvoices: 0,
+};
+
+describe("the invoiced panel fills its column and its axis is honest", () => {
+  const panel = renderToStaticMarkup(
+    createElement(InvoicedPanelView, {
+      panel: INVOICED,
+      caveats: [],
+      onOpenCaveat: () => {},
+    }),
+  );
+
+  it("really drew the chart, not the unavailable branch", () => {
+    // Anti-vacuity: every assertion below is about the chart's construction and
+    // they all pass against a panel that decided it had nothing to draw.
+    expect(panel, "the fixture fell through to Unavailable").not.toContain("Unavailable");
+    expect(panel, "no bars rendered").toContain('title="Paid: £35,888.00"');
+    expect(panel, "no bars rendered").toContain('title="Unpaid: £4,152.00"');
+  });
+
+  it("grows with the panel rather than sitting at a constant height", () => {
+    // The chart block is the flexible part of the column now. mt-auto was how it
+    // was pinned to the foot, and a pixel height on the plot is how it was frozen.
+    expect(
+      panel.includes("mt-auto"),
+      "the chart is pinned to the foot of the panel again, so the space above it is dead",
+    ).toBe(false);
+    expect(panel, "the chart block no longer grows into the cell").toContain("flex-1");
+    // The floor survives: a panel with nothing tall beside it must not collapse.
+    expect(panel, "the plot lost its minimum height").toContain("min-height:104px");
+  });
+
+  it("draws the bars as a share of the plot, so a taller panel means a taller bar", () => {
+    // 35,888 and 4,152 against a 40,000 axis. Percentages, and the RIGHT ones -
+    // a bar drawn against the wrong denominator misrepresents money on the one
+    // screen a practice manager reads takings from.
+    expect(panel, "the paid bar is not a share of the plot").toContain("height:89.72%");
+    expect(panel, "the unpaid bar is not a share of the plot").toContain("height:10.38%");
+    // A real debt never rounds away to an empty column.
+    expect(panel, "a non-zero bar can round to nothing again").toContain("min-height:2px");
+  });
+
+  it("puts every tick label on the gridline it names", () => {
+    // Same offsets, label for line, and the transform that centres rather than
+    // lifts. Both halves matter: matching offsets with the old -translate-y-1/2
+    // still drew every label a full label-height above its line.
+    const labels = [...panel.matchAll(/translate-y-1\/2[^>]*style="bottom:([\d.]+%)"/g)].map(
+      (m) => m[1],
+    );
+    const lines = [...panel.matchAll(/bg-line"\s*style="bottom:([\d.]+%)"/g)].map((m) => m[1]);
+    expect(labels.length, "no axis labels found to check").toBeGreaterThan(2);
+    expect(labels, "the labels no longer sit at the same offsets as their gridlines").toEqual(lines);
+    expect(
+      panel.includes("-translate-y-1/2"),
+      "the axis labels lift off their gridlines again - `bottom` needs a POSITIVE half-height translate to centre",
+    ).toBe(false);
+  });
+
+  it("lays the bars and their figures on one set of tracks", () => {
+    // The bar row and the dl underneath must share a grid, or the columns stop
+    // pointing at their own captions. The row therefore carries no padding of its
+    // own; the dl's pl-[28px] is the axis column plus the gap, which is what puts
+    // both of them on the plot's left edge.
+    const barRow = /class="absolute inset-0 flex items-end gap-3"/.test(panel);
+    expect(
+      barRow,
+      "the bar row has grown padding or changed its gap, so the bars no longer register with the figures under them",
+    ).toBe(true);
+    expect(panel, "the figures under the chart lost the offset that clears the axis").toContain(
+      "pl-[28px]",
+    );
+  });
+});
+
+/* ---------------------------------------------------------------------------
  * 4. The "Next actions" block names its colours.
  *
  * A companion to dashboard-tokens.test.ts, which bans hex under
@@ -508,5 +621,26 @@ describe("the worklist under the dashboard names its colours", () => {
     expect(css, "--row-hover is gone, so the row hover paints nothing").toMatch(
       /--row-hover:\s*#f7f9fc;/,
     );
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 3c. TWO WEIGHTS OF RULE, NOT ONE.
+ *
+ * The band's own top and bottom edges are --line-strong via a style attribute
+ * (the utility form was proven inert under the @theme layering - see the
+ * comment above the band in practice-dashboard.tsx); the rules BETWEEN cells
+ * stay plain --line. The verifier proved deleting the style attribute passed
+ * every suite, so the screen's most visible chrome decision was unpinned. */
+describe("the band carries the heavier rule, and only the band", () => {
+  it("draws its top and bottom in line-strong via the style attribute", () => {
+    expect(html).toContain("border-top-color:var(--line-strong)");
+    expect(html).toContain("border-bottom-color:var(--line-strong)");
+  });
+
+  it("keeps the heavier weight off the rules between cells", () => {
+    // Exactly the band's two declarations; a third occurrence means an inner
+    // rule was promoted and the two-weight hierarchy is gone.
+    expect(html.match(/var\(--line-strong\)/g)).toHaveLength(2);
   });
 });

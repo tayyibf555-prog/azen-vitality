@@ -45,7 +45,12 @@ export function AccountsPanelView({
         {net.value === null ? (
           <Unavailable reason={net.reason} className="text-[22px]" />
         ) : (
-          <span className="text-[22px] font-bold leading-[1.1] tabular-nums tracking-[-0.6px] text-status-red">
+          // whitespace-nowrap because this is the one figure on the screen with a
+          // legal break opportunity in it: a browser may break a line after the
+          // leading hyphen, and "-" alone above "£17,033.00" reads as money the
+          // practice HAS rather than money it is owed. See FIGURE_BASE in parts.tsx,
+          // which carries the same guard for every figure rendered through it.
+          <span className="whitespace-nowrap text-[22px] font-bold leading-[1.1] tabular-nums tracking-[-0.6px] text-status-red">
             {formatPenceGbp(-Math.abs(net.value))}
           </span>
         )}

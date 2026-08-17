@@ -141,8 +141,16 @@ export default async function OwnerHomePage({
   // So everything below the dashboard is re-capped, in one wrapper, at the same
   // 1400px the shell caps at. (Not to the pixel: the shell's cap includes its own
   // px-6 gutter and this one does not, so the console runs 48px wider than before
-  // on a large screen. Centred and at that size, that is not a difference anyone
-  // reads - and matching it exactly would mean hardcoding 1400-minus-a-gutter.)
+  // on a large screen. At that size that is not a difference anyone reads - and
+  // matching it exactly would mean hardcoding 1400-minus-a-gutter.)
+  //
+  // THE CAP IS LEFT-ALIGNED, NOT CENTRED. It carried mx-auto, which gave the page
+  // two left rules: the dashboard's, at the shell's gutter, and the console's,
+  // wherever the leftover width happened to halve to. The whole owner console -
+  // the Management header, the stat row, the recovery table - therefore started
+  // 88px inside every figure above it on a 1680 screen, and moved as the window
+  // resized. The reading measure is what the cap buys and it is unchanged; the
+  // leftover width now falls entirely on the right, where nothing has to line up.
   //
   // c/[client]/page.tsx carries the identical structure - same marker, same
   // wrapper, same class string - because the two trees render the same dashboard
@@ -154,7 +162,7 @@ export default async function OwnerHomePage({
         clientSlug={clientSlug}
         initialSiteId={selection === ALL_SITES ? null : selection}
       />
-      <div className="mx-auto max-w-[1400px] space-y-4">
+      <div className="max-w-[1400px] space-y-4">
         <TaskQueueBoard
           plain
           clientSlug={clientSlug}

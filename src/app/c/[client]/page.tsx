@@ -72,6 +72,16 @@ export default async function ClientHomePage({
   // reading measure, not a viewport. So it gets the cap back, explicitly, in a
   // wrapper of its own. /owner/[client]/page.tsx is the same structure, because
   // the two trees render the same dashboard and must not disagree about its size.
+  //
+  // THE CAP IS LEFT-ALIGNED, NOT CENTRED, and that is a correction. It carried
+  // mx-auto, so on a 1680 screen the dashboard above ran 80px to 1656px while
+  // "Next actions" ran 168px to 1568px: the page had TWO left rules, and the
+  // second one moved as the window resized. Every heading, figure and row above
+  // starts on one vertical line and the worklist started 88px inside it, which
+  // reads as a different page pasted underneath rather than as the next section
+  // of this one. The measure is what the cap is for and the measure is unchanged;
+  // only the leftover width now falls on the right, where there is nothing to
+  // line up against, instead of being split either side of the reading rule.
   return (
     <div data-wide className="space-y-4">
       <PracticeDashboard
@@ -79,7 +89,7 @@ export default async function ClientHomePage({
         clientSlug={clientSlug}
         initialSiteId={selection === ALL_SITES ? null : selection}
       />
-      <div className="mx-auto max-w-[1400px] space-y-4">
+      <div className="max-w-[1400px] space-y-4">
         <TaskQueueBoard
           plain
           clientSlug={clientSlug}
