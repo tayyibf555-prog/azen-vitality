@@ -833,6 +833,46 @@ export function addableBlockKinds(graph: FlowGraph, nodeId: string): FlowBlockKi
   return blockKindsForScreen(site.node.kind).filter((k) => !taken.has(k));
 }
 
+/**
+ * WHY THE PICKER IS EMPTY, in a sentence, or null when it is not empty (and null
+ * for a screen that never had one).
+ *
+ * IT EXISTS BECAUSE THE TWO REASONS ARE NOT THE SAME REASON, and since C1 they
+ * stopped coinciding. `blocksPerNode` is 4 and a RESULT screen may carry five
+ * kinds (`booking` is legal there and nowhere else), so an owner who fills a result
+ * screen has one kind left that the picker will never offer. The rail used to say
+ * "this screen has one of every kind of block" in that situation, which is simply
+ * untrue - the screen is FULL, and the fix is to remove something, not to accept
+ * that there is nothing left to add.
+ *
+ * THE CAP STAYS 4 ON PURPOSE, rather than being raised to 5 to make the old
+ * sentence true again. It is a budget for a PHONE SCREEN, not a count of kinds:
+ * four sections under a result headline is already a scroll, and the one that must
+ * not end up below the fold is the booking invitation - the only block on that
+ * screen that does anything. A limit that grows every time a kind is added is a
+ * limit that is really just "all of them".
+ *
+ * Both sentences live here rather than in the rail for the reason the docstring
+ * above gives: the picker must not hold a second, drifting copy of the rules that
+ * decide what it may offer.
+ */
+export function noAddableBlockReason(graph: FlowGraph, nodeId: string): string | null {
+  const site = blockSite(graph, nodeId);
+  if (!site.ok) return null;
+  if (addableBlockKinds(graph, nodeId).length > 0) return null;
+  // Nothing on the screen and nothing offered would mean a screen with no legal
+  // kinds at all, which blockSite has already refused. Say nothing rather than
+  // explain an empty list to somebody who has not added anything.
+  if (site.blocks.length === 0) return null;
+
+  const taken = new Set(site.blocks.map((b) => b.kind));
+  const unused = blockKindsForScreen(site.node.kind).filter((k) => !taken.has(k));
+  if (unused.length === 0) {
+    return "This screen has one of every kind of block. Change or remove one to swap it for another.";
+  }
+  return `A screen holds at most ${FLOW_LIMITS.blocksPerNode} blocks, and this one is full. Remove one to make room for a ${BLOCK_LABELS[unused[0]!]}.`;
+}
+
 export function addBlock(graph: FlowGraph, nodeId: string, block: FlowBlock): FlowEditResult {
   const site = blockSite(graph, nodeId);
   if (!site.ok) return no(site.reason);

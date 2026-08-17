@@ -27,6 +27,7 @@ import { validateFlow } from "./flow-validate";
 import { toPublicFlow } from "./campaign";
 import { walkFlow } from "./flow-runtime";
 import { scoreAssessment } from "./scoring";
+import { stepNumbering } from "./step-numbering";
 import { QUIZ_QUESTIONS, Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT, questionById } from "./quiz";
 
 // ---------------------------------------------------------------------------
@@ -114,21 +115,29 @@ function stripped(graph: FlowGraph): FlowGraph {
 
 /**
  * Walk the funnel exactly as the browser does, answering each question with the
- * option at `pick` (clamped), and return what the submission would carry.
+ * option `pickFor` names (clamped), and return what the submission would carry.
  */
-function run(graph: FlowGraph, pick: number): { asked: string[]; responses: Record<string, string> } {
+function runWith(
+  graph: FlowGraph,
+  pickFor: (questionId: string) => number,
+): { asked: string[]; responses: Record<string, string> } {
   const responses: Record<string, string> = {};
   for (let guard = 0; guard < 20; guard++) {
     const walk = walkFlow(graph, responses);
     if (walk.status === "ask") {
       const q = questionById(walk.node.questionId)!;
-      responses[q.id] = q.options[Math.min(pick, q.options.length - 1)]!.value;
+      responses[q.id] = q.options[Math.min(pickFor(q.id), q.options.length - 1)]!.value;
       continue;
     }
     if (walk.status === "contact") return { asked: walk.asked, responses };
     throw new Error(`stuck: ${walk.reason}`);
   }
   throw new Error("did not settle");
+}
+
+/** The same walk with one answer index for every question. */
+function run(graph: FlowGraph, pick: number): { asked: string[]; responses: Record<string, string> } {
+  return runWith(graph, () => pick);
 }
 
 // ---------------------------------------------------------------------------
@@ -145,15 +154,41 @@ describe("blocks are inert: the same funnel scores the same with and without the
     expect(scoreAssessment(withBlocks.responses)).toEqual(scoreAssessment(without.responses));
   });
 
-  it("scores identically for every single-question answer set in the bank", () => {
-    // Wider than the walk: whatever a block could theoretically do to scoring, it
-    // would have to do through one of these, and scoreAssessment cannot even see a
-    // graph. Belt and braces on the claim in the file header.
+  // MADE REAL, having been `expect(f(x)).toEqual(f(x))` - both sides the same
+  // expression, which passes for every possible implementation of scoreAssessment
+  // and therefore says nothing at all. It is kept rather than deleted because the
+  // claim it was reaching for is a genuine gap in the it.each above: that one moves
+  // all four questions in LOCKSTEP, so it never mixes a keen answer to one question
+  // with a cool answer to another - and a branch that a block had bent would show
+  // up on a mixture long before it showed up on four identical picks.
+  //
+  // It has to go through the WALK. scoreAssessment takes responses and nothing else
+  // - it cannot see a graph - so "the blocks did not change the score" is only ever
+  // provable as "the blocks did not change what the walk COLLECTS".
+  //
+  // MUTATION: let a block bend the route (an edge, an answer, a step skipped when a
+  // node carries furniture) and one of these mixtures diverges here.
+  it("collects and scores the same on every one-question-at-a-time mixture", () => {
+    let mixtures = 0;
     for (const q of QUIZ_QUESTIONS) {
-      for (const o of q.options) {
-        expect(scoreAssessment({ [q.id]: o.value })).toEqual(scoreAssessment({ [q.id]: o.value }));
+      for (let pick = 0; pick < q.options.length; pick++) {
+        // This question at `pick`, every other question at its first option.
+        const pickFor = (id: string): number => (id === q.id ? pick : 0);
+        const withBlocks = runWith(decorated(), pickFor);
+        const without = runWith(plain(), pickFor);
+        const where = `${q.id} #${pick}`;
+
+        expect(withBlocks.asked, where).toEqual(without.asked);
+        expect(withBlocks.responses, where).toEqual(without.responses);
+        expect(scoreAssessment(withBlocks.responses), where).toEqual(
+          scoreAssessment(without.responses),
+        );
+        mixtures++;
       }
     }
+    // The loop must actually have run, or "every mixture" is a claim about an
+    // empty bank - the other way a test like this goes quietly vacuous.
+    expect(mixtures).toBeGreaterThanOrEqual(QUIZ_QUESTIONS.length * 2);
   });
 
   it("is byte-identical once the furniture is taken off again", () => {
@@ -166,6 +201,39 @@ describe("blocks are inert: the same funnel scores the same with and without the
   it("both funnels validate, so the comparison is between two shippable funnels", () => {
     expect(validateFlow(plain()).failures).toEqual([]);
     expect(validateFlow(decorated()).failures).toEqual([]);
+  });
+
+  // THE ORDINALS, COMPARED AS ENTRIES RATHER THAN AS JSON.
+  //
+  // StepNumbering.ordinals is a ReadonlyMap, and `JSON.stringify(new Map())` is
+  // "{}" - so a JSON comparison of two numberings compares screens, stepCount,
+  // contactStep and outcomeStep and silently compares NOTHING about the map. That
+  // is the half of the numbering the public quiz actually reads: stepIndexOf() is a
+  // map lookup, and a screen missing from the map emits no view event at all.
+  //
+  // It is also the half a `screens` comparison cannot cover, because screens
+  // records only the FIRST node of each slot (step-numbering.ts) - so all three
+  // result nodes could drop out of the map with screens byte-identical, and the
+  // funnel's completion bar would go to zero on every funnel wearing furniture.
+  //
+  // MUTATION: number a chip-bearing or FAQ-bearing screen differently - skip it,
+  // or give it an ordinal of its own - and this goes red where the JSON comparison
+  // stays green.
+  it("hands out the same ordinals to the same screens, entry for entry", () => {
+    const a = stepNumbering(plain());
+    const b = stepNumbering(decorated());
+    expect([...b.ordinals.entries()]).toEqual([...a.ordinals.entries()]);
+    expect(b.screens).toEqual(a.screens);
+    expect([b.stepCount, b.contactStep, b.outcomeStep]).toEqual([
+      a.stepCount,
+      a.contactStep,
+      a.outcomeStep,
+    ]);
+    // The map really does carry every result node, not just the one `screens`
+    // names - which is what makes the entry comparison above worth making.
+    for (const id of ["out-high", "out-medium", "out-low"]) {
+      expect(b.ordinals.get(id), id).toBe(a.outcomeStep);
+    }
   });
 });
 

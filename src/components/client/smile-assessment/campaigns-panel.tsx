@@ -528,6 +528,7 @@ export function CampaignsPanel({
             clientSlug={clientSlug}
             idealCustomer={form.idealCustomer}
             targetBudget={form.targetBudget}
+            practiceName={practiceName}
             chosenKey={wizard.choice?.key ?? null}
             onChoose={choose}
             onClose={() => dispatch({ type: "cancel" })}
@@ -1715,6 +1716,9 @@ export function CampaignCard({
           // the builder read as the page a patient lands on rather than as the
           // generic fallback.
           practiceName={practiceName}
+          // The campaign's goal, so "Rewrite the words" briefs the writer on what
+          // this funnel is FOR rather than asking it to guess from the questions.
+          goal={campaign.goal}
           campaignHeadline={campaign.headline}
           campaignIntro={campaign.intro}
           graph={stored.graph ?? templateForGoal(campaign.goal).build()}

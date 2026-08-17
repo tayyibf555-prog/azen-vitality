@@ -84,6 +84,14 @@ beforeEach(() => {
   h.requireUser.mockResolvedValue(null);
   h.requireClientAccess.mockReturnValue(null);
   h.requireModuleApiAccess.mockReturnValue(null);
+  // clearAllMocks clears the CALLS, not the implementations, so a
+  // `mockRejectedValue` set by one test leaks into every test written after it -
+  // which makes the order of this file load-bearing and the failures baffling.
+  // The model stub is put back to the state variables on every test instead.
+  h.createMsg.mockImplementation(async (..._a: unknown[]) => ({
+    content: [{ type: "text", text: h.state.reply }],
+    stop_reason: h.state.stopReason,
+  }));
   h.state.reply = GOOD;
   h.state.stopReason = "end_turn";
 });
@@ -167,6 +175,37 @@ describe("POST /api/smile-assessment/flow-generate — the cost guard", () => {
     const key = h.consumeBudget.mock.calls[0]![0] as string;
     expect(key).toBe("sa-flow-gen:vitality");
   });
+
+  // THE LETTER OF THE RULE, WHICH NO RUNTIME ASSERTION IN THIS FILE REACHES.
+  //
+  // The invocation-order test above proves the budget is spent before the model is
+  // CALLED. The house rule is stricter: it is spent before the Anthropic CLIENT IS
+  // CONSTRUCTED. Hoist `new Anthropic(...)` above the consumeBudget block and every
+  // mock-order assertion here stays green - the client is built, the 429 still
+  // returns, no message is ever created - while the rule is broken.
+  //
+  // The rule is written that way because construction is where the key is read and
+  // where the SDK is free to do work of its own (connection setup, retry state, a
+  // future eager handshake). A cap decided after that point is a cap on a decision
+  // already taken, and the failure would be invisible until a bill arrived.
+  //
+  // MUTATION: swap the two statements in route.ts. This assertion is the only thing
+  // in the repository that goes red.
+  it("spends the budget BEFORE the Anthropic client is constructed, in source order", () => {
+    const src = readFileSync(
+      resolve(process.cwd(), "src/app/api/smile-assessment/flow-generate/route.ts"),
+      "utf8",
+    );
+    const budget = src.indexOf("await consumeBudget(");
+    const client = src.indexOf("new Anthropic(");
+    expect(budget, "the route no longer consumes a budget").toBeGreaterThan(-1);
+    expect(client, "the route no longer constructs a client").toBeGreaterThan(-1);
+    expect(budget).toBeLessThan(client);
+    // Exactly one of each, or "the first one" is not the one that matters and a
+    // second construction site could sit anywhere.
+    expect(src.split("new Anthropic(").length - 1).toBe(1);
+    expect(src.split("consumeBudget(").length - 1).toBe(1);
+  });
 });
 
 describe("POST /api/smile-assessment/flow-generate — the reply", () => {
@@ -213,6 +252,138 @@ describe("POST /api/smile-assessment/flow-generate — the reply", () => {
     const j = (await res.json()) as { ok: boolean; source: string };
     expect(j.ok).toBe(true);
     expect(j.source).toBe("template");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REWRITE MODE. Same route, same guards, same wallet - and a floor that is the
+// OWNER'S FUNNEL rather than the goal's template.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/smile-assessment/flow-generate — rewrite mode", () => {
+  const OWNED = templateForGoal("implants").build();
+  const TIMELINE = OWNED.nodes.find((n) => n.kind === "question" && n.questionId === "timeline")!;
+
+  /** The funnel echoed back with one better line, which is all a rewriter sends. */
+  const REWRITTEN = JSON.stringify({
+    nodes: OWNED.nodes
+      .filter((n) => n.kind === "question")
+      .map((n) => ({
+        id: n.id,
+        questionId: n.kind === "question" ? n.questionId : "",
+        transition: n.id === TIMELINE.id ? "Lovely. When would you like to start?" : undefined,
+      })),
+    edges: OWNED.edges.map((e) => ({ from: e.from, to: e.to, answer: e.answer })),
+    screens: { welcome: { headline: "A few quick questions about your smile" } },
+  });
+
+  // No default argument: `rewriteBody(undefined)` has to mean "a request with no
+  // funnel on it", which is the commonest way this endpoint gets called wrongly.
+  const rewriteBody = (flow: unknown) => ({ ...OK_BODY, mode: "rewrite", flow });
+  const goodRewrite = () => rewriteBody(OWNED);
+
+  it("returns the owner's funnel with new words and the same shape", async () => {
+    h.state.reply = REWRITTEN;
+    const res = await POST(post(goodRewrite()));
+    expect(res.status).toBe(200);
+
+    const j = (await res.json()) as { ok: boolean; flow: FlowGraph; source: string };
+    expect(j.source).toBe("model");
+    expect(validateFlow(j.flow).ok).toBe(true);
+    expect(j.flow.nodes.map((n) => n.id)).toEqual(OWNED.nodes.map((n) => n.id));
+    expect(j.flow.edges).toHaveLength(OWNED.edges.length);
+    const timeline = j.flow.nodes.find((n) => n.id === TIMELINE.id)!;
+    expect(timeline.kind === "question" && timeline.transition).toBe(
+      "Lovely. When would you like to start?",
+    );
+  });
+
+  // MUTATION: fall through to a draft when `flow` cannot be read. The owner presses
+  // "rewrite the words" and gets a different funnel - one they never asked for,
+  // built from a template, over the top of the one they had.
+  it("400s an unreadable funnel rather than quietly drafting a new one", async () => {
+    for (const flow of [undefined, "not a funnel", { nodes: "yes" }, 42]) {
+      const res = await POST(post(rewriteBody(flow)));
+      expect(res.status, `flow: ${JSON.stringify(flow)}`).toBe(400);
+    }
+    expect(h.createMsg).not.toHaveBeenCalled();
+  });
+
+  it("hands the owner's own funnel back, untouched, when the model is unusable", async () => {
+    h.state.reply = "I will not do that.";
+    const res = await POST(post(goodRewrite()));
+    expect(res.status).toBe(200);
+
+    const j = (await res.json()) as { flow: FlowGraph; source: string; reason: string };
+    expect(j.source).toBe("unchanged");
+    expect(j.source).not.toBe("template");
+    expect(j.flow).toEqual(OWNED);
+  });
+
+  // ONE WALLET FOR ONE BUILDER. Two modes with two caps would mean an owner who
+  // had tuned the words all morning could still spend the drafting budget, which
+  // is the expensive half. Same key, same limit, same order.
+  it("spends the SAME budget as a draft, before the model, on the same key", async () => {
+    h.state.reply = REWRITTEN;
+    await POST(post(goodRewrite()));
+    expect(h.consumeBudget).toHaveBeenCalledWith("sa-flow-gen:vitality", 30, 3600);
+    expect(h.consumeBudget.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.createMsg.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("429s a rewrite once the drafting budget is gone, and calls no model", async () => {
+    h.consumeBudget.mockResolvedValueOnce(false);
+    const res = await POST(post(goodRewrite()));
+    expect(res.status).toBe(429);
+    expect(h.createMsg).not.toHaveBeenCalled();
+  });
+
+  it("holds a rewrite to the same guards a draft passes", async () => {
+    h.requireModuleApiAccess.mockReturnValue(
+      Response.json({ ok: false, error: "forbidden" }, { status: 403 }),
+    );
+    const res = await POST(post(goodRewrite()));
+    expect(res.status).toBe(403);
+    expect(h.consumeBudget).not.toHaveBeenCalled();
+    expect(h.createMsg).not.toHaveBeenCalled();
+  });
+
+  // MUTATION: give a rewrite the draft's cap. The reply has to echo the funnel
+  // back, so it is longer for the same funnel - and a cut-off reply is refused,
+  // which spends the call and changes nothing.
+  it("gives a rewrite the headroom to echo the funnel back", async () => {
+    h.state.reply = REWRITTEN;
+    await POST(post(goodRewrite()));
+    const [rewriteArgs] = h.createMsg.mock.calls[0] as [Record<string, unknown>];
+    expect(rewriteArgs.max_tokens).toBe(4000);
+
+    vi.clearAllMocks();
+    h.state.reply = GOOD;
+    await POST(post(OK_BODY));
+    const [draftArgs] = h.createMsg.mock.calls[0] as [Record<string, unknown>];
+    expect(draftArgs.max_tokens).toBe(3000);
+  });
+
+  it("refuses a truncated rewrite before parsing, and changes nothing", async () => {
+    h.state.reply = REWRITTEN;
+    h.state.stopReason = "max_tokens";
+    const res = await POST(post(goodRewrite()));
+
+    const j = (await res.json()) as { flow: FlowGraph; source: string; reason: string };
+    expect(j.source).toBe("unchanged");
+    expect(j.reason).toBe("truncated");
+    expect(j.flow).toEqual(OWNED);
+    expect(h.createMsg).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an unknown mode as a draft rather than guessing", async () => {
+    h.state.reply = GOOD;
+    const res = await POST(post({ ...OK_BODY, mode: "improve", flow: OWNED }));
+    const j = (await res.json()) as { source: string; flow: FlowGraph };
+    expect(j.source).toBe("model");
+    // A draft: the model's own question ids, not the owner's funnel.
+    expect(j.flow.nodes.some((n) => n.id === "n1")).toBe(true);
   });
 });
 

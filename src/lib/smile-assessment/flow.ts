@@ -405,6 +405,14 @@ export const FLOW_LIMITS = {
   // meaning. Lengths are deliberately tight - these render as chips, a pull quote
   // and an accordion on a phone, and copy that overflows them is copy that was
   // written for a different surface.
+  // FOUR, AND IT IS NOT THE NUMBER OF KINDS. Since C1 a RESULT screen may carry
+  // five kinds (`booking` is legal there and nowhere else), so a full result screen
+  // always has one kind it will never be offered - deliberately. This is a budget
+  // for a phone screen: four sections under a result headline is already a scroll,
+  // and the one thing that must not fall below the fold is the booking invitation.
+  // The rail says which of the two reasons its picker is empty for
+  // (noAddableBlockReason), rather than the cap being raised to keep one sentence
+  // true.
   blocksPerNode: 4,
   practiceName: 60,
   chipLabel: 28,

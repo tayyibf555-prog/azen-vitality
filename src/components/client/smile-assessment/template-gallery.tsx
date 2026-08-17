@@ -67,6 +67,13 @@ export interface TemplateGalleryProps {
   /** Passed to the generator so it writes for the right enquiry. */
   idealCustomer?: string;
   targetBudget?: string;
+  /**
+   * The PRACTICE's own name. A FACT the writer is given rather than copy it may
+   * invent: it heads a trust strip, and without one no trust strip is written at
+   * all (flow-generate.ts). Never the campaign's name, which is an internal source
+   * label ("Instagram bio").
+   */
+  practiceName?: string;
   /** The currently chosen key, so a card reads as chosen when the owner comes back. */
   chosenKey?: string | null;
   onChoose: (choice: TemplateChoice) => void;
@@ -86,6 +93,7 @@ export function TemplateGallery({
   clientSlug,
   idealCustomer,
   targetBudget,
+  practiceName,
   chosenKey,
   onChoose,
   onClose,
@@ -159,6 +167,7 @@ export function TemplateGallery({
           goal,
           idealCustomer: idealCustomer || undefined,
           targetBudget: targetBudget || undefined,
+          practiceName: practiceName || undefined,
         }),
       });
 

@@ -17,11 +17,13 @@ import { FLOW_TEMPLATES, buildScratchFlow, templateForGoal } from "./flow-templa
 import { Q_BUDGET, Q_LOCATION, Q_TIMELINE, Q_TREATMENT } from "./quiz";
 import { assessImagesForSlot } from "@/lib/assess/image-library";
 import {
+  BLOCK_LABELS,
   addBlock,
   addBlockChip,
   addBlockFaqItem,
   addableBlockKinds,
   moveBlock,
+  noAddableBlockReason,
   optionImageRows,
   questionSwapWarning,
   removeBlock,
@@ -1050,6 +1052,68 @@ describe("adding a content block", () => {
     expect(welcomeBlocksOf(g)).toHaveLength(FLOW_LIMITS.blocksPerNode);
     expect(addableBlockKinds(g, "welcome")).toEqual([]);
     expect(validateFlow(g).ok).toBe(true);
+  });
+
+  // THE TWO REASONS AN EMPTY PICKER CAN HAVE, WHICH STOPPED BEING ONE REASON.
+  //
+  // `blocksPerNode` is 4 and a RESULT screen accepts five kinds, so filling one
+  // leaves a kind that will never be offered. The rail's old wording - "this screen
+  // has one of every kind of block" - is then a false statement about the funnel,
+  // and it points the owner at a swap when what they need is a removal.
+  //
+  // MUTATION: return one sentence for both cases (or let the rail decide) and the
+  // result-screen assertion below goes red.
+  it("says WHY it is offering nothing, and the two whys are different", () => {
+    // An OPENING screen: four kinds allowed, four held, so nothing is missing.
+    let welcome = invisalign();
+    for (const kind of blockKindsForScreen("welcome")) {
+      const block =
+        kind === "testimonial"
+          ? ({ kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." } as FlowBlock)
+          : starterBlock(kind, "Vitality Dental");
+      if (!block) throw new Error(`no starter for ${kind}`);
+      welcome = must(addBlock(welcome, "welcome", block));
+    }
+    expect(addableBlockKinds(welcome, "welcome")).toEqual([]);
+    expect(noAddableBlockReason(welcome, "welcome")).toBe(
+      "This screen has one of every kind of block. Change or remove one to swap it for another.",
+    );
+
+    // A RESULT screen: five kinds allowed, four held. It is FULL, not complete.
+    const kinds = blockKindsForScreen("outcome");
+    expect(kinds.length).toBeGreaterThan(FLOW_LIMITS.blocksPerNode);
+    let result = invisalign();
+    for (const kind of kinds.slice(0, FLOW_LIMITS.blocksPerNode)) {
+      const block =
+        kind === "testimonial"
+          ? ({ kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." } as FlowBlock)
+          : starterBlock(kind, "Vitality Dental");
+      if (!block) throw new Error(`no starter for ${kind}`);
+      result = must(addBlock(result, "result-high", block));
+    }
+    expect(addableBlockKinds(result, "result-high")).toEqual([]);
+    const reason = noAddableBlockReason(result, "result-high");
+    expect(reason).toContain(String(FLOW_LIMITS.blocksPerNode));
+    expect(reason).toContain("full");
+    // It names what is being kept out, so the trade is a decision rather than a
+    // dead end - and it is NOT the "one of every kind" sentence.
+    expect(reason).toContain(BLOCK_LABELS[kinds[FLOW_LIMITS.blocksPerNode]!]);
+    expect(reason).not.toContain("one of every kind");
+    // ...and the funnel it describes is still a publishable one.
+    expect(validateFlow(result).ok).toBe(true);
+  });
+
+  it("says nothing when there is something to offer, or nothing to explain", () => {
+    // A screen with room: the picker speaks for itself.
+    expect(noAddableBlockReason(invisalign(), "welcome")).toBeNull();
+    // A screen that has never taken a block: explaining an empty list to somebody
+    // who has added nothing is noise, and the rail draws the intro copy instead.
+    const bare = invisalign();
+    expect(welcomeBlocksOf(bare)).toHaveLength(0);
+    // Screens that cannot carry blocks at all have no section and so no sentence.
+    expect(noAddableBlockReason(bare, "q-timeline")).toBeNull();
+    expect(noAddableBlockReason(bare, "contact")).toBeNull();
+    expect(noAddableBlockReason(bare, "nowhere")).toBeNull();
   });
 });
 

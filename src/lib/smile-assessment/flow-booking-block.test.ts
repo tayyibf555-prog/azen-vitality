@@ -133,6 +133,22 @@ describe("a booking block changes nothing about the shape of the funnel", () => 
     // pushes last unconditionally, so the drop-off chart draws "Booking" then
     // "Result", backwards, and completionPct stops meaning "reached a result".
     expect(JSON.stringify(stepNumbering(booked()))).toBe(JSON.stringify(stepNumbering(plain())));
+
+    // AND THE ORDINALS, WHICH THAT LINE CANNOT SEE. `ordinals` is a ReadonlyMap,
+    // and JSON.stringify renders a Map as "{}" - so the comparison above holds
+    // screens, stepCount, contactStep and outcomeStep to each other and lets the
+    // map through untouched. The map is the half the public quiz reads
+    // (stepIndexOf is a map lookup), and it is also the half `screens` cannot
+    // stand in for, because screens names only the FIRST node of each slot: all
+    // three result nodes could drop out of the map with everything above still
+    // byte-identical, and every booked funnel would report zero completions.
+    //
+    // MUTATION: skip a block-bearing node when the ordinals are handed out, or
+    // give it a slot of its own, and this goes red while the line above stays
+    // green.
+    expect([...stepNumbering(booked()).ordinals.entries()]).toEqual([
+      ...stepNumbering(plain()).ordinals.entries(),
+    ]);
   });
 
   it("produces byte-identical step labels", () => {

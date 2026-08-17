@@ -101,6 +101,50 @@ describe("the allowlist is the only way in", () => {
     // Adding an entry keyed "https://..." fails here, not in production.
     for (const image of ASSESS_IMAGES) {
       expect(image.key, image.key).toMatch(ASSESS_IMAGE_KEY_FORMAT);
+    }
+  });
+
+  // THE FORMAT ON ITS OWN, WITH NO MANIFEST BEHIND IT.
+  //
+  // This is the test the sibling above cannot be. Every other rejection in this
+  // file is carried by `BY_KEY.has(value) === false` - the value is refused because
+  // the map misses, not because the shape is wrong - so loosening
+  // ASSESS_IMAGE_KEY_FORMAT to /.*/ leaves the whole suite green while the
+  // "format first, then the map" claim in image-library.ts becomes false. The
+  // difference matters because assessImage() and assessImagePath() run the FORMAT
+  // before the lookup on purpose, so that a URL or a traversal never reaches a map
+  // at all; that first gate needs a test of its own or it is only decoration.
+  //
+  // MUTATION: widen the regex by one character class and one of these goes red.
+  it("rejects a URL, a path and a traversal by SHAPE, before any lookup", () => {
+    for (const shaped of [
+      "https://example.com/x.jpg",
+      "http://example.com/x.jpg",
+      "//example.com/x.jpg",
+      "/assess/conditions/crowded.webp",
+      "../../etc/passwd",
+      "conditions/crowded.webp",
+      "Conditions/Crowded",
+      "javascript:alert(1)",
+      "data:image/png;base64,AAAA",
+      "",
+      " conditions/crowded",
+      "conditions/crowded ",
+      "conditions/crowded/extra",
+      "conditions/-crowded",
+    ]) {
+      expect(ASSESS_IMAGE_KEY_FORMAT.test(shaped), shaped).toBe(false);
+    }
+    // ...and the shape a real key has passes it, so the regex is a gate rather
+    // than a wall: a rejection above is about THAT string, not about everything.
+    expect(ASSESS_IMAGE_KEY_FORMAT.test("conditions/crowded")).toBe(true);
+    expect(ASSESS_IMAGE_KEY_FORMAT.test("screens")).toBe(true);
+  });
+
+  // The manifest's own keys, held to the same gate the way IN uses. Split from the
+  // shape test above so a manifest entry that stops resolving names itself.
+  it("resolves every key it lists", () => {
+    for (const image of ASSESS_IMAGES) {
       expect(isAssessImageKey(image.key), image.key).toBe(true);
     }
   });

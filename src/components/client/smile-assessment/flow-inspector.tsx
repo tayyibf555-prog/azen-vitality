@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowRight, ArrowUp, ImageOff, Link2, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, ImageOff, Link2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +21,7 @@ import {
   describeNode,
   insertableQuestions,
   insertableQuestionsAfter,
+  noAddableBlockReason,
   optionImageRows,
   outgoingEdges,
   questionSwapWarning,
@@ -41,6 +42,11 @@ import {
   type InspectorEdit,
   type InspectorField,
 } from "@/lib/smile-assessment/flow-inspect";
+import {
+  assistTargetKey,
+  isAssistableBlockField,
+  type AssistTarget,
+} from "@/lib/smile-assessment/flow-assist";
 import { assessImage, assessImagesForSlot } from "@/lib/assess/image-library";
 import { questionById } from "@/lib/smile-assessment/quiz";
 
@@ -80,10 +86,20 @@ import { questionById } from "@/lib/smile-assessment/quiz";
  * the next time the button is restyled. And a PICTURE IS PICKED, never typed: the
  * strips below are the curated manifest, so what reaches the graph is a key.
  *
- * WHAT IS DELIBERATELY NOT HERE YET: any AI affordance on a block (the
- * write-this-for-me lane), and anything that writes to the server. The rail edits
- * a DRAFT graph in the builder's state; the builder is what saves it, through the
- * one PUT route with its compliance scan, validation and version bump.
+ * IT NOW ASKS FOR COPY TOO, and asking is ALL it does. "Write this for me" beside
+ * a box emits an AssistTarget upward (`onAssist`) exactly as every other control
+ * emits an intent; the builder does the fetching, and the line that comes back
+ * lands through the SAME `onEdit` intents a typed line goes through - so it is
+ * trimmed by the same ops, refused by the same rules and scanned by the same save.
+ * The rail has no idea a model exists. Two buttons are deliberately absent: a
+ * testimonial's quote and who gave it, because that quote is the practice's and
+ * nothing here writes one. That absence is not the rule - the server refuses those
+ * targets on its own (flow-assist.ts) - because a rule living in a missing button
+ * is a rule that comes back the next time this file is restyled.
+ *
+ * WHAT IS STILL DELIBERATELY NOT HERE: anything that writes to the server. The
+ * rail edits a DRAFT graph in the builder's state; the builder is what saves it,
+ * through the one PUT route with its compliance scan, validation and version bump.
  */
 
 const inputClass =
@@ -106,6 +122,18 @@ export interface FlowInspectorProps {
   onEdit: (edit: InspectorEdit) => void;
   /** Move the selection: a branch row opens its connection, a delete clears it. */
   onSelect: (selection: FlowSelection | null) => void;
+  /**
+   * "Write this for me", pointed at one copy box. OPTIONAL, and that is the shape
+   * of the promise: without it every box is the box it was, and the rail still
+   * cannot reach a model - only the builder can.
+   */
+  onAssist?: (target: AssistTarget) => void;
+  /**
+   * The key (assistTargetKey) of the line being written right now, or null. One at
+   * a time: a second press while one is in flight would land two lines in an order
+   * nobody chose.
+   */
+  assisting?: string | null;
 }
 
 export function FlowInspector({
@@ -115,6 +143,8 @@ export function FlowInspector({
   practiceName,
   onEdit,
   onSelect,
+  onAssist,
+  assisting,
 }: FlowInspectorProps) {
   const node: FlowNode | null =
     selection?.kind === "node" ? (nodeMap(graph).get(selection.id) ?? null) : null;
@@ -131,6 +161,8 @@ export function FlowInspector({
           practiceName={practiceName}
           onEdit={onEdit}
           onSelect={onSelect}
+          onAssist={onAssist}
+          assisting={assisting}
         />
       ) : edge && selection?.kind === "edge" ? (
         <EdgeInspector
@@ -140,6 +172,8 @@ export function FlowInspector({
           failures={failures}
           onEdit={onEdit}
           onSelect={onSelect}
+          onAssist={onAssist}
+          assisting={assisting}
         />
       ) : (
         <p className="text-[12px] text-muted">
@@ -185,6 +219,72 @@ function InspectorHead({
 }
 
 /**
+ * The two props every copy box now carries, together, because they travel
+ * together the whole way down and a component that took one without the other
+ * would draw a button that can never stop spinning.
+ */
+interface AssistProps {
+  onAssist?: (target: AssistTarget) => void;
+  assisting?: string | null;
+}
+
+/**
+ * WRITE THIS FOR ME. It EMITS and nothing else: no fetch, no state, no idea what
+ * a model is. The builder does the asking and lands the answer through the
+ * ordinary edit intents.
+ *
+ * ABSENT, NOT DISABLED, when there is nowhere to send the request (`onAssist`
+ * unset) or when the field is one nothing writes for you. A disabled button that
+ * never becomes enabled is furniture that reads as a broken feature - and on the
+ * testimonial in particular the ABSENCE is not the rule anyway: flow-assist.ts
+ * refuses those targets whatever presses them.
+ *
+ * ONE AT A TIME. Every button goes flat while any line is being written, and only
+ * the one that was pressed says so, which is what `assisting` carrying the target
+ * KEY buys over a boolean.
+ */
+function AssistButton({
+  target,
+  what,
+  onAssist,
+  assisting,
+}: AssistProps & { target: AssistTarget; what: string }) {
+  if (!onAssist) return null;
+  const busy = assisting === assistTargetKey(target);
+  return (
+    <button
+      type="button"
+      disabled={typeof assisting === "string"}
+      onClick={() => onAssist(target)}
+      aria-label={`Write ${what} for me`}
+      className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-blue-dark transition-colors hover:bg-tint-blue disabled:opacity-40"
+    >
+      <Sparkles size={11} />
+      {busy ? "Writing" : "Write this for me"}
+    </button>
+  );
+}
+
+/** A label with its assist button on the same line, which is where the eye is. */
+function AssistedLabel({
+  htmlFor,
+  children,
+  target,
+  what,
+  onAssist,
+  assisting,
+}: AssistProps & { htmlFor: string; children: React.ReactNode; target: AssistTarget; what: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <label className={labelClass} htmlFor={htmlFor}>
+        {children}
+      </label>
+      <AssistButton target={target} what={what} onAssist={onAssist} assisting={assisting} />
+    </div>
+  );
+}
+
+/**
  * The failures that belong to ONE control, printed under it.
  *
  * The banner above the canvas still lists every failure at once (the validateFlow
@@ -217,7 +317,9 @@ function NodeInspector({
   practiceName,
   onEdit,
   onSelect,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   graph: FlowGraph;
   node: FlowNode;
   failures: readonly FlowValidationFailure[];
@@ -238,14 +340,35 @@ function NodeInspector({
       <IssueList issues={issues} field="step" />
 
       {node.kind === "question" ? (
-        <QuestionFields graph={graph} node={node} issues={issues} onEdit={onEdit} />
+        <QuestionFields
+          graph={graph}
+          node={node}
+          issues={issues}
+          onEdit={onEdit}
+          onAssist={onAssist}
+          assisting={assisting}
+        />
       ) : null}
 
       {node.kind === "welcome" ? (
-        <WelcomeFields node={node} issues={issues} onEdit={onEdit} />
+        <WelcomeFields
+          node={node}
+          issues={issues}
+          onEdit={onEdit}
+          onAssist={onAssist}
+          assisting={assisting}
+        />
       ) : null}
 
-      {node.kind === "outcome" ? <OutcomeFields node={node} issues={issues} onEdit={onEdit} /> : null}
+      {node.kind === "outcome" ? (
+        <OutcomeFields
+          node={node}
+          issues={issues}
+          onEdit={onEdit}
+          onAssist={onAssist}
+          assisting={assisting}
+        />
+      ) : null}
 
       {/* A2's furniture, on the two screens that are not an ask. Which kinds
           those are is acceptsBlocks' answer, read back through addableBlockKinds
@@ -258,6 +381,8 @@ function NodeInspector({
           issues={issues}
           practiceName={practiceName}
           onEdit={onEdit}
+          onAssist={onAssist}
+          assisting={assisting}
         />
       ) : null}
 
@@ -396,7 +521,9 @@ function QuestionFields({
   node,
   issues,
   onEdit,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   graph: FlowGraph;
   node: Extract<FlowNode, { kind: "question" }>;
   issues: readonly FieldIssue[];
@@ -448,11 +575,21 @@ function QuestionFields({
       </div>
 
       <div>
-        <label className={labelClass} htmlFor={`tr-${node.id}`}>
+        <AssistedLabel
+          htmlFor={`tr-${node.id}`}
+          target={{ nodeId: node.id, field: "transition" }}
+          what="the lead-in line"
+          onAssist={onAssist}
+          assisting={assisting}
+        >
           Lead-in line (optional)
-        </label>
+        </AssistedLabel>
+        {/* KEYED BY THE LINE ITSELF, not by the step alone. The box is
+            uncontrolled (typing must not re-render the strip), so a line that
+            arrives from anywhere but this keyboard - the writer - would be stored
+            on the graph while the box still showed the old words. */}
         <input
-          key={`tr-${node.id}`}
+          key={`tr-${node.id}-${node.transition ?? ""}`}
           id={`tr-${node.id}`}
           type="text"
           defaultValue={node.transition ?? ""}
@@ -475,7 +612,9 @@ function WelcomeFields({
   node,
   issues,
   onEdit,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   node: Extract<FlowNode, { kind: "welcome" }>;
   issues: readonly FieldIssue[];
   onEdit: (edit: InspectorEdit) => void;
@@ -483,11 +622,17 @@ function WelcomeFields({
   return (
     <>
       <div>
-        <label className={labelClass} htmlFor={`wh-${node.id}`}>
+        <AssistedLabel
+          htmlFor={`wh-${node.id}`}
+          target={{ nodeId: node.id, field: "headline" }}
+          what="the opening headline"
+          onAssist={onAssist}
+          assisting={assisting}
+        >
           Opening headline (optional)
-        </label>
+        </AssistedLabel>
         <input
-          key={`wh-${node.id}`}
+          key={`wh-${node.id}-${node.headline ?? ""}`}
           id={`wh-${node.id}`}
           type="text"
           defaultValue={node.headline ?? ""}
@@ -498,11 +643,17 @@ function WelcomeFields({
         <IssueList issues={issues} field="headline" />
       </div>
       <div>
-        <label className={labelClass} htmlFor={`wi-${node.id}`}>
+        <AssistedLabel
+          htmlFor={`wi-${node.id}`}
+          target={{ nodeId: node.id, field: "intro" }}
+          what="the opening line"
+          onAssist={onAssist}
+          assisting={assisting}
+        >
           Opening line (optional)
-        </label>
+        </AssistedLabel>
         <textarea
-          key={`wi-${node.id}`}
+          key={`wi-${node.id}-${node.intro ?? ""}`}
           id={`wi-${node.id}`}
           rows={2}
           defaultValue={node.intro ?? ""}
@@ -524,18 +675,26 @@ function OutcomeFields({
   node,
   issues,
   onEdit,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   node: Extract<FlowNode, { kind: "outcome" }>;
   issues: readonly FieldIssue[];
   onEdit: (edit: InspectorEdit) => void;
 }) {
   return (
     <div>
-      <label className={labelClass} htmlFor={`hl-${node.id}`}>
+      <AssistedLabel
+        htmlFor={`hl-${node.id}`}
+        target={{ nodeId: node.id, field: "headline" }}
+        what="the result headline"
+        onAssist={onAssist}
+        assisting={assisting}
+      >
         Result headline (optional)
-      </label>
+      </AssistedLabel>
       <input
-        key={`hl-${node.id}`}
+        key={`hl-${node.id}-${node.headline ?? ""}`}
         id={`hl-${node.id}`}
         type="text"
         defaultValue={node.headline ?? ""}
@@ -767,7 +926,9 @@ function EdgeInspector({
   failures,
   onEdit,
   onSelect,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   graph: FlowGraph;
   index: number;
   failures: readonly FlowValidationFailure[];
@@ -833,11 +994,17 @@ function EdgeInspector({
       </div>
 
       <div>
-        <label className={labelClass} htmlFor={`etr-${index}`}>
+        <AssistedLabel
+          htmlFor={`etr-${index}`}
+          target={{ nodeId: edge.from, field: "edge-transition", index }}
+          what="the lead-in for this answer"
+          onAssist={onAssist}
+          assisting={assisting}
+        >
           Lead-in for this answer (optional)
-        </label>
+        </AssistedLabel>
         <input
-          key={`etr-${index}-${edge.from}-${edge.to}-${edge.answer ?? ""}`}
+          key={`etr-${index}-${edge.from}-${edge.to}-${edge.answer ?? ""}-${edge.transition ?? ""}`}
           id={`etr-${index}`}
           type="text"
           defaultValue={edge.transition ?? ""}
@@ -960,7 +1127,9 @@ function Blocks({
   issues,
   practiceName,
   onEdit,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   graph: FlowGraph;
   node: FlowNode;
   failures: readonly FlowValidationFailure[];
@@ -970,6 +1139,7 @@ function Blocks({
 }) {
   const blocks = blocksOf(node);
   const addable = addableBlockKinds(graph, node.id);
+  const noneReason = noAddableBlockReason(graph, node.id);
 
   return (
     <div className="border-t border-line pt-2">
@@ -991,6 +1161,8 @@ function Blocks({
               count={blocks.length}
               issues={blockIssues(failures, node.id, index)}
               onEdit={onEdit}
+              onAssist={onAssist}
+              assisting={assisting}
             />
           ))}
         </ul>
@@ -1000,10 +1172,14 @@ function Blocks({
 
       {addable.length > 0 ? (
         <AddBlock nodeId={node.id} kinds={addable} practiceName={practiceName} onEdit={onEdit} />
-      ) : blocks.length > 0 ? (
-        <p className={helpClass}>
-          This screen has one of every kind of block. Change or remove one to swap it for another.
-        </p>
+      ) : noneReason ? (
+        // WHY, not just nothing. A picker that vanishes without a word reads as
+        // broken, and the two reasons it can vanish need different answers from the
+        // owner: a screen holding one of every kind wants a swap, a screen at the
+        // cap wants a removal. Which sentence applies is flow-edit's answer - the
+        // rail asking that question itself is how the two drifted apart in the
+        // first place (a result screen may carry five kinds and hold four).
+        <p className={helpClass}>{noneReason}</p>
       ) : null}
     </div>
   );
@@ -1016,7 +1192,9 @@ function BlockCard({
   count,
   issues,
   onEdit,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   nodeId: string;
   block: FlowBlock;
   index: number;
@@ -1112,6 +1290,14 @@ function BlockCard({
             removable={/^chips\[\d+\]$/.test(field.field) || /^items\[\d+\]\.q$/.test(field.field)}
             issues={issues}
             onEdit={onEdit}
+            // WHICH LINES A MODEL MAY BE ASKED FOR is flow-assist's answer, not
+            // this file's: a testimonial's words are the practice's own, and so is
+            // the name on a trust strip. Passing the handler through the rule
+            // rather than testing the field name here is what stops the button
+            // reappearing on a quote the next time this loop is edited - and the
+            // server refuses those targets anyway.
+            onAssist={isAssistableBlockField(block.kind, field.field) ? onAssist : undefined}
+            assisting={assisting}
           />
         ))}
       </div>
@@ -1140,7 +1326,9 @@ function BlockField({
   removable,
   issues,
   onEdit,
-}: {
+  onAssist,
+  assisting,
+}: AssistProps & {
   nodeId: string;
   index: number;
   field: string;
@@ -1157,9 +1345,15 @@ function BlockField({
     <div>
       <div className="flex items-end gap-1.5">
         <div className="min-w-0 flex-1">
-          <label className={labelClass} htmlFor={id}>
+          <AssistedLabel
+            htmlFor={id}
+            target={{ nodeId, field: "block-text", index, blockField: field }}
+            what={blockFieldLabel(field).toLowerCase()}
+            onAssist={onAssist}
+            assisting={assisting}
+          >
             {blockFieldLabel(field)}
-          </label>
+          </AssistedLabel>
           {long ? (
             <textarea
               id={id}

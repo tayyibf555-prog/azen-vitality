@@ -21,21 +21,35 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { blockCopyFields, type FlowGraph } from "@/lib/smile-assessment/flow";
+import {
+  FLOW_LIMITS,
+  blockCopyFields,
+  blockKindsForScreen,
+  type FlowBlock,
+  type FlowGraph,
+} from "@/lib/smile-assessment/flow";
 import { validateFlow } from "@/lib/smile-assessment/flow-validate";
 import { FLOW_TEMPLATES, templateForGoal } from "@/lib/smile-assessment/flow-templates";
 import { insertionPoints, phoneFlowLayout } from "@/lib/smile-assessment/flow-phone-layout";
 import { screenFor, type PhoneScreen } from "@/lib/smile-assessment/flow-phone-screen";
 import { questionById } from "@/lib/smile-assessment/quiz";
 import {
+  addBlock,
   addableBlockKinds,
   describeEdge,
+  noAddableBlockReason,
+  starterBlock,
   insertableQuestionsAfter,
   optionImageRows,
   questionSwapWarning,
   swappableQuestions,
 } from "@/lib/smile-assessment/flow-edit";
 import { applyInspectorEdit, type FlowSelection } from "@/lib/smile-assessment/flow-inspect";
+import {
+  assistTargetKey,
+  isAssistableBlockField,
+  type AssistTarget,
+} from "@/lib/smile-assessment/flow-assist";
 import { assessImage } from "@/lib/assess/image-library";
 import { FlowInspector } from "./flow-inspector";
 import { FlowPhoneCanvas } from "./flow-phone-canvas";
@@ -889,6 +903,64 @@ describe("the blocks section", () => {
     expect(left).toContain('value="testimonial"');
   });
 
+  // AN EMPTY PICKER HAS TO SAY WHY, AND THE TWO WHYS ARE DIFFERENT.
+  //
+  // A result screen accepts five block kinds and holds at most four
+  // (FLOW_LIMITS.blocksPerNode), so a full one always has a kind it will never be
+  // offered. The rail used to answer that with "this screen has one of every kind
+  // of block", which is false there and sends the owner looking for a kind to
+  // change instead of one to remove. The sentence is flow-edit's
+  // (noAddableBlockReason) precisely so the rail cannot come to its own view of a
+  // rule it does not own.
+  //
+  // MUTATION: restore the single hard-coded sentence in the rail and the result
+  // screen below reads back a statement about the funnel that is not true of it.
+  it("says which of the two reasons the picker is empty for", () => {
+    // The opening screen, holding one of each of the four kinds it may carry.
+    const kinds = blockKindsForScreen("welcome");
+    let welcome = invisalign();
+    for (const kind of kinds) {
+      const block =
+        kind === "testimonial"
+          ? ({ kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." } as FlowBlock)
+          : starterBlock(kind, "Vitality Dental");
+      if (!block) throw new Error(`no starter for ${kind}`);
+      const edited = addBlock(welcome, "welcome", block);
+      if (!edited.ok) throw new Error(edited.reason);
+      welcome = edited.graph;
+    }
+    const wHtml = rail(welcome, { kind: "node", id: "welcome" });
+    expect(wHtml).not.toContain('<select id="ab-welcome"');
+    expect(wHtml).toContain(esc(noAddableBlockReason(welcome, "welcome")!));
+    expect(wHtml).toContain("one of every kind");
+
+    // The result screen, FULL at four of its five kinds.
+    const outcomeKinds = blockKindsForScreen("outcome");
+    expect(outcomeKinds.length).toBeGreaterThan(FLOW_LIMITS.blocksPerNode);
+    let result = invisalign();
+    for (const kind of outcomeKinds.slice(0, FLOW_LIMITS.blocksPerNode)) {
+      const block =
+        kind === "testimonial"
+          ? ({ kind: "testimonial", quote: "They explained every step.", attribution: "Jo B." } as FlowBlock)
+          : starterBlock(kind, "Vitality Dental");
+      if (!block) throw new Error(`no starter for ${kind}`);
+      const edited = addBlock(result, "result-high", block);
+      if (!edited.ok) throw new Error(edited.reason);
+      result = edited.graph;
+    }
+    const rHtml = rail(result, { kind: "node", id: "result-high" });
+    expect(rHtml).not.toContain('<select id="ab-result-high"');
+    expect(rHtml).toContain(esc(noAddableBlockReason(result, "result-high")!));
+    // The wording an owner acts on: the screen is full, not complete.
+    expect(rHtml).toContain("full");
+    expect(rHtml).not.toContain("one of every kind");
+
+    // A screen with room still gets the picker and no sentence at all.
+    const roomy = rail(invisalign(), { kind: "node", id: "welcome" });
+    expect(roomy).toContain('<select id="ab-welcome"');
+    expect(roomy).not.toContain("one of every kind");
+  });
+
   // EVERY AUTHORED LINE HAS A BOX, and the list is blockCopyFields' - the same one
   // rule 12 caps and the compliance scan reads. MUTATION: draw a fixed set of
   // fields per kind here and a chip added by the generator becomes uneditable.
@@ -1046,7 +1118,15 @@ describe("the rail still decides nothing about a block", () => {
     ]) {
       expect(code, `the rail calls ${op}`).not.toContain(op);
     }
-    for (const reader of ["addableBlockKinds", "optionImageRows", "questionSwapWarning", "blockIssues"]) {
+    for (const reader of [
+      "addableBlockKinds",
+      // WHY the picker is empty is a rule too, and one that stopped being a
+      // single sentence when a result screen gained a fifth legal kind.
+      "noAddableBlockReason",
+      "optionImageRows",
+      "questionSwapWarning",
+      "blockIssues",
+    ]) {
       expect(code, `${reader} is not read from the pure layer`).toContain(reader);
     }
     // Which screens take blocks is blocksOf/addableBlockKinds' answer, never a
@@ -1136,5 +1216,303 @@ describe("an edited block reaches the phone beside the rail", () => {
     const memo = code.slice(at, code.indexOf("}, [", at) + 40);
     expect(memo).toContain("screenFor(");
     expect(memo).toMatch(/\}, \[[^\]]*\bgraph\b/);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 8. "WRITE THIS FOR ME": the rail ASKS, the builder fetches, the answer lands
+ *    through the ordinary edit intents.
+ *
+ * The seam this suite exists for, one lane further on. Three things can only be
+ * held here: that the rail emits without fetching, that the two boxes nothing
+ * writes for you have no button, and that the builder hands the answer back to
+ * `onEdit` rather than to the graph.
+ * ------------------------------------------------------------------------- */
+
+describe("write this for me", () => {
+  const withBlocks = (blocks: FlowBlock[]): FlowGraph => {
+    const graph = invisalign();
+    return {
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.kind === "welcome" ? { ...n, blocks } : n)),
+    };
+  };
+
+  const TRUST: FlowBlock = {
+    kind: "trust-strip",
+    practiceName: "Vitality Dental",
+    chips: ["Open Saturdays", "Takes about 30 seconds"],
+  };
+  const FAQ: FlowBlock = {
+    kind: "faq",
+    items: [
+      { q: "How soon could I be seen?", a: "Usually within a week or so." },
+      { q: "What happens next?", a: "The team will call you back." },
+    ],
+  };
+  const TESTIMONIAL: FlowBlock = {
+    kind: "testimonial",
+    quote: "The team looked after me from start to finish.",
+    attribution: "Sam, Wood Green",
+  };
+
+  function railAsking(
+    graph: FlowGraph,
+    selection: FlowSelection | null,
+    assisting: string | null = null,
+  ): { html: string; asked: AssistTarget[] } {
+    const asked: AssistTarget[] = [];
+    const html = renderToStaticMarkup(
+      createElement(FlowInspector, {
+        graph,
+        selection,
+        failures: validateFlow(graph).failures,
+        onEdit: () => {},
+        onSelect: () => {},
+        onAssist: (t: AssistTarget) => asked.push(t),
+        assisting,
+      }),
+    );
+    return { html, asked };
+  }
+
+  const buttons = (html: string) => occurrences(html, "Write this for me");
+
+  // MUTATION: drop the prop and the buttons are drawn anyway. The rail would then
+  // need somewhere to send the request, which is the whole of the builder.
+  it("draws no button at all when nothing is listening", () => {
+    expect(buttons(rail(invisalign(), { kind: "node", id: "welcome" }))).toBe(0);
+    expect(buttons(railAsking(invisalign(), { kind: "node", id: "welcome" }).html)).toBeGreaterThan(0);
+  });
+
+  // MUTATION: hand the button a target it built itself ("the selected node") and a
+  // block line would be written onto whichever block happens to be first.
+  it("puts one on every copy box the pure layer says may be written", () => {
+    const graph = withBlocks([TRUST, FAQ, TESTIMONIAL]);
+    const fromTheRules =
+      2 + // the opening headline and the opening line
+      [TRUST, FAQ, TESTIMONIAL].reduce(
+        (sum, b) =>
+          sum + blockCopyFields(b).filter((f) => isAssistableBlockField(b.kind, f.field)).length,
+        0,
+      );
+    expect(buttons(railAsking(graph, { kind: "node", id: "welcome" }).html)).toBe(fromTheRules);
+  });
+
+  // MUTATION: the charter one. A quote is the practice's own words and nothing
+  // here writes one - and the same goes for the name on a trust strip, which is a
+  // fact rather than a line of copy.
+  it("has no button on a testimonial, or on the practice's own name", () => {
+    const { html } = railAsking(withBlocks([TESTIMONIAL, TRUST]), { kind: "node", id: "welcome" });
+    // The boxes are all there to type in...
+    expect(html).toContain(esc("The quote, in their words"));
+    expect(html).toContain(esc("Who gave it"));
+    expect(html).toContain(esc("Practice name"));
+    // ...and the aria-labels prove which of them offered to write themselves.
+    expect(html).not.toContain("Write the quote, in their words for me");
+    expect(html).not.toContain("Write who gave it for me");
+    expect(html).not.toContain("Write practice name for me");
+    expect(html).toContain("Write chip 1 for me");
+  });
+
+  it("offers one on a question's lead-in, a result headline and a connection", () => {
+    const graph = invisalign();
+    expect(buttons(railAsking(graph, { kind: "node", id: "q-treatment_interest" }).html)).toBe(1);
+    expect(buttons(railAsking(graph, { kind: "node", id: "result-high" }).html)).toBe(1);
+    expect(buttons(railAsking(graph, { kind: "edge", index: 0 }).html)).toBe(1);
+    // The contact screen has no copy of its own, so it has nothing to write.
+    expect(buttons(railAsking(graph, { kind: "node", id: "contact" }).html)).toBe(0);
+  });
+
+  // MUTATION: a boolean instead of the key. Every button would then say "Writing",
+  // and the owner could not tell which line was on its way.
+  it("flattens every button while one line is being written, and only that one says so", () => {
+    const graph = withBlocks([FAQ]);
+    const key = assistTargetKey({ nodeId: "welcome", field: "headline" });
+    const { html } = railAsking(graph, { kind: "node", id: "welcome" }, key);
+    expect(occurrences(html, "Writing<")).toBe(1);
+    expect(occurrences(html, "disabled=")).toBeGreaterThanOrEqual(buttons(html) + 1);
+  });
+
+  // MUTATION: fetch from the rail. Every rule about what may be written, what the
+  // budget is and where the line lands would move into a file vitest collects
+  // nothing from - the exact failure this whole layer exists to stop.
+  it("emits the target and nothing else: the rail still cannot reach a server", () => {
+    const code = codeOnly(inspectorSource);
+    expect(code).toContain("onAssist(target)");
+    expect(code).not.toContain("fetch(");
+    expect(code).not.toContain("assistCopy");
+    expect(code).not.toContain("flow-copy-assist");
+    // The one rule it reads rather than restates: which block lines may be asked
+    // for. Every place the handler is passed on is either passed WHOLE or passed
+    // through that helper - a `blockField === "quote"` test written here instead
+    // is the version of this rule that comes back the next time a block kind is
+    // added and nobody remembers the charter clause.
+    const passes = code.match(/onAssist=\{[^}]*\}/g) ?? [];
+    expect(passes.length).toBeGreaterThan(0);
+    for (const pass of passes) {
+      expect(
+        pass === "onAssist={onAssist}" ||
+          pass === "onAssist={isAssistableBlockField(block.kind, field.field) ? onAssist : undefined}",
+        `the rail decides for itself who may be written: ${pass}`,
+      ).toBe(true);
+    }
+  });
+
+  // MUTATION: land it with setGraph. It would bypass applyInspectorEdit, and with
+  // it every trim, every "that screen has no such box" and every refusal.
+  it("lands the written line through the same edit intents a typed line takes", () => {
+    const code = codeOnly(builderSource);
+    expect(code).toContain("const edit = assistEditFor(target, text);");
+    expect(code).toContain("live.current.onEdit(edit)");
+    const at = code.indexOf("const onAssist = useCallback");
+    expect(at).toBeGreaterThan(-1);
+    const handler = code.slice(at, code.indexOf("[assisting, clientSlug, practiceName]", at));
+    expect(handler).not.toContain("setGraph");
+    expect(handler).not.toContain("applyInspectorEdit");
+    // ...and it refuses to land at all once the ground has moved.
+    expect(handler).toContain("canLandAssist(live.current.graph, live.current.selected, target)");
+    expect(handler).toContain("setRefusal(ASSIST_TARGET_MOVED)");
+
+    // THE STAMP, AND WHY IT IS PINNED HERE. canLandAssist only checks identity when
+    // the target carries a fingerprint (`at`), so the check is exactly as good as
+    // the promise that the one caller in this codebase always stamps one. The rail
+    // emits a bare target - it is dumb by design - so the stamping happens here, at
+    // press time, off the SAME live graph the landing is checked against.
+    //
+    // MUTATION: send `raw` instead of the stamped target, or stamp from the render
+    // closure's `graph` instead of `live.current.graph`, and a block reordered
+    // during the round trip takes the line silently.
+    expect(handler).toContain("assistFingerprint(live.current.graph, raw)");
+    expect(handler).toContain("{ ...raw, at }");
+    // A box that has already gone has no fingerprint, and that is a refusal rather
+    // than a reason to skip the check.
+    expect(handler).toContain("if (at === null)");
+    expect(handler).not.toContain("canLandAssist(live.current.graph, live.current.selected, raw)");
+  });
+
+  // MUTATION: a second raw fetch. The `await fetch(` count is the file's promise
+  // that the draft graph leaves by exactly one road; routing every call through
+  // one helper is what keeps that promise honest rather than merely worded.
+  //
+  // THE HELPER COUNT IS THREE, AND IT IS MEANT TO MOVE. It is a census of the
+  // requests this builder makes, not a ceiling on them: one PUT that saves, one
+  // POST that writes a single line, one POST that rewrites the whole funnel's
+  // words. Raising it is a decision - a fourth call means a fourth thing the
+  // builder can do to an owner's funnel, and it should be read as such rather
+  // than absorbed. The `await fetch(` count is the one that must NEVER move.
+  it("asks through the one request helper, and still saves through the one PUT", () => {
+    const code = codeOnly(builderSource);
+    expect(occurrences(code, "await fetch(")).toBe(1);
+    expect(occurrences(code, "await callFlowApi(")).toBe(3);
+    expect(occurrences(code, 'method: "PUT"')).toBe(1);
+    expect(code).toContain("/api/smile-assessment/flow-copy-assist?client=");
+    expect(code).toContain("/api/smile-assessment/flow-generate");
+    // The rail is handed both halves, or the buttons spin for ever.
+    expect(code).toContain("onAssist={onAssist}");
+    expect(code).toContain("assisting={assisting}");
+  });
+
+  // -------------------------------------------------------------------------
+  // "REWRITE THE WORDS": the same idea at funnel scale, and the one control in
+  // this builder that replaces the whole graph. Everything below is about the
+  // three things that make that defensible.
+  // -------------------------------------------------------------------------
+
+  // MUTATION: send `mode: "draft"`, or leave the mode off. The route would then
+  // WRITE A NEW FUNNEL - different questions, different routing - and drop it on
+  // top of one the owner built, from a button that says it rewrites the words.
+  it("asks the funnel route to rewrite, carrying the funnel that is on the canvas", () => {
+    const code = codeOnly(builderSource);
+    expect(code).toContain("/api/smile-assessment/flow-generate");
+    expect(code).toContain('mode: "rewrite"');
+    expect(code).toContain("flow: sent");
+    expect(code).toContain("const sent = graph;");
+  });
+
+  // MUTATION: setGraph(data.flow). An unvalidated funnel from a reply would land
+  // on the canvas and be drawn - the exact thing the gallery re-validates against
+  // for a fresh draft, on a path that overwrites work rather than starting it.
+  it("re-validates the rewritten funnel with the runtime's own gate before it lands", () => {
+    const code = codeOnly(builderSource);
+    const at = code.indexOf("const rewrite = useCallback");
+    expect(at).toBeGreaterThan(-1);
+    const handler = code.slice(at, code.indexOf("}, [clientSlug, goal, graph", at));
+
+    expect(handler).toContain("const { graph: next } = normaliseAndValidateFlow(data.flow);");
+    // The order matters: validate, then check the ground has not moved, and only
+    // then set. A setGraph before either is a setGraph that cannot be taken back.
+    expect(handler.indexOf("normaliseAndValidateFlow")).toBeLessThan(handler.indexOf("setGraph(next)"));
+    expect(handler.indexOf("JSON.stringify(live.current.graph)")).toBeLessThan(
+      handler.indexOf("setGraph(next)"),
+    );
+    expect(occurrences(handler, "setGraph(")).toBe(1);
+  });
+
+  // MUTATION: drop the moved-graph check. The owner types a headline while the
+  // rewrite is in flight, the reply lands, and their typing is gone - silently,
+  // from a control that never said it would touch anything they were working on.
+  it("refuses to land a rewrite on a funnel that changed while it was being written", () => {
+    const code = codeOnly(builderSource);
+    expect(code).toContain(
+      "if (JSON.stringify(live.current.graph) !== JSON.stringify(sent)) {",
+    );
+    expect(code).toContain("You changed the funnel while the words were being written");
+  });
+
+  // MUTATION: treat `unchanged` as success. The owner is shown "the words were
+  // rewritten" over a funnel nothing happened to, and goes looking for what moved.
+  it("says so, in words, when the server could not improve on what is there", () => {
+    const code = codeOnly(builderSource);
+    expect(code).toContain('if (data.source === "unchanged")');
+    expect(code).toContain("could not improve on what is there");
+    // Every other road out of the handler speaks too: a spinner that stops with
+    // nothing said is the version of this an owner stops trusting.
+    for (const said of [
+      "The words could not be rewritten just now",
+      "did not pass its checks",
+      "The writer could not be reached",
+      "The words were rewritten",
+    ]) {
+      expect(code, `a silent exit: ${said}`).toContain(said);
+    }
+  });
+
+  // MUTATION: render it unconditionally. With no goal the writer has nothing to
+  // brief it on but the questions, and a rewrite briefed on nothing is a rewrite
+  // that reads like a different practice.
+  it("offers the control only when the campaign's goal is known, and hands it down", () => {
+    const code = codeOnly(builderSource);
+    expect(code).toContain("{goal ? (");
+    expect(code).toContain("Rewrite the words");
+    expect(code).toContain("if (!goal || rewriting || saving) return;");
+    // ...and the panel supplies it off the campaign, never off the funnel.
+    expect(codeOnly(panelSource)).toContain("goal={campaign.goal}");
+  });
+
+  // MUTATION: leave the box uncontrolled AND keyed by the step alone. The line
+  // would be on the graph and the old words still in the box, which reads exactly
+  // like the button having done nothing.
+  it("re-mounts a copy box when the line under it changes", () => {
+    const code = codeOnly(inspectorSource);
+    for (const key of [
+      "key={`wh-${node.id}-${node.headline ?? \"\"}`}",
+      "key={`wi-${node.id}-${node.intro ?? \"\"}`}",
+      "key={`tr-${node.id}-${node.transition ?? \"\"}`}",
+      "key={`hl-${node.id}-${node.headline ?? \"\"}`}",
+    ]) {
+      expect(code, `a box is keyed without its own line: ${key}`).toContain(key);
+    }
+    // ...and it really does redraw: the same rail, one written line apart.
+    const before = invisalign();
+    const after = applyInspectorEdit(before, { kind: "node", id: "welcome" }, {
+      kind: "headline",
+      text: "Tell us what you would change.",
+    });
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(railAsking(after.graph, { kind: "node", id: "welcome" }).html).toContain(
+      esc("Tell us what you would change."),
+    );
   });
 });
