@@ -1,5 +1,5 @@
 import "server-only";
-import { dentallyFromEnv } from "@/lib/dentally/read";
+import { dentallyFromEnv, cachedRead, writeDisplayCache } from "@/lib/dentally/read";
 import { dentallySiteId, getSites } from "@/lib/mock/clients";
 import { configuredUdaTargets } from "@/lib/dashboard/contract";
 import {
@@ -506,40 +506,51 @@ export interface ReadDashboardArgs {
  * totalling a truncated scan.
  */
 export async function readPracticeDashboard(args: ReadDashboardArgs): Promise<PracticeDashboardView> {
-  const hit = cacheRead(args.clientId);
-  if (hit) return hit;
-  const view = await buildPracticeDashboard(args);
-  cacheWrite(args.clientId, view);
-  return view;
+  // Through the SHARED L2 (src/lib/dentally/display-cache.ts), not a per-instance
+  // Map. The Map made this fast only on a WARM instance: under Fluid Compute a COLD
+  // instance re-ran all six 90-day scans (~40s) on the practice manager's home page,
+  // and every cold instance re-paid it. Keyed by clientId as the tenant, it now
+  // dedups across the whole fleet AND gets stale-while-revalidate for free — an
+  // expired dashboard is served instantly while it re-warms behind the response, so
+  // no one waits — AND becomes pre-warmable (the cron writes this exact key). The
+  // view is JSON-serialisable (it already crosses the RSC boundary to the dashboard
+  // client component), so it survives the jsonb round trip; a round-trip test pins
+  // that. `now` is not part of the key (the assembled figures carry their own
+  // "Stats updated" stamp), matching the old Map which keyed on clientId alone.
+  return cachedRead(
+    args.clientId,
+    DASHBOARD_CACHE_KEY,
+    () => buildPracticeDashboard(args),
+    DASHBOARD_TTL_MS,
+  );
 }
 
 /**
- * A short cross-request cache, matching what the other live Dentally display
- * reads do (src/lib/dentally/read.ts).
+ * The L2 key + user-facing TTL for the assembled dashboard.
  *
  * Assembling this screen is six paged scans of a source that will not filter by
- * date, so it is expensive by construction. Without a cache every navigation
- * back to the dashboard re-pages ninety days of payments, and the reads compete
- * with the hourly backfill for the rate budget. A minute of staleness is exactly
- * what the "Stats updated" line exists to declare, so nothing is hidden by it.
+ * date, so it is expensive by construction. A minute of staleness is exactly what
+ * the "Stats updated" line exists to declare, so nothing is hidden by it. The
+ * pre-warm writes this SAME key with a longer ttl so the row stays fresh between
+ * cron runs; see prewarmPracticeDashboard.
  */
-const CACHE_TTL_MS = 60_000;
-const cache = new Map<string, { at: number; view: PracticeDashboardView }>();
+export const DASHBOARD_CACHE_KEY = "dashboard:v1";
+const DASHBOARD_TTL_MS = 60_000;
 
-function cacheRead(clientId: string): PracticeDashboardView | null {
-  if (process.env.VITEST) return null;
-  const hit = cache.get(clientId);
-  if (!hit || Date.now() - hit.at >= CACHE_TTL_MS) return null;
-  return hit.view;
-}
-
-function cacheWrite(clientId: string, view: PracticeDashboardView): void {
-  if (process.env.VITEST) return;
-  cache.set(clientId, { at: Date.now(), view });
-  if (cache.size > 20) {
-    const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-    if (oldest) cache.delete(oldest[0]);
-  }
+/**
+ * PRE-WARM the practice dashboard for one client: recompute it fresh (a true cold
+ * assembly, bypassing the read path) and stamp it into L2 under DASHBOARD_CACHE_KEY
+ * with `ttlMs`. `clientId` is the tenancy key, so the pre-warm can only ever write
+ * this client's own row. Called only by the pre-warm cron; a no-op when the cache is
+ * disabled (VITEST default), because writeDisplayCache is.
+ */
+export async function prewarmPracticeDashboard(
+  clientId: string,
+  now: Date,
+  ttlMs: number,
+): Promise<void> {
+  const view = await buildPracticeDashboard({ clientId, now });
+  await writeDisplayCache(clientId, DASHBOARD_CACHE_KEY, view, ttlMs);
 }
 
 async function buildPracticeDashboard(args: ReadDashboardArgs): Promise<PracticeDashboardView> {

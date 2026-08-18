@@ -250,6 +250,7 @@ const EXEMPT: Record<string, Exemption> = {
   "landing-pages/promote-sweep": { kind: "cron", reason: "A/B winner promotion sweep" },
   "messaging/drain": { kind: "cron", reason: "the shared outbox drain" },
   "meta-ads/insights": { kind: "cron", reason: "hourly Meta insights pull" },
+  "dentally/prewarm": { kind: "cron", reason: "Dentally display-cache pre-warm" },
   "sync/coordinator": { kind: "cron", reason: "Dentally -> treatment-coordinator sync" },
   "sync/dentally": { kind: "cron", reason: "Dentally patient sync" },
   "sync/noshow": { kind: "cron", reason: "Dentally -> no-show defence sync" },

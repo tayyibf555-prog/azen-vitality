@@ -1,4 +1,5 @@
 import { cache } from "react";
+import { after } from "next/server";
 import { DentallyClient } from "./client";
 import { normaliseAppointmentState } from "./appointment-state";
 import { notesFromEnvelope, toNoteRecords, type NoteRecord } from "./notes-shape";
@@ -396,12 +397,32 @@ async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: n
 // be served another's blob.
 const READ_CACHE_TTL_MS = 60_000;
 
+/**
+ * Run a stale-while-revalidate refresh so it SURVIVES the serverless response.
+ *
+ * The SWR refresh must run AFTER the current response has already returned its stale
+ * value. A bare floating promise is not enough on Fluid Compute: once the response is
+ * flushed the platform can freeze or reclaim the instance before a detached promise
+ * settles, so the refresh would silently never run and the row would stay stale
+ * forever. next/after registers the task with the invocation's waitUntil, which keeps
+ * the instance alive until it settles. It can only be called inside a request/render
+ * scope; the try/catch falls back to a detached run for any caller outside one (the
+ * pre-warm cron never hits this path — it computes on a true miss, synchronously).
+ */
+function afterScheduler(task: () => Promise<void>): void {
+  try {
+    after(task);
+  } catch {
+    void task().catch(() => {});
+  }
+}
+
 // Null under VITEST so the unit suite exercises the REAL reads uncached, exactly as
 // before this cache existed. A test that wants to exercise the cache MECHANISM
 // through this file injects an active one with __setDisplayCacheForTests.
 let displayCache: DisplayCache | null = process.env.VITEST
   ? null
-  : createDisplayCache({ store: supabaseDisplayCacheStore() });
+  : createDisplayCache({ store: supabaseDisplayCacheStore(), scheduleBackground: afterScheduler });
 
 /**
  * TEST SEAM. Swap in a display cache (e.g. one backed by inMemoryDisplayCacheStore)
@@ -437,6 +458,26 @@ export async function cachedRead<T>(
   // VITEST default / cache disabled: compute live (no cross-test cache pollution).
   if (!displayCache) return fn();
   return displayCache.cachedRead(clientId, key, fn, ttlMs);
+}
+
+/**
+ * Write a value straight into the shared L2 under (clientId, key), bypassing the
+ * read path. This is the PRE-WARM seam: the pre-warm cron computes an expensive
+ * DISPLAY read once (a true cold compute) and stamps it into L2 with a LONG ttl —
+ * one that outlives the cron interval — so the row stays FRESH between runs and a
+ * normal user read is a fresh L2 hit rather than a stale-serve+refresh. `clientId`
+ * is the tenancy key: it is embedded in the L1 key AND the L2 row, so a pre-warm for
+ * one practice can never land in another's bucket. No-op when the cache is disabled
+ * (VITEST default), like every other read here.
+ */
+export async function writeDisplayCache(
+  clientId: string | null,
+  key: string,
+  value: unknown,
+  ttlMs: number,
+): Promise<void> {
+  if (!displayCache) return;
+  await displayCache.setCached(clientId, key, value, ttlMs);
 }
 
 /** All patients across the given sites. The 3 sites are paged CONCURRENTLY (peak
@@ -1102,11 +1143,26 @@ export interface OutstandingRead {
  *  page cap (so the caller can tell a complete total from a floor). Shares the same
  *  60s cache entry as {@link listOutstanding}, so the two never double-scan. */
 export function listOutstandingDetailed(siteIds: string[]): Promise<OutstandingRead> {
-  return cachedRead(
-    clientIdForSites(siteIds),
-    `outstanding:${[...siteIds].sort().join("|")}`,
-    () => _listOutstandingUncached(siteIds),
+  return cachedRead(clientIdForSites(siteIds), outstandingCacheKey(siteIds), () =>
+    _listOutstandingUncached(siteIds),
   );
+}
+
+/** The exact L2 cache key the outstanding read uses. Shared with the pre-warm so the
+ *  two can never drift onto different keys (a drift would warm a key nobody reads). */
+function outstandingCacheKey(siteIds: string[]): string {
+  return `outstanding:${[...siteIds].sort().join("|")}`;
+}
+
+/**
+ * PRE-WARM the outstanding read for these sites: recompute it fresh (a true cold
+ * scan, bypassing the read path) and stamp it into L2 under the read's own key with
+ * `ttlMs`. Tenant-correct by construction (clientIdForSites is the key). Called only
+ * by the pre-warm cron; a no-op when the cache is disabled.
+ */
+export async function prewarmOutstanding(siteIds: string[], ttlMs: number): Promise<void> {
+  const value = await _listOutstandingUncached(siteIds);
+  await writeDisplayCache(clientIdForSites(siteIds), outstandingCacheKey(siteIds), value, ttlMs);
 }
 
 /** Outstanding balances across the given sites, one aggregated row per patient, from

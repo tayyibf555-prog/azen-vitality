@@ -64,6 +64,7 @@ vi.mock("@/lib/dentally/read", async (importActual) => {
 });
 
 import { readPracticeDashboard } from "./read";
+import { jsonRoundTrip } from "@/lib/dentally/display-cache";
 
 describe("readPracticeDashboard: the practitioner read overlaps the panel scans", () => {
   it("completes (does not serialise behind the practitioner read) and still resolves appointment practitioner names", async () => {
@@ -80,5 +81,14 @@ describe("readPracticeDashboard: the practitioner read overlaps the panel scans"
     // to preserve.
     expect(view.appointments.length).toBeGreaterThan(0);
     expect(view.appointments.every((r) => r.practitionerName === "Alice Ng")).toBe(true);
+  });
+
+  it("the assembled view survives the L2 jsonb round trip byte-for-byte", async () => {
+    // readPracticeDashboard now caches through the shared L2 (jsonb), and the pre-warm
+    // stamps the SAME shape in. A Date or a Map anywhere in the view would not survive
+    // — Date becomes an ISO string, a Map becomes {} — and would deserialise wrong on
+    // another instance. This proves the real, fully-built shape round-trips unchanged.
+    const view = await readPracticeDashboard({ clientId: "vitality", now: new Date() });
+    expect(jsonRoundTrip(view)).toEqual(view);
   });
 });

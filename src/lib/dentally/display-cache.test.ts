@@ -20,7 +20,28 @@ function clock(start = 1_000_000) {
   return { now: () => t, advance: (ms: number) => (t += ms) };
 }
 
+// A capturing background scheduler: SWR refreshes are queued here instead of running
+// detached, so a test can assert HOW MANY fired and run them deterministically AFTER
+// the read has already returned (modelling "the response has been sent").
+function captureScheduler() {
+  const tasks: Array<() => Promise<void>> = [];
+  return {
+    schedule: (t: () => Promise<void>) => {
+      tasks.push(t);
+    },
+    count: () => tasks.length,
+    async runAll() {
+      const pending = tasks.splice(0);
+      for (const t of pending) await t();
+    },
+  };
+}
+
 const TTL = 60_000;
+
+// The inMemory store keys its rows by JSON.stringify([clientId, cacheKey]); tests that
+// look at raw rows use this to name one.
+const rowKey = (clientId: string, cacheKey: string) => JSON.stringify([clientId, cacheKey]);
 
 describe("display-cache: tenancy (a read for one client can never return another's blob)", () => {
   it("keeps two clients' identical cache_key on two separate rows, both layers", async () => {
@@ -240,23 +261,153 @@ describe("display-cache: invalidation (a confirmed write is not hidden for the T
   });
 });
 
-describe("display-cache: TTL expiry and the null-tenant fresh guard", () => {
-  it("recomputes once the entry has aged past its TTL, in both layers", async () => {
+describe("display-cache: stale-while-revalidate (an expired row is served, then re-warmed)", () => {
+  it("serves the stale value immediately and fires exactly one background refresh", async () => {
     const c = clock();
     const store = inMemoryDisplayCacheStore();
-    const compute = vi.fn(async () => "v");
-    const cache = createDisplayCache({ store, now: c.now });
+    const sched = captureScheduler();
+    let value = "v1";
+    const compute = vi.fn(async () => value);
+    const cache = createDisplayCache({ store, now: c.now, scheduleBackground: sched.schedule });
 
-    await cache.cachedRead("vitality", "k", compute, TTL);
-    c.advance(TTL - 1);
-    await cache.cachedRead("vitality", "k", compute, TTL); // still fresh
+    expect(await cache.cachedRead("vitality", "k", compute, TTL)).toBe("v1"); // true cold compute
     expect(compute).toHaveBeenCalledTimes(1);
 
+    c.advance(TTL - 1);
+    expect(await cache.cachedRead("vitality", "k", compute, TTL)).toBe("v1"); // still fresh
+    expect(compute).toHaveBeenCalledTimes(1);
+    expect(sched.count()).toBe(0); // a fresh hit never schedules a refresh
+
     c.advance(2); // now past expiry
-    await cache.cachedRead("vitality", "k", compute, TTL);
-    expect(compute).toHaveBeenCalledTimes(2);
+    value = "v2"; // the underlying data has moved on
+    const served = await cache.cachedRead("vitality", "k", compute, TTL);
+    // The STALE value is returned immediately — NOT recomputed synchronously.
+    expect(served).toBe("v1");
+    expect(compute).toHaveBeenCalledTimes(1); // no synchronous recompute on the read path
+    expect(sched.count()).toBe(1); // exactly one background refresh queued
+
+    await sched.runAll(); // the response has returned; now the refresh runs
+    expect(compute).toHaveBeenCalledTimes(2); // the refresh recomputed
+    expect(await cache.cachedRead("vitality", "k", compute, TTL)).toBe("v2"); // fresh again
   });
 
+  it("N concurrent stale reads schedule ONE refresh, not one per read (no refresh storm)", async () => {
+    const c = clock();
+    const store = inMemoryDisplayCacheStore();
+    const sched = captureScheduler();
+    const compute = vi.fn(async () => "v");
+    const cache = createDisplayCache({ store, now: c.now, scheduleBackground: sched.schedule });
+
+    await cache.cachedRead("vitality", "k", compute, TTL);
+    c.advance(TTL + 1);
+    await cache.cachedRead("vitality", "k", compute, TTL);
+    await cache.cachedRead("vitality", "k", compute, TTL);
+    await cache.cachedRead("vitality", "k", compute, TTL);
+    expect(sched.count()).toBe(1); // deduped while a refresh for this key is in flight
+  });
+
+  it("a failed background refresh does NOT promote and does NOT clobber the stale row", async () => {
+    const c = clock();
+    const store = inMemoryDisplayCacheStore();
+    const sched = captureScheduler();
+    let mode: "ok" | "throw" = "ok";
+    const compute = vi.fn(async () => {
+      if (mode === "throw") throw new Error("dentally 503");
+      return "good";
+    });
+    const cache = createDisplayCache({ store, now: c.now, scheduleBackground: sched.schedule });
+
+    await cache.cachedRead("vitality", "k", compute, TTL); // stores "good"
+    const before = store.rows.get(rowKey("vitality", "k"))!;
+    const beforeValue = before.value;
+    const beforeExpiry = before.expiresAt;
+
+    c.advance(TTL + 1);
+    mode = "throw";
+    expect(await cache.cachedRead("vitality", "k", compute, TTL)).toBe("good"); // stale served
+    await sched.runAll(); // the refresh throws
+
+    // The stored row is untouched: same value, same expiry — a throwing refresh is the
+    // "only a clean read is promoted" rule, so it never overwrites good stale data.
+    const after = store.rows.get(rowKey("vitality", "k"))!;
+    expect(after.value).toBe(beforeValue);
+    expect(after.expiresAt).toBe(beforeExpiry);
+    // And the next read still serves the same stale value (and retries behind it).
+    expect(await cache.cachedRead("vitality", "k", compute, TTL)).toBe("good");
+  });
+
+  it("the background refresh writes back under the SAME tenant, never another practice's", async () => {
+    const c = clock();
+    const store = inMemoryDisplayCacheStore();
+    const sched = captureScheduler();
+    const cache = createDisplayCache({ store, now: c.now, scheduleBackground: sched.schedule });
+
+    let a = "a1";
+    const computeA = vi.fn(async () => a);
+    await cache.cachedRead("clientA", "shared:key", computeA, TTL); // clientA row
+    await cache.setCached("clientB", "shared:key", "b-stable", TTL); // clientB's own row, same key
+
+    c.advance(TTL + 1);
+    a = "a2";
+    expect(await cache.cachedRead("clientA", "shared:key", computeA, TTL)).toBe("a1"); // stale + schedule
+    await sched.runAll();
+
+    // clientA refreshed to a2; clientB's row was never touched by clientA's refresh.
+    expect(store.rows.get(rowKey("clientA", "shared:key"))!.value).toBe("a2");
+    expect(store.rows.get(rowKey("clientB", "shared:key"))!.value).toBe("b-stable");
+  });
+
+  it("a write-invalidation DURING a background refresh must not resurrect the busted row (order pinned)", async () => {
+    const c = clock();
+    const store = inMemoryDisplayCacheStore();
+    const sched = captureScheduler();
+    const compute = vi.fn(async () => "value");
+    const cache = createDisplayCache({ store, now: c.now, scheduleBackground: sched.schedule });
+
+    await cache.cachedRead("vitality", "outstanding:site-cc", compute, TTL);
+    c.advance(TTL + 1);
+    expect(await cache.cachedRead("vitality", "outstanding:site-cc", compute, TTL)).toBe("value"); // stale + schedule
+    expect(sched.count()).toBe(1);
+
+    // A CONFIRMED write busts the key before the queued refresh runs.
+    await cache.invalidate("vitality", {
+      prefixes: ["outstanding:"],
+      l1Predicate: (k) => k.startsWith("outstanding:"),
+    });
+    expect(store.rows.has(rowKey("vitality", "outstanding:site-cc"))).toBe(false); // gone
+
+    await sched.runAll(); // the refresh (which read BEFORE the bust) now completes
+
+    // It must NOT write its pre-bust value back: the row stays gone, not resurrected.
+    expect(store.rows.has(rowKey("vitality", "outstanding:site-cc"))).toBe(false);
+    expect(await cache.getCached("vitality", "outstanding:site-cc")).toBeUndefined();
+
+    // MUTATION: drop the generation veto in scheduleRefresh -> the refresh's setCached
+    // runs after the delete and the row comes back (has() === true) -> red.
+  });
+
+  it("FRESH PATH: getCached is fresh-only and NEVER stale-while-revalidates", async () => {
+    const c = clock();
+    const store = inMemoryDisplayCacheStore();
+    const sched = captureScheduler();
+    const cache = createDisplayCache({ store, now: c.now, scheduleBackground: sched.schedule });
+
+    // apptssafe:* is a two-phase Safe read (the diary/availability family). It must
+    // recompute on expiry, never be answered from a stale blob.
+    await cache.setCached("vitality", "apptssafe:site-cc::", { appointments: [], failed: false, failedSiteIds: [] }, TTL);
+    expect(await cache.getCached("vitality", "apptssafe:site-cc::")).toBeTruthy(); // fresh hit
+
+    c.advance(TTL + 1);
+    expect(await cache.getCached("vitality", "apptssafe:site-cc::")).toBeUndefined(); // expired reads as MISS
+    expect(sched.count()).toBe(0); // and NEVER schedules a background refresh
+
+    // MUTATION: point getCached at the SWR lookup (serve stale + refresh) -> a
+    // write-guard/diary Safe read could be answered from a stale day and this goes red
+    // (returns the value here, and sched.count() becomes 1).
+  });
+});
+
+describe("display-cache: the null-tenant fresh guard", () => {
   it("a null (unresolved) tenant is L1-only and never written to the shared L2", async () => {
     const store = inMemoryDisplayCacheStore();
     const compute = vi.fn(async () => "v");

@@ -48,23 +48,32 @@ import {
   getPatientById,
   listSitePractitionersSafe,
   listDiaryAvailabilitySafe,
+  prewarmOutstanding,
   __setDisplayCacheForTests,
 } from "./read";
 import { createDisplayCache, type DisplayCacheStore } from "./display-cache";
 
 // A store that counts every interaction, so "did this read touch the shared cache?"
 // is a hard number.
-function spyStore(): DisplayCacheStore & { gets: number; sets: number; deletes: number } {
+function spyStore(): DisplayCacheStore & {
+  gets: number;
+  sets: number;
+  deletes: number;
+  rows: Map<string, { value: unknown; expiresAt: number }>;
+} {
   const rows = new Map<string, { value: unknown; expiresAt: number }>();
   const key = (c: string, k: string) => `${c}::${k}`;
   const s = {
     gets: 0,
     sets: 0,
     deletes: 0,
-    async get(clientId: string, cacheKey: string, nowMs: number) {
+    rows,
+    // Present-regardless-of-expiry: freshness is the cache's job now (so it can
+    // stale-while-revalidate). This spy only ever holds fresh rows in these tests.
+    async get(clientId: string, cacheKey: string) {
       s.gets += 1;
       const row = rows.get(key(clientId, cacheKey));
-      if (!row || row.expiresAt <= nowMs) return null;
+      if (!row) return null;
       return { value: JSON.parse(JSON.stringify(row.value)), expiresAt: row.expiresAt };
     },
     async set(clientId: string, cacheKey: string, value: unknown, expiresAtMs: number) {
@@ -105,6 +114,37 @@ describe("DISPLAY reads route through the shared cache", () => {
 
     expect(store.sets).toBe(1); // the computed result reached the shared L2
     expect(calls.length).toBe(invoiceCallsAfterFirst); // the second read paged Dentally ZERO more times
+  });
+});
+
+describe("PRE-WARM writes the read's own key, tenant-correct, with the long ttl", () => {
+  it("prewarmOutstanding lands under (clientId, outstanding-key) and satisfies the live read", async () => {
+    let invoicePages = 0;
+    state.listInvoices = (() => {
+      invoicePages += 1;
+      return Promise.resolve({ invoices: [] });
+    }) as never;
+
+    const LONG = 20 * 60_000;
+    await prewarmOutstanding(["site-cc"], LONG);
+
+    // Wrote exactly one row, under THIS client's tenant + the read's exact key, with
+    // a ttl reflecting the long pre-warm window (not the 60s read ttl).
+    expect(store.sets).toBe(1);
+    const row = store.rows.get("vitality::outstanding:site-cc");
+    expect(row).toBeTruthy();
+    expect(row!.expiresAt).toBeGreaterThan(Date.now() + 10 * 60_000);
+    // No other tenant's row was written.
+    expect([...store.rows.keys()]).toEqual(["vitality::outstanding:site-cc"]);
+
+    // The live read is now a fresh L2 hit: it pages Dentally ZERO more times.
+    const pagesAfterWarm = invoicePages;
+    await listOutstanding(["site-cc"]);
+    expect(invoicePages).toBe(pagesAfterWarm);
+
+    // MUTATION: key the pre-warm on a bare site set (drop clientIdForSites) or on a
+    // different key string -> the row lands somewhere the read never looks, store.sets
+    // stays 1 but the live read re-pages (invoicePages climbs) -> red.
   });
 });
 
