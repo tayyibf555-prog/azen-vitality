@@ -212,7 +212,7 @@ function toAppointmentSource(
 async function scanAppointments(
   siteIds: readonly string[],
   today: string,
-  practitionerNameById: ReadonlyMap<string, string>,
+  practitionersP: Promise<PractitionerRef[]>,
 ): Promise<AppointmentScan> {
   const client = dentallyFromEnv();
   const from = shiftDayKey(today, -(HISTORY_DAYS - 1)) ?? today;
@@ -254,6 +254,15 @@ async function scanAppointments(
   if (perSite.some((s) => !s.ok)) {
     return { normalised: null, rows: [], coverage: null };
   }
+
+  // The practitioner read was started ALONGSIDE this scan, not before it, and its
+  // names are only needed now — to fill an appointment row that did not carry its
+  // practitioner's name inline. Awaiting the promise here, after the appointment
+  // paging, overlaps the two reads instead of serialising the whole dashboard
+  // behind the practitioner read. The name map is otherwise built and used exactly
+  // as before, so every row resolves the same name it did when the map was passed
+  // in ready-made.
+  const practitionerNameById = new Map((await practitionersP).map((p) => [p.id, p.name]));
 
   const normalised: DashboardAppointment[] = [];
   const rows: AppointmentSource[] = [];
@@ -539,19 +548,24 @@ async function buildPracticeDashboard(args: ReadDashboardArgs): Promise<Practice
   const today = londonToday(args.now);
   const contractStart = nhsContractYear(args.now).start;
 
-  const practitioners = await readPractitioners(siteIds);
-  const practitionerNameById = new Map(practitioners.map((p) => [p.id, p.name]));
+  // The practitioner read is STARTED here but not awaited: it used to block every
+  // scan below it, adding a whole round trip to the front of a cold dashboard load
+  // for a read that only the appointment panel consumes. It is now handed to
+  // scanAppointments as a promise and awaited there, after that panel's own paging,
+  // so it overlaps the six scans instead of preceding them.
+  const practitionersP = readPractitioners(siteIds);
 
   // Independent reads, so one slow endpoint does not stack behind another and a
   // dead one costs only its own panel.
   const [payments, appointments, claims, patients, plans, invoiceScan] = await Promise.all([
     scanPayments(siteIds, today),
-    scanAppointments(siteIds, today, practitionerNameById),
+    scanAppointments(siteIds, today, practitionersP),
     scanClaims(siteIds, today, contractStart),
     scanPatients(siteIds),
     scanPlans(siteIds),
     scanInvoices(),
   ]);
+  const practitioners = await practitionersP;
 
   const siteByPatientId = new Map<string, string>();
   const patientNameById = new Map<string, string>();

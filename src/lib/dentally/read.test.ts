@@ -33,6 +33,7 @@ interface ClientStubs {
   listTreatmentPlans: (arg: unknown) => Promise<unknown>;
   listInvoices: (arg: unknown) => Promise<unknown>;
   countPatients: (siteId: unknown) => Promise<number | null>;
+  getPatient: (id: unknown) => Promise<unknown>;
 }
 
 const state = vi.hoisted<ClientStubs>(() => ({
@@ -41,6 +42,7 @@ const state = vi.hoisted<ClientStubs>(() => ({
   listTreatmentPlans: () => Promise.resolve({ treatment_plans: [] }),
   listInvoices: () => Promise.resolve({ invoices: [] }),
   countPatients: () => Promise.resolve(null),
+  getPatient: () => Promise.resolve({ patient: null }),
 }));
 
 vi.mock("./client", () => ({
@@ -51,10 +53,11 @@ vi.mock("./client", () => ({
     listTreatmentPlans(a: unknown) { return state.listTreatmentPlans(a); }
     listInvoices(a: unknown) { return state.listInvoices(a); }
     countPatients(s: unknown) { return state.countPatients(s); }
+    getPatient(id: unknown) { return state.getPatient(id); }
   },
 }));
 
-import { listPatients, listAppointments, listAppointmentsSafe, listOutstanding, countPatients, dentallyReadKey } from "./read";
+import { listPatients, listAppointments, listAppointmentsSafe, listOutstanding, listOutstandingDetailed, countPatients, dentallyReadKey } from "./read";
 
 beforeEach(() => {
   vi.stubEnv("DENTALLY_API_KEY", "k");
@@ -222,6 +225,109 @@ describe("listOutstanding", () => {
     const out = await listOutstanding(["site-1", "site-2", "site-3"]);
     expect(out).toEqual([]);
     expect(spy).not.toHaveBeenCalled(); // patient scan skipped on the no-outstanding path
+  });
+});
+
+// The debtors the bounded book scan does not cover (out-of-practice patients on the
+// shared group index, and this practice's own patients sorting past the book's page
+// cap) are resolved by a direct id read. That fan-out USED TO BE SERIAL — one
+// blocking round trip per miss, inside the assembly loop — which on the real base is
+// a miss for every debtor past the 100-page book. It now runs in bounded-concurrency
+// chunks of 8, and the invoice scan reports when it hit its own page cap so a partial
+// total is never presented as the whole.
+describe("listOutstanding: parallel debtor resolution + truncation signal", () => {
+  const unpaid = (id: string, patientId: string, owed: number) => ({
+    id, patient_id: patientId, amount: owed, amount_outstanding: owed, paid: false, status: "new",
+  });
+
+  it("resolves book-miss debtors in BOUNDED-PARALLEL chunks, not one serial round trip each, and drops the unresolvable and out-of-practice ones", async () => {
+    // 20 in-practice debtors + 1 other-practice + 1 that cannot be resolved. NONE are
+    // in the book scan (it returns empty), so every one falls to getPatientById.
+    const invoices = [
+      ...Array.from({ length: 20 }, (_, i) => unpaid(`inv-${i}`, `pat-${i}`, 100 + i)),
+      unpaid("inv-other", "pat-other", 999),
+      unpaid("inv-null", "pat-null", 500),
+    ];
+    state.listInvoices = ((a: { page?: number }) =>
+      Promise.resolve({ invoices: (a.page ?? 1) === 1 ? invoices : [] })) as never;
+    state.listPatients = (() => Promise.resolve({ patients: [] })) as never; // empty book -> every debtor misses
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const seen: string[] = [];
+    state.getPatient = (async (id: string) => {
+      seen.push(id);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Two microtask yields, so every sibling invoked in the same chunk has entered
+      // before the first resolves — that is what lets maxInFlight observe the true
+      // chunk width rather than 1.
+      await Promise.resolve();
+      await Promise.resolve();
+      inFlight -= 1;
+      if (id === "pat-null") return { patient: null };
+      const site = id === "pat-other" ? "site-9" : "site-1";
+      return { patient: { id, first_name: "P", last_name: id, site_id: site } };
+    }) as never;
+
+    const out = await listOutstanding(["site-1"]);
+
+    // Each distinct debtor is read exactly once (22 misses), never twice.
+    expect(seen.length).toBe(22);
+    expect(new Set(seen).size).toBe(22);
+    // Bounded parallelism: a full chunk runs 8 reads at once. Serial code would peak
+    // at 1; unbounded would peak at 22. ceil(22/8) = 3 round trips instead of 22.
+    expect(maxInFlight).toBe(8);
+    // Zero data loss: all 20 in-practice debtors present; the other-practice and the
+    // unresolvable ones dropped, never mis-attributed.
+    expect(out.map((o) => o.patientId).sort()).toEqual(
+      Array.from({ length: 20 }, (_, i) => `pat-${i}`).sort(),
+    );
+    expect(out.every((o) => o.siteId === "site-1")).toBe(true);
+    expect(out.find((o) => o.patientId === "pat-other")).toBeUndefined();
+    expect(out.find((o) => o.patientId === "pat-null")).toBeUndefined();
+  });
+
+  it("flags the total as truncated when a site exhausts the page cap on full pages, without dropping the debtor it did read", async () => {
+    // Every page is FULL (100 rows) and never short, so the scan runs the whole cap
+    // and can never prove it reached the end — the real understated-total case. Unique
+    // invoice ids but a single patient_id keep the debtor set tiny while the page walk
+    // stays long.
+    state.listInvoices = ((a: { page?: number }) => {
+      const page = a.page ?? 1;
+      const rows = Array.from({ length: 100 }, (_, i) => unpaid(`inv-${page}-${i}`, "pat-cap", 10));
+      return Promise.resolve({ invoices: rows });
+    }) as never;
+    state.listPatients = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({
+        patients:
+          a.siteId === "site-1" && (a.page ?? 1) === 1
+            ? [{ id: "pat-cap", first_name: "P", last_name: "Cap", site_id: "site-1" }]
+            : [],
+      })) as never;
+
+    const read = await listOutstandingDetailed(["site-1"]);
+    expect(read.truncated).toBe(true);
+    // The debtor read within the cap is STILL present: truncation narrows the total,
+    // it does not drop what was already collected. 40 pages x 100 invoices x £10.
+    expect(read.rows.map((r) => r.patientId)).toEqual(["pat-cap"]);
+    expect(read.rows[0].outstanding).toBe(40 * 100 * 10);
+  });
+
+  it("does NOT flag truncation on a clean scan that ends on a short page", async () => {
+    state.listInvoices = ((a: { page?: number }) =>
+      Promise.resolve({ invoices: (a.page ?? 1) === 1 ? [unpaid("inv-1", "pat-1", 200)] : [] })) as never;
+    state.listPatients = ((a: { siteId?: string; page?: number }) =>
+      Promise.resolve({
+        patients:
+          a.siteId === "site-1" && (a.page ?? 1) === 1
+            ? [{ id: "pat-1", first_name: "P", last_name: "One", site_id: "site-1" }]
+            : [],
+      })) as never;
+
+    const read = await listOutstandingDetailed(["site-1"]);
+    expect(read.truncated).toBe(false);
+    expect(read.rows.map((r) => r.patientId)).toEqual(["pat-1"]);
   });
 });
 

@@ -11,7 +11,7 @@ import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { getSite } from "@/lib/mock";
 import { gbp, relativeTime } from "@/lib/utils";
-import { listOutstanding, type OutstandingRecord } from "@/lib/dentally/read";
+import { listOutstandingDetailed, type OutstandingRecord } from "@/lib/dentally/read";
 
 export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
@@ -23,8 +23,11 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
   const now = new Date();
 
   let rows: OutstandingRecord[] = [];
+  let truncated = false;
   try {
-    rows = await listOutstanding(siteIds);
+    const read = await listOutstandingDetailed(siteIds);
+    rows = read.rows;
+    truncated = read.truncated;
   } catch {
     rows = [];
   }
@@ -72,7 +75,15 @@ export async function PaymentsView({ clientSlug }: { clientSlug: string }) {
         }
       />
 
-      <SectionCard title="Outstanding balances" description="Highest owed first." bodyClassName="p-0">
+      <SectionCard
+        title="Outstanding balances"
+        description={
+          truncated
+            ? `Highest owed first. Showing the ${rows.length} balances read so far — the invoice history is longer than a single scan, so more may be owed than the total above.`
+            : "Highest owed first."
+        }
+        bodyClassName="p-0"
+      >
         {rows.length === 0 ? (
           <EmptyState
             icon={ReceiptText}

@@ -352,6 +352,13 @@ const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad ups
 // case where a source ignores the filter and returns the whole (mostly-paid) index.
 const OUTSTANDING_MAX_PAGES = 40;
 
+// The debtors the bounded book scan does not cover are resolved by a direct id
+// read (getPatientById). That fan-out runs in bounded-concurrency chunks of this
+// size, so the round-trip depth of the fallback is misses/chunk rather than one
+// blocking round trip per miss. Kept small so a large debtor set cannot open
+// hundreds of simultaneous Dentally connections against the shared rate budget.
+const DEBTOR_RESOLVE_CHUNK = 8;
+
 async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: number = MAX_PAGES): Promise<T[]> {
   const out: T[] = [];
   for (let page = 1; page <= maxPages; page += 1) {
@@ -1017,10 +1024,34 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   };
 }
 
-/** Outstanding balances across the given sites, one aggregated row per patient, from
- *  unpaid invoices (real Dentally holds the balance on invoices, not on plans). */
-export function listOutstanding(siteIds: string[]): Promise<OutstandingRecord[]> {
+export interface OutstandingRead {
+  rows: OutstandingRecord[];
+  /**
+   * True when a site's unpaid-invoice scan exhausted OUTSTANDING_MAX_PAGES on full
+   * pages without ever reaching a short page or the ignored-filter signature. The
+   * outstanding total is then a FLOOR, not a complete figure: balances on invoices
+   * past the page cap are not included. The Payments page surfaces this so a
+   * partial total is never presented as the whole; false on any scan that
+   * terminated cleanly on a short page (the normal case). An errored site is logged
+   * and skipped as before and does NOT set this — it is a transient failure the
+   * next 60s refresh may clear, distinct from a structural cap.
+   */
+  truncated: boolean;
+}
+
+/** Outstanding balances across the given sites plus whether the invoice scan hit its
+ *  page cap (so the caller can tell a complete total from a floor). Shares the same
+ *  60s cache entry as {@link listOutstanding}, so the two never double-scan. */
+export function listOutstandingDetailed(siteIds: string[]): Promise<OutstandingRead> {
   return cachedRead(`outstanding:${[...siteIds].sort().join("|")}`, () => _listOutstandingUncached(siteIds));
+}
+
+/** Outstanding balances across the given sites, one aggregated row per patient, from
+ *  unpaid invoices (real Dentally holds the balance on invoices, not on plans). The
+ *  rows half of {@link listOutstandingDetailed}, kept as its own export because the
+ *  co-pilot and the daily brief consume the array directly. */
+export function listOutstanding(siteIds: string[]): Promise<OutstandingRecord[]> {
+  return listOutstandingDetailed(siteIds).then((read) => read.rows);
 }
 
 // Invoice statuses that are NOT a live debt (never counted as outstanding or paid).
@@ -1087,8 +1118,11 @@ function invoiceCredit(r: Record<string, unknown>): number {
   return Math.max(0, -num(raw));
 }
 
-async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingRecord[]> {
+async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingRead> {
   const client = dentallyFromEnv();
+  // Set once any site exhausts the page cap on full pages: the total is then a
+  // floor, and the caller says so rather than presenting the partial as the whole.
+  let truncated = false;
 
   // 1. Scan the invoices index ONCE. Real Dentally may IGNORE the site_id filter and
   //    return the entire (5-practice) group's invoices on every site call, so dedupe
@@ -1142,6 +1176,7 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
         if (invoices.length < PER_PAGE) { sawShortPage = true; break; }
       }
       if (!sawShortPage) {
+        truncated = true;
         console.warn(
           `[dentally] listOutstanding: site ${siteId} hit the ${OUTSTANDING_MAX_PAGES}-page cap without a short page; ` +
             `the outstanding total may be understated (raise OUTSTANDING_MAX_PAGES or confirm the paid=false filter is honoured).`,
@@ -1154,7 +1189,7 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
   }
 
   // Live-data fast path: nothing outstanding -> skip the (expensive) patient scan.
-  if (byPatient.size === 0) return [];
+  if (byPatient.size === 0) return { rows: [], truncated };
 
   // 2. Resolve patient name + real site only for the patients that carry a balance.
   //    Invoices are attributed by the patient's site and DROP any whose patient is not
@@ -1166,13 +1201,31 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
   const patients = await listPatients(siteIds);
   const byId = new Map(patients.map((p) => [p.id, p]));
   const allow = new Set(siteIds);
+
+  // The debtors the bounded book scan did not cover — patients on the shared group
+  // index who belong to another practice, and this practice's own patients sorting
+  // past the book's page cap (on the real base, 17k/site over a 100-page book that
+  // reaches 10k, that is every debtor past the bound) — are resolved by a direct id
+  // read. That fan-out USED TO BE SERIAL: one blocking round trip per miss, inside
+  // the assembly loop. It now runs in bounded-concurrency chunks, so the round-trip
+  // depth is misses/DEBTOR_RESOLVE_CHUNK rather than misses. Semantics are
+  // unchanged: each miss is still resolved by its own id, and an unresolved miss is
+  // still dropped below. The set of ids is byPatient's keys, so a patient is read at
+  // most once however many invoices they carry.
+  const misses = [...byPatient.keys()].filter((id) => !byId.has(id));
+  const resolvedById = new Map<string, PatientRecord>();
+  for (let i = 0; i < misses.length; i += DEBTOR_RESOLVE_CHUNK) {
+    const chunk = misses.slice(i, i + DEBTOR_RESOLVE_CHUNK);
+    const found = await Promise.all(chunk.map((id) => getPatientById(id)));
+    chunk.forEach((id, j) => {
+      const rec = found[j];
+      if (rec) resolvedById.set(id, rec);
+    });
+  }
+
   const out: OutstandingRecord[] = [];
   for (const [patientId, agg] of byPatient) {
-    let patient = byId.get(patientId);
-    if (!patient) {
-      const resolved = await getPatientById(patientId);
-      if (resolved) patient = resolved;
-    }
+    const patient = byId.get(patientId) ?? resolvedById.get(patientId);
     // Attribute by the patient's real site; drop any whose patient is not in the
     // requested Vitality sites, or that we could not resolve at all (better a small
     // omission than a mis-attributed balance).
@@ -1187,5 +1240,5 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
       acceptedAt: agg.latest,
     });
   }
-  return out.sort((a, b) => b.outstanding - a.outstanding);
+  return { rows: out.sort((a, b) => b.outstanding - a.outstanding), truncated };
 }
