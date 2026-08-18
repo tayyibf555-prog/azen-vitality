@@ -73,6 +73,24 @@ export function getSite(siteId: string): Site | undefined {
 }
 
 /**
+ * The client that owns a set of internal site ids, or null when that cannot be
+ * decided unambiguously -- an EMPTY set, an UNKNOWN site, or a set that somehow
+ * SPANS more than one client. Used as the tenancy key for the cross-instance
+ * display cache: a null result means "do not share this read via the shared L2",
+ * so an unresolved tenant can never land in another practice's bucket. Display
+ * reads always pass a single client's own sites (they come from getViewSiteIds),
+ * so null is the safe-degrade path, not the normal one.
+ */
+export function clientIdForSites(siteIds: readonly string[]): string | null {
+  const clients = new Set<string>();
+  for (const id of siteIds) {
+    const clientId = getSite(id)?.clientId;
+    if (clientId) clients.add(clientId);
+  }
+  return clients.size === 1 ? [...clients][0]! : null;
+}
+
+/**
  * The real Dentally site_id to send when calling Dentally for one of our internal
  * sites. Falls back to the internal id itself (mock/pilot, where the mock server
  * keys on the internal id).

@@ -66,8 +66,9 @@ const DETAIL = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Pass-through, so the key can be asserted without simulating a cache.
-  h.cachedRead.mockImplementation((_key: string, fn: () => Promise<unknown>) => fn());
+  // Pass-through, so the key can be asserted without simulating a cache. Signature
+  // is cachedRead(clientId, key, fn, ttl) -- fn is the THIRD arg.
+  h.cachedRead.mockImplementation((_clientId: string | null, _key: string, fn: () => Promise<unknown>) => fn());
   h.getPatientById.mockResolvedValue(patient());
   h.getPatientDetailUncached.mockResolvedValue(DETAIL);
 });
@@ -76,7 +77,9 @@ describe("getPatientRecord", () => {
   it("resolves the patient AND the detail under ONE cache key", async () => {
     await getPatientRecord("p1", "site-cc");
     expect(h.cachedRead).toHaveBeenCalledTimes(1);
-    expect(h.cachedRead.mock.calls[0][0]).toBe("patientrecord:site-cc:p1");
+    // The tenancy key comes first, then the read key.
+    expect(h.cachedRead.mock.calls[0][0]).toBe("vitality");
+    expect(h.cachedRead.mock.calls[0][1]).toBe("patientrecord:site-cc:p1");
     expect(h.getPatientById).toHaveBeenCalledTimes(1);
     expect(h.getPatientDetailUncached).toHaveBeenCalledTimes(1);
   });

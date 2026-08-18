@@ -6,6 +6,7 @@ import {
   type PatientRecord,
   type ReadHealth,
 } from "@/lib/dentally/read";
+import { clientIdForSites } from "@/lib/mock/clients";
 import { derivePatient, type PatientDerived } from "./record-derive";
 
 /**
@@ -57,6 +58,7 @@ const RECORD_TTL_MS = 30_000;
  */
 export function getPatientRecord(patientId: string, siteId: string): Promise<PatientRecordView | null> {
   return cachedRead(
+    clientIdForSites([siteId]),
     `patientrecord:${siteId}:${patientId}`,
     () => resolve(patientId, siteId),
     RECORD_TTL_MS,

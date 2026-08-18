@@ -2,7 +2,12 @@ import { cache } from "react";
 import { DentallyClient } from "./client";
 import { normaliseAppointmentState } from "./appointment-state";
 import { notesFromEnvelope, toNoteRecords, type NoteRecord } from "./notes-shape";
-import { dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
+import { dentallySiteId, siteIdFromDentally, clientIdForSites } from "@/lib/mock/clients";
+import {
+  createDisplayCache,
+  supabaseDisplayCacheStore,
+  type DisplayCache,
+} from "./display-cache";
 import { normaliseGender, type Gender } from "@/lib/patient/demographics";
 import { readPlanId } from "@/lib/calendar/funding";
 import { londonDayStartIso, londonDayEndIso } from "@/lib/calendar/availability";
@@ -133,12 +138,14 @@ export async function listSitePractitionersSafe(
   opts: ThroughClient = {},
 ): Promise<PractitionersRead> {
   const cacheKey = PRACTITIONERS_CACHE_KEY(internalSiteId);
+  const clientId = clientIdForSites([internalSiteId]);
   // A caller that supplied its OWN client bypasses the cache in both directions.
   // Reading it would answer a question about one Dentally instance with another
   // instance's answer, and writing to it would poison every read-path caller.
-  if (!process.env.VITEST && !opts.client) {
-    const hit = readCache.get(cacheKey);
-    if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as PractitionersRead;
+  const useCache = displayCache && !opts.client;
+  if (useCache) {
+    const hit = await displayCache!.getCached<PractitionersRead>(clientId, cacheKey);
+    if (hit) return hit;
   }
 
   const client = opts.client ?? dentallyFromEnv();
@@ -166,8 +173,8 @@ export async function listSitePractitionersSafe(
     result = { practitioners: [], failed: true };
   }
 
-  if (!process.env.VITEST && !result.failed && !opts.client) {
-    readCache.set(cacheKey, { at: Date.now(), value: result });
+  if (useCache && !result.failed) {
+    await displayCache!.setCached(clientId, cacheKey, result, READ_CACHE_TTL_MS);
   }
   return result;
 }
@@ -373,12 +380,38 @@ async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: n
 // force-dynamic page re-pages Dentally on navigation; on a real-size practice
 // (thousands of patients + the whole group's treatment plans) that makes the app
 // feel slow, and the reads compete with the hourly backfill for the rate budget.
-// Fluid Compute keeps instances warm, so a short per-instance TTL turns repeat and
-// SHARED reads (Home, Payments and the brief all want the same outstanding +
-// appointments) into instant hits. DISPLAY only: the sync/backfill uses the raw
-// DentallyClient directly, so its data always stays fresh. Stale by at most the TTL.
+//
+// TWO LAYERS (see lib/dentally/display-cache.ts):
+//  - L1 is an in-process Map, so REPEAT reads on ONE warm instance are instant.
+//  - L2 is the shared dentally_display_cache table (migration 0084), so a COLD
+//    instance -- and there are many under Fluid Compute -- serves the read from
+//    another instance's computed result and calls Dentally ZERO times until it
+//    expires. That is what stops a tab walk across cold instances from burning the
+//    3,600/hour Dentally budget.
+//
+// DISPLAY only: the sync/backfill, online-booking availability and the write-back
+// that confirms a write all use the raw DentallyClient (or pass opts.client) and so
+// never touch either layer -- they always reflect this exact second. Stale by at
+// most the TTL. Every entry is keyed by (clientId + params), so no practice can ever
+// be served another's blob.
 const READ_CACHE_TTL_MS = 60_000;
-const readCache = new Map<string, { at: number; value: unknown }>();
+
+// Null under VITEST so the unit suite exercises the REAL reads uncached, exactly as
+// before this cache existed. A test that wants to exercise the cache MECHANISM
+// through this file injects an active one with __setDisplayCacheForTests.
+let displayCache: DisplayCache | null = process.env.VITEST
+  ? null
+  : createDisplayCache({ store: supabaseDisplayCacheStore() });
+
+/**
+ * TEST SEAM. Swap in a display cache (e.g. one backed by inMemoryDisplayCacheStore)
+ * so the wiring in THIS file can be driven under VITEST, where displayCache is null
+ * by default. Pass null to restore the pass-through (compute-live) behaviour. Only
+ * for tests; production builds the singleton above.
+ */
+export function __setDisplayCacheForTests(cache: DisplayCache | null): void {
+  displayCache = cache;
+}
 
 /**
  * Exported so ONE caller can wrap several reads in a SINGLE cache entry.
@@ -388,22 +421,22 @@ const readCache = new Map<string, { at: number; value: unknown }>();
  * they must never disagree about a figure, which they would if each read through a
  * cache with its own TTL. Everything else in this file should keep using cachedRead
  * per read, as it does below.
+ *
+ * `clientId` is the TENANCY key -- it is embedded in the L1 map key AND the shared
+ * L2 row and its WHERE clause, so a read for one practice can never be answered with
+ * another's cached blob. Pass the client that owns `siteIds` (clientIdForSites);
+ * null when it cannot be resolved unambiguously, which keeps the read L1-only and
+ * out of the shared L2.
  */
-export async function cachedRead<T>(key: string, fn: () => Promise<T>, ttlMs = READ_CACHE_TTL_MS): Promise<T> {
-  // Unit tests exercise the real read directly (no cross-test cache pollution).
-  if (process.env.VITEST) return fn();
-  const now = Date.now();
-  const hit = readCache.get(key);
-  if (hit && now - hit.at < ttlMs) return hit.value as T;
-  const value = await fn();
-  readCache.set(key, { at: now, value });
-  if (readCache.size > 300) {
-    // Bound memory: drop the oldest quarter of entries.
-    for (const [k] of [...readCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 75)) {
-      readCache.delete(k);
-    }
-  }
-  return value;
+export async function cachedRead<T>(
+  clientId: string | null,
+  key: string,
+  fn: () => Promise<T>,
+  ttlMs = READ_CACHE_TTL_MS,
+): Promise<T> {
+  // VITEST default / cache disabled: compute live (no cross-test cache pollution).
+  if (!displayCache) return fn();
+  return displayCache.cachedRead(clientId, key, fn, ttlMs);
 }
 
 /** All patients across the given sites. The 3 sites are paged CONCURRENTLY (peak
@@ -413,7 +446,7 @@ export async function cachedRead<T>(key: string, fn: () => Promise<T>, ttlMs = R
  *  first ~300); callers that omit it keep the full scan (name resolution, sync, etc.). */
 export function listPatients(siteIds: string[], opts?: { maxPages?: number }): Promise<PatientRecord[]> {
   const key = `patients:${[...siteIds].sort().join("|")}:${opts?.maxPages ?? "all"}`;
-  return cachedRead(key, () => _listPatientsUncached(siteIds, opts?.maxPages));
+  return cachedRead(clientIdForSites(siteIds), key, () => _listPatientsUncached(siteIds, opts?.maxPages));
 }
 async function _listPatientsUncached(siteIds: string[], maxPages?: number): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
@@ -452,7 +485,7 @@ export function searchPatients(siteIds: string[], query: string): Promise<Patien
   const q = query.trim();
   if (q.length < 2) return Promise.resolve([]);
   const key = `patsearch:${[...siteIds].sort().join("|")}:${q}`;
-  return cachedRead(key, () => _searchPatientsUncached(siteIds, q), 30_000);
+  return cachedRead(clientIdForSites(siteIds), key, () => _searchPatientsUncached(siteIds, q), 30_000);
 }
 async function _searchPatientsUncached(siteIds: string[], query: string): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
@@ -483,7 +516,7 @@ async function _searchPatientsUncached(siteIds: string[], query: string): Promis
  *  to counting whatever slice they fetched. */
 export function countPatients(siteIds: string[]): Promise<number | null> {
   const key = `patcount:${[...siteIds].sort().join("|")}`;
-  return cachedRead(key, () => _countPatientsUncached(siteIds), 300_000);
+  return cachedRead(clientIdForSites(siteIds), key, () => _countPatientsUncached(siteIds), 300_000);
 }
 async function _countPatientsUncached(siteIds: string[]): Promise<number | null> {
   const client = dentallyFromEnv();
@@ -591,6 +624,7 @@ export async function listAppointments(
   const from = range?.from ?? "";
   const to = range?.to ?? "";
   const rows = await cachedRead(
+    clientIdForSites(siteIds),
     `appts:${siteIds.join("|")}:${from}:${to}`,
     () => listAppointmentsCached(siteIds.join("|"), from, to),
   );
@@ -635,10 +669,11 @@ export async function listAppointmentsSafe(
   const from = range?.from ?? "";
   const to = range?.to ?? "";
   const cacheKey = `apptssafe:${[...siteIds].sort().join("|")}:${from}:${to}`;
+  const clientId = clientIdForSites(siteIds);
 
-  if (!process.env.VITEST) {
-    const hit = readCache.get(cacheKey);
-    if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as AppointmentsRead;
+  if (displayCache) {
+    const hit = await displayCache.getCached<AppointmentsRead>(clientId, cacheKey);
+    if (hit) return hit;
   }
 
   const client = dentallyFromEnv();
@@ -676,39 +711,54 @@ export async function listAppointmentsSafe(
   const result: AppointmentsRead = { appointments, failed, failedSiteIds };
   // A PARTIAL read is not cached either. Caching it would serve one practice's
   // missing day back to every reader for the rest of the TTL, which is the same
-  // empty-diary lie as the all-sites-failed case, just narrower.
-  if (!process.env.VITEST && failedSiteIds.length === 0) {
-    readCache.set(cacheKey, { at: Date.now(), value: result });
+  // empty-diary lie as the all-sites-failed case, just narrower. Only a CLEAN read
+  // reaches the shared L2, so a failure on one instance can never poison another's.
+  if (displayCache && failedSiteIds.length === 0) {
+    await displayCache.setCached(clientId, cacheKey, result, READ_CACHE_TTL_MS);
   }
   return result;
 }
 
+/** The three cached read families whose rows a confirmed appointment write can make
+ *  stale: the two appointment feeds and the diary's availability grid. */
+const APPOINTMENT_CACHE_PREFIXES = ["apptssafe:", "appts:", "diaryavail:"] as const;
+
+/** True when an appointment-family cache key's embedded site set intersects `wanted`.
+ *  Every such key is `<prefix>:<siteOrSites>:<...>` and site ids carry no colon, so
+ *  the first segment after the first colon is the site part (`a|b|c` for the feeds,
+ *  a single id for diaryavail). Exported for the invalidation pin. */
+export function appointmentKeyIntersectsSites(key: string, wanted: Set<string>): boolean {
+  const firstColon = key.indexOf(":");
+  if (firstColon === -1) return false;
+  const sitePart = key.slice(firstColon + 1).split(":")[0] ?? "";
+  return sitePart.split("|").some((s) => wanted.has(s));
+}
+
 /**
- * Drop every cached appointment window whose site set intersects `siteIds`.
+ * Drop every cached appointment window whose site set intersects `siteIds`, across
+ * BOTH cache layers.
  *
- * WHY THIS HAS TO EXIST. listAppointmentsSafe caches a successful window for 60s
- * under `apptssafe:<sites>:<from>:<to>` and had no invalidation hook, so a
- * router.refresh() straight after a CONFIRMED appointment move repainted the OLD
- * time for up to a minute. To the person who just moved it that reads as a silent
- * revert: the very failure the read-back confirmation exists to prevent, produced
- * by the cache that makes the page fast. The move route calls this after a
- * confirmed write, and only then may the board refresh.
+ * WHY THIS HAS TO EXIST. The appointment feeds cache a successful window for 60s, and
+ * a router.refresh() straight after a CONFIRMED appointment move would otherwise
+ * repaint the OLD time for up to a minute. To the person who just moved it that reads
+ * as a silent revert: the very failure the read-back confirmation exists to prevent,
+ * produced by the cache that makes the page fast. The move route calls this after a
+ * confirmed write, and only then may the board refresh. Now that the cache is
+ * CROSS-INSTANCE, this must bust the shared L2 too, or the stale row survives on
+ * every OTHER instance for the rest of the TTL.
  *
- * Deliberately keyed on INTERSECTION, not equality: the diary reads one site at a
- * time, but Home and the daily brief read all three in one key, and that combined
- * entry holds the same stale row.
+ * L1 is INTERSECTION-precise (the diary reads one site at a time, but Home and the
+ * daily brief read all three in one key, and that combined entry holds the same stale
+ * row). L2 is busted per read-family for the whole client -- over-invalidating within
+ * one practice, which only forces a recompute and never yields a wrong answer.
  */
-export function invalidateAppointmentsCache(siteIds: string[]): void {
-  if (siteIds.length === 0) return;
+export async function invalidateAppointmentsCache(siteIds: string[]): Promise<void> {
+  if (siteIds.length === 0 || !displayCache) return;
   const wanted = new Set(siteIds);
-  const prefix = "apptssafe:";
-  for (const key of [...readCache.keys()]) {
-    if (!key.startsWith(prefix)) continue;
-    // `apptssafe:<a|b|c>:<from>:<to>`: site ids carry no colon, so the first
-    // segment after the prefix is the whole site set.
-    const sitePart = key.slice(prefix.length).split(":")[0] ?? "";
-    if (sitePart.split("|").some((s) => wanted.has(s))) readCache.delete(key);
-  }
+  await displayCache.invalidate(clientIdForSites(siteIds), {
+    prefixes: APPOINTMENT_CACHE_PREFIXES,
+    l1Predicate: (key) => appointmentKeyIntersectsSites(key, wanted),
+  });
 }
 
 /**
@@ -748,9 +798,13 @@ export async function listDiaryAvailabilitySafe(
   if (ids.length === 0) return { rows: [], failed: false };
 
   const cacheKey = `diaryavail:${args.siteId}:${[...ids].sort().join("|")}:${args.fromDayKey}:${args.toDayKey}`;
-  if (!process.env.VITEST && !opts.client) {
-    const hit = readCache.get(cacheKey);
-    if (hit && Date.now() - hit.at < READ_CACHE_TTL_MS) return hit.value as { rows: unknown[]; failed: boolean };
+  const clientId = clientIdForSites([args.siteId]);
+  // A caller supplying its OWN client (the write-guard path) bypasses the cache in
+  // both directions -- see the ThroughClient note on listSitePractitionersSafe.
+  const useCache = displayCache && !opts.client;
+  if (useCache) {
+    const hit = await displayCache!.getCached<{ rows: unknown[]; failed: boolean }>(clientId, cacheKey);
+    if (hit) return hit;
   }
 
   const client = opts.client ?? dentallyFromEnv();
@@ -802,8 +856,8 @@ export async function listDiaryAvailabilitySafe(
     result = { rows: [], failed: true };
   }
 
-  if (!process.env.VITEST && !result.failed && !opts.client) {
-    readCache.set(cacheKey, { at: Date.now(), value: result });
+  if (useCache && !result.failed) {
+    await displayCache!.setCached(clientId, cacheKey, result, READ_CACHE_TTL_MS);
   }
   return result;
 }
@@ -887,7 +941,12 @@ export interface InvoiceRecord {
 /** Full record for one patient: appointment history, treatment plans, notes, lifetime spend.
  *  Cached (short TTL) so re-opening the same record is instant. */
 export function getPatientDetail(patientId: string, siteId: string): Promise<PatientDetail> {
-  return cachedRead(`patientdetail:${siteId}:${patientId}`, () => _getPatientDetailUncached(patientId, siteId), 30_000);
+  return cachedRead(
+    clientIdForSites([siteId]),
+    `patientdetail:${siteId}:${patientId}`,
+    () => _getPatientDetailUncached(patientId, siteId),
+    30_000,
+  );
 }
 /** The detail read with NO cache of its own, for a caller that is already inside a
  *  cache entry of its own (lib/patient/record.ts). Prefer getPatientDetail. */
@@ -1043,7 +1102,11 @@ export interface OutstandingRead {
  *  page cap (so the caller can tell a complete total from a floor). Shares the same
  *  60s cache entry as {@link listOutstanding}, so the two never double-scan. */
 export function listOutstandingDetailed(siteIds: string[]): Promise<OutstandingRead> {
-  return cachedRead(`outstanding:${[...siteIds].sort().join("|")}`, () => _listOutstandingUncached(siteIds));
+  return cachedRead(
+    clientIdForSites(siteIds),
+    `outstanding:${[...siteIds].sort().join("|")}`,
+    () => _listOutstandingUncached(siteIds),
+  );
 }
 
 /** Outstanding balances across the given sites, one aggregated row per patient, from

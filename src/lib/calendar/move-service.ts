@@ -734,8 +734,10 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
   // 60 seconds, so a refresh straight after a confirmed move would repaint the OLD
   // time, and to the person who just moved it that reads as a silent revert: the
   // exact failure the read-back exists to prevent, produced by the cache that
-  // makes the page fast.
-  if (confirmed) invalidateAppointmentsCache([body.siteId]);
+  // makes the page fast. AWAITED, because the cache is now cross-instance: the L2
+  // row must be gone before the board is allowed to refresh, or another instance
+  // serves the stale time back.
+  if (confirmed) await invalidateAppointmentsCache([body.siteId]);
 
   // --- 16. the patient's text ----------------------------------------------
   //
