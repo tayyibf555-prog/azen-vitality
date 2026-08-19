@@ -1,6 +1,8 @@
 import { draftNoshow } from "@/lib/noshow/draft";
 import { stepDef, advanceAfter, NOSHOW_CADENCE } from "@/lib/noshow/cadence";
+import type { NoshowStep } from "@/lib/noshow/cadence";
 import { offerSlotToNextCandidate } from "@/lib/noshow/fill";
+import { noshowSendCap, disposeCadence, orderBySoonestAppointment, applySendCap } from "@/lib/noshow/ramp";
 import {
   listDueCadences,
   getTarget,
@@ -13,7 +15,7 @@ import {
   expireOffer,
   setWaitlistStatus,
 } from "@/lib/noshow/repository";
-import type { NoshowTarget } from "@/lib/noshow/types";
+import type { NoshowTarget, NoshowCadence } from "@/lib/noshow/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
@@ -57,45 +59,71 @@ export async function POST(request: Request) {
   // the appointment is still upcoming; a passed appointment exhausts the cadence anyway.
   const excludedKeys = await loadExcludedTargetKeys();
 
-  // A) Send due confirmations / reminders.
+  // A) Due confirmations / reminders, in TWO passes (see lib/noshow/ramp.ts).
+  //
+  // Interleaving settle-and-send was safe only while the sweep sent everything it
+  // found. It cannot survive a send cap: the moment a cap stops the loop, every
+  // stale cadence after the cut-off is stranded in the due list and re-read on
+  // every future tick, for ever. So: settle the whole backlog first (free — no
+  // message, no LLM draft), then send a bounded slice of what genuinely remains.
   const due = await listDueCadences(now.toISOString());
   let sent = 0;
   let ended = 0;
   let failedCadences = 0;
   let suppressed = 0;
+
+  // A1) SETTLE. Close every cadence that can never send again, and collect the
+  //     ones that genuinely can.
+  const sendable: Array<{ cadence: NoshowCadence; target: NoshowTarget; step: NoshowStep }> = [];
   for (const cadence of due) {
-    // One bad cadence (a transient DB/LLM error) must not abort the whole sweep and
+    // One bad cadence (a transient DB error) must not abort the whole sweep and
     // strand every later due cadence. Isolate each iteration: log and carry on.
     try {
       const target = await getTarget(cadence.targetId);
       if (!target) continue;
 
-      // Platform admin status excludes this patient from confirmations: skip before draft.
-      if (excludedKeys.has(excludedTargetKey(target.siteId, target.dentallyPatientId))) {
+      const step = stepDef(cadence.currentStep + 1, NOSHOW_CADENCE);
+      const disposition = disposeCadence(
+        {
+          // Platform admin status excludes this patient from confirmations.
+          excluded: excludedKeys.has(excludedTargetKey(target.siteId, target.dentallyPatientId)),
+          targetStatus: target.status,
+          appointmentStartAt: target.appointmentStartAt,
+          hasNextStep: step !== null,
+          channelConsented: step ? channelConsented(target, step.channel) : false,
+        },
+        now,
+      );
+
+      if (disposition === "suppress") {
         suppressed += 1;
         continue;
       }
+      if (disposition === "expire") {
+        await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
+        ended += 1;
+        continue;
+      }
+      // disposeCadence only answers "send" when hasNextStep was true, so `step` is
+      // non-null here; this is the type narrowing, not a second rule.
+      if (!step) continue;
+      sendable.push({ cadence, target, step });
+    } catch (err) {
+      failedCadences += 1;
+      console.error(`[noshow-sweep] settling cadence ${cadence.id} failed; skipping to the next`, err);
+    }
+  }
 
+  // A2) SEND, bounded. Most imminent appointment first, so a squeezed cap is
+  //     spent on the patients whose appointment is closest. Deferred cadences are
+  //     NOT touched: they stay active with next_due_at in the past, which is
+  //     exactly the state listDueCadences selects on, so the next tick takes them.
+  const sendCap = noshowSendCap();
+  const { send, deferred } = applySendCap(orderBySoonestAppointment(sendable), sendCap);
+  for (const { cadence, target, step } of send) {
+    // A transient DB/LLM error on one message must not abort the rest of the run.
+    try {
       const appointmentStart = new Date(target.appointmentStartAt);
-      // Stop once the patient has resolved (confirmed/cancelled) or the appointment
-      // has started: no point reminding any further.
-      if (target.status !== "scheduled" || appointmentStart.getTime() <= now.getTime()) {
-        await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
-        ended += 1;
-        continue;
-      }
-
-      const step = stepDef(cadence.currentStep + 1, NOSHOW_CADENCE);
-      if (!step) {
-        await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
-        ended += 1;
-        continue;
-      }
-      if (!channelConsented(target, step.channel)) {
-        await updateCadence(cadence.id, { status: "exhausted", endedAt: now.toISOString() });
-        ended += 1;
-        continue;
-      }
 
       const { body } = await draftNoshow(target, step.channel, step);
       const touch = await insertTouch({
@@ -172,7 +200,22 @@ export async function POST(request: Request) {
     }
   }
 
-  return Response.json({ ok: true, swept: due.length, sent, ended, offersExpired, reoffered, failedCadences, suppressed });
+  // `deferred` is the ramp made observable: on the first ticks after switch-on it
+  // is large and falling, and if it never falls the cap is too tight for the
+  // practice's volume (raise NOSHOW_MAX_SENDS_PER_RUN).
+  return Response.json({
+    ok: true,
+    swept: due.length,
+    sendCap,
+    sendable: sendable.length,
+    sent,
+    deferred: deferred.length,
+    ended,
+    offersExpired,
+    reoffered,
+    failedCadences,
+    suppressed,
+  });
   } finally {
     await releaseCronLock("sweep-noshow");
   }

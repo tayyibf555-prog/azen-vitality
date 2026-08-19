@@ -150,6 +150,75 @@ export async function setConversationStatus(id: string, status: ConversationStat
   if (error) throw error;
 }
 
+/**
+ * Idempotently mark a conversation as needing a human, and say whether THIS call
+ * was the one that did it.
+ *
+ * The `.neq("status", "needs_human")` predicate is the point: a conversation that
+ * is already handed over is left completely untouched, so re-running the handover
+ * path cannot churn `updated_at` and reshuffle the Conversations list under a
+ * colleague who is reading it. It is also a single statement, so two concurrent
+ * handovers on the same thread cannot both believe they were first.
+ *
+ * `closed` is excluded on purpose: a thread a human has already finished with must
+ * not be dragged back open by a late alert for a turn that happened before it closed.
+ */
+export async function ensureNeedsHuman(id: string): Promise<"set" | "already"> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("agent_conversation")
+    .update({ status: "needs_human", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .neq("status", "needs_human")
+    .neq("status", "closed")
+    .select("id");
+  if (error) throw error;
+  return ((data as { id: string }[] | null) ?? []).length > 0 ? "set" : "already";
+}
+
+/** The shape the Task Queue needs for a handed-over conversation. */
+export interface NeedsHumanConversation {
+  id: string;
+  siteId: string;
+  dentallyPatientId: string;
+  patientName: string;
+  channel: string;
+  updatedAt: string;
+}
+
+/**
+ * Conversations waiting on a human, newest first.
+ *
+ * Lean by design: the Task Queue needs one row per thread, not the message bodies
+ * `listDashboardConversations` fetches, and this runs on every dashboard render.
+ * Bounded so a practice that has let a backlog build up cannot turn one queue read
+ * into an unbounded scan; the cap is generous relative to any real backlog, and a
+ * queue showing 200 escalations has already made its point.
+ */
+export async function listNeedsHumanConversations(
+  siteIds: string[],
+  limit = 200,
+): Promise<NeedsHumanConversation[]> {
+  if (siteIds.length === 0) return [];
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("agent_conversation")
+    .select("id, site_id, dentally_patient_id, patient_name, channel, updated_at")
+    .in("site_id", siteIds)
+    .eq("status", "needs_human")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return ((data as ConvRow[]) ?? []).map((r) => ({
+    id: r.id,
+    siteId: r.site_id,
+    dentallyPatientId: r.dentally_patient_id,
+    patientName: r.patient_name,
+    channel: r.channel,
+    updatedAt: r.updated_at,
+  }));
+}
+
 export async function stampInbound(id: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db

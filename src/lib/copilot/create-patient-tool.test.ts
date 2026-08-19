@@ -25,6 +25,12 @@ const createPatient = vi.fn();
 const isDentallyWriteEnabled = vi.fn();
 const logCopilotAction = vi.fn();
 
+// tools.ts now reaches the Speed-to-lead contact path (the co-pilot can nudge a
+// lead), which opens with `import "server-only"` — a Next.js marker package that is
+// not installed and that vitest cannot resolve. Stubbed to an empty module, which is
+// exactly what it is at runtime on the server. Same line as landing-lead/route.test.ts.
+vi.mock("server-only", () => ({}));
+
 vi.mock("@/lib/dentally/read", () => ({
   searchPatients: (...a: unknown[]) => searchPatients(...a),
   dentallyFromEnv: () => ({ listPatients: (...a: unknown[]) => listPatientsRaw(...a) }),
@@ -54,10 +60,19 @@ const SITE_CC_UUID = "3286d822-68c5-48ff-b1a2-065780dfcd15";
 const dispatch = makeCopilotDispatch(["site-cc"], "vitality", "tester");
 
 // A complete, valid new-patient input (nobody matching in the mocked search).
+//
+// `title` and `funding` were ADDED on 2026-08-18. They are not decoration: live
+// Dentally refuses a registration without a title and a payment plan, so every
+// create this tool made before they existed would have 422'd against the real
+// practice while the local mock accepted it (DENTALLY.md; memory
+// dentally-createpatient-422). The owner is the right person to ask for both, so
+// they are required inputs rather than defaults.
 const GOOD = {
   firstName: "Jane",
   lastName: "Doe",
+  title: "Mrs",
   dateOfBirth: "1990-05-01",
+  funding: "NHS",
   phone: "07700900123",
   email: "jane.doe@example.co.uk",
 };
@@ -267,28 +282,114 @@ describe("create_patient two-step confirm", () => {
     expect(out.created).toBe(true);
     expect(out.patientId).toBe("new-pat-1");
     expect(createPatient).toHaveBeenCalledTimes(1);
-    expect(createPatient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        first_name: "Jane",
-        last_name: "Doe",
-        date_of_birth: "1990-05-01",
-        mobile_phone: "+447700900123",
-        email_address: "jane.doe@example.co.uk",
-        gender: "Female",
-        site_id: SITE_CC_UUID,
-        use_sms: true,
-        use_email: true,
-      }),
-    );
+    // THE WHOLE PAYLOAD, not a subset: the defect this tool shipped with was three
+    // ABSENT fields, and objectContaining cannot see an absence.
+    expect(createPatient).toHaveBeenCalledWith({
+      first_name: "Jane",
+      last_name: "Doe",
+      title: "Mrs",
+      date_of_birth: "1990-05-01",
+      payment_plan_id: 1, // NHS, confirmed against GET /v1/payment_plans
+      // A BOOLEAN. This call used to send the STRING "Female", to an API that
+      // answers "gender: must be male or female" to anything that is not a boolean.
+      gender: false,
+      email_address: "jane.doe@example.co.uk",
+      mobile_phone: "+447700900123",
+      site_id: SITE_CC_UUID,
+      use_sms: true,
+      use_email: true,
+    });
     expect(logCopilotAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: "create_patient", status: "created", targetRef: "patient:new-pat-1" }),
     );
   });
 
-  it("omits gender from the payload when the owner did not state it", async () => {
+  it("derives the boolean sex from the title when the owner did not state one", async () => {
+    // It used to OMIT gender entirely in this case, which live refuses outright.
+    // GOOD carries title "Mrs", so the derivation is false (female).
     await dispatch("create_patient", { ...GOOD, confirm: true });
     const payload = createPatient.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload).not.toHaveProperty("gender");
+    expect(payload.gender).toBe(false);
+    expect(typeof payload.gender).toBe("boolean");
+
+    createPatient.mockClear();
+    await dispatch("create_patient", { ...GOOD, title: "Mr", confirm: true });
+    expect((createPatient.mock.calls[0][0] as Record<string, unknown>).gender).toBe(true);
+  });
+
+  it("lets a sex the owner actually stated beat the title derivation", async () => {
+    // The title is a ~2%-wrong default (5 of 232 live "Mr" records are female); a
+    // person who says otherwise knows better than the derivation.
+    await dispatch("create_patient", { ...GOOD, title: "Mr", gender: "female", confirm: true });
+    expect((createPatient.mock.calls[0][0] as Record<string, unknown>).gender).toBe(false);
+  });
+
+  it("maps Private to the id that IS Private live (2), not to a positional guess", async () => {
+    await dispatch("create_patient", { ...GOOD, funding: "Private", confirm: true });
+    expect((createPatient.mock.calls[0][0] as Record<string, unknown>).payment_plan_id).toBe(2);
+  });
+});
+
+// ===========================================================================
+// THE FIELDS LIVE DENTALLY REFUSES A REGISTRATION WITHOUT.
+//
+// This tool sent NONE of title, payment_plan or a boolean gender, so every create
+// it made would have failed 422 against the real practice — invisibly, because the
+// local mock defaulted them all. These cases pin the refusals that now happen
+// BEFORE any network call, and the sentences that send the model back to the owner
+// rather than letting it guess.
+// ===========================================================================
+describe("create_patient refuses rather than sending a registration live would reject", () => {
+  it("will not create without a title, and asks the owner for one", async () => {
+    const { title: _title, ...noTitle } = GOOD;
+    const out = JSON.parse(await dispatch("create_patient", { ...noTitle, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.error).toMatch(/title/i);
+    expect(out.error).toMatch(/never guess/i);
+    expect(createPatient).not.toHaveBeenCalled();
+    expect(listPatientsRaw).not.toHaveBeenCalled(); // refused before the dedupe search
+  });
+
+  it("will not create on a title Dentally does not carry a sex signal for", async () => {
+    // Dr appears in live data (twice: one male, one female) and predicts nothing,
+    // so it is not offered — the same refusal the public funnel makes.
+    for (const title of ["Dr", "Rev", "Sir", "constructor"]) {
+      const out = JSON.parse(await dispatch("create_patient", { ...GOOD, title, confirm: true }));
+      expect(out.created, `${title} must be refused`).toBe(false);
+      expect(out.error).toMatch(/Mr, Mrs, Miss, Ms, Master/);
+    }
+    expect(createPatient).not.toHaveBeenCalled();
+  });
+
+  it("will not create without knowing how the patient is to be seen", async () => {
+    const { funding: _funding, ...noFunding } = GOOD;
+    const out = JSON.parse(await dispatch("create_patient", { ...noFunding, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.error).toMatch(/NHS or privately/i);
+    expect(out.error).toMatch(/never assume/i);
+    expect(createPatient).not.toHaveBeenCalled();
+  });
+
+  it("will not accept a plan the practice has that this tool does not offer", async () => {
+    // UDC (47752) is the practice's biggest plan by volume, and is deliberately not
+    // selectable: a plan nobody chose must not be reachable by naming it.
+    for (const funding of ["UDC", "47752", "Denplan A", "constructor"]) {
+      const out = JSON.parse(await dispatch("create_patient", { ...GOOD, funding, confirm: true }));
+      expect(out.created, `${funding} must be refused`).toBe(false);
+    }
+    expect(createPatient).not.toHaveBeenCalled();
+  });
+
+  it("reads the title and the funding back in the preview, so the owner approves what is saved", async () => {
+    const out = JSON.parse(await dispatch("create_patient", GOOD));
+    expect(out.preview).toBe(true);
+    expect(out.title).toBe("Mrs");
+    expect(out.funding).toBe("NHS");
+    // The DERIVED sex is read back too: a person catches a wrong derivation, and
+    // nobody can catch a value they were never shown.
+    expect(out.gender).toBe("female");
+    expect(out.note).toContain("Mrs");
+    expect(out.note).toContain("NHS");
   });
 });
 

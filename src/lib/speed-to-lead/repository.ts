@@ -146,13 +146,57 @@ export async function listLeads(args: {
   siteIds: string[];
   stages?: LeadStage[];
   limit?: number;
+  /**
+   * Optional lower bound on created_at. Absent means "however far back the bound
+   * reaches", which is every existing caller's behaviour, unchanged: the filter is
+   * only applied when a caller asks for one. It exists so a date-shaped question
+   * ("who came in today") is answered by the QUERY rather than by fetching the
+   * newest N and hoping the day fits inside them — which under-reports silently
+   * the moment a busy day is longer than the bound.
+   */
+  sinceIso?: string;
 }): Promise<SpeedToLeadLead[]> {
   const db = serviceClient();
   let q = db.from("speed_to_lead_lead").select("*").in("site_id", args.siteIds);
   if (args.stages && args.stages.length > 0) q = q.in("stage", args.stages);
+  if (args.sinceIso) q = q.gte("created_at", args.sinceIso);
   const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(args.limit ?? 200);
+  if (error) throw error;
+  return (data as LeadRow[]).map(rowToLead);
+}
+
+/** The hard ceiling on one batched by-id read, whatever the caller asks for. */
+const MAX_BATCH_IDS = 200;
+
+/**
+ * The leads behind a set of ids, SITE-SCOPED.
+ *
+ * The ids come from another table's foreign key (smile_assessment_response.lead_id),
+ * and the site scope is NOT redundant belt-and-braces: it is the boundary. A
+ * response row carries whatever lead id was stamped on it, so reading by id alone
+ * would let a stale, mis-stamped or tampered value pull a lead row belonging to a
+ * different site — and, at a multi-site group, a different practice's enquiry into
+ * an answer scoped to N15. The scope is applied in the query, not after it, so a
+ * row that fails it is never in this process's memory at all.
+ *
+ * Refuses to query on an empty site list or an empty id list: PostgREST's `in.()`
+ * with no values is not "match nothing" in every version, and "no scope" must never
+ * degrade into "every site".
+ */
+export async function listLeadsByIds(args: {
+  siteIds: string[];
+  ids: string[];
+}): Promise<SpeedToLeadLead[]> {
+  if (args.siteIds.length === 0 || args.ids.length === 0) return [];
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .select("*")
+    .in("site_id", args.siteIds)
+    .in("id", args.ids.slice(0, MAX_BATCH_IDS))
+    .limit(MAX_BATCH_IDS);
   if (error) throw error;
   return (data as LeadRow[]).map(rowToLead);
 }
@@ -552,6 +596,35 @@ export async function updateAttemptStatusByMessageId(
       .eq("stage", "contacted"); // conditional: never touch booked/lost/qualifying
     if (leadErr) throw leadErr;
   }
+}
+
+/** The ceiling on one batched attempts read: MAX_BATCH_IDS leads x a few tries each. */
+const MAX_BATCH_ATTEMPTS = 1000;
+
+/**
+ * Every recorded attempt for a SET of leads, in one query rather than one per lead.
+ *
+ * NOT SITE-SCOPED, and deliberately so: speed_to_lead_attempt has no site column,
+ * and inventing a join here would be a second, weaker copy of a check the caller
+ * has already made properly. The contract is that `leadIds` are ids the caller has
+ * ALREADY established it may see (listLeads / listLeadsByIds both scope by site),
+ * so this reads rows hanging off leads already inside the boundary. Callers must
+ * not pass ids straight from user input.
+ *
+ * Bounded on both the id list and the row count, and refuses an empty id list for
+ * the same reason listLeadsByIds does.
+ */
+export async function listAttemptsForLeads(leadIds: string[]): Promise<SpeedToLeadAttempt[]> {
+  if (leadIds.length === 0) return [];
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_attempt")
+    .select("*")
+    .in("lead_id", leadIds.slice(0, MAX_BATCH_IDS))
+    .order("created_at", { ascending: true })
+    .limit(MAX_BATCH_ATTEMPTS);
+  if (error) throw error;
+  return (data as AttemptRow[]).map(rowToAttempt);
 }
 
 export async function listAttempts(leadId: string): Promise<SpeedToLeadAttempt[]> {

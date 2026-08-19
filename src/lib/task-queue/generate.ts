@@ -8,6 +8,8 @@ import { listCaptures } from "@/lib/after-hours/repository";
 import { afterHoursTaskCopy, captureTiming } from "@/lib/after-hours/call-outcome";
 import { getSiteById } from "@/lib/after-hours/hours";
 import { listResponses } from "@/lib/smile-assessment/repository";
+import { listNeedsHumanConversations } from "@/lib/agent/repository";
+import { realPatientId } from "@/lib/agent/conversation-key";
 import { isMedicalHistoryEnabled } from "@/lib/patient-medical/gate";
 import { listOutstandingReviews } from "@/lib/patient-medical/repository";
 import { londonDateTimeLabel } from "@/lib/time/london";
@@ -184,6 +186,85 @@ async function smileAssessmentCandidates(ctx: TaskQueueContext): Promise<Candida
     }));
 }
 
+/**
+ * MEDIUM-band assessments nobody has picked up.
+ *
+ * A high scorer is auto-contacted by the bridge in /api/smile-assessment/submit and
+ * only lands in the queue when that bridge did not fire. A MEDIUM scorer is never
+ * contacted by anything: the follow-up config that decides who gets an automatic
+ * reply is off for every campaign until an owner turns it on, so a warm enquiry
+ * with a phone number was recorded and then appeared on no worklist at all.
+ *
+ * THIS TASK IS A HUMAN DECISION, NOT AN AUTO-SEND. Surfacing the enquiry is the
+ * whole feature: whether to contact them, and how, stays with the person reading
+ * the row. Nothing in the task queue sends anything; if an owner wants medium
+ * scorers contacted automatically, the campaign's own follow-up band is the switch
+ * for that, and it goes through every existing consent and suppression gate.
+ *
+ * LOW band stays out deliberately. It is the "recorded for nurture" tier, and a
+ * queue that lists every submission is a queue nobody reads.
+ */
+async function mediumAssessmentCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
+  // Its OWN read, separate from the high-band one, for two reasons: a shared query
+  // ordered by recency would let a run of medium submissions push high scorers off
+  // the end of the limit, and a failure on either band would blank both.
+  const responses = await listResponses({ siteIds: ctx.siteIds, bands: ["medium"], limit: 100 });
+  return responses
+    .filter((r) => r.leadId === null)
+    // No phone and no email means there is no decision to make: the enquiry cannot
+    // be acted on, only read, and it is already on the Smile Assessment page.
+    .filter((r) => r.phone !== null || r.email !== null)
+    .map((r) => ({
+      key: `smile-assessment:${r.id}:review`,
+      module: "smile-assessment" as const,
+      kind: "review_enquiry" as const,
+      title: `Review ${r.firstName}'s enquiry`,
+      subtitle: r.treatmentInterest
+        ? `Medium interest, ${r.treatmentInterest}`
+        : "Medium interest, decide whether to follow up",
+      patientName: r.firstName,
+      // Same as the high band: an assessment response is an enquiry keyed by our own
+      // uuid, with a first name and no Dentally patient id. Null, never a name match.
+      patientId: null,
+      siteId: r.siteId,
+      priority: computePriority("review_enquiry"),
+      dueHint: "not yet contacted",
+      href: `/c/${ctx.clientSlug}/smile-assessment`,
+    }));
+}
+
+/**
+ * Conversations the assistant has handed to a human.
+ *
+ * The handover was already durable (`agent_conversation.status = 'needs_human'`, set
+ * before every alert) and already visible on the Conversations page. What was
+ * missing is that the TASK QUEUE never read it, so the only active push was an SMS
+ * to STAFF_ALERT_PHONE, which is unset. A patient asking for a human produced a row
+ * on a page nobody had open and nothing else.
+ *
+ * Ranked above everything else in the queue: someone is holding their phone.
+ */
+async function agentEscalationCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
+  const conversations = await listNeedsHumanConversations(ctx.siteIds);
+  return conversations.map((c) => ({
+    key: `agent:${c.id}:human`,
+    module: "agent" as const,
+    kind: "agent_escalation" as const,
+    title: `Reply to ${c.patientName}`,
+    subtitle: `${c.channel === "whatsapp" ? "WhatsApp" : "SMS"} conversation waiting on a human`,
+    patientName: c.patientName,
+    // The conversation's own key, and ONLY when it is a real patient id: an
+    // unidentified enquiry is keyed `lead:<phone>`, which is a phone number, not a
+    // patient. realPatientId returns null for those rather than putting a stranger's
+    // conversation on somebody's clinical record.
+    patientId: realPatientId(c.dentallyPatientId),
+    siteId: c.siteId,
+    priority: computePriority("agent_escalation"),
+    dueHint: "waiting for a reply",
+    href: `/c/${ctx.clientSlug}/conversations`,
+  }));
+}
+
 async function medicalHistoryCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
   // GATED OFF by default, and off is the shipping default. When the feature is off
   // the repository would THROW rather than return [], so it is not called at all —
@@ -222,12 +303,12 @@ async function medicalHistoryCandidates(ctx: TaskQueueContext): Promise<Candidat
  */
 export interface TaskQueueResult {
   tasks: Task[];
-  /** How many of the sources (seven modules plus the overlay) threw. */
+  /** How many of the sources (every candidate builder plus the overlay) threw. */
   failedSources: number;
   totalSources: number;
 }
 
-// The seven module builders, caught INDIVIDUALLY so one dead module never blanks the
+// The module builders, caught INDIVIDUALLY so one dead module never blanks the
 // queue and, critically, so the failure is COUNTED rather than swallowed. The old
 // `safe()` helper returned [] on a throw with no trace, which is why a total Supabase
 // outage rendered as "No open tasks for this patient" on the record instead of a
@@ -240,6 +321,8 @@ const CANDIDATE_BUILDERS: readonly ((ctx: TaskQueueContext) => Promise<Candidate
   noshowCandidates,
   afterHoursCandidates,
   smileAssessmentCandidates,
+  mediumAssessmentCandidates,
+  agentEscalationCandidates,
   // Gated OFF by default (perio precedent): returns [] until MEDICAL_HISTORY_ENABLED
   // is set, so it adds no tasks in the shipping state.
   medicalHistoryCandidates,

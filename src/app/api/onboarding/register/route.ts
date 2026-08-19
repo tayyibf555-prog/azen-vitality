@@ -9,6 +9,15 @@ import { DentallyError } from "@/lib/dentally/client";
 import { REGISTER_WRITES_OFF } from "@/lib/onboarding/register-result";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { ageFromDob } from "@/lib/patient/demographics";
+// The ONE live-calibrated derivation of a new Dentally patient, shared with the
+// booking funnel, the 24/7 agent and the owner co-pilot. See patient-payload.ts.
+import {
+  TITLES,
+  knownTitle,
+  canonicalDob,
+  knownPaymentPlanId,
+  buildPatientRegistration,
+} from "@/lib/dentally/patient-payload";
 
 export const dynamic = "force-dynamic";
 
@@ -36,23 +45,6 @@ export const dynamic = "force-dynamic";
 // carries only a submissionId (no clientSlug), so the client is resolved from the
 // LOADED submission rather than up front; requireClientAccess is still the same guard,
 // called the same way, once we know which client owns the row.
-
-/**
- * Real-past-date check, identical to the co-pilot's create_patient canonicalDob: rejects
- * an impossible calendar date (2001-13-40, 31 Feb) by round-tripping the parsed parts
- * through a UTC date so it must be a real day, not just regex-shaped.
- */
-function canonicalDob(raw: string): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-  return `${m[1]}-${m[2]}-${m[3]}`;
-}
 
 interface LikelyMatch {
   id: string;
@@ -200,28 +192,75 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // ---- Date of birth: validated ONLY when this practice's form actually captured one.
-  // When it did not (or the question was disabled), we NEVER invent a value and NEVER
-  // block registration on its absence — this mirrors register_patient in
-  // src/lib/agent/tools.ts, which creates a Dentally patient without ever sending
-  // date_of_birth at all (Dentally does not require one to create a patient). When a
-  // value IS on file it must be a real, past calendar date, exactly like the co-pilot's
-  // create_patient check.
+  // ---- Date of birth. REQUIRED, and the comment that used to sit here was wrong.
+  //
+  // It read: "Dentally does not require one to create a patient", and pointed at
+  // register_patient in src/lib/agent/tools.ts as precedent for omitting it. Live
+  // Dentally refuses a registration with no date_of_birth ("seems to be missing",
+  // DENTALLY.md; memory dentally-createpatient-422) — and register_patient was not
+  // precedent, it was the same bug in another file. Both are fixed; this is the
+  // corrected reading.
+  //
+  // A submission with no date of birth (a form whose question was disabled, or a
+  // legacy row) can therefore never be registered as it stands. We say so plainly
+  // rather than sending a doomed write: the practice goes back to the patient for it.
   const dobRaw = (submission.dateOfBirth ?? "").trim();
-  let dob: string | null = null;
-  if (dobRaw) {
-    const canonical = canonicalDob(dobRaw);
-    const age = canonical ? ageFromDob(canonical, new Date()) : null;
-    if (!canonical || age === null || age > 120) {
-      return Response.json(
-        {
-          ok: false,
-          error: `The date of birth on file ("${dobRaw}") is not a valid past date. Check it with the patient before registering them.`,
-        },
-        { status: 400 },
-      );
-    }
-    dob = canonical;
+  const canonicalDateOfBirth = canonicalDob(dobRaw);
+  const age = canonicalDateOfBirth ? ageFromDob(canonicalDateOfBirth, new Date()) : null;
+  if (!dobRaw) {
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "This submission has no date of birth, and Dentally will not create a patient without one. Ask the patient for it, or add the date-of-birth question to this onboarding form.",
+      },
+      { status: 400 },
+    );
+  }
+  if (!canonicalDateOfBirth || age === null || age > 120) {
+    return Response.json(
+      {
+        ok: false,
+        error: `The date of birth on file ("${dobRaw}") is not a valid past date. Check it with the patient before registering them.`,
+      },
+      { status: 400 },
+    );
+  }
+  const dob: string = canonicalDateOfBirth;
+
+  // ---- Title and funding: THE TWO FIELDS THE FORM DOES NOT ASK FOR, and which live
+  // Dentally will not create a patient without.
+  //
+  // They come from the STAFF MEMBER, in the request body, not from the submission —
+  // deliberately. This route is reached by a person clicking "Register in Dentally"
+  // in the worklist after a confirm dialogue, and how a patient is to be seen is the
+  // practice's decision, not something to infer from a marketing form or default
+  // silently. The dialogue collects both and sends them here; both are re-validated
+  // against the same whitelists the public funnel uses, because a body field is a
+  // body field however trusted the caller.
+  //
+  // Sex is NOT asked for: it is derived from the title exactly as the booking funnel
+  // derives it, and the dialogue shows the staff member what will be saved.
+  const title = knownTitle(typeof body.title === "string" ? body.title : undefined);
+  if (!title) {
+    return Response.json(
+      {
+        ok: false,
+        error: `Choose a title (${TITLES.join(", ")}) before registering this patient. Dentally will not create a patient without one.`,
+      },
+      { status: 400 },
+    );
+  }
+  const paymentPlanId = knownPaymentPlanId(typeof body.funding === "string" ? body.funding : undefined);
+  if (paymentPlanId === undefined) {
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "Choose how this patient is to be seen (NHS or Private) before registering them. Dentally will not create a patient without a payment plan.",
+      },
+      { status: 400 },
+    );
   }
 
   // ---- Resolve the site: the submission's chosen site if it is genuinely one of this
@@ -247,6 +286,7 @@ export async function POST(request: Request): Promise<Response> {
   const readback = {
     firstName,
     lastName,
+    title,
     dateOfBirth: dob,
     phone: phone ?? null,
     email: email ?? null,
@@ -258,7 +298,7 @@ export async function POST(request: Request): Promise<Response> {
   // that this is a different person — gated behind the UI's own secondary confirm, so
   // `force` skips straight to creation without re-searching.
   if (!force) {
-    const likely = await findLikelyExistingPatient(allSiteIds, { name, dob: dob ?? "", phone, email });
+    const likely = await findLikelyExistingPatient(allSiteIds, { name, dob, phone, email });
     if (likely) {
       return Response.json({
         ok: true,
@@ -295,23 +335,42 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: REGISTER_WRITES_OFF }, { status: 503 });
   }
 
-  // ---- CREATE. Single write via the gated client, mirroring the co-pilot and
-  // register_patient's field mapping exactly, with the internal site id mapped to
-  // Dentally's own UUID. Onboarding never captures gender, so (like register_patient)
-  // it is never sent.
+  // ---- CREATE. Single write via the gated client, with the payload built by the ONE
+  // live-calibrated derivation every registration path now shares
+  // (lib/dentally/patient-payload.ts), and the internal site id mapped to Dentally's
+  // own UUID.
+  //
+  // WHAT THIS USED TO SEND: names, contact, site, and a date of birth only when the
+  // form happened to have asked for one. No title, no payment plan, no sex — three of
+  // the four fields live Dentally names in its 422. So every "Register in Dentally"
+  // click against the real practice would have failed, and the receptionist would have
+  // been told "Dentally rejected the details (422). Check the date of birth and
+  // contact details with the patient" — sending them to check details that were fine.
+  //
+  // Sex is derived from the staff member's chosen title, exactly as the booking funnel
+  // derives it; the confirm dialogue shows what will be saved before they commit.
+  const built = buildPatientRegistration({
+    firstName,
+    lastName,
+    title,
+    dateOfBirth: dob,
+    paymentPlanId,
+    email,
+    phone,
+    dentallySiteId: dentallySiteId(resolvedSiteId),
+    useSms: Boolean(phone),
+    useEmail: Boolean(email),
+  });
+  if (!built.ok) {
+    // Unreachable while the guards above stand, and handled anyway: never send a
+    // registration Dentally will refuse and then blame the patient's details for it.
+    return Response.json({ ok: false, error: built.reason }, { status: 400 });
+  }
+
   let newId: string;
   try {
     const dentally = dentallyAgentClient();
-    const { patient } = await dentally.createPatient({
-      first_name: firstName,
-      last_name: lastName,
-      ...(dob ? { date_of_birth: dob } : {}),
-      email_address: email ?? undefined,
-      mobile_phone: phone ?? undefined,
-      site_id: dentallySiteId(resolvedSiteId),
-      use_sms: Boolean(phone),
-      use_email: Boolean(email),
-    });
+    const { patient } = await dentally.createPatient(built.payload);
     newId = String(patient.id);
   } catch (err) {
     // ANY Dentally failure is surfaced HONESTLY and NEVER auto-retried. A 403 most

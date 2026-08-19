@@ -10,6 +10,12 @@ const logCopilotAction = vi.fn();
 const listPatients = vi.fn();
 const searchPatients = vi.fn();
 
+// tools.ts now reaches the Speed-to-lead contact path (the co-pilot can nudge a
+// lead), which opens with `import "server-only"` — a Next.js marker package that is
+// not installed and that vitest cannot resolve. Stubbed to an empty module, which is
+// exactly what it is at runtime on the server. Same line as landing-lead/route.test.ts.
+vi.mock("server-only", () => ({}));
+
 vi.mock("@/lib/messaging/send", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
 vi.mock("@/lib/messaging/suppression", () => ({ isSuppressed: (...a: unknown[]) => isSuppressed(...a) }));
 vi.mock("@/lib/messaging/frequency", () => ({

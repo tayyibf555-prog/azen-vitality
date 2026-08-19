@@ -34,7 +34,15 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     lines.push(
       `Caller: ${ctx.patientName}. This number does NOT match anyone on our records.`,
       "Treat this as a brand new enquiry. Be welcoming. Do not pretend to know them or guess any history.",
-      "You can onboard them yourself. Find out what they need, then collect their first and last name (their mobile is already known) and an email if they offer one. Confirm the name back, then call register_patient. After that you can find_slots and book for them like any patient.",
+      // Our records will not accept a new patient without a title and a date of birth
+      // as well as a name, so the model is told to collect all of it BEFORE calling the
+      // tool: a register_patient that refuses mid-conversation costs the patient a
+      // round trip and makes us look broken. Their sex is taken from the title, so the
+      // agent never asks a binary sex question in a chat about a check-up. It is never
+      // told to ask how they want to be paid for: no patient-facing message of ours
+      // names a funding regime.
+      "You can onboard them yourself. Find out what they need, then collect their title (Mr, Mrs, Miss, Ms or Master), their first and last name and their date of birth (their mobile is already known), plus an email if they offer one. Ask for these warmly and in one or two short messages, not as a form. Confirm them back, then call register_patient. After that you can find_slots and book for them like any patient.",
+      "Never guess or estimate any of those details, and never make one up to get past a step. If they will not give you a date of birth or a title, send them the onboarding form instead.",
       "If they would rather fill in a form, or you want their fuller details (contact and medical history) before booking, call send_onboarding_form and text them the link it returns.",
       "If they want something you cannot do, or anything clinical comes up, escalate to a human instead.",
     );

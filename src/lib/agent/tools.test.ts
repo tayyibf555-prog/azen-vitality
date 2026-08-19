@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { AGENT_TOOLS, makeDispatch, writeDisabledResult, type AgentWriteTool } from "./tools";
 
 describe("AGENT_TOOLS", () => {
@@ -205,8 +205,17 @@ describe("makeDispatch", () => {
     };
     const leadContext = { ...context, patientId: "lead:+447403097379", phone: "+447403097379", isKnownPatient: false };
     const dispatch = makeDispatch({ dentally: dentally as never, context: leadContext, writesEnabled: true });
+    // The practice has chosen which plan a conversational registration lands on.
+    // Without that choice the agent registers nobody at all — see the block below.
+    vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", "1");
 
-    const reg = await dispatch("register_patient", { firstName: "John", lastName: "Smith", email: "john@example.com" });
+    const reg = await dispatch("register_patient", {
+      firstName: "John",
+      lastName: "Smith",
+      title: "Mr",
+      dateOfBirth: "1985-04-09",
+      email: "john@example.com",
+    });
     expect(dentally.createPatient).toHaveBeenCalledWith(
       expect.objectContaining({ first_name: "John", last_name: "Smith", mobile_phone: "+447403097379" }),
     );
@@ -214,6 +223,7 @@ describe("makeDispatch", () => {
 
     await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "Checkup" });
     expect(dentally.createAppointment).toHaveBeenCalledWith(expect.objectContaining({ patient_id: "pat-new" }));
+    vi.unstubAllEnvs();
   });
 
   it("treatment_info returns non-clinical info from the catalogue", async () => {
@@ -252,6 +262,178 @@ describe("makeDispatch", () => {
   it("returns an error string for an unknown tool", async () => {
     const dispatch = makeDispatch({ dentally: { getAvailability: vi.fn(), createAppointment: vi.fn() } as never, context, writesEnabled: true });
     expect(await dispatch("nope", {})).toContain("unknown");
+  });
+});
+
+// ===========================================================================
+// register_patient AND THE FIELDS LIVE DENTALLY REQUIRES.
+//
+// What this tool sent before 2026-08-18: names, an email, a mobile and a site.
+// Live Dentally refuses a registration without a title, a date of birth, a payment
+// plan and a BOOLEAN sex (DENTALLY.md; memory dentally-createpatient-422), so every
+// registration this agent made would have 422'd mid-conversation against the real
+// practice. It looked finished because the local mock defaulted all four.
+//
+// Two of them the agent can ask for, and now does. The third is derived from the
+// title. The fourth — the payment plan — it CANNOT get: naming a funding regime to
+// a patient is forbidden, and choosing one silently would write a billing
+// arrangement nobody agreed onto a real clinical record. So it refuses and hands
+// over, unless the practice has deliberately chosen a plan for this path.
+// ===========================================================================
+describe("register_patient refuses rather than sending a registration live would reject", () => {
+  const leadContext = {
+    patientId: "lead:+447403097379",
+    siteId: "site-cc",
+    patientName: "there",
+    treatment: null,
+    fundingType: null,
+    phone: "+447403097379",
+    isKnownPatient: false,
+  };
+
+  function client() {
+    return {
+      ...openDiary(),
+      getPatientAppointments: vi.fn().mockResolvedValue({ appointments: [] }),
+      updateAppointment: vi.fn(),
+      cancelAppointment: vi.fn(),
+      createPatient: vi.fn().mockResolvedValue({ patient: { id: "pat-new" } }),
+      createAppointment: vi.fn().mockResolvedValue({ appointment: { id: "appt-2" } }),
+    };
+  }
+  function dispatchFor(dentally: ReturnType<typeof client>) {
+    return makeDispatch({ dentally: dentally as never, context: leadContext, writesEnabled: true });
+  }
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  const FULL = { firstName: "John", lastName: "Smith", title: "Mr", dateOfBirth: "1985-04-09" };
+
+  it("asks for a title and a date of birth instead of sending a doomed registration", async () => {
+    vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", "1");
+    const dentally = client();
+    const out = JSON.parse(await dispatchFor(dentally)("register_patient", { firstName: "John", lastName: "Smith" })) as {
+      registered: boolean;
+      error: string;
+    };
+    expect(out.registered).toBe(false);
+    expect(out.error).toMatch(/title/i);
+    expect(out.error).toMatch(/date of birth/i);
+    expect(out.error).toMatch(/never guess/i);
+    expect(dentally.createPatient).not.toHaveBeenCalled();
+  });
+
+  it("names only the detail that is actually missing", async () => {
+    vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", "1");
+    const noDob = JSON.parse(
+      await dispatchFor(client())("register_patient", { firstName: "John", lastName: "Smith", title: "Mr" }),
+    ) as { error: string };
+    expect(noDob.error).toMatch(/date of birth/i);
+    expect(noDob.error).not.toMatch(/Mr, Mrs, Miss/);
+
+    const noTitle = JSON.parse(
+      await dispatchFor(client())("register_patient", { firstName: "John", lastName: "Smith", dateOfBirth: "1985-04-09" }),
+    ) as { error: string };
+    expect(noTitle.error).toMatch(/Mr, Mrs, Miss/);
+    expect(noTitle.error).not.toMatch(/date of birth/i);
+  });
+
+  it("refuses a title live carries no sex signal for, and a date that is not a real day", async () => {
+    vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", "1");
+    for (const bad of [
+      { ...FULL, title: "Dr" }, // real in live data, one male + one female: predicts nothing
+      { ...FULL, title: "constructor" }, // the prototype key that used to pass a bare lookup
+      { ...FULL, dateOfBirth: "1985-13-40" },
+      { ...FULL, dateOfBirth: "1985-04-09T00:00:00Z" }, // live carries date-only, always
+      { ...FULL, dateOfBirth: "last tuesday" },
+      { ...FULL, dateOfBirth: "2999-01-01" }, // a future DOB is absent, not a value
+    ]) {
+      const dentally = client();
+      const out = JSON.parse(await dispatchFor(dentally)("register_patient", bad)) as { registered: boolean };
+      expect(out.registered, `${JSON.stringify(bad)} must be refused`).toBe(false);
+      expect(dentally.createPatient).not.toHaveBeenCalled();
+    }
+  });
+
+  it("registers nobody at all while the practice has chosen no payment plan for this path", async () => {
+    // The DEFAULT, and what production runs today: DENTALLY_DEFAULT_PAYMENT_PLAN_ID
+    // unset. Everything else about the registration is complete and correct.
+    const dentally = client();
+    const out = JSON.parse(await dispatchFor(dentally)("register_patient", FULL)) as {
+      registered: boolean;
+      error: string;
+    };
+    expect(out.registered).toBe(false);
+    expect(dentally.createPatient).not.toHaveBeenCalled();
+    // It hands over to a path that WORKS rather than dead-ending the patient.
+    expect(out.error).toMatch(/send_onboarding_form/);
+    expect(out.error).toMatch(/escalate_to_human/);
+    // AND it never lets the model tell the patient their details were rejected:
+    // nothing is wrong with them, and no funding regime is ever named to a patient.
+    expect(out.error).toMatch(/do NOT tell them anything was rejected/i);
+    expect(out.error).not.toMatch(/\bNHS\b/);
+    expect(out.error).not.toMatch(/\bprivate\b/i);
+    expect(out.error).not.toMatch(/payment plan/i);
+  });
+
+  it("ignores a deployment typo rather than inventing a plan id from it", async () => {
+    for (const raw of ["", "  ", "0", "-1", "NHS", "1.5", "1e3", "abc"]) {
+      vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", raw);
+      const dentally = client();
+      const out = JSON.parse(await dispatchFor(dentally)("register_patient", FULL)) as { registered: boolean };
+      expect(out.registered, `"${raw}" must not become a payment plan`).toBe(false);
+      expect(dentally.createPatient).not.toHaveBeenCalled();
+    }
+  });
+
+  it("sends the four fields live demands once the practice HAS chosen a plan", async () => {
+    vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", "1");
+    const dentally = client();
+    const out = JSON.parse(
+      await dispatchFor(dentally)("register_patient", { ...FULL, email: "john@example.com" }),
+    ) as { registered: boolean; patientId: string };
+    expect(out.registered).toBe(true);
+    expect(out.patientId).toBe("pat-new");
+    expect(dentally.createPatient).toHaveBeenCalledWith({
+      first_name: "John",
+      last_name: "Smith",
+      title: "Mr",
+      date_of_birth: "1985-04-09",
+      payment_plan_id: 1,
+      gender: true, // BOOLEAN, derived from the title. Never a string, never absent.
+      email_address: "john@example.com",
+      mobile_phone: "+447403097379",
+      site_id: SITE_UUID,
+      use_sms: true,
+      use_email: true,
+    });
+  });
+
+  it("derives the sex from the title the patient chose, exactly as the funnel does", async () => {
+    vi.stubEnv("DENTALLY_DEFAULT_PAYMENT_PLAN_ID", "2");
+    for (const [title, expected] of [
+      ["Mr", true],
+      ["Master", true],
+      ["Mrs", false],
+      ["Miss", false],
+      ["Ms", false],
+    ] as const) {
+      const dentally = client();
+      await dispatchFor(dentally)("register_patient", { ...FULL, title });
+      const payload = dentally.createPatient.mock.calls[0]![0] as Record<string, unknown>;
+      expect(payload.gender, `${title} follows the live majority`).toBe(expected);
+      expect(typeof payload.gender).toBe("boolean");
+    }
+  });
+
+  it("leaves no phantom patient behind for a later book when it refuses", async () => {
+    // register_patient sets the id a later `book` in the same turn writes against.
+    const dentally = client();
+    const dispatch = dispatchFor(dentally);
+    await dispatch("register_patient", FULL); // refused: no configured plan
+    await dispatch("book", { slotStart: SLOT_START, finishTime: SLOT_FINISH, practitionerId: "42", treatment: "Checkup" });
+    expect(dentally.createPatient).not.toHaveBeenCalled();
+    expect(dentally.createAppointment).not.toHaveBeenCalled();
   });
 });
 

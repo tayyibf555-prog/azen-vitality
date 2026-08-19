@@ -36,7 +36,55 @@ import {
 import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { DentallyError } from "@/lib/dentally/client";
 import { normaliseGender, ageFromDob } from "@/lib/patient/demographics";
+// The ONE live-calibrated derivation of a new Dentally patient, shared with the
+// booking funnel, the 24/7 agent and the onboarding worklist. See patient-payload.ts.
+import {
+  TITLES,
+  knownTitle,
+  canonicalDob,
+  knownPaymentPlanId,
+  genderFromTitle,
+  buildPatientRegistration,
+} from "@/lib/dentally/patient-payload";
 import { readPlanId } from "@/lib/calendar/funding";
+// LEAD SIGHT. The co-pilot could describe every patient already in the book and
+// nothing at all about the people trying to become one, so these four tools read
+// the acquisition pipeline (assessment submissions, the leads worklist, funnel
+// drop-off) and re-fire ONE existing send. The rules they apply are pure and live
+// in lead-sight.ts; nothing here invents a send path.
+import {
+  OPEN_LEAD_STAGES,
+  countByLondonDay,
+  inDayWindow,
+  londonDayWindow,
+  looksTruncated,
+  nudgeRefusal,
+  parseBand,
+  parseLimit,
+  parseWindowDays,
+  summariseAttempts,
+  waitingMinutes,
+  wasSupplied,
+} from "./lead-sight";
+import { listResponses } from "@/lib/smile-assessment/repository";
+import { getCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
+import { normaliseFlow } from "@/lib/smile-assessment/flow";
+import { aggregateStepEvents, MAX_FLOW_VERSION } from "@/lib/smile-assessment/step-events";
+import { stepNumbering } from "@/lib/smile-assessment/step-numbering";
+import { stepLabels } from "@/lib/smile-assessment/step-labels";
+import { readStepEvents, StepEventTableMissingError } from "@/lib/smile-assessment/step-events-repository";
+import { answerLines } from "@/lib/smile-assessment/summary";
+import {
+  claimLeadFromStage,
+  getLead,
+  listAttemptsForLeads,
+  listLeads,
+  listLeadsByIds,
+  setLeadStage,
+} from "@/lib/speed-to-lead/repository";
+import { channelConsented, contactLead, toAddress } from "@/lib/speed-to-lead/contact";
+import { sourceLabel } from "@/lib/speed-to-lead/source-label";
+import type { SpeedToLeadLead } from "@/lib/speed-to-lead/types";
 import { listTargets } from "@/lib/reactivation/repository";
 import { listOpportunities } from "@/lib/coordinator/repository";
 import { getAgentAnalytics } from "@/lib/agent/repository";
@@ -46,7 +94,7 @@ import { isSuppressed } from "@/lib/messaging/suppression";
 import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
 import { checkAgentReply } from "@/lib/agent/guardrail";
-import type { MessageChannel } from "@/lib/messaging/types";
+import { isDryRun, type MessageChannel } from "@/lib/messaging/types";
 import {
   createCampaign,
   getCampaign,
@@ -251,19 +299,100 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
   {
     name: "create_patient",
     description:
-      "Create a NEW patient record in Dentally, the practice's real management system. TWO STEPS, exactly like send_sms: call first WITHOUT confirm to CHECK FOR AN EXISTING MATCH and read back every detail that would be saved; then, ONLY after the owner clearly says yes in a later reply, call again with confirm true to actually create them. REQUIRES first name, last name, a date of birth (ISO YYYY-MM-DD) AND at least one of a mobile number or an email. NEVER invent or guess any detail: if a name spelling, the date of birth, a contact number/email or the gender is missing, return without creating and ask the owner for it. On the first call it first searches Dentally for a likely existing patient (same mobile, same email, or same name and date of birth); if one is found it reports that record and creates nothing. Real creation only happens against the live practice system once the Dentally write key is enabled; otherwise it records in test mode and says so. Any Dentally error (including a key that is not permitted to create patients) is reported honestly and never retried.",
+      "Create a NEW patient record in Dentally, the practice's real management system. TWO STEPS, exactly like send_sms: call first WITHOUT confirm to CHECK FOR AN EXISTING MATCH and read back every detail that would be saved; then, ONLY after the owner clearly says yes in a later reply, call again with confirm true to actually create them. REQUIRES first name, last name, a title (Mr, Mrs, Miss, Ms or Master), a date of birth (ISO YYYY-MM-DD), how the patient is to be seen (NHS or private) AND at least one of a mobile number or an email — Dentally refuses to create a patient without the title, the date of birth and the funding, so ask the owner for any of them you do not have. NEVER invent or guess any detail: if a name spelling, the title, the date of birth, the funding, a contact number/email or the gender is missing, return without creating and ask the owner for it. On the first call it first searches Dentally for a likely existing patient (same mobile, same email, or same name and date of birth); if one is found it reports that record and creates nothing. Real creation only happens against the live practice system once the Dentally write key is enabled. Any Dentally error (including a key that is not permitted to create patients) is reported honestly and never retried.",
     input_schema: {
       type: "object",
       properties: {
         firstName: { type: "string", description: "The patient's first name, exactly as the owner gave it. Never invented." },
         lastName: { type: "string", description: "The patient's last name, exactly as the owner gave it. Never invented." },
+        title: { type: "string", enum: ["Mr", "Mrs", "Miss", "Ms", "Master"], description: "The patient's title. Dentally requires one and also uses it to set the patient's sex when the owner has not stated it, so ask the owner rather than guessing." },
         dateOfBirth: { type: "string", description: "Date of birth as an ISO date, YYYY-MM-DD. Must be a real past date. Never guess it; ask the owner if unknown." },
+        funding: { type: "string", enum: ["NHS", "Private"], description: "How this patient is to be seen at the practice. Dentally requires a payment plan on every new patient. Ask the owner; never assume one." },
         phone: { type: "string", description: "Mobile number in any common format. Required unless an email is given. Never invented." },
         email: { type: "string", description: "Email address. Required unless a mobile number is given. Never invented." },
-        gender: { type: "string", enum: ["female", "male"], description: "Optional. Only set it if the owner stated it; never guess." },
+        gender: { type: "string", enum: ["female", "male"], description: "Optional. Only set it if the owner stated it; otherwise it is taken from the title. Never guess." },
         confirm: { type: "boolean", description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to check for an existing match and read back without creating." },
       },
-      required: ["firstName", "lastName", "dateOfBirth"],
+      required: ["firstName", "lastName", "title", "dateOfBirth", "funding"],
+    },
+  },
+  {
+    name: "list_recent_assessment_leads",
+    description:
+      "Who has filled in the Smile Assessment recently. Returns each person, when they submitted (with the practice's calendar day), their intent band (high, medium or low), what they said they were interested in, their answers, and whether the practice has contacted them yet. Use this for any 'who filled in the smile assessment', 'any new enquiries today', 'who came in this week', 'has anyone been in touch' question. It only covers the site or sites currently in view.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: {
+          type: "number",
+          description:
+            "How many of the practice's calendar days to cover, counting today as day 1. Use 1 for 'today', 2 for 'today and yesterday', 7 for 'this past week'. Defaults to 7; the maximum is 90.",
+        },
+        band: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "Optional: only this intent band. Leave it out to get every band.",
+        },
+      },
+    },
+  },
+  {
+    name: "list_speed_to_lead",
+    description:
+      "The Leads worklist: enquiries in the speed-to-lead pipeline. For each one it returns the stage, where they came from in plain English (Smile Assessment, website form, missed call, abandoned booking, a landing page), how long they have been waiting if nobody has contacted them yet, whether first contact went out, and how many contact attempts were recorded and whether any failed. Use this for 'who has not been contacted', 'what leads are open', 'did anyone abandon a booking', 'is anything stuck'. It only covers the site or sites currently in view. Each lead's id is returned so you can nudge one with nudge_lead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filter: {
+          type: "string",
+          enum: ["open", "all"],
+          description:
+            "'open' (the default) returns only enquiries still live: waiting for first contact, being contacted, contacted, or being qualified. 'all' also includes leads that are booked, closed as lost, or have finished their nurture sequence.",
+        },
+        days: {
+          type: "number",
+          description:
+            "Optional: only leads that arrived within this many of the practice's calendar days, counting today as day 1. Leave it out to see every open lead however old, which is usually what the owner wants. The maximum is 90.",
+        },
+        limit: {
+          type: "number",
+          description: "How many leads to return, newest first (1 to 100; defaults to 50).",
+        },
+      },
+    },
+  },
+  {
+    name: "assessment_dropoff_summary",
+    description:
+      "Where people give up on a Smile Assessment funnel: the per-step drop-off for ONE assessment campaign. Give the assessment's URL slug (the last part of its public link, e.g. 'invisalign-2026'); if the owner names it another way, ask them for the link or the slug rather than guessing. Returns, for each screen in order, how many people reached it, what share of the previous screen was lost there, and the overall completion rate, with the screens' own question wording when it is available. Use this for 'where are people dropping off', 'why is my assessment not converting', 'how is the funnel doing'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "The assessment's URL slug, exactly as it appears in its public link." },
+        days: { type: "number", description: "How many days of history to include. Defaults to 30; the maximum is 365." },
+        flowVersion: {
+          type: "number",
+          description:
+            "Optional: an older version of the funnel, to compare against the current one. Leave it out for the version that is live now.",
+        },
+      },
+      required: ["slug"],
+    },
+  },
+  {
+    name: "nudge_lead",
+    description:
+      "Re-send first contact to an open lead who has gone quiet, using the practice's normal first-contact message. This is exactly the 'Resend' action on the Leads worklist: it does not write anything new, it re-fires the existing pipeline, which drafts the message and applies the practice's consent, opt-out and delivery rules. TWO STEPS, exactly like send_sms: call first WITHOUT confirm to read the lead back (who they are, where they came from, their stage, how long they have waited, what has already been tried) while sending nothing; then, ONLY after the owner clearly says yes in a later reply, call again with confirm true. It refuses a lead who is already booked or was closed as lost, a lead who never consented to be contacted, a lead with no number or email on file, a lead outside the site currently in view, and it refuses when the Speed-to-lead system is switched off. Get the lead's id from list_speed_to_lead; never invent one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        leadId: { type: "string", description: "The id of the lead to nudge, from list_speed_to_lead." },
+        confirm: {
+          type: "boolean",
+          description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to read the lead back without sending anything.",
+        },
+      },
+      required: ["leadId"],
     },
   },
 ];
@@ -278,24 +407,6 @@ function patientSummary(p: PatientRecord) {
     lastVisit: p.lastVisitAt,
     recallDue: p.recallDueAt,
   };
-}
-
-/**
- * Validate + canonicalise an ISO date of birth to YYYY-MM-DD, or null when it is not a
- * REAL calendar date. A bare regex would pass impossible dates (2001-13-40, 31 Feb), so
- * we round-trip the parsed parts through a UTC date and reject any that do not survive.
- * The caller separately rejects future / absurdly old dates via ageFromDob.
- */
-function canonicalDob(raw: string): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-  return `${m[1]}-${m[2]}-${m[3]}`;
 }
 
 interface LikelyMatch {
@@ -1602,12 +1713,46 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
           // (4) Optional gender: only honoured if the owner stated a recognised value.
           // Never guessed. An unrecognised value is an error rather than a silent drop.
+          // When the owner did NOT state one it is derived from the title below, which
+          // is what live Dentally needs and what the booking funnel already does.
           const genderInput = String(input.gender ?? "").trim();
           const gender = genderInput ? normaliseGender(genderInput) : null;
           if (genderInput && !gender) {
             return JSON.stringify({
               created: false,
               error: `I did not recognise the gender "${genderInput}". Use female or male, or leave it out; never guess.`,
+            });
+          }
+
+          // (4b) THE TWO FIELDS LIVE DENTALLY REFUSES A REGISTRATION WITHOUT, and which
+          // this tool used to omit entirely: a title and a payment plan. Every create it
+          // made would have 422'd against the real practice (DENTALLY.md; memory
+          // dentally-createpatient-422) while the local mock accepted it, so the tool
+          // looked finished and was not.
+          //
+          // The owner is the RIGHT person to ask for both — they are the practice, they
+          // know whether this patient is NHS or private, and nothing here is said to a
+          // patient (the no-funding-jargon rule is about patient-facing messages). So an
+          // absent or unrecognised value is refused with a sentence that tells the model
+          // to go and ask, exactly like every other field on this tool.
+          const titleInput = String(input.title ?? "").trim();
+          const title = knownTitle(titleInput);
+          if (!title) {
+            return JSON.stringify({
+              created: false,
+              error: titleInput
+                ? `I did not recognise the title "${titleInput}". Dentally accepts ${TITLES.join(", ")}. Ask the owner which one applies; never guess.`
+                : `I need the patient's title (${TITLES.join(", ")}). Dentally will not create a patient without one. Ask the owner; never guess.`,
+            });
+          }
+          const fundingInput = String(input.funding ?? "").trim();
+          const paymentPlanId = knownPaymentPlanId(fundingInput);
+          if (paymentPlanId === undefined) {
+            return JSON.stringify({
+              created: false,
+              error: fundingInput
+                ? `I did not recognise "${fundingInput}" as a way of being seen. Use NHS or private. Ask the owner which applies to this patient; never assume one.`
+                : "I need to know whether this patient is being seen on the NHS or privately. Dentally will not create a patient without a payment plan. Ask the owner; never assume one.",
             });
           }
 
@@ -1627,10 +1772,15 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           const readback = {
             firstName,
             lastName,
+            title,
             dateOfBirth: dob,
+            funding: fundingInput,
             phone: phone ?? null,
             email: email ?? null,
-            gender: gender ?? null,
+            // What will actually be SAVED, not merely what the owner typed: with no
+            // stated gender this is the title derivation, and the owner reads it back
+            // before confirming so a wrong derivation is caught by a person.
+            gender: gender ?? (genderFromTitle(title) ? "male" : "female"),
             site: siteName(siteId),
           };
 
@@ -1705,8 +1855,11 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
               preview: true,
               ...readback,
               note:
-                `Ready to create this patient in Dentally (nothing saved yet). Read every detail back to the owner: ${firstName} ${lastName}, born ${dob}` +
-                `${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}${gender ? `, ${gender}` : ""}, at ${siteName(siteId)}. ` +
+                `Ready to create this patient in Dentally (nothing saved yet). Read every detail back to the owner: ${title} ${firstName} ${lastName}, born ${dob}, ${fundingInput}` +
+                // The sex is read back WHETHER OR NOT the owner stated one, because
+                // when they did not it is derived from the title — a ~2%-wrong
+                // default that only a person can catch, and only if they are shown it.
+                `${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}, ${readback.gender}, at ${siteName(siteId)}. ` +
                 "Only once they clearly say yes, call create_patient again with confirm true.",
             });
           }
@@ -1716,8 +1869,15 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           // instance (the write gate at the top of this case already guarantees writes
           // are enabled, so this always reaches the real/sandbox write instance, never the
           // default read-only client). The internal site id is mapped to Dentally's own
-          // UUID exactly as booking-create and register_patient do. Field names follow the
-          // existing createPatient payload.
+          // UUID exactly as booking-create and register_patient do.
+          //
+          // THE PAYLOAD IS BUILT BY THE SHARED, LIVE-CALIBRATED DERIVATION
+          // (lib/dentally/patient-payload.ts), which is the whole point of the fix. What
+          // this call used to send was `gender: "Male"` — a STRING, to an API that
+          // carries sex as a boolean and answers "gender: must be male or female" to
+          // anything else — and no title and no payment plan at all. Three of the four
+          // fields live demanded, missing, on a tool whose entire job is creating a real
+          // person in a book of 51,000.
           const audit = {
             clientId,
             siteId,
@@ -1725,26 +1885,41 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             action: "create_patient",
             targetName: name,
             channel: null,
-            body: `DOB ${dob}${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}${gender ? `, ${gender}` : ""}`,
+            body: `${title} ${name}, DOB ${dob}, ${fundingInput}${phone ? `, mobile ${phone}` : ""}${email ? `, email ${email}` : ""}${gender ? `, ${gender}` : ""}`,
           };
+
+          const built = buildPatientRegistration({
+            firstName,
+            lastName,
+            title,
+            dateOfBirth: dob,
+            paymentPlanId,
+            // The owner's own word when they gave one; otherwise the title derivation.
+            gender,
+            email,
+            phone,
+            // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
+            dentallySiteId: dentallySiteId(siteId),
+            useSms: Boolean(phone),
+            useEmail: Boolean(email),
+          });
+          if (!built.ok) {
+            // Unreachable while the guards above stand, and handled anyway: the one thing
+            // this tool must never do is send Dentally a registration it will refuse and
+            // then report the refusal as something the owner did wrong.
+            await logCopilotAction({ ...audit, targetRef: null, status: "blocked:incomplete" });
+            return JSON.stringify({
+              created: false,
+              reason: "incomplete",
+              ...readback,
+              message: `I could not create ${name}: ${built.reason} Ask the owner for the missing detail; never guess it.`,
+            });
+          }
 
           let newId: string;
           try {
             const client = dentallyAgentClient();
-            const { patient } = await client.createPatient({
-              first_name: firstName,
-              last_name: lastName,
-              date_of_birth: dob,
-              email_address: email ?? undefined,
-              mobile_phone: phone ?? undefined,
-              // Dentally has historically carried gender as a "Male"/"Female" string
-              // (see normaliseGender); omitted entirely when the owner did not state it.
-              ...(gender ? { gender: gender === "female" ? "Female" : "Male" } : {}),
-              // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
-              site_id: dentallySiteId(siteId),
-              use_sms: Boolean(phone),
-              use_email: Boolean(email),
-            });
+            const { patient } = await client.createPatient(built.payload);
             newId = String(patient.id);
           } catch (err) {
             // ANY Dentally failure is surfaced HONESTLY and NEVER auto-retried. A 403 most
@@ -1774,6 +1949,516 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             ...readback,
             dryRun: false,
             note: `Created ${name} in Dentally (id ${newId}). Confirm to the owner that they have been added.`,
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // LEAD SIGHT (3 reads + 1 act).
+        //
+        // NOT AUDITED, THE THREE READS. logCopilotAction is this file's record of
+        // what the assistant DID on the practice's behalf — every call site is a
+        // send, a launch, a publish or a write, and every read tool above
+        // (patient_record, appointments, outstanding_balances) logs nothing. A read
+        // of the enquiry pipeline is the same kind of thing as a read of a patient
+        // record, so it follows the same rule; nudge_lead, which sends, audits like
+        // send_sms does.
+        // -------------------------------------------------------------------
+
+        case "list_recent_assessment_leads": {
+          const days = parseWindowDays(input.days, { def: 7, max: 90 });
+          if (!days.ok) return JSON.stringify({ error: days.error });
+          const band = parseBand(input.band);
+          if (!band.ok) return JSON.stringify({ error: band.error });
+
+          const now = new Date();
+          const window = londonDayWindow(now, days.days);
+          // The read is bounded and the bound is REPORTED (below), rather than a
+          // partial day being handed over as a whole one.
+          const LIMIT = 100;
+          const fetched = await listResponses({
+            siteIds,
+            ...(band.bands ? { bands: band.bands } : {}),
+            // The QUERY carries the window, so a day busier than LIMIT loses its
+            // OLDEST rows to the bound rather than losing the whole day to a
+            // newest-N fetch that never reached back far enough.
+            sinceIso: window.sinceIso,
+            limit: LIMIT,
+          });
+          // sinceIso deliberately over-fetches by a day (londonDayWindow explains
+          // why); this is the authority on what is actually in the window.
+          const rows = fetched.filter((r) => inDayWindow(r.createdAt, window));
+
+          // WHETHER EACH ONE HAS BEEN CONTACTED, which is the half of the question
+          // the assessment table cannot answer: a response carries a lead_id once
+          // it was bridged into Speed-to-lead, and the CONTACT state lives on that
+          // lead. One batched, site-scoped read rather than one per row.
+          const leadIds = [...new Set(rows.map((r) => r.leadId).filter((v): v is string => typeof v === "string" && v !== ""))];
+          const leads = await listLeadsByIds({ siteIds, ids: leadIds });
+          const leadById = new Map(leads.map((l) => [l.id, l]));
+
+          return JSON.stringify({
+            window: { days: days.days, from: window.keys[window.keys.length - 1], to: window.keys[0] },
+            ...(band.bands ? { band: band.bands[0] } : {}),
+            total: rows.length,
+            // Every day of the window, including the empty ones: "nobody enquired
+            // yesterday" is an answer, and a missing key would read as missing data.
+            byDay: countByLondonDay(rows, (r) => r.createdAt, window),
+            truncated: looksTruncated(fetched.length, LIMIT),
+            leads: rows.map((r) => {
+              const lead = r.leadId ? leadById.get(r.leadId) : undefined;
+              return {
+                name: r.firstName,
+                submittedAt: r.createdAt,
+                day: londonDayKey(new Date(r.createdAt)),
+                band: r.band,
+                score: r.rawScore,
+                treatmentInterest: r.treatmentInterest,
+                phone: r.phone,
+                email: r.email,
+                preferredChannel: r.channel,
+                source: sourceLabel(r.source),
+                site: siteName(r.siteId),
+                answers: answerLines(r.responses),
+                // Three genuinely different states, never collapsed into one:
+                //   - no lead at all: recorded for nurture, nobody was contacted;
+                //   - a lead we can see: its real stage and first-contact time;
+                //   - a lead id we cannot see under this scope: say so rather than
+                //     reporting "not contacted", which would be a guess.
+                ...(lead
+                  ? {
+                      inLeadsPipeline: true,
+                      leadId: lead.id,
+                      stage: lead.stage,
+                      contacted: lead.firstResponseAt !== null,
+                      contactedAt: lead.firstResponseAt,
+                      waitingMinutes: waitingMinutes(lead, now),
+                    }
+                  : r.leadId
+                    ? { inLeadsPipeline: true, leadId: r.leadId, stage: null, contacted: null, note: "This enquiry is linked to a lead outside the site you have in view, so I cannot see its contact state." }
+                    : { inLeadsPipeline: false, contacted: false, note: "Recorded for nurture; this one was not fast-tracked into the leads pipeline, so nobody has been contacted automatically." }),
+              };
+            }),
+            note:
+              "These are Smile Assessment submissions for the site(s) currently in view. 'contacted' means the platform's first-contact message went out, not that a person spoke to them.",
+          });
+        }
+
+        case "list_speed_to_lead": {
+          const filterRaw = String(input.filter ?? "open").trim().toLowerCase();
+          if (filterRaw !== "open" && filterRaw !== "all") {
+            return JSON.stringify({ error: `I did not recognise the filter "${String(input.filter)}". Use open or all.` });
+          }
+          const limit = parseLimit(input.limit, { def: 50, max: 100 });
+          if (!limit.ok) return JSON.stringify({ error: limit.error });
+
+          const now = new Date();
+          // days is OPTIONAL HERE with no default, unlike the assessment tool: the
+          // oldest untouched lead is the most urgent one, so "show me the open
+          // leads" must not quietly mean "the recent ones".
+          let window: ReturnType<typeof londonDayWindow> | null = null;
+          if (wasSupplied(input.days)) {
+            const days = parseWindowDays(input.days, { def: 7, max: 90 });
+            if (!days.ok) return JSON.stringify({ error: days.error });
+            window = londonDayWindow(now, days.days);
+          }
+
+          const fetched = await listLeads({
+            siteIds,
+            ...(filterRaw === "open" ? { stages: OPEN_LEAD_STAGES } : {}),
+            ...(window ? { sinceIso: window.sinceIso } : {}),
+            limit: limit.limit,
+          });
+          const rows = window ? fetched.filter((l) => inDayWindow(l.createdAt, window)) : fetched;
+
+          // One batched attempts read for the whole page of leads, not one per lead.
+          // The ids come from a site-scoped read, which is the contract
+          // listAttemptsForLeads states it relies on.
+          const attempts = await listAttemptsForLeads(rows.map((l) => l.id));
+          const attemptsByLead = new Map<string, typeof attempts>();
+          for (const a of attempts) {
+            const bucket = attemptsByLead.get(a.leadId);
+            if (bucket) bucket.push(a);
+            else attemptsByLead.set(a.leadId, [a]);
+          }
+
+          return JSON.stringify({
+            filter: filterRaw,
+            ...(window ? { window: { from: window.keys[window.keys.length - 1], to: window.keys[0] } } : {}),
+            total: rows.length,
+            truncated: looksTruncated(fetched.length, limit.limit),
+            leads: rows.map((l) => {
+              const summary = summariseAttempts(attemptsByLead.get(l.id) ?? []);
+              const address = toAddress(l);
+              return {
+                // The id is the handle nudge_lead takes; it is returned so the model
+                // never has to construct or guess one.
+                id: l.id,
+                name: l.name,
+                stage: l.stage,
+                source: sourceLabel(l.source),
+                sourceRaw: l.source,
+                channel: l.channel,
+                treatmentInterest: l.treatmentInterest,
+                score: l.score,
+                site: siteName(l.siteId),
+                enquiredAt: l.createdAt,
+                day: londonDayKey(new Date(l.createdAt)),
+                contacted: l.firstResponseAt !== null,
+                contactedAt: l.firstResponseAt,
+                // Null once contacted, so "waiting" only ever describes someone who is.
+                waitingMinutes: waitingMinutes(l, now),
+                nurtureTouchesSent: l.nurtureStep,
+                attempts: summary,
+                // Surfaced BEFORE the owner asks for a nudge, because these are the
+                // two things that make one refuse. An owner should not have to try
+                // it to be told the person never consented.
+                contactable: Boolean(address) && channelConsented(l),
+                hasContactDetails: Boolean(address),
+                consentedOnChannel: channelConsented(l),
+              };
+            }),
+            note:
+              "Leads for the site(s) currently in view. 'contacted' means the platform's first-contact message went out. Use nudge_lead with a lead's id to re-send first contact, and always read it back before confirming.",
+          });
+        }
+
+        case "assessment_dropoff_summary": {
+          const slug = String(input.slug ?? "").trim();
+          if (!slug) {
+            return JSON.stringify({
+              error: "I need the assessment's URL slug (the last part of its public link). Ask the owner for the link rather than guessing a slug.",
+            });
+          }
+          if (!clientId) return JSON.stringify({ error: "I could not resolve your practice." });
+
+          const days = parseWindowDays(input.days, { def: 30, max: 365 });
+          if (!days.ok) return JSON.stringify({ error: days.error });
+
+          // CLIENT-SCOPED, which is the boundary the Smile Assessment module itself
+          // uses for campaigns: the campaigns page lists them with listCampaigns
+          // (client) and only the RESPONSES are site-scoped. So an assessment
+          // belonging to a sister site is reported rather than hidden — an owner
+          // looking at their own campaigns page would be told "I cannot see that"
+          // about an assessment plainly in front of them — and the site it belongs
+          // to is NAMED in the answer so the scope is never ambiguous.
+          const campaign = await getCampaignBySlug(clientId, slug);
+          if (!campaign) {
+            return JSON.stringify({
+              found: false,
+              message: `I could not find an assessment with the URL slug "${slug}" for this practice. Ask the owner for the exact link; never guess a slug.`,
+            });
+          }
+
+          let flowVersion = campaign.flowVersion;
+          if (wasSupplied(input.flowVersion)) {
+            const n = typeof input.flowVersion === "number" ? input.flowVersion : Number(input.flowVersion);
+            // Bounded ABOVE by the same constant the public write side uses:
+            // flow_version is an int4 column, so an unbounded integer is not a
+            // "no rows" answer, it is a database error handed to the owner.
+            if (!Number.isInteger(n) || n < 0 || n > MAX_FLOW_VERSION) {
+              return JSON.stringify({ error: `flowVersion must be a whole number between 0 and ${MAX_FLOW_VERSION}.` });
+            }
+            flowVersion = n;
+          }
+
+          // A ROLLING window here, NOT the London-day window the two list tools
+          // use, and deliberately: this is the same report the drop-off panel on
+          // screen draws, computed the same way, so an owner comparing the two sees
+          // one number rather than two that disagree by a few hours.
+          const to = new Date();
+          const from = new Date(to.getTime() - days.days * 24 * 60 * 60 * 1000);
+
+          let scan: Awaited<ReturnType<typeof readStepEvents>>;
+          try {
+            scan = await readStepEvents({
+              campaignId: campaign.id,
+              flowVersion,
+              fromIso: from.toISOString(),
+              toIso: to.toISOString(),
+            });
+          } catch (e) {
+            // Named, not swallowed: answering "0 sessions" would tell an owner
+            // nobody uses their funnel, when the truth is the table is not there.
+            if (e instanceof StepEventTableMissingError) {
+              return JSON.stringify({ error: e.message, note: "Say this plainly to the owner; do not report it as zero traffic." });
+            }
+            throw e;
+          }
+
+          // Labels and length ONLY for the version that is live: a campaign row
+          // stores one funnel, so numbering an older version with today's graph
+          // would put today's questions on bars those events never came from.
+          let stepCount: number | undefined;
+          let labels: Record<number, string> | undefined;
+          if (flowVersion === campaign.flowVersion) {
+            const graph = normaliseFlow(campaign.flow);
+            if (graph) {
+              const numbering = stepNumbering(graph);
+              if (numbering.stepCount > 0) {
+                stepCount = numbering.stepCount;
+                labels = stepLabels(graph, numbering, { headline: campaign.headline, intro: campaign.intro });
+              }
+            }
+          }
+
+          const funnel = aggregateStepEvents(scan.rows, stepCount === undefined ? undefined : { stepCount });
+
+          return JSON.stringify({
+            found: true,
+            assessment: { slug: campaign.slug, name: campaign.name, site: siteName(campaign.siteId) },
+            flowVersion,
+            isCurrentVersion: flowVersion === campaign.flowVersion,
+            from: from.toISOString(),
+            to: to.toISOString(),
+            days: days.days,
+            // Said out loud rather than a partial tally passed off as a whole one.
+            truncated: scan.truncated,
+            sessions: funnel.sessions,
+            completionPct: funnel.completionPct,
+            steps: funnel.steps.map((s) => ({
+              ...s,
+              // The SAME fallback wording the on-screen chart uses for an unlabelled
+              // bar, so the co-pilot and the panel name the same step the same way.
+              label: labels?.[s.stepIndex]?.trim() || `Step ${s.stepIndex + 1}`,
+            })),
+            note:
+              "dropOffPct is the share of the PREVIOUS step's sessions that did not reach this one; it is null on the first step and whenever the previous step had nobody. A step with no sessions at all is a screen nobody reached.",
+          });
+        }
+
+        case "nudge_lead": {
+          // Re-fires the EXISTING first-contact path (contactLead), with the SAME
+          // claim/restore dance as /api/speed-to-lead/[action] resend. No new send
+          // machinery: consent, opt-out, deliverability, the retry cap, the drafting
+          // and the attempt record all stay inside contactLead, where they already
+          // are, so the co-pilot and the worklist button cannot drift apart.
+          const leadId = String(input.leadId ?? "").trim();
+          if (!leadId) {
+            return JSON.stringify({ sent: false, error: "I need the lead's id. Use list_speed_to_lead to find it; never invent one." });
+          }
+
+          const lead = await getLead(leadId);
+          // TENANCY FIRST, before anything about this lead is spoken aloud.
+          //
+          // getLead is keyed on the id ALONE, so the two checks below are the whole
+          // boundary. A lead belonging to ANOTHER PRACTICE is reported exactly as a
+          // lead that does not exist: an id typed at this co-pilot must never be
+          // able to tell the difference, or the tool becomes an oracle for whether a
+          // given id exists somewhere in the platform.
+          const owningClientId = lead ? getSite(lead.siteId)?.clientId : undefined;
+          if (!lead || !owningClientId || owningClientId !== clientId) {
+            if (lead) {
+              // A cross-tenant attempt is worth a record, but the row must not carry
+              // the other practice's site or the person's name into this client's
+              // audit trail.
+              await logCopilotAction({
+                clientId,
+                siteId: null,
+                actor,
+                action: "nudge_lead",
+                targetRef: `lead:${leadId}`,
+                targetName: null,
+                channel: null,
+                body: null,
+                status: "blocked:out_of_tenant",
+              });
+            }
+            return JSON.stringify({ sent: false, error: "I could not find a lead with that id." });
+          }
+
+          // Same client, different site: the site IS nameable here, and naming it is
+          // the useful answer (the owner switches the selector and asks again).
+          if (!siteIds.includes(lead.siteId)) {
+            return JSON.stringify({
+              sent: false,
+              reason: "out_of_scope",
+              message: `That lead is at ${siteName(lead.siteId)}, which is not the site you have in view, so I have not messaged them. Switch the site selector at the top of the dashboard (or pick "All sites") and ask me again.`,
+            });
+          }
+
+          const audit = {
+            clientId,
+            siteId: lead.siteId,
+            actor,
+            action: "nudge_lead",
+            targetRef: `lead:${lead.id}`,
+            targetName: lead.name,
+            channel: lead.channel as string,
+            body: null,
+          };
+
+          // The kill switch, exactly where the route checks it.
+          if (!(await isSystemEnabled(clientId, "speed-to-lead"))) {
+            await logCopilotAction({ ...audit, status: "blocked:system_off" });
+            return JSON.stringify({
+              sent: false,
+              reason: "system_off",
+              message: "Speed-to-lead is switched off for this practice, so I have not messaged anyone. The owner can switch it on in Operations, System controls, then ask me again.",
+            });
+          }
+
+          // The route's own two refusals, inherited rather than re-decided.
+          const refusal = nudgeRefusal(lead.stage);
+          if (refusal) {
+            await logCopilotAction({ ...audit, status: `blocked:stage_${lead.stage}` });
+            return JSON.stringify({ sent: false, reason: "stage", stage: lead.stage, message: refusal });
+          }
+
+          // THE ONE PLACE THIS IS STRICTER THAN THE WORKLIST BUTTON, and it is the
+          // send_sms pattern applied honestly. contactLead's answer to "no address"
+          // is to do nothing, and its answer to "no consent" is to RETIRE the lead
+          // to the terminal 'lost' stage. Neither is a message, and the second is a
+          // state change an owner who said "yes, text them" did not ask for and
+          // cannot undo from here. So both are refused with the reason, exactly as
+          // send_sms refuses no_destination and no_consent, and the lead is left
+          // where the worklist can still see it.
+          const address = toAddress(lead);
+          if (!address) {
+            await logCopilotAction({ ...audit, status: "blocked:no_destination" });
+            return JSON.stringify({
+              sent: false,
+              reason: "no_destination",
+              message: `${lead.name} has no ${lead.channel === "email" ? "email address" : "mobile number"} on file, so there is nothing to re-send to.`,
+            });
+          }
+          if (!channelConsented(lead)) {
+            await logCopilotAction({ ...audit, status: "blocked:no_consent" });
+            return JSON.stringify({
+              sent: false,
+              reason: "no_consent",
+              message: `${lead.name} did not consent to be contacted by ${lead.channel === "email" ? "email" : lead.channel === "whatsapp" ? "WhatsApp" : "text"}, so nothing was sent.`,
+            });
+          }
+
+          const attemptsSoFar = summariseAttempts(await listAttemptsForLeads([lead.id]));
+          const readback = {
+            leadId: lead.id,
+            patient: lead.name,
+            stage: lead.stage,
+            source: sourceLabel(lead.source),
+            channel: lead.channel,
+            treatmentInterest: lead.treatmentInterest,
+            site: siteName(lead.siteId),
+            enquiredAt: lead.createdAt,
+            waitingMinutes: waitingMinutes(lead, new Date()),
+            alreadyContactedAt: lead.firstResponseAt,
+            attempts: attemptsSoFar,
+          };
+
+          // Two-step gate, enforced here and not only in the prompt (run.ts also
+          // holds nudge_lead in CONFIRM_COMMIT_TOOLS, so a same-turn confirm is
+          // inert as well).
+          if (input.confirm !== true) {
+            return JSON.stringify({
+              sent: false,
+              preview: true,
+              ...readback,
+              note:
+                `Ready to re-send first contact to ${lead.name} (nothing sent yet). Read it back to the owner: who they are, where the enquiry came from, and that ${attemptsSoFar.total === 0 ? "no message has gone out yet" : `${attemptsSoFar.total} message${attemptsSoFar.total === 1 ? " has" : "s have"} already been attempted${attemptsSoFar.failed > 0 ? `, ${attemptsSoFar.failed} of which failed to send` : ""}`}. The platform writes the message itself. Only once they clearly say yes, call nudge_lead again with confirm true.`,
+            });
+          }
+
+          // CONFIRMED. The atomic claim is what stops two nudges (or a nudge racing
+          // the SLA sweep) both texting the same person; a lost claim means another
+          // contact is already in flight, which is not an error.
+          const fromStage = lead.stage;
+          if (!(await claimLeadFromStage(lead.id, fromStage))) {
+            await logCopilotAction({ ...audit, status: "skipped:in_progress" });
+            return JSON.stringify({
+              sent: false,
+              reason: "in_progress",
+              message: `A contact to ${lead.name} is already in progress, so I have not sent a second one.`,
+            });
+          }
+
+          let failed = false;
+          let after: SpeedToLeadLead | null = null;
+          try {
+            await contactLead(lead);
+          } catch (err) {
+            failed = true;
+            console.error(`[copilot] nudge_lead: contactLead threw for lead ${lead.id}`, err);
+          } finally {
+            // If contactLead did not move the lead off 'contacting' (a silent
+            // early-return, or the throw above), restore its ORIGINAL stage so it is
+            // not stranded — identical to the route's finally block.
+            after = await getLead(lead.id).catch(() => null);
+            if (after && after.stage === "contacting") {
+              await setLeadStage(lead.id, fromStage).catch(() => {});
+              after = { ...after, stage: fromStage };
+            }
+          }
+
+          // WHAT ACTUALLY HAPPENED, OBSERVED, NOT ASSERTED.
+          //
+          // contactLead returns void and has SEVERAL silent outcomes: it retires a
+          // lead whose address turns out to be undeliverable, it retires one whose
+          // draft trips the output guardrail, and it declines to draft at all once a
+          // lead has hit its failed-attempt cap. Every one of those ends with nobody
+          // texted, so a tool that answered "sent: true" because the call returned
+          // would be the co-pilot telling an owner a patient was contacted when they
+          // were not.
+          //
+          // AND THE OBVIOUS SIGNAL IS THE WRONG ONE. first_response_at is stamped
+          // ONLY on a lead that has never been contacted ("so a staff resend never
+          // corrupts the first-response SLA metric", contact.ts) — which is exactly
+          // the lead a nudge is usually aimed at, so watching that field would report
+          // every successful nudge of an already-contacted lead as a failure. The
+          // attempt LEDGER is what a resend always writes, so that is what is read.
+          const attemptsAfter = summariseAttempts(await listAttemptsForLeads([lead.id]).catch(() => []));
+          const newAttempt = attemptsAfter.total > attemptsSoFar.total;
+
+          if (failed) {
+            await logCopilotAction({ ...audit, status: "error:contact_failed" });
+            return JSON.stringify({
+              sent: false,
+              reason: "error",
+              ...readback,
+              message: `Something went wrong re-sending to ${lead.name}, so I cannot say a message went out. Try again in a moment, or check the lead in Leads.`,
+            });
+          }
+          // Checked BEFORE the ledger, because the guardrail path writes a failed
+          // attempt AND retires the lead: "retired" is the more important half.
+          if (after && after.stage === "lost") {
+            await logCopilotAction({ ...audit, status: "retired:unreachable" });
+            return JSON.stringify({
+              sent: false,
+              reason: "unreachable",
+              ...readback,
+              attempts: attemptsAfter,
+              message: `${lead.name} could not be reached (they have opted out, or the number or address cannot receive a message), so nothing was sent and the lead has been closed as lost. Tell the owner it needs a person, not another try.`,
+            });
+          }
+          if (!newAttempt) {
+            await logCopilotAction({ ...audit, status: "skipped:not_sent" });
+            return JSON.stringify({
+              sent: false,
+              reason: "not_sent",
+              ...readback,
+              message: `I did not manage to get a message out to ${lead.name} just now, and the lead is unchanged. This usually means earlier attempts to reach them kept failing, so it needs a person to look at rather than another automatic try.`,
+            });
+          }
+          if (attemptsAfter.lastStatus === "failed") {
+            await logCopilotAction({ ...audit, status: "failed:not_delivered" });
+            return JSON.stringify({
+              sent: false,
+              reason: "delivery_failed",
+              ...readback,
+              attempts: attemptsAfter,
+              message: `The message to ${lead.name} could not be delivered, so they have not heard from us. The platform will try again on its own; do not tell the owner they have been contacted.`,
+            });
+          }
+
+          const dryRun = isDryRun();
+          await logCopilotAction({ ...audit, status: dryRun ? "dry_run" : "sent" });
+          return JSON.stringify({
+            sent: true,
+            ...readback,
+            stage: after?.stage ?? "contacted",
+            dryRun,
+            note: dryRun
+              ? `Re-sent first contact to ${lead.name}, recorded in test mode (dry run): it was not delivered to them. It will go out for real once the practice switches messaging live.`
+              : `Re-sent first contact to ${lead.name}.`,
           });
         }
 

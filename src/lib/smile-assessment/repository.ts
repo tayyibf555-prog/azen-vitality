@@ -107,10 +107,20 @@ export async function listResponses(args: {
   siteIds: string[];
   bands?: AssessmentBand[];
   limit?: number;
+  /**
+   * Optional lower bound on created_at. Absent means today's behaviour exactly —
+   * the newest `limit` rows, whatever their age — so every existing caller is
+   * untouched. It exists so "who filled this in today" is answered by the query
+   * rather than by fetching the newest 200 and filtering: on a day busier than the
+   * bound, the filter approach quietly drops the earliest enquiries of that very
+   * day and reports the remainder as the whole day.
+   */
+  sinceIso?: string;
 }): Promise<AssessmentResponse[]> {
   const db = serviceClient();
   let q = db.from("smile_assessment_response").select("*").in("site_id", args.siteIds);
   if (args.bands && args.bands.length > 0) q = q.in("band", args.bands);
+  if (args.sinceIso) q = q.gte("created_at", args.sinceIso);
   const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(args.limit ?? 200);

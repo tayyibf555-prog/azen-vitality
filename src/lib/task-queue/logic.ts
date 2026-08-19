@@ -5,10 +5,24 @@ import type { CandidateTask, Task, TaskKind, TaskOverlayState, TaskStatus } from
 
 /** Base urgency by task kind (higher is worked first). */
 export const KIND_BASE: Record<TaskKind, number> = {
+  // The top of the queue, and deliberately AT THE CAP rather than merely near it.
+  // A real person is mid-conversation, has been told a colleague will come back to
+  // them, and is waiting right now; nothing else in this queue has someone holding
+  // their phone. A base of 92 was not enough: `confirm_appt` starts at 90 and a
+  // maximum risk score adds 10, so the single most urgent thing in the practice was
+  // ranked below an appointment reminder. At 100 (which is also the ceiling every
+  // other kind's boost is clamped to) an escalation can be equalled by a
+  // maximum-boost task but never beaten, and a tie falls through to the existing
+  // name ordering.
+  agent_escalation: 100,
   confirm_appt: 90, // a high-risk appointment today/tomorrow
   contact_lead: 82, // a fresh enquiry, speed matters most
   after_hours_callback: 80, // someone tried to reach the practice out of hours
   action_assessment: 74, // a high-intent quiz lead not yet picked up
+  // A medium-band enquiry: warm, uncontacted, and worth a human's judgement, but
+  // below the high scorers and below anything with a clock on it. Sits between the
+  // acquisition work above and the compliance desk work below.
+  review_enquiry: 66,
   // Compliance: a base that sits below the time-critical patient work, then an
   // overdue boost (passed as overdueDays) lifts a breached item near the top.
   // due_soon items pass no boost and stay in the medium band.

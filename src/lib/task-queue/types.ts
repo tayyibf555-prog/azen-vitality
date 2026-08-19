@@ -10,6 +10,7 @@ export type TaskModule =
   | "noshow"
   | "after-hours"
   | "smile-assessment"
+  | "agent"
   | "compliance"
   | "medical-history";
 
@@ -21,6 +22,15 @@ export type TaskKind =
   | "confirm_appt"
   | "after_hours_callback"
   | "action_assessment"
+  /**
+   * A MEDIUM-band assessment nobody has picked up. Deliberately its own kind, not a
+   * second `action_assessment`: a high scorer is auto-contacted and the task is a
+   * safety net, whereas this one has had no contact of any sort and is a HUMAN
+   * decision about whether to reach out at all. Same row, different meaning.
+   */
+  | "review_enquiry"
+  /** A live patient conversation the assistant handed to a human. */
+  | "agent_escalation"
   | "compliance_audit"
   | "compliance_policy"
   | "compliance_training"
@@ -36,6 +46,8 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   confirm_appt: "Confirm appointment",
   after_hours_callback: "After-hours callback",
   action_assessment: "Review assessment",
+  review_enquiry: "Review enquiry",
+  agent_escalation: "Patient asked for a human",
   compliance_audit: "Compliance audit",
   compliance_policy: "Compliance policy",
   compliance_training: "Staff training",

@@ -21,6 +21,7 @@ const store = vi.hoisted(() => ({
   openRecall: new Set<string>(),
   created: [] as Array<{ targetId: string; nextDueAt: string }>,
   statusSets: [] as Array<{ id: string; status: string }>,
+  listTargetsCalls: [] as Array<{ limit: number | undefined }>,
 }));
 
 vi.mock("@/lib/cron-lock", () => ({ acquireCronLock: vi.fn(async () => true), releaseCronLock: vi.fn(async () => {}) }));
@@ -38,9 +39,18 @@ vi.mock("@/lib/dentally/client", () => ({
 }));
 vi.mock("@/lib/reactivation/repository", () => ({
   upsertTargets: vi.fn(async () => {}),
-  listTargets: vi.fn(async (q: { statuses?: string[] }) =>
-    q.statuses?.length === 1 && q.statuses[0] === "dormant" ? store.dormant : [],
-  ),
+  // Honours `limit` exactly as the real repository does (it issues a .limit() on
+  // the query). A double that ignored it would let the enrol pass appear to work
+  // while silently pulling the WHOLE dormant book — tens of thousands of rows —
+  // into a 300s function to pick at most 25, and no test would notice.
+  listTargets: vi.fn(async (q: { statuses?: string[]; limit?: number }) => {
+    if (!(q.statuses?.length === 1 && q.statuses[0] === "dormant")) return [];
+    store.listTargetsCalls.push({ limit: q.limit });
+    const limit = q.limit;
+    return typeof limit === "number" && Number.isFinite(limit) && limit > 0
+      ? store.dormant.slice(0, Math.floor(limit))
+      : store.dormant;
+  }),
   setTargetStatus: vi.fn(async (id: string, status: string) => { store.statusSets.push({ id, status }); }),
   getCadenceByTarget: vi.fn(async () => null),
   createCadence: vi.fn(async (i: { targetId: string; nextDueAt: string }) => {
@@ -113,6 +123,7 @@ beforeEach(() => {
   store.openRecall = new Set();
   store.created = [];
   store.statusSets = [];
+  store.listTargetsCalls = [];
   vi.clearAllMocks();
   vi.stubEnv("CRON_SECRET", "rx-secret");
 });
@@ -198,6 +209,25 @@ describe("reactivation sync auto-enrolment", () => {
 
     expect(out.perSite[0].enrolled).toBe(1);
     expect(store.created.map((c) => c.targetId)).toEqual(["site-1:p-13mo"]);
+  });
+
+  it("reads a BOUNDED window of the dormant book, never the whole thing", async () => {
+    // The per-run ceiling bounds how many cadences are CREATED; this bounds how
+    // many rows are READ to find them. Without it the enrol pass pulls every
+    // dormant row for the site — ~30k on the live base, with no upper lapse bound
+    // configured — into a 300s function in order to pick at most 25, on every
+    // tick, for every site. The other tests cannot see this: they all pass a pool
+    // smaller than the window.
+    store.dormant = Array.from({ length: 30_000 }, (_, i) => target(`p-${i}`));
+    await run();
+
+    expect(store.listTargetsCalls).toHaveLength(1);
+    const limit = store.listTargetsCalls[0]?.limit;
+    expect(typeof limit).toBe("number");
+    // A window, and one that is comfortably wider than the ceiling it feeds, so
+    // consent and exclusion skips inside it are absorbed rather than starving the run.
+    expect(limit).toBeGreaterThanOrEqual(MAX_ENROLMENTS_PER_RUN * 4);
+    expect(limit).toBeLessThan(30_000);
   });
 
   it("holds every bound with a pool the size of the whole lapsed book", async () => {

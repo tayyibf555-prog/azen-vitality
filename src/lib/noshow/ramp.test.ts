@@ -1,0 +1,204 @@
+// The no-show ramp rules, tested directly. These are the only brakes on the
+// module: no-show confirmations are transactional, so the drain's per-recipient
+// daily frequency cap does not apply to them, and the module has no daily
+// contact limit of its own. If a rule here is wrong, real patients get texted.
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  NOSHOW_DEFAULT_MAX_SENDS_PER_RUN,
+  noshowSendCap,
+  disposeCadence,
+  orderBySoonestAppointment,
+  applySendCap,
+} from "./ramp";
+
+const NOW = new Date("2026-08-18T09:00:00.000Z");
+
+function dispositionInput(over: Partial<Parameters<typeof disposeCadence>[0]> = {}) {
+  return {
+    excluded: false,
+    targetStatus: "scheduled",
+    appointmentStartAt: new Date(NOW.getTime() + 26 * 3_600_000).toISOString(),
+    hasNextStep: true,
+    channelConsented: true,
+    ...over,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// noshowSendCap
+// ---------------------------------------------------------------------------
+
+describe("noshowSendCap", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is 25 when nothing is configured", () => {
+    vi.stubEnv("NOSHOW_MAX_SENDS_PER_RUN", undefined as unknown as string);
+    expect(noshowSendCap()).toBe(NOSHOW_DEFAULT_MAX_SENDS_PER_RUN);
+    expect(NOSHOW_DEFAULT_MAX_SENDS_PER_RUN).toBe(25);
+  });
+
+  it("takes a configured widening of the ramp", () => {
+    vi.stubEnv("NOSHOW_MAX_SENDS_PER_RUN", "60");
+    expect(noshowSendCap()).toBe(60);
+  });
+
+  it("treats 0 as a real pause, not as a misconfiguration", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("NOSHOW_MAX_SENDS_PER_RUN", "0");
+    expect(noshowSendCap()).toBe(0);
+    // 0 is the owner deliberately holding the module; it must not be shouted
+    // about and must NOT fall back to the default, which would send 25.
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it.each([
+    ["", "empty"],
+    ["   ", "whitespace"],
+    ["lots", "non-numeric"],
+    ["-5", "negative"],
+    ["NaN", "NaN"],
+  ])("reverts to the default LOUDLY for %s (%s), never to unlimited", (raw) => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("NOSHOW_MAX_SENDS_PER_RUN", raw);
+    expect(noshowSendCap()).toBe(NOSHOW_DEFAULT_MAX_SENDS_PER_RUN);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0]?.[0])).toContain("NOSHOW_MAX_SENDS_PER_RUN");
+    spy.mockRestore();
+  });
+
+  it("floors a fractional cap rather than slicing on a fraction", () => {
+    vi.stubEnv("NOSHOW_MAX_SENDS_PER_RUN", "12.9");
+    expect(noshowSendCap()).toBe(12);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disposeCadence
+// ---------------------------------------------------------------------------
+
+describe("disposeCadence", () => {
+  it("sends a consented, still-confirmable, still-scheduled appointment", () => {
+    expect(disposeCadence(dispositionInput(), NOW)).toBe("send");
+  });
+
+  it("suppresses an admin-excluded patient WITHOUT closing the cadence", () => {
+    // Exclusion is a reversible override: closing the cadence would be permanent,
+    // so it must win over every expiry rule and leave the row untouched.
+    expect(disposeCadence(dispositionInput({ excluded: true }), NOW)).toBe("suppress");
+    expect(disposeCadence(dispositionInput({ excluded: true, targetStatus: "cancelled" }), NOW)).toBe("suppress");
+    expect(disposeCadence(dispositionInput({ excluded: true, hasNextStep: false }), NOW)).toBe("suppress");
+    expect(disposeCadence(dispositionInput({ excluded: true, channelConsented: false }), NOW)).toBe("suppress");
+  });
+
+  it.each(["confirmed", "cancelled", "attended", "no_show"])(
+    "expires a cadence whose patient has already settled it (%s)",
+    (status) => {
+      expect(disposeCadence(dispositionInput({ targetStatus: status }), NOW)).toBe("expire");
+    },
+  );
+
+  it("expires once the appointment has started, and at the exact start instant", () => {
+    const started = new Date(NOW.getTime() - 1).toISOString();
+    expect(disposeCadence(dispositionInput({ appointmentStartAt: started }), NOW)).toBe("expire");
+    // Boundary: reminding someone about an appointment starting this very second
+    // is pointless, so `<=` not `<`.
+    expect(disposeCadence(dispositionInput({ appointmentStartAt: NOW.toISOString() }), NOW)).toBe("expire");
+    // One millisecond of runway is still runway.
+    const barely = new Date(NOW.getTime() + 1).toISOString();
+    expect(disposeCadence(dispositionInput({ appointmentStartAt: barely }), NOW)).toBe("send");
+  });
+
+  it("expires an unreadable appointment time instead of messaging blind", () => {
+    for (const bad of ["", "not-a-date", "2026-13-40T00:00:00Z"]) {
+      expect(disposeCadence(dispositionInput({ appointmentStartAt: bad }), NOW)).toBe("expire");
+    }
+  });
+
+  it("expires a cadence that has run out of steps", () => {
+    expect(disposeCadence(dispositionInput({ hasNextStep: false }), NOW)).toBe("expire");
+  });
+
+  it("expires rather than sends when the step's channel is not consented", () => {
+    expect(disposeCadence(dispositionInput({ channelConsented: false }), NOW)).toBe("expire");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// orderBySoonestAppointment
+// ---------------------------------------------------------------------------
+
+function candidate(id: string, hoursFromNow: number) {
+  return {
+    cadence: { id },
+    target: { appointmentStartAt: new Date(NOW.getTime() + hoursFromNow * 3_600_000).toISOString() },
+  };
+}
+
+describe("orderBySoonestAppointment", () => {
+  it("puts the most imminent appointment first", () => {
+    const ordered = orderBySoonestAppointment([candidate("c-late", 40), candidate("c-soon", 2), candidate("c-mid", 20)]);
+    expect(ordered.map((c) => c.cadence.id)).toEqual(["c-soon", "c-mid", "c-late"]);
+  });
+
+  it("breaks ties on cadence id so the order is total", () => {
+    // listDueCadences has no ORDER BY. Without a tie-break, two runs over the same
+    // backlog could slice it differently and a cadence could be deferred by chance
+    // for ever.
+    const same = [candidate("c-c", 5), candidate("c-a", 5), candidate("c-b", 5)];
+    expect(orderBySoonestAppointment(same).map((c) => c.cadence.id)).toEqual(["c-a", "c-b", "c-c"]);
+    expect(orderBySoonestAppointment([...same].reverse()).map((c) => c.cadence.id)).toEqual(["c-a", "c-b", "c-c"]);
+  });
+
+  it("sorts an unreadable appointment time LAST, never first", () => {
+    const junk = { cadence: { id: "c-junk" }, target: { appointmentStartAt: "nonsense" } };
+    const ordered = orderBySoonestAppointment([junk, candidate("c-real", 3)]);
+    expect(ordered.map((c) => c.cadence.id)).toEqual(["c-real", "c-junk"]);
+  });
+
+  it("does not mutate the caller's array", () => {
+    const input = [candidate("c-late", 40), candidate("c-soon", 2)];
+    orderBySoonestAppointment(input);
+    expect(input.map((c) => c.cadence.id)).toEqual(["c-late", "c-soon"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applySendCap
+// ---------------------------------------------------------------------------
+
+describe("applySendCap", () => {
+  const hundred = Array.from({ length: 100 }, (_, i) => i);
+
+  it("sends the cap and defers the rest, losing nobody", () => {
+    const { send, deferred } = applySendCap(hundred, 25);
+    expect(send).toHaveLength(25);
+    expect(deferred).toHaveLength(75);
+    expect([...send, ...deferred]).toEqual(hundred);
+  });
+
+  it("takes the FRONT of the order, which is the most imminent", () => {
+    expect(applySendCap(hundred, 3).send).toEqual([0, 1, 2]);
+  });
+
+  it("sends everything when the backlog is under the cap", () => {
+    const { send, deferred } = applySendCap([1, 2, 3], 25);
+    expect(send).toEqual([1, 2, 3]);
+    expect(deferred).toEqual([]);
+  });
+
+  it.each([
+    [0, "paused"],
+    [-1, "negative"],
+    [Number.NaN, "NaN"],
+    [Number.POSITIVE_INFINITY, "infinite"],
+  ])("sends nothing for a cap of %s (%s) — the cap fails closed", (cap) => {
+    const { send, deferred } = applySendCap(hundred, cap);
+    expect(send).toEqual([]);
+    expect(deferred).toHaveLength(100);
+  });
+
+  it("floors a fractional cap", () => {
+    expect(applySendCap(hundred, 2.9).send).toHaveLength(2);
+  });
+});

@@ -94,11 +94,25 @@ function submission(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * A register request.
+ *
+ * `title` and `funding` come from the STAFF MEMBER's confirm dialogue, not from the
+ * submission: live Dentally will not create a patient without a title and a payment
+ * plan, and this onboarding form asks the patient for neither. They are defaulted
+ * into every well-formed body here so the cases that are about something else read
+ * exactly as they always did; the cases that ARE about them pass their own value, or
+ * `undefined` to leave the field off the wire entirely.
+ */
 function req(body: unknown): Request {
+  const withStaffChoices =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? { title: "Mrs", funding: "NHS", ...(body as Record<string, unknown>) }
+      : body;
   return new Request("http://localhost/api/onboarding/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
+    body: typeof body === "string" ? body : JSON.stringify(withStaffChoices),
   });
 }
 
@@ -207,13 +221,70 @@ describe("validation (never invents a missing detail)", () => {
     expect(h.createPatient).not.toHaveBeenCalled();
   });
 
-  it("creates without a date of birth when the form never captured one (mirrors register_patient)", async () => {
+  // ---------------------------------------------------------------------------
+  // THE THREE FIELDS LIVE DENTALLY REFUSES A REGISTRATION WITHOUT.
+  //
+  // This route used to send names, contact, site, and a date of birth only when the
+  // form happened to have asked for one. Live requires date_of_birth, title and
+  // payment_plan, and a BOOLEAN gender (DENTALLY.md; memory
+  // dentally-createpatient-422) — so every "Register in Dentally" click against the
+  // real practice would have failed, and the receptionist would have been told to go
+  // and check details that were perfectly fine.
+  //
+  // The case below this one used to assert the OPPOSITE: "creates without a date of
+  // birth when the form never captured one (mirrors register_patient)". It passed,
+  // and it was wrong on both counts — live does require one, and register_patient was
+  // not precedent but the same bug in another file. Both are fixed.
+  // ---------------------------------------------------------------------------
+  it("refuses a submission with no date of birth instead of sending a write live rejects", async () => {
     h.getSubmission.mockResolvedValue(submission({ dateOfBirth: null }));
     const res = await POST(req({ submissionId: "sub-1" }));
-    expect(res.status).toBe(200);
-    expect(h.createPatient).toHaveBeenCalledTimes(1);
-    const payload = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
-    expect(payload).not.toHaveProperty("date_of_birth");
+    expect(res.status).toBe(400);
+    const j = (await res.json()) as { error: string };
+    expect(j.error).toMatch(/no date of birth/i);
+    // It says what to DO about it, to both audiences: ask the patient, or add the
+    // question to the form so the next one arrives complete.
+    expect(j.error).toMatch(/date-of-birth question/i);
+    expect(h.createPatient).not.toHaveBeenCalled();
+    expect(h.setStatus).not.toHaveBeenCalled();
+  });
+
+  it("refuses without a title, which this form never asks the patient for", async () => {
+    const res = await POST(req({ submissionId: "sub-1", title: undefined }));
+    expect(res.status).toBe(400);
+    const j = (await res.json()) as { error: string };
+    expect(j.error).toMatch(/Mr, Mrs, Miss, Ms, Master/);
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  it("refuses a title that is not one of the five, however it is spelled", async () => {
+    // Dr and Rev are real in this practice's live data and carry no sex signal, so
+    // they are refused here exactly as the public funnel refuses them. "constructor"
+    // is the prototype key that used to walk straight through a bare object lookup.
+    for (const title of ["Dr", "Rev", "Sir", "constructor", "__proto__", ""]) {
+      const res = await POST(req({ submissionId: "sub-1", title }));
+      expect(res.status, `title "${title}" must be refused`).toBe(400);
+    }
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  it("refuses without knowing how the patient is to be seen", async () => {
+    const res = await POST(req({ submissionId: "sub-1", funding: undefined }));
+    expect(res.status).toBe(400);
+    const j = (await res.json()) as { error: string };
+    expect(j.error).toMatch(/NHS or Private/i);
+    expect(j.error).toMatch(/payment plan/i);
+    expect(h.createPatient).not.toHaveBeenCalled();
+  });
+
+  it("refuses a plan this practice has but this screen does not offer", async () => {
+    // UDC (47752) is the practice's biggest plan by volume and is deliberately not
+    // selectable: a plan nobody chose must not be reachable by naming it in a body.
+    for (const funding of ["UDC", "47752", "Denplan A", "constructor", ""]) {
+      const res = await POST(req({ submissionId: "sub-1", funding }));
+      expect(res.status, `funding "${funding}" must be refused`).toBe(400);
+    }
+    expect(h.createPatient).not.toHaveBeenCalled();
   });
 });
 
@@ -281,20 +352,49 @@ describe("success", () => {
     expect(j.patientId).toBe("new-pat-1");
     expect(j.status).toBe("registered");
     expect(h.createPatient).toHaveBeenCalledTimes(1);
-    expect(h.createPatient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        first_name: "Jane",
-        last_name: "Doe",
-        date_of_birth: "1990-05-01",
-        mobile_phone: "+447700900123",
-        email_address: "jane.doe@example.co.uk",
-        site_id: SITE_CC_UUID,
-        use_sms: true,
-        use_email: true,
-      }),
-    );
+    // THE WHOLE PAYLOAD, not a subset. The defect this route shipped with was three
+    // ABSENT fields, and objectContaining cannot see an absence.
+    expect(h.createPatient).toHaveBeenCalledWith({
+      first_name: "Jane",
+      last_name: "Doe",
+      title: "Mrs", // the staff member's choice, from the confirm dialogue
+      date_of_birth: "1990-05-01",
+      payment_plan_id: 1, // NHS, confirmed against GET /v1/payment_plans
+      // A BOOLEAN, derived from that title: this route used to send no sex at all,
+      // and live answers "gender: must be male or female" to a registration without.
+      gender: false,
+      email_address: "jane.doe@example.co.uk",
+      mobile_phone: "+447700900123",
+      site_id: SITE_CC_UUID,
+      use_sms: true,
+      use_email: true,
+    });
     expect(h.setStatus).toHaveBeenCalledWith("sub-1", "registered");
     expect(h.setStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("derives the boolean sex from the staff member's chosen title", async () => {
+    for (const [title, expected] of [
+      ["Mr", true],
+      ["Master", true],
+      ["Mrs", false],
+      ["Miss", false],
+      ["Ms", false],
+    ] as const) {
+      h.createPatient.mockClear();
+      const res = await POST(req({ submissionId: "sub-1", title }));
+      expect(res.status).toBe(200);
+      const payload = h.createPatient.mock.calls[0]![0] as Record<string, unknown>;
+      expect(payload.title).toBe(title);
+      expect(payload.gender, `${title} follows its live majority`).toBe(expected);
+      expect(typeof payload.gender).toBe("boolean");
+    }
+  });
+
+  it("maps Private to the id that IS Private live (2), not to a positional guess", async () => {
+    const res = await POST(req({ submissionId: "sub-1", funding: "Private" }));
+    expect(res.status).toBe(200);
+    expect((h.createPatient.mock.calls[0]![0] as Record<string, unknown>).payment_plan_id).toBe(2);
   });
 
   it("falls back to the client's primary site when the submission named none", async () => {

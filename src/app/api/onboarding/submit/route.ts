@@ -5,7 +5,15 @@ import { getActiveFormBySlug } from "@/lib/onboarding/form-repository";
 import { resolveSteps } from "@/lib/onboarding/resolve";
 import { createSubmission } from "@/lib/onboarding/repository";
 import { consumeBudget } from "@/lib/rate-budget";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabled, isSystemEnabledForSend } from "@/lib/systems/repository";
+import { decideLeadBridge, onboardingLeadSource } from "@/lib/onboarding/lead-bridge";
+import {
+  findEarlierOpenLead,
+  findOpenLeadByAddress,
+  insertLead,
+  setLeadStage,
+} from "@/lib/speed-to-lead/repository";
+import { normaliseEmail, toE164 } from "@/lib/messaging/phone";
 import type {
   OnboardingConsent,
   OnboardingFile,
@@ -113,6 +121,89 @@ function parseFiles(raw: unknown, clientSlug: string): OnboardingFile[] | null {
     out.push({ path, name, size, type });
   }
   return out;
+}
+
+/**
+ * Bridge a completed registration into Speed-to-lead so somebody chases it.
+ *
+ * WHY THIS EXISTS: a submission used to be recorded and nothing more. The person
+ * had just told the practice they wanted to join, and no automation and no worklist
+ * entry followed them; the row sat in the onboarding list until a human happened to
+ * open it. This creates the lead the existing SLA sweep already knows how to chase.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO: it does NOT send. The intake route first-contacts
+ * inside the request because a web enquiry is a race; a registration is not, and
+ * adding a second send path to a public unauthenticated endpoint buys nothing. The
+ * lead is written at stage 'new' with first_response_at null, which is exactly what
+ * listUncontacted selects, so the sweep picks it up on its next tick and every
+ * existing choke point (consent, suppression, deliverability, quiet hours, the
+ * kill switch, the atomic claim) applies unchanged.
+ *
+ * BEST EFFORT BY CONTRACT: every failure here is swallowed. The patient has already
+ * registered successfully and their submission is already stored; a lead-table blip
+ * must never turn that into an error page telling them to fill the form in again.
+ */
+async function bridgeSubmissionToLead(input: {
+  clientId: string;
+  siteId: string;
+  formSlug: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  consent: OnboardingConsent;
+  reason: string | undefined;
+}): Promise<void> {
+  // Owner kill switch. Speed-to-lead being off means the practice does not want
+  // leads created or chased, so record the submission and stop. Checked with the
+  // SEND variant (fail-closed once messaging is live) because the lead this would
+  // create exists precisely so the sweep can message it.
+  if (!(await isSystemEnabledForSend(input.clientId, "speed-to-lead"))) return;
+
+  // Normalise before deciding: an unusable number must read as "no phone" to the
+  // consent gate, not as a phone that happens never to deliver.
+  const phone = toE164(input.phone);
+  const email = normaliseEmail(input.email);
+
+  const decision = decideLeadBridge({
+    firstName: input.firstName,
+    lastName: input.lastName,
+    phone,
+    email,
+    consent: input.consent,
+  });
+  if (!decision.bridge) return;
+
+  // Dedup, exactly as the intake route does: someone who did the quiz and then
+  // registered (or double-tapped Submit) must not become two leads and two chases.
+  const sinceIso = new Date(Date.now() - HOUR_MS).toISOString();
+  if (await findOpenLeadByAddress(input.siteId, phone, email, sinceIso)) return;
+
+  const lead = await insertLead({
+    siteId: input.siteId,
+    name: decision.name,
+    email,
+    phone,
+    channel: decision.channel,
+    // Why they said they are joining, so the first-contact draft and the worklist
+    // row are about their actual reason rather than a generic new-patient line.
+    treatmentInterest: input.reason ?? null,
+    source: onboardingLeadSource(input.formSlug),
+    consent: decision.consent,
+  });
+
+  // Double-submit race guard (the intake route's post-insert re-check). There is no
+  // DB unique constraint on (site, contact), so two near-simultaneous submits can
+  // both pass the dedup above; retire the later one so only one lead is chased.
+  const earlier = await findEarlierOpenLead(
+    input.siteId,
+    phone,
+    email,
+    sinceIso,
+    lead.id,
+    lead.createdAt,
+  );
+  if (earlier) await setLeadStage(lead.id, "lost");
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -244,6 +335,32 @@ export async function POST(request: Request): Promise<Response> {
       consent,
       custom: hasAny(custom) ? custom : null,
     });
+
+    // LEAD BRIDGE: the submission is safely stored; now make sure a human (or the
+    // sweep) actually follows it up. A lead has to belong to a site to be worked, so
+    // when the patient chose "any" on a form that itself has no site, attribute it to
+    // the practice's first site (the intake route resolves an unstated site the same
+    // way). The SUBMISSION's own siteId is untouched by that fallback: it stays null
+    // and honest about the patient having expressed no preference.
+    const leadSiteId = siteId ?? clientSites[0]?.id ?? null;
+    if (leadSiteId) {
+      try {
+        await bridgeSubmissionToLead({
+          clientId: client.id,
+          siteId: leadSiteId,
+          formSlug: formSlug ?? null,
+          firstName: a.first_name ?? null,
+          lastName: a.last_name ?? null,
+          phone: a.phone ?? null,
+          email: a.email ?? null,
+          consent,
+          reason: emptyToUndef(a.reason),
+        });
+      } catch (err) {
+        // The registration itself succeeded. Loud in the log, invisible to them.
+        console.error("[onboarding] could not bridge the submission into speed-to-lead", err);
+      }
+    }
 
     // Do not leak the row id or internals to the public caller; a friendly ack only.
     void submission;

@@ -16,6 +16,14 @@ import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/bo
 import { markHoldConfirmed } from "@/lib/booking/holds";
 import { londonDayKey } from "@/lib/time/london";
 import { ageFromDob } from "@/lib/patient/demographics";
+// The ONE live-calibrated derivation of a new Dentally patient, shared by all four
+// registration paths so they cannot drift apart again. See patient-payload.ts.
+import {
+  knownTitle,
+  canonicalDob,
+  knownPaymentPlanId,
+  buildPatientRegistration,
+} from "@/lib/dentally/patient-payload";
 
 export const dynamic = "force-dynamic";
 
@@ -128,136 +136,17 @@ function safeNote(value: string): string {
  *
  * Registering a brand new patient against real Dentally fails with a 422 unless
  * date_of_birth, title and payment_plan are all present, and gender is sent as a
- * BOOLEAN. Nothing below is trusted from the client: every value is re-derived or
- * re-checked here, because this endpoint is public and unauthenticated.
+ * BOOLEAN. Nothing is trusted from the client: every value is re-derived or
+ * re-checked, because this endpoint is public and unauthenticated.
+ *
+ * THE DERIVATION ITSELF NOW LIVES IN lib/dentally/patient-payload.ts, with the
+ * live-probe evidence for every rule. It moved because this route was the ONLY one
+ * of four registration paths that had been calibrated, and the other three had each
+ * drifted into a payload live refuses. What stays here is the part that is genuinely
+ * this route's own: the ORDER the fields are checked in and the patient-facing
+ * sentence each failure produces, because this is a public funnel and "Please choose
+ * a title and try again" is copy, not validation.
  * ------------------------------------------------------------------------- */
-
-/**
- * The only titles this practice uses, and the only ones the booking page offers.
- *
- * PROBE 2026-08-17 (GET /v1/patients, 800 real records: the 500 most recently
- * created + the 300 oldest). Every one of these five appears in live data, and
- * together they are 99.6% of it. The tail is `Dr` (2) and `Rev` (1), and both are
- * DELIBERATELY absent here — see genderFromTitle for why adding them would be a
- * clinical-data regression, not a courtesy.
- */
-const TITLES = ["Mr", "Mrs", "Miss", "Ms", "Master"] as const;
-type Title = (typeof TITLES)[number];
-
-/**
- * Whitelist, exactly like knownTreatment(): the booking page's own five options
- * are the ONLY accepted values, so no arbitrary string a stranger posts can land
- * on a real patient record. Returns the canonical spelling, never the caller's.
- */
-function knownTitle(value: string | undefined): Title | undefined {
-  if (!value) return undefined;
-  const cleaned = value.replace(/\s+/g, " ").trim().toLowerCase();
-  return TITLES.find((t) => t.toLowerCase() === cleaned);
-}
-
-/**
- * Dentally carries sex as a BOOLEAN on the patient record, true = male and
- * false = female, and it is required to register.
- *
- * A DEFAULT DERIVED FROM THE TITLE, AND NOT A FACT ABOUT THE PATIENT. The earlier
- * comment here claimed this was "proven against 200 real records"; the wider probe
- * below disproves the word "proven", so it is gone.
- *
- * PROBE 2026-08-17 (GET /v1/patients, 800 real records for this practice):
- *   Mr     -> true  227 / false 5      (232)
- *   Master -> true   23 / false 0       (23)
- *   Mrs    -> true    0 / false 58      (58)
- *   Miss   -> true    0 / false 157    (157)
- *   Ms     -> true    0 / false 172    (172)
- * The female titles are exact. `Mr` is right 227 times in 232 and WRONG 5 times —
- * about 2% — so this is a good starting value, not a derivation that cannot err.
- * That is the honest basis for the decision below, and it is enough for one: the
- * practice corrects the record in Dentally, and nothing clinical keys off it.
- *
- * `Dr` and `Rev` are excluded from TITLES for exactly this reason. Live data gives
- * Dr -> true once and Dr -> false once, and Rev -> true once: those titles carry no
- * sex signal at all, so admitting them would mean writing a coin-flip into a real
- * patient record. If the practice ever asks for them, ASK the patient for sex on
- * the form instead of extending this function.
- *
- * DELIBERATE DECISION, not an oversight: we derive it from the chosen title
- * rather than asking. This form is the end of a public marketing funnel, and
- * putting a binary male or female question in front of someone booking a
- * check-up is off-putting and adds a step for no patient benefit. The derivation
- * happens HERE, on the server, never in the browser, so the client cannot set it.
- * It is a starting value on the record like any other detail, and the practice
- * can correct it in Dentally whenever it is wrong.
- */
-function genderFromTitle(title: Title): boolean {
-  return title === "Mr" || title === "Master";
-}
-
-/**
- * How the patient asked to be seen, mapped to THIS practice's own Dentally
- * payment plan ids. Whitelisted like the title: an unrecognised value is refused
- * rather than passed through.
- *
- * PROBE 2026-08-17 (GET /v1/payment_plans, all 15 active plans): id 1 IS "NHS" and
- * id 2 IS "Private", so the two ids below are confirmed against the live practice
- * rather than assumed.
- *
- * WHAT THE PROBE ALSO SHOWS, and what we are deliberately not doing about it: the
- * practice's third plan, "UDC" (id 47752), is 37% of its 500 most recent
- * registrations — more than Private's 8%. The booking page offers NHS and Private
- * only, so a walk-in urgent-care patient booking through the funnel is registered
- * on one of those two. That is a FUNNEL COPY decision for the owner, not a silent
- * code default: adding 47752 here without adding the option to the form would map
- * nothing to it, and adding the option changes what patients are asked. Left as
- * two until the owner chooses. See docs/runbooks/booking-live-calibration.md.
- *
- * NULL-PROTOTYPE, and that is load-bearing — see knownPaymentPlanId.
- */
-const FUNDING_PLAN_IDS: Record<string, number> = Object.assign(Object.create(null), {
-  nhs: 1,
-  private: 2,
-});
-
-/**
- * THIS IS THE MOCK-VS-LIVE TRAP THE CALIBRATION EXISTS TO CATCH.
- *
- * The lookup used to be a bare index into an object literal, so every key on
- * Object.prototype answered it: `funding: "constructor"` returned the Object
- * constructor, which is not `undefined`, so it sailed through the caller's
- * `=== undefined` guard and became `payment_plan_id: <function>` on the payload.
- * JSON.stringify then DROPS a function value silently, so what left the building
- * was a registration with no payment_plan at all — precisely the field live
- * Dentally 422s on ("payment_plan: seems to be missing", DENTALLY.md), while the
- * local mock accepted it happily. A public, unauthenticated caller could reach it
- * with one word.
- *
- * Two independent belts now: the map has a null prototype, and the answer must be
- * a number before it is returned. Either alone would fix it; both are cheap.
- */
-function knownPaymentPlanId(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const id = FUNDING_PLAN_IDS[value.replace(/\s+/g, " ").trim().toLowerCase()];
-  return typeof id === "number" ? id : undefined;
-}
-
-/**
- * A real calendar date as YYYY-MM-DD, the same check the onboarding register
- * route and the co-pilot's create_patient already make: an impossible date
- * (2001-13-40, 31 February) fails the UTC round trip rather than being written
- * through because it was merely regex-shaped. Anchored at both ends here, unlike
- * those two: the booking page posts a plain date input value, and this endpoint
- * is public, so a timestamp or trailing junk is refused rather than truncated.
- */
-function canonicalDob(raw: string): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-  return `${m[1]}-${m[2]}-${m[3]}`;
-}
 
 export async function POST(request: Request): Promise<Response> {
   let body: Record<string, unknown>;
@@ -431,24 +320,34 @@ export async function POST(request: Request): Promise<Response> {
       patientId = (candidates.find((c) => c.name === wanted) ?? candidates[0])?.id ?? "";
 
       if (!patientId) {
-        const { patient } = await dentally.createPatient({
-          first_name: firstName,
-          last_name: lastName,
-          // Live Dentally rejects a registration missing any of these three.
+        // The shared, live-calibrated derivation. It re-checks the whitelisted
+        // values above rather than trusting them, derives sex from the title as a
+        // BOOLEAN (never a string, and never a value the browser could set — see
+        // genderFromTitle for why the funnel does not ask), and refuses outright
+        // rather than sending a payload live would 422.
+        //
+        // The three guards above have already produced a per-field patient-facing
+        // 400 for every way this can refuse, so `ok: false` here is unreachable in
+        // practice; it is handled as a refusal, not asserted away, because the one
+        // thing this route must never do is register someone with a field missing.
+        const built = buildPatientRegistration({
+          firstName,
+          lastName,
           title,
-          date_of_birth: dob,
-          payment_plan_id: paymentPlanId,
-          // A BOOLEAN, never a string: Dentally stores sex as true = male. Derived
-          // from the title HERE rather than taken from the client, so the browser
-          // can never set it (see genderFromTitle for why we do not ask for it).
-          gender: genderFromTitle(title),
-          email_address: email ?? undefined,
-          mobile_phone: phone,
+          dateOfBirth: dob,
+          paymentPlanId,
+          email,
+          phone,
           // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
-          site_id: dentallySiteId(siteId),
-          use_sms: true,
-          use_email: true,
+          dentallySiteId: dentallySiteId(siteId),
+          useSms: true,
+          useEmail: true,
         });
+        if (!built.ok) {
+          console.error(`[booking/create] refused an incomplete registration: ${built.reason}`);
+          return bad(BOOKING_FAILED, 502);
+        }
+        const { patient } = await dentally.createPatient(built.payload);
         patientId = String(patient.id);
         patientCreated = true;
       }

@@ -247,6 +247,14 @@ async function firstRealSlot(): Promise<{ start: string; finish: string; practit
   return slot;
 }
 
+// A single walk here is hold -> create -> Dentally-mock registration -> appointment
+// write -> read-back: five awaited hops. Under a loaded machine the 5s default
+// aborts hop three mid-flight, which strands a half-registered patient in the
+// module-level mock book and makes the NEXT test's "never registered again"
+// assertion fail for a reason that has nothing to do with the product. The
+// timeout is the realistic budget for the whole walk, not a licence to be slow.
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeEach(() => {
   vi.clearAllMocks();
   holds.clear();

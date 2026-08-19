@@ -326,4 +326,38 @@ describe("co-pilot commit gate (finding #3)", () => {
     expect(dispatch).toHaveBeenCalledWith("create_patient", expect.objectContaining({ confirm: true }));
     expect(r.replyText).toMatch(/added/i);
   });
+
+  // nudge_lead joins the SAME set: it re-fires a real first-contact message to a
+  // real person who enquired, so a confirm the owner never gave must be inert here
+  // as well as inside the tool.
+  it("REFUSES a nudge_lead confirm:true set in the same turn as the request", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "nudge_lead", { leadId: "lead-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Amara enquired an hour ago and has not been contacted. Shall I send it?"));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ sent: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn([{ role: "user", content: "chase up that lead from this morning, go on" }], deps);
+    expect(dispatch).not.toHaveBeenCalled(); // nobody was texted
+    expect(r.replyText).toMatch(/send/i);
+  });
+
+  it("ALLOWS a nudge_lead confirm:true that answers a prior read-back", async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(toolUseMessage("tu1", "nudge_lead", { leadId: "lead-1", confirm: true }))
+      .mockResolvedValueOnce(textMessage("Re-sent first contact to Amara."));
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify({ sent: true }));
+    const deps = { anthropic: { messages: { create } } as never, dispatch, systemPrompt: "sys", tools: [] };
+
+    const r = await runAgentTurn(
+      [
+        { role: "user", content: "chase up that lead from this morning" },
+        { role: "assistant", content: "Amara Osei enquired through the Smile Assessment an hour ago and nobody has been in touch. Shall I send her the first contact message?" },
+        { role: "user", content: "yes go ahead" },
+      ],
+      deps,
+    );
+    expect(dispatch).toHaveBeenCalledWith("nudge_lead", expect.objectContaining({ confirm: true }));
+    expect(r.replyText).toMatch(/re-sent/i);
+  });
 });

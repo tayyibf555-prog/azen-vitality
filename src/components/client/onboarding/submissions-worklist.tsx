@@ -30,6 +30,10 @@ import {
   type RegisterApiResponse,
   type RegisterOutcome,
 } from "@/lib/onboarding/register-result";
+// The two fields Dentally will not create a patient without and this form never
+// asks the patient for. The staff member chooses them here, at the moment of
+// registration — see the register route for why they are theirs to choose.
+import { TITLES, FUNDING_OPTIONS, genderFromTitle, type Title } from "@/lib/dentally/patient-payload";
 
 // Internal staff worklist for new-patient onboarding submissions. Fetches the
 // auth-gated /api/onboarding/list (newest first), renders a scannable worklist, and
@@ -551,8 +555,16 @@ function RegisterDialog({
   onRegistered: (submissionId: string, patientId: string) => void;
 }) {
   const [phase, setPhase] = useState<RegisterPhase>({ kind: "confirm" });
+  // THE TWO FIELDS THE PATIENT WAS NEVER ASKED. Dentally refuses a registration
+  // without a title and a payment plan, and this form captures neither, so the staff
+  // member picks them here. Deliberately UNSET to begin with: a pre-selected "Mr" or
+  // "NHS" is a guess wearing the clothes of a decision, and it would be saved to a
+  // real clinical record by someone who only ever clicked "Confirm".
+  const [title, setTitle] = useState<Title | "">("");
+  const [funding, setFunding] = useState("");
   const working = phase.kind === "working";
   const name = fullName(s);
+  const ready = title !== "" && funding !== "";
 
   // Escape closes, except mid-request (nothing to interrupt safely).
   useEffect(() => {
@@ -564,12 +576,15 @@ function RegisterDialog({
   }, [onClose, working]);
 
   async function submit(force: boolean) {
+    if (!ready) return; // the button is disabled; belt and braces
     setPhase({ kind: "working" });
     try {
       const res = await fetch("/api/onboarding/register", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ submissionId: s.id, ...(force ? { force: true } : {}) }),
+        // title + funding travel with every attempt, including the "different
+        // person" retry, because the server validates them on that path too.
+        body: JSON.stringify({ submissionId: s.id, title, funding, ...(force ? { force: true } : {}) }),
       });
       const json = (await res.json().catch(() => null)) as RegisterApiResponse | null;
       // One pure function decides what happened, so "blocked" can never again be
@@ -641,11 +656,67 @@ function RegisterDialog({
                   }
                 />
               </dl>
+
+              {/* The two Dentally requires and the form never asked for. Both start
+                  empty and the register button stays disabled until a person has
+                  chosen: neither may be defaulted into a real clinical record. */}
+              <div className="mt-3 grid gap-3 rounded-xl border border-line bg-card-muted/40 p-3.5 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="reg-title" className="block text-xs font-medium text-muted">
+                    Title
+                  </label>
+                  <select
+                    id="reg-title"
+                    value={title}
+                    disabled={working}
+                    onChange={(e) => setTitle(e.target.value as Title | "")}
+                    className="mt-1 w-full rounded-lg border border-line bg-card px-2.5 py-1.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-50"
+                  >
+                    <option value="">Choose…</option>
+                    {TITLES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="reg-funding" className="block text-xs font-medium text-muted">
+                    Seen as
+                  </label>
+                  <select
+                    id="reg-funding"
+                    value={funding}
+                    disabled={working}
+                    onChange={(e) => setFunding(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-line bg-card px-2.5 py-1.5 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40 disabled:opacity-50"
+                  >
+                    <option value="">Choose…</option>
+                    {FUNDING_OPTIONS.map((f) => (
+                      <option key={f.value} value={f.value}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-muted sm:col-span-2">
+                  {title === ""
+                    ? "Dentally needs both before it will create this patient."
+                    : `Their record will be saved as ${genderFromTitle(title) ? "male" : "female"}, taken from the title. Change it in Dentally if that is wrong.`}
+                </p>
+              </div>
+
               <div className="mt-4 flex justify-end gap-2">
                 <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={working}>
                   Cancel
                 </Button>
-                <Button type="button" variant="primary" size="sm" onClick={() => submit(false)} disabled={working}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={() => submit(false)}
+                  disabled={working || !ready}
+                >
                   {working ? (
                     <Loader2 size={15} className="animate-spin" aria-hidden />
                   ) : (

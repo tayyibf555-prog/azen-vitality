@@ -12,6 +12,14 @@ import {
 } from "@/lib/booking/slots";
 import { londonDayKey } from "@/lib/time/london";
 import { isDentallyWriteEnabled } from "@/lib/dentally/write";
+// The ONE live-calibrated derivation of a new Dentally patient, shared with the
+// booking funnel, the owner co-pilot and the onboarding worklist. See patient-payload.ts.
+import {
+  knownTitle,
+  canonicalDob,
+  buildPatientRegistration,
+  configuredDefaultPaymentPlanId,
+} from "@/lib/dentally/patient-payload";
 import type { AgentContext } from "./types";
 
 // Real Dentally requires the appointment `reason` to be one of a fixed set (calibrated
@@ -113,15 +121,24 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
   {
     name: "register_patient",
     description:
-      "Register a new patient on our records so you can then book for them. Use for a number we do not recognise, once you have their first and last name (their mobile is already known). Confirm the name with them before calling this.",
+      "Register a new patient on our records so you can then book for them. Use for a number we do not recognise, once you have their title, first and last name and date of birth (their mobile is already known). Our records will not accept a new patient without all four, so collect them naturally in conversation and confirm them back before calling this.",
     input_schema: {
       type: "object",
       properties: {
         firstName: { type: "string" },
         lastName: { type: "string" },
+        title: {
+          type: "string",
+          enum: ["Mr", "Mrs", "Miss", "Ms", "Master"],
+          description: "How they are addressed. Ask them; never guess it from their name.",
+        },
+        dateOfBirth: {
+          type: "string",
+          description: "Their date of birth as YYYY-MM-DD. Ask them for it; never guess or estimate it.",
+        },
         email: { type: "string", description: "email address if they give one (optional)" },
       },
-      required: ["firstName", "lastName"],
+      required: ["firstName", "lastName", "title", "dateOfBirth"],
     },
   },
   {
@@ -619,16 +636,80 @@ export function makeDispatch(deps: ToolDeps) {
         // Refused before registeredPatientId is set, so a later `book` in the same
         // turn cannot proceed against an id that was never created.
         if (!writesEnabled) return writeDisabledResult("register_patient");
-        const { patient } = await deps.dentally.createPatient({
-          first_name: input.firstName,
-          last_name: input.lastName,
-          email_address: typeof input.email === "string" ? input.email : undefined,
-          mobile_phone: deps.context.phone ?? undefined,
+
+        // WHAT THIS TOOL USED TO SEND, and why it could never have worked: names, an
+        // email, a mobile and a site — and none of the four fields live Dentally
+        // demands to create a patient (DENTALLY.md; memory dentally-createpatient-422).
+        // Every registration this agent made would have 422'd against the real
+        // practice, mid-conversation, with a patient waiting. It went unnoticed because
+        // the local mock accepted it.
+        //
+        // Two of the four the agent can simply ASK for, and now does: a title and a
+        // date of birth are ordinary things to give a practice over text. The third
+        // (sex) is derived from the title exactly as the booking funnel derives it, so
+        // nobody is asked a binary sex question in a chat about a check-up.
+        const title = knownTitle(typeof input.title === "string" ? input.title : undefined);
+        const dob = canonicalDob(typeof input.dateOfBirth === "string" ? input.dateOfBirth : undefined);
+        if (!title || !dob) {
+          // Told to the MODEL, which then asks the patient in its own words. Never
+          // says "our system rejected it": from the patient's side this is simply a
+          // detail we have not taken yet.
+          return JSON.stringify({
+            registered: false,
+            error:
+              `I still need ${!title && !dob ? "their title (Mr, Mrs, Miss, Ms or Master) and their date of birth" : !title ? "their title (Mr, Mrs, Miss, Ms or Master)" : "their date of birth as a real date, e.g. 1985-04-09"}` +
+              " before I can add them to our records. Ask them for it warmly, confirm it back, then call register_patient again. Never guess it.",
+          });
+        }
+
+        // THE FOURTH FIELD, and the one this agent cannot get: a payment plan.
+        //
+        // Live Dentally will not create a patient without one, and there is no honest
+        // way for THIS caller to supply it. Asking the patient is forbidden — a
+        // patient-facing agent message must never name a funding regime (project rule)
+        // — and picking one silently would write a billing arrangement nobody chose
+        // onto a real clinical record. The practice's own probe underlines the risk:
+        // its biggest plan by volume is UDC (47752, 37% of recent registrations), not
+        // NHS or Private, so any hard-coded guess would be wrong more often than right.
+        //
+        // So the agent registers nobody until the owner has DELIBERATELY chosen which
+        // plan a conversational registration lands on (DENTALLY_DEFAULT_PAYMENT_PLAN_ID
+        // — see configuredDefaultPaymentPlanId). Unset, which is what production runs
+        // today, it refuses and hands over to a path that works: the onboarding form,
+        // where the patient fills in their own details and a member of staff completes
+        // the registration, or a colleague.
+        const paymentPlanId = configuredDefaultPaymentPlanId();
+        if (paymentPlanId === null) {
+          return JSON.stringify({
+            registered: false,
+            error:
+              "I cannot finish setting them up on our records myself. Do NOT tell them anything was rejected or that there is a problem with their details — there is not. Say warmly that you will get them registered, then either send them the onboarding form with send_onboarding_form so they can complete their details, or call escalate_to_human so a colleague finishes it. Do not call register_patient again this conversation.",
+          });
+        }
+
+        const built = buildPatientRegistration({
+          firstName: typeof input.firstName === "string" ? input.firstName : "",
+          lastName: typeof input.lastName === "string" ? input.lastName : "",
+          title,
+          dateOfBirth: dob,
+          paymentPlanId,
+          email: typeof input.email === "string" ? input.email : null,
+          phone: deps.context.phone ?? null,
           // Dentally knows its own site UUIDs, not our internal ids ("site-cc").
-          site_id: dentallySiteId(deps.context.siteId),
-          use_sms: true,
-          use_email: true,
+          dentallySiteId: dentallySiteId(deps.context.siteId),
+          useSms: true,
+          useEmail: true,
         });
+        if (!built.ok) {
+          // Only a missing name can reach here (the other three are checked above).
+          return JSON.stringify({
+            registered: false,
+            error:
+              "I still need their full name before I can add them to our records. Ask them for it, confirm it back, then call register_patient again. Never guess it.",
+          });
+        }
+
+        const { patient } = await deps.dentally.createPatient(built.payload);
         registeredPatientId = patient.id;
         return JSON.stringify({ registered: true, patientId: patient.id });
       }

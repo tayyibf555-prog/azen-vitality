@@ -516,7 +516,11 @@ export async function POST(request: Request): Promise<Response> {
     // Silence must never be invisible: the patient has messaged us and will get no
     // automatic reply, so ping the practice the same way every other handover does.
     // Best-effort and hourly-capped inside alertStaffHandover.
-    await alertStaffHandover({ patientName: displayName, reason: "no_reply" });
+    await alertStaffHandover({
+      patientName: displayName,
+      reason: "no_reply",
+      conversationId: conversation.id,
+    });
     return twiml();
   }
   if (conversation.status === "needs_human") {
@@ -561,7 +565,11 @@ export async function POST(request: Request): Promise<Response> {
     } catch {
       // Reply logged; swallow delivery errors so Twilio does not retry.
     }
-    await alertStaffHandover({ patientName: displayName, reason: "throttled" });
+    await alertStaffHandover({
+      patientName: displayName,
+      reason: "throttled",
+      conversationId: conversation.id,
+    });
     return twiml();
   }
 
@@ -744,7 +752,11 @@ export async function POST(request: Request): Promise<Response> {
   if (handoverReason) {
     // AFTER the patient reply: ping the practice's alert number so a human picks
     // the thread up. No-op until STAFF_ALERT_PHONE is set; never throws.
-    await alertStaffHandover({ patientName: displayName, reason: handoverReason });
+    await alertStaffHandover({
+      patientName: displayName,
+      reason: handoverReason,
+      conversationId: conversation.id,
+    });
   }
   } finally {
     await releaseCronLock(turnLock);
