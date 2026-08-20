@@ -96,9 +96,21 @@ export default async function OwnerLayout({
                   BOTH trees must carry it or the owner view boxes a chart that /c
                   does not. The owner route renders the SAME RecordTabContent, and
                   a module wired into one tree and not the other is a class of
-                  failure this project has already shipped once. */}
-              <main className="lg:has-[[data-diary]]:h-full">
-                <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 has-[[data-wide]]:max-w-none sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-diary]]:h-full">
+                  failure this project has already shipped once.
+
+                  data-chat is the HEIGHT half again, for the co-pilot page, and
+                  it is deliberately NOT data-diary: that marker also drops the
+                  1400px cap and zeroes the column's spacing, and a chat wants
+                  neither. All the chat needs is a DEFINITE height, because its
+                  composer is a row pinned to the bottom of a flex column and its
+                  messages are the only thing that scrolls. Without it the page's
+                  h-full resolves against an auto-height parent, the column
+                  collapses to its content and the composer floats mid-screen.
+                  BOTH shells carry it for the same reason data-wide is in both:
+                  /owner renders the SAME CopilotView through its [module]
+                  if-chain. */}
+              <main className="lg:has-[[data-diary]]:h-full lg:has-[[data-chat]]:h-full">
+                <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-3 has-[[data-diary]]:max-w-none has-[[data-diary]]:space-y-0 has-[[data-wide]]:max-w-none sm:px-5 lg:px-6 lg:py-4 lg:has-[[data-chat]]:h-full lg:has-[[data-diary]]:h-full">
                   {children}
                 </div>
               </main>

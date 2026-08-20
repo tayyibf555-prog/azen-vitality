@@ -2,28 +2,43 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Send, Loader2, Bot, X } from "lucide-react";
-import { COPILOT_STARTERS, useCopilotThread } from "@/components/platform/copilot-thread";
+import { Send, Loader2, Bot, X, CalendarDays, PoundSterling, AlertTriangle, TrendingUp, type LucideIcon } from "lucide-react";
 
-// ---------------------------------------------------------------------------
-// THE BOTTOM-DOCKED POP-UP, and ONLY the pop-up.
-//
-// This component used to be both surfaces: the shortcut's docked ask-bar AND
-// the whole co-pilot page, which rendered it inside a card. That is why the page
-// read as an oversized pop-up, and it is fixed by giving the page its own
-// component (copilot-page-chat.tsx) rather than by bending this one.
-//
-// SO NOTHING BELOW THIS LINE IS SHARED LAYOUT ANY MORE. The docked construction
-// here — the floating card above a slim ask-bar, the 48vh message cap, the
-// single-line input — belongs to the overlay and is pinned by
-// copilot-page-chat.test.ts so a change to the page cannot reach it.
-//
-// WHAT IS STILL SHARED is the transport: the message shape, the request, the
-// error sentences, the busy lock and the starter prompts all come from
-// copilot-thread.ts, so the two surfaces can never disagree about what sending
-// a message does. The starters keep their existing tints (popupTint) because
-// this overlay's palette is its own and was not part of the complaint.
-// ---------------------------------------------------------------------------
+interface Msg {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// Starter prompts shown on the empty state. Each maps to a real co-pilot tool
+// (appointments / outstanding_balances / no-show risk / practice_overview) so a
+// click returns live data rather than a dead end. Clicking one sends it straight
+// away, so a first-time user never faces a blank box.
+const SUGGESTIONS: { label: string; prompt: string; icon: LucideIcon; tint: string }[] = [
+  {
+    label: "What's in today's diary?",
+    prompt: "What's in today's diary?",
+    icon: CalendarDays,
+    tint: "bg-blue-dark/10 text-blue-dark",
+  },
+  {
+    label: "Who has an outstanding balance?",
+    prompt: "Which patients have an outstanding balance?",
+    icon: PoundSterling,
+    tint: "bg-emerald-500/10 text-emerald-600",
+  },
+  {
+    label: "Any high no-show risks today?",
+    prompt: "Are there any high no-show risks in today's diary?",
+    icon: AlertTriangle,
+    tint: "bg-amber-500/10 text-amber-600",
+  },
+  {
+    label: "How is the practice doing this week?",
+    prompt: "How is the practice doing this week?",
+    icon: TrendingUp,
+    tint: "bg-violet-500/10 text-violet-600",
+  },
+];
 
 export function CopilotConversation({
   clientSlug,
@@ -34,8 +49,9 @@ export function CopilotConversation({
   autoFocus?: boolean;
   onClose?: () => void;
 }) {
-  const { messages, busy, send: sendTurn } = useCopilotThread(clientSlug);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -46,13 +62,26 @@ export function CopilotConversation({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
 
-  function send(text: string) {
-    // Clearing the box is this surface's own business (it owns the input); the
-    // turn itself, including the busy lock that stops a double Enter, is the
-    // shared hook's. sendTurn ignores an empty or in-flight send on its own.
-    if (!text.trim() || busy) return;
+  async function send(text: string) {
+    const body = text.trim();
+    if (!body || busy) return;
+    const next = [...messages, { role: "user" as const, content: body }];
+    setMessages(next);
     setInput("");
-    void sendTurn(text);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/copilot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: next, client: clientSlug }),
+      });
+      const d = (await res.json()) as { reply?: string };
+      setMessages([...next, { role: "assistant", content: d.reply ?? "Sorry, something went wrong." }]);
+    } catch {
+      setMessages([...next, { role: "assistant", content: "Sorry, I could not reach the co-pilot just now." }]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   const hasThread = messages.length > 0 || busy;
@@ -113,17 +142,17 @@ export function CopilotConversation({
           <div className="px-3 py-3">
             <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">Try asking</p>
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {COPILOT_STARTERS.map((s) => {
+              {SUGGESTIONS.map((s) => {
                 const Icon = s.icon;
                 return (
                   <button
-                    key={s.id}
+                    key={s.label}
                     type="button"
                     onClick={() => send(s.prompt)}
                     disabled={busy}
                     className="group flex items-center gap-3 rounded-xl border border-line bg-card-muted/40 px-3 py-2.5 text-left transition-all hover:-translate-y-0.5 hover:border-line-strong hover:bg-card hover:shadow-[0_6px_16px_rgba(20,45,95,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", s.popupTint)}>
+                    <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", s.tint)}>
                       <Icon size={16} />
                     </span>
                     <span className="text-[13px] font-semibold leading-snug text-navy">{s.label}</span>
