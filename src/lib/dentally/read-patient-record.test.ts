@@ -36,7 +36,12 @@ const state = vi.hoisted<ClientStubs>(() => ({
   getPatient: () => Promise.resolve({ patient: null }),
 }));
 
-vi.mock("./client", () => ({
+// Spread the real module so the runtime error CLASSES survive: the read layer
+// now does `err instanceof DentallyBudgetExceededError` inside its catch
+// handlers, and a mock that omits the export makes that binding undefined,
+// so `instanceof` throws and the honesty pins below die silently.
+vi.mock("./client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client")>()),
   DentallyClient: class {
     constructor() {}
     getPatientAppointments(p: string, page?: number, perPage?: number, inc?: boolean) {

@@ -89,6 +89,14 @@ const UNAVAILABLE = {
   invoiceDates: "Unavailable: no invoice carries a date, so a window cannot be totalled.",
   balancesFailed: "Unavailable: account balances could not be read from Dentally.",
   claimsFailed: "Unavailable: NHS claims could not be read from Dentally.",
+  patientsTruncated:
+    "Unavailable: the patient scan ran out of page budget, so a count would be short.",
+  activeCountUnsourced:
+    "Unavailable: the nightly patient count has not recorded a figure for this site.",
+  plansTruncated:
+    "Unavailable: the treatment plan scan ran out of page budget, so a count would be short.",
+  planOpenWindowed:
+    "Unavailable: the plan scan reads recent changes only, so it cannot see plans left open before that.",
 } as const;
 
 // --- Panels ----------------------------------------------------------------
@@ -298,7 +306,27 @@ export interface BuildViewInput {
   appointmentRows: readonly AppointmentSource[];
 
   patients: readonly DashboardPatient[] | null;
+  /**
+   * ACTIVE patients per site id, from the nightly whole-book count
+   * (/api/sync/patient-count -> patient_count), NOT from `patients`.
+   *
+   * "How many active patients are on the books" is a WHOLE-BOOK question, and the
+   * dashboard's patient scan is a bounded, window-narrowed read: counting active
+   * flags over it produced a confident number derived from whichever few thousand
+   * rows the page budget happened to reach. The nightly job pages the entire book
+   * off-hours and is the only honest source. A site missing from this map reports
+   * the count unavailable rather than falling back to the partial scan.
+   */
+  activeCounts?: ReadonlyMap<string, number> | null;
   plans: readonly DashboardTreatmentPlan[] | null;
+  /**
+   * True when the plan scan was narrowed to recently-updated plans. The window
+   * counts (started / finished) are still exact — a plan that started or finished
+   * inside the window was necessarily updated inside it — but OPEN is not: a plan
+   * opened years ago and still open was not updated recently and is not in the set.
+   * So `open` reports itself unavailable rather than counting only recent plans.
+   */
+  plansWindowed?: boolean;
 
   /** Invoices already reduced to gross, outstanding, day and patient. */
   invoices: readonly DashboardInvoice[] | null;
@@ -528,12 +556,36 @@ function buildInvoicedPanel(
   };
 }
 
+/**
+ * `activeCounts` is site id -> active patients from the nightly whole-book count.
+ * For a single site that is its own row; for the GROUP scope it is the sum over
+ * `siteIds`, and the sum is only stated when EVERY site has a row — a group total
+ * missing one practice is not a group total.
+ */
+function activeFromCounts(
+  activeCounts: ReadonlyMap<string, number> | null | undefined,
+  siteId: string | null,
+  siteIds: readonly string[],
+): number | null {
+  if (!activeCounts) return null;
+  if (siteId !== null) return activeCounts.get(siteId) ?? null;
+  let sum = 0;
+  for (const id of siteIds) {
+    const n = activeCounts.get(id);
+    if (n === undefined) return null;
+    sum += n;
+  }
+  return sum;
+}
+
 function buildPatientsPanel(
   patients: readonly DashboardPatient[] | null,
   appointments: readonly DashboardAppointment[] | null,
   appointmentsCoverage: DayCoverage | null,
   window: DayWindow,
   siteId: string | null,
+  activeCounts: ReadonlyMap<string, number> | null | undefined,
+  siteIds: readonly string[],
 ): PatientsPanel {
   const appointmentsUsable = appointments !== null && coversWindow(appointmentsCoverage, window);
   const counts = computePatientCounts({
@@ -545,12 +597,23 @@ function buildPatientsPanel(
   const patientReason = patients === null ? UNAVAILABLE.patientsFailed : UNAVAILABLE.registrationDate;
   const seenReason =
     appointments === null ? UNAVAILABLE.appointmentsFailed : UNAVAILABLE.appointments;
+  // The nightly whole-book count WINS whenever it has a figure. It is the only
+  // source that has actually seen every patient; the scan's own active tally is
+  // kept solely as the fallback for a deployment where the nightly job has never
+  // run, and is what the `activeCounts` input exists to retire.
+  const sourcedActive = activeFromCounts(activeCounts, siteId, siteIds);
+  const activeReason =
+    activeCounts != null
+      ? UNAVAILABLE.activeCountUnsourced
+      : patients === null
+        ? UNAVAILABLE.patientsFailed
+        : UNAVAILABLE.activeFlag;
   return {
     newCount: metric(counts.newCount, patientReason),
     seenCount: metric(counts.seenCount, seenReason),
     activeCount: metric(
-      counts.activeCount,
-      patients === null ? UNAVAILABLE.patientsFailed : UNAVAILABLE.activeFlag,
+      activeCounts != null ? sourcedActive : counts.activeCount,
+      activeReason,
     ),
   };
 }
@@ -559,6 +622,7 @@ function buildPlansPanel(
   plans: readonly DashboardTreatmentPlan[] | null,
   window: DayWindow,
   siteId: string | null,
+  plansWindowed: boolean,
 ): PlansPanel {
   const counts = computeTreatmentPlanCounts({ plans, window, siteId });
   const startReason = plans === null ? UNAVAILABLE.plansFailed : UNAVAILABLE.planStart;
@@ -566,7 +630,12 @@ function buildPlansPanel(
   return {
     started: metric(counts.started, startReason),
     finished: metric(counts.finished, finishReason),
-    open: metric(counts.open, finishReason),
+    // A windowed plan read cannot answer OPEN, and a number that only counts the
+    // recently-touched plans is worse than a stated gap: it would read as "the
+    // practice has 40 open plans" to someone deciding whether to chase them.
+    open: plansWindowed
+      ? metric(null, UNAVAILABLE.planOpenWindowed)
+      : metric(counts.open, finishReason),
   };
 }
 
@@ -737,8 +806,10 @@ function buildScope(
         input.appointmentsCoverage,
         window,
         siteId,
+        input.activeCounts,
+        input.sites.map((s) => s.id),
       ),
-      plans: buildPlansPanel(input.plans, window, siteId),
+      plans: buildPlansPanel(input.plans, window, siteId, input.plansWindowed === true),
       uda: buildUdaWindowPanel(input.claims, window, siteId, practitionerNameById),
     };
   }

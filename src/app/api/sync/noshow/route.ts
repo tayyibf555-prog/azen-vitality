@@ -1,3 +1,4 @@
+import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "@/lib/dentally/budget";
 import { DentallyClient } from "@/lib/dentally/client";
 import {
   toNoshowTarget,
@@ -236,6 +237,13 @@ async function syncSite(
   consentIncomplete: boolean;
   /** Appointments skipped this run because their patient was not in the map. */
   consentMisses: number;
+  /**
+   * True when the shared Dentally budget refused this run part-way through
+   * (src/lib/dentally/budget.ts). NOT an error and NOT a fault of this site: the
+   * platform declined to spend more of the practice's hourly quota. Coverage is
+   * deliberately partial and the next tick picks up where this one stopped.
+   */
+  budgetRefused?: boolean;
 }> {
   const now = new Date();
   const toDate = new Date(now.getTime() + cfg.leadDays * DAY);
@@ -266,7 +274,21 @@ async function syncSite(
     expectedPatients = null;
   }
 
+
+  // TRUE once the shared Dentally budget has refused this run's class. Tracked
+  // separately from consentReadError because it is not an upstream fault: the
+  // platform declined to spend more of the practice's hourly quota.
+  let budgetRefused = false;
+
   patient_pages: for (let pp = 1; pp <= MAX_PATIENT_PAGES; pp += PATIENT_PAGE_BATCH) {
+    // THE BUDGET HAS GONE. Every remaining page would be refused (the refusal is
+    // sticky per scope, src/lib/dentally/budget.ts), and the per-page catch below
+    // would swallow each one as a "hole" — up to 800 pages of them, all no-ops. Stop
+    // and let the map be honestly reported as incomplete.
+    if (dentallyScopeRefused()) {
+      budgetRefused = true;
+      break patient_pages;
+    }
     const batch: number[] = [];
     for (let k = 0; k < PATIENT_PAGE_BATCH && pp + k <= MAX_PATIENT_PAGES; k++) batch.push(pp + k);
     const results = await Promise.all(
@@ -311,13 +333,14 @@ async function syncSite(
   // a genuine gap rather than a filter difference.
   const consentShortfall =
     expectedPatients !== null ? Math.max(0, expectedPatients - consentByPatient.size) : 0;
-  if (consentTruncated || consentReadError || consentShortfall > 0) {
+  if (consentTruncated || consentReadError || consentShortfall > 0 || budgetRefused) {
     console.error(
       `[sync-noshow] site ${siteId}: consent map is INCOMPLETE, ${consentByPatient.size} patients mapped` +
         (expectedPatients !== null ? ` of ${expectedPatients} at this site (${consentShortfall} missing)` : "") +
         `, ${consentPages} pages read` +
         (consentTruncated ? `, HIT the ${MAX_PATIENT_PAGES}-page bound` : "") +
         (consentReadError ? ", a page read failed" : "") +
+        (budgetRefused ? ", the shared Dentally budget REFUSED this run" : "") +
         ". Appointments for unmapped patients are skipped and left undefended this run.",
     );
   }
@@ -356,6 +379,13 @@ async function syncSite(
   // once the per-run cap is hit; the rest is reported as `remaining` and picked
   // up on the next tick (the window is re-queried each run).
   appt_loop: for (let page = 1; ; page++) {
+    // The budget went during the consent map (or on a previous page): every read
+    // from here is refused, so stop rather than pay a refused listing call per page.
+    if (dentallyScopeRefused()) {
+      budgetRefused = true;
+      listingError = true; // an uncovered window: reconciliation must not treat unseen as vanished
+      break appt_loop;
+    }
     let rawAppts: unknown[];
     try {
       const res = await client.listAppointments({
@@ -423,6 +453,15 @@ async function syncSite(
       (pid) => !historyCache.has(pid),
     );
     await mapWithConcurrency(needHistory, HISTORY_CONCURRENCY, async (pid) => {
+      // THE BUDGET HAS GONE. The catch below caches null and carries on, which is
+      // right for a transient failure and, for a refusal, a way to walk up to a full
+      // page of patients making no request and doing no work. Caching null here is
+      // the SAME outcome the catch produces: Phase 3 skips them, next run retries.
+      if (dentallyScopeRefused()) {
+        budgetRefused = true;
+        historyCache.set(pid, null);
+        return;
+      }
       try {
         // includeCancelled: real Dentally EXCLUDES Did-not-attend rows by default,
         // which would zero priorNoShows and gut the risk score's history component.
@@ -587,12 +626,18 @@ async function syncSite(
     remaining,
     consentMapped: consentByPatient.size,
     consentExpected: expectedPatients,
-    consentIncomplete: consentTruncated || consentReadError || consentShortfall > 0,
+    consentIncomplete:
+      consentTruncated || consentReadError || consentShortfall > 0 || budgetRefused,
     consentMisses,
+    // TRUE when the shared Dentally budget refused this run part-way through. Not a
+    // fault of this site or of Dentally: the platform declined to spend more of the
+    // practice's hourly quota. Coverage is deliberately partial; the next tick
+    // re-queries the whole window, so nothing is lost.
+    budgetRefused: budgetRefused || undefined,
   };
 }
 
-export async function POST(request: Request) {
+async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
@@ -629,6 +674,18 @@ export async function POST(request: Request) {
     const perSite: Array<Record<string, unknown>> = [];
     const failedSites: string[] = [];
     for (const siteId of ordered) {
+      // STOP AT A SITE BOUNDARY WHEN THE BUDGET HAS GONE. A refusal is sticky for
+      // this whole run (src/lib/dentally/budget.ts), so the next site could not read
+      // a single row: it would spend function time to build an empty consent map and
+      // then report a failure that is not the site's fault. The hourly rotation above
+      // means whichever sites are dropped here lead the next run.
+      if (dentallyScopeRefused()) {
+        console.warn(
+          `[sync-noshow] stopping before site ${siteId}: the shared Dentally budget is spent for ` +
+            `background work this hour. The next tick resumes from here.`,
+        );
+        break;
+      }
       try {
         perSite.push(await syncSite(client, siteId, cfg));
       } catch (e) {
@@ -645,10 +702,30 @@ export async function POST(request: Request) {
     // Postgres and records the SQL result (not the HTTP status) in
     // cron.job_run_details, so a non-200 would be swallowed exactly where an
     // operator looks. ok:false + failedSites is the signal that actually surfaces.
-    return Response.json({ ok: failedSites.length === 0, failedSites, perSite });
+    // budgetRefused is NOT a failure: the run did what it was allowed to do and the
+    // next tick continues. Reported so an operator reading cron.job_run_details can
+    // tell "the practice's hourly Dentally quota ran out" apart from "this sync is
+    // broken" — two very different things that used to look identical.
+    const refusal = dentallyScopeRefusal();
+    return Response.json({
+      ok: failedSites.length === 0,
+      failedSites,
+      budgetRefused: refusal !== null,
+      budgetRefusalReason: refusal?.reason ?? null,
+      perSite,
+    });
   } finally {
     await releaseCronLock("sync-noshow");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

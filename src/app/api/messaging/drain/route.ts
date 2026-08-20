@@ -1,3 +1,4 @@
+import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "@/lib/dentally/budget";
 import { DentallyClient, DentallyError } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
 import { resolveRecipient } from "@/lib/messaging/resolve";
@@ -206,6 +207,19 @@ async function drainSource(
   let resolveFailures = 0;
   let examined = 0;
   for (const row of rows) {
+    // THE SHARED DENTALLY BUDGET HAS REFUSED THIS RUN. resolveRecipient below reads
+    // the patient record from Dentally, so every remaining row would fail its lookup
+    // and be counted against the resolve-failure cap — five rows of noise, then a
+    // "cap reached" line that names the wrong cause. Stop cleanly instead: the rows
+    // stay 'queued', exactly as a resolve failure leaves them, and the next tick
+    // (a fresh hour, or simply a quieter one) sends them.
+    if (dentallyScopeRefused()) {
+      console.warn(
+        `[drain] ${source.name}: stopping — the shared Dentally budget is spent for background ` +
+          `work this hour, so recipients cannot be resolved. Remaining rows stay queued.`,
+      );
+      break;
+    }
     const rowChannel = row.channel as MessageChannel;
     // Channel preference: honour the patient's chosen channel where BOTH channels
     // are genuinely viable. WhatsApp routing is DOUBLE-GATED by the caller (owner
@@ -410,7 +424,7 @@ async function drainSource(
   return { drained: examined, sent, failed, blocked };
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function handleWithDentallyPriority(request: Request): Promise<Response> {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   const apiKey = dentallyReadKey();
@@ -471,6 +485,16 @@ export async function POST(request: Request): Promise<Response> {
     const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};
     const sourceErrors: string[] = [];
     for (const source of SOURCES) {
+      // Stop before the next module when the budget has gone: the refusal is sticky
+      // for this whole run (src/lib/dentally/budget.ts), so every module after this
+      // one would resolve nothing. Its rows stay queued for the next tick.
+      if (dentallyScopeRefused()) {
+        console.warn(
+          `[drain] stopping before ${source.name}: the shared Dentally budget is spent for ` +
+            `background work this hour. Remaining modules drain on the next tick.`,
+        );
+        break;
+      }
       // Kill switch: skip this system entirely when the owner has turned it off.
       // Its rows stay 'queued' and drain the moment it is switched back on.
       const slug = DRAIN_SOURCE_TO_SLUG[source.name];
@@ -495,14 +519,29 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
 
+    // budgetRefused is NOT a failure: the rows are still queued and the next tick
+    // sends them. Reported so an operator can tell "the practice's hourly Dentally
+    // quota ran out" apart from "the drain is broken".
+    const refusal = dentallyScopeRefusal();
     return Response.json({
       ok: sourceErrors.length === 0,
+      budgetRefused: refusal !== null,
+      budgetRefusalReason: refusal?.reason ?? null,
       drained, sent, failed, blocked, perSource,
       ...(sourceErrors.length ? { errors: sourceErrors } : {}),
     });
   } finally {
     await releaseCronLock("drain");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

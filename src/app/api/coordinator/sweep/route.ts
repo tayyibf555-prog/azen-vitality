@@ -1,3 +1,4 @@
+import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { draftOutreach } from "@/lib/coordinator/draft";
 import { stepDef, COORDINATOR_CADENCE } from "@/lib/coordinator/cadence";
 import {
@@ -42,7 +43,7 @@ function patientToRef(o: TreatmentOpportunity): string {
   return `patient:${o.dentallyPatientId}`;
 }
 
-export async function POST(request: Request) {
+async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
@@ -182,6 +183,15 @@ export async function POST(request: Request) {
   } finally {
     await releaseCronLock("sweep-coordinator");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

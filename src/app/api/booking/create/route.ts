@@ -1,3 +1,4 @@
+import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { getClient, getSites, dentallySiteId, siteIdFromDentally } from "@/lib/mock/clients";
 import { isSystemEnabledStrict } from "@/lib/systems/repository";
 import {
@@ -148,7 +149,7 @@ function safeNote(value: string): string {
  * a title and try again" is copy, not validation.
  * ------------------------------------------------------------------------- */
 
-export async function POST(request: Request): Promise<Response> {
+async function handleWithDentallyPriority(request: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     const parsed = await request.json();
@@ -434,4 +435,12 @@ export async function POST(request: Request): Promise<Response> {
 /** YYYY-MM-DD shifted by whole days (UTC-safe). */
 function shiftYmd(ymd: string, days: number): string {
   return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+// Every Dentally read inside this handler is CRITICAL work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): a patient mid-booking, or the
+// 24/7 agent answering one, outranks every dashboard and every sweep and is served to
+// 95% consumption. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("critical", () => handleWithDentallyPriority(request));
 }

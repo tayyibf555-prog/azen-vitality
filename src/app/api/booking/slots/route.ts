@@ -1,3 +1,4 @@
+import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { getClient, getSites } from "@/lib/mock/clients";
 import { dentallyFromEnv } from "@/lib/dentally/read";
 import { fetchAvailabilityDays, type BookingDay } from "@/lib/booking/slots";
@@ -53,7 +54,7 @@ function bad(error: string, status: number): Response {
   return Response.json({ ok: false, error }, { status });
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function handleWithDentallyPriority(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const clientSlug = url.searchParams.get("client") ?? "";
@@ -109,4 +110,12 @@ export async function GET(request: Request): Promise<Response> {
     );
     return bad("We could not load available times right now. Please try again shortly.", 502);
   }
+}
+
+// Every Dentally read inside this handler is CRITICAL work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): a patient mid-booking, or the
+// 24/7 agent answering one, outranks every dashboard and every sweep and is served to
+// 95% consumption. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export function GET(request: Request): Promise<Response> {
+  return runWithDentallyPriority("critical", () => handleWithDentallyPriority(request));
 }

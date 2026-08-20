@@ -1,3 +1,4 @@
+import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -34,7 +35,7 @@ function clientNameForSite(siteId: string): string | null {
 // (templated) review request, insert + approve a touch, enqueue the outbox row, and
 // mark the request 'sent'. The shared drain dispatches the outbox via Twilio/Resend
 // and honours MESSAGING_DRY_RUN; suppression is re-checked there too.
-export async function POST(request: Request): Promise<Response> {
+async function handleWithDentallyPriority(request: Request): Promise<Response> {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
@@ -108,5 +109,14 @@ export async function POST(request: Request): Promise<Response> {
 }
 
 // Vercel Cron / pg_cron triggers with GET; reuse the same handler.
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
+}
+
 export const GET = POST;
 export const maxDuration = 300;

@@ -1,48 +1,217 @@
 -- register-dentally-prewarm-cron.sql  —  register the Dentally display-cache
 -- pre-warm on pg_cron
 -- ---------------------------------------------------------------------------
--- STATUS: NOT YET APPLIED. Run this once (Fable applies cron SQL; the app's
--- Supabase role is read-only on the cron.job TABLE, so use the cron.* FUNCTIONS,
--- which are SECURITY DEFINER — same method as supabase/ops/enable-24-7-cron.sql
--- and register-outreach-cron.sql).
+-- STATUS: RE-REGISTRATION REQUIRED. The job (pg_cron 'app-prewarm-dentally') is
+-- currently DISABLED in production by hand — see the incident below. Running this
+-- file re-schedules it at the new HOURLY cadence; it must then be re-activated
+-- explicitly (the alter_job call at the bottom), because cron.schedule() on an
+-- existing job keeps its current active flag.
 --
--- WHY: the L2 display cache (dentally_display_cache, migration 0084) plus
--- stale-while-revalidate mean no user waits ONCE a row exists — but the FIRST read
--- after a row is gone (a brand-new deploy, a quiet overnight, an invalidation) still
--- pays the full ~40s cold scan. This job keeps a warm row present at all times for
--- every LIVE client, so even that first read is a warm read. It recomputes the two
--- heavy DISPLAY reads — the practice dashboard (six 90-day scans) and the outstanding
--- book — and stamps them into L2 with a 20-minute ttl (see PREWARM_TTL_MS in the
--- route), which OUTLIVES this schedule so the pre-warmed rows stay FRESH between runs.
--- It is idempotent and self-locking (cron_lock lease "dentally-prewarm"): overlapping
--- ticks skip rather than double the Dentally load.
+-- Fable applies cron SQL. The app's Supabase role is read-only on the cron.job
+-- TABLE, so this uses the cron.* FUNCTIONS, which are SECURITY DEFINER — same
+-- method as supabase/ops/enable-24-7-cron.sql and register-outreach-cron.sql.
+-- ---------------------------------------------------------------------------
+-- WHAT THIS JOB IS FOR
 --
--- CADENCE: */15. This is the ONLY path that pays the full scan on live Dentally now
--- (user reads are served from L2), and it runs on ONE cron instance, so it does not
--- fan out across the fleet the way the uncoordinated cold navigations did that caused
--- the July rate-limit incident. Worst case is one full assembly per live client per
--- run — far less in practice, because every page walk stops early on a short page —
--- which at */15 sits comfortably inside the 3,600/hour Dentally budget for the single
--- live client, leaving headroom for the lifecycle sweeps and hourly syncs. The ttl
--- (20 min) is deliberately > the interval (15 min) + a slack for a slow/lock-skipped
--- run. IF a SECOND live client is onboarded, or 429s appear in cron.job_run_details,
--- widen to '*/20' or '*/30' here AND raise PREWARM_TTL_MS in the route in lockstep so
--- the ttl still outlives the interval. CRON_SECRET is NOT written here; it lives
--- inside public.trigger_app_cron(), exactly as the other jobs rely on.
+-- The L2 display cache (dentally_display_cache, migration 0084) serves an EXPIRED
+-- row stale-while-revalidate: the reader gets it immediately, carrying its own
+-- honest "Stats updated" stamp, and a refresh runs behind the response. So an old
+-- row costs nobody a wait. Only a MISSING row does — a brand-new client, the first
+-- assembly after a deploy that invalidated, a cache bust. This job's ONE job is to
+-- make sure a row exists for every LIVE client.
+--
+-- It does NOT exist to keep those rows fresh. That was the old design and it is
+-- what made this the most expensive thing in the platform.
+-- ---------------------------------------------------------------------------
+-- THE INCIDENT THIS CADENCE ANSWERS  (2026-08-20)
+--
+-- Every Dentally read from production returned, all day:
+--
+--   403 {"error":{"type":"invalid_access_error","message":"Rate limit exceeded"}}
+--
+-- Dentally's ceiling is 3,600 requests/hour (x-ratelimit-limit; a fixed window that
+-- recovers on the hour). This job, at */15, recomputed readPracticeDashboard —
+-- 3 sites x 6 paged scans x up to 40 pages of 100 rows over 90 days — plus
+-- listOutstanding (40 pages/site + per-debtor resolves), FOUR TIMES AN HOUR. On the
+-- order of 2,400 requests/hour, spent warming numbers nobody was looking at, while
+-- the practice's own screens, the hourly syncs and the public booking calendar were
+-- refused. The previous version of this comment asserted the job sat "comfortably
+-- inside" the budget. It did not.
+-- ---------------------------------------------------------------------------
+-- THE ARITHMETIC  (all figures per clock hour, against 3,600)
+--
+-- THE PREVIOUS VERSION OF THIS SECTION WAS A TABLE OF POINT ESTIMATES ADDING UP TO
+-- "~1,720 = 48%", AND IT WAS WRONG IN THREE PLACES. It is replaced by BOUNDS, which
+-- are the only figures here that can be derived from the code rather than guessed
+-- at, and by an honest statement of what the estimates would need to be verified.
+-- The estimate table is what said this job sat "comfortably inside" the budget
+-- before it took the practice offline; a second one would be the same mistake.
+--
+-- WHAT ONE PRE-WARM RUN CAN COST (3 sites, per live client). Every scan is bounded
+-- by a page cap in code, so these are hard ceilings, not guesses:
+--
+--   readPracticeDashboard  (src/lib/dashboard/read.ts, SCAN_MAX_PAGES 40 x 100 rows)
+--     payments        40 pages x 3 sites   120
+--     appointments    40 x 3               120
+--     nhs claims      40 x 3               120
+--     patients        40 x 3               120   (updated_after, see below)
+--     treatment plans 40 x 3               120   (updated_after, see below)
+--     invoices        40 x 1 (unscoped)     40
+--     practitioners    1 x 3                 3
+--                                         -----
+--     bound per assembly                    643
+--
+--   listOutstanding  (src/lib/dentally/read.ts)
+--     unpaid invoice index  OUTSTANDING_MAX_PAGES 40 x 3      120
+--     the WHOLE patient book, listPatients(siteIds), MAX_PAGES
+--       100 x 3 sites — and on this practice all three sites
+--       exhaust it (N15 alone is ~276 pages of 100)           300
+--     one direct read per debtor the book scan did not reach  UNBOUNDED
+--                                                            -----
+--     bound per warm                                          420 + debtors
+--
+--   PRE-WARM RUN BOUND                                      1,063 + debtors
+--
+-- THE THREE CORRECTIONS.
+--
+--  1. "dashboard, after ~250". That figure assumes the new `updated_after` windows
+--     on the patients and plans scans return FEWER THAN 4,000 rows per site over 90
+--     days, so both stop on a short page. Nobody has measured that against live. If
+--     either exceeds 4,000 — and on ~51,000 patients and ~85,000 plans, where
+--     updated_at moves on any record touch, that is entirely plausible — the scan
+--     runs to the 40-page cap and reports the panel UNAVAILABLE (read.ts scanPatients
+--     / scanPlans now return null on truncation). The cost then reverts to the 120
+--     each in the table above, and the dashboard is back at its 643 bound. The
+--     narrowing is a real improvement to the TRUTH of those figures; it is not a
+--     verified saving, and it must not be budgeted as one.
+--
+--  2. "outstanding book ~120, unchanged this pass". Wrong: it counted only the
+--     invoice index. The scan then pages the ENTIRE patient book to attribute the
+--     balances (up to 300 requests, and this practice hits the cap on all three
+--     sites) and then issues ONE DIRECT READ PER DEBTOR the book scan did not reach.
+--     That last fan-out has no bound in code at all. The outstanding book, not this
+--     dashboard, is the most expensive single thing this job does.
+--
+--  3. "staff reading screens (SWR refreshes) ~250, bounded by the 15-minute ttl".
+--     Wrong, and wrong in the direction that matters. The refresh dedupe
+--     (`refreshing` in src/lib/dentally/display-cache.ts) is a module-level Set, so
+--     it dedupes PER INSTANCE. Fluid Compute runs many instances, which is the whole
+--     reason this problem exists. The ttl bounds each instance to ~4 assemblies an
+--     hour; it does not bound the FLEET, so a stale dashboard key can fan one full
+--     643-request assembly out per cold instance that happens to serve a read for
+--     it. That figure is traffic- and instance-count-dependent and cannot be stated
+--     here at all.
+--
+-- SO THE HOUR DOES NOT ADD UP TO 48%. Add the four hourly lifecycle syncs — each
+-- capped at 300 patients a site (400 for the coordinator, including re-checks) at
+-- one to twenty-one reads a patient — to a 1,063-request pre-warm and an unbounded
+-- SWR fan-out, and the honest total is: MORE THAN 3,600 IF NOTHING STOPS IT.
+-- ---------------------------------------------------------------------------
+-- WHAT ACTUALLY BOUNDS THE HOUR  (and it is not this cron's schedule)
+--
+-- Every one of those consumers runs inside runWithDentallyPriority("background")
+-- (src/lib/dentally/budget.ts). Background is REFUSED once the hour's shared,
+-- cross-instance counter passes 2,160 — 60% of 3,600. So:
+--
+--   background work, all of it, all hour            <= 2,160
+--   left for staff screens (interactive, to 90%)     >= 1,080
+--   left for the booking calendar and the 24/7
+--     agent (critical, to 95%)                       >=   180 beyond that
+--   hard reserve the platform never spends               180
+--
+-- THAT 2,160 IS NOW A REAL NUMBER. It was not, until 2026-08-20's second fix:
+-- consume_rate_budget increments the counter on the call it REFUSES as well as the
+-- ones it allows, and four of the background callers swallowed refusals inside a
+-- per-row try/catch and kept walking their patient list. Each swallowed row spent a
+-- counter increment for a request that was never sent, so the counter could reach
+-- ~7,260 in an hour whose real Dentally consumption was 2,160 — and the first
+-- patient to open the booking calendar after that was refused BY THIS GUARD with
+-- 1,440 real requests unspent. A refusal is now STICKY per execution scope: the
+-- second and every later consume in a refused scope short-circuits without touching
+-- the store, and the callers additionally stop their scan and report `budgetRefused`
+-- in their response body. See src/lib/dentally/budget-sticky-refusal.test.ts.
+-- ---------------------------------------------------------------------------
+-- WHY '40 * * * *'  (the cadence closes NOTHING on its own — say it plainly)
+--
+-- No cron schedule can fix a per-run cost that is not bounded by the schedule, and
+-- the phantom increments above came from the sweeps, not from how often this job
+-- fired. What makes hourly safe is the 60% ceiling, not the arithmetic.
+--
+-- The minute is still chosen, for a reason that survives the corrections. The four
+-- lifecycle syncs run at :05 reactivation, :10 recall, :15 no-show, :20 coordinator.
+-- Running at :40 puts this job LAST in the hour's background queue, so when the
+-- 2,160 runs short, what gets refused is a cache warmer rather than a recall
+-- reminder a patient was going to receive. That is the right order of sacrifice.
+--
+-- THE TRADE-OFF THIS BUYS, NAMED — AND CORRECTED. The previous version of this
+-- paragraph said that when this job is refused "the L2 rows are never pre-warmed —
+-- so the first reader pays a synchronous assembly". That was wrong twice, and the
+-- second error was a live defect rather than a wording slip.
+--
+--  1. A REFUSED RUN DOES NOT REMOVE A ROW. The L2 row is only ever overwritten, never
+--     deleted by expiry, and an expired row is still SERVED — stale-while-revalidate,
+--     immediately, carrying its own honest "Stats updated" stamp. So a refused hour
+--     costs freshness, not availability: readers keep getting the last good assembly.
+--     The synchronous cold assembly is paid only when NO row exists at all (a brand
+--     new client, or after a bust), which is exactly the narrow job this cron has.
+--
+--  2. WHAT A REFUSED RUN USED TO DO WAS WORSE THAN WARMING NOTHING. Every scan in
+--     src/lib/dashboard/read.ts caught its own failure and degraded to empty/null, so
+--     a refusal did not stop the assembly — it produced a complete, uniformly BLANK
+--     dashboard (null takings, "Takings unavailable for this period." on every
+--     period, no practitioners), and prewarmPracticeDashboard then stamped that over
+--     the good row with a fresh 15-minute expiry. prewarmOutstanding did the same
+--     with an empty debtors book. Because background is refused FIRST, at 60%, this
+--     was the NORMAL outcome of a busy afternoon: the cache warmer blanking the
+--     screens it exists to keep fast, every hour, for as long as the hour stayed hot.
+--
+-- WHAT HAPPENS NOW. A DentallyBudgetExceededError propagates out of the scans and out
+-- of buildPracticeDashboard / _listOutstandingUncached, so neither pre-warm reaches
+-- its write and a reader's own stale-while-revalidate refresh promotes nothing
+-- either. A refused run leaves both rows exactly as they were — same value, same
+-- computed_at, same expires_at — and the practice carries on reading the last good
+-- figures until an hour with headroom re-warms them. A genuine Dentally outage still
+-- degrades to the honest "Unavailable" panels and is still cached, unchanged.
+-- Pinned by src/lib/dashboard/budget-refusal-not-cached.test.ts.
+--
+-- The residual cost of a hot hour is therefore STALENESS, and the answer to it is
+-- still NOT a different cron minute (an earlier one just moves the refusal onto the
+-- syncs). It is a smaller per-run patient cap on the syncs, which is
+-- MAX_PATIENTS_PER_RUN in each sync route.
+--
+-- HOW TO TELL WHICH IS HAPPENING: this job reports `budget.used` and the classes
+-- still `serving` for the current hour in its response body, and every sync now
+-- reports `budgetRefused` in its own. Read cron.job_run_details, not Dentally's
+-- headers. If `serving` lacks "background" at :40 for several hours running, cut the
+-- sync caps. If `budget.used` is high while every job reports budgetRefused:false,
+-- something new is spending and should be found before it is the reason a patient
+-- cannot be looked up.
+--
+-- ONE THING THIS FILE SHOULD NOT PRETEND. The comment above says the job's one job
+-- is to make sure a row EXISTS. The handler does not check: prewarmPracticeDashboard
+-- recomputes a full cold assembly every run whether the row is fresh, stale or
+-- missing. Until that changes, the run costs its full bound every hour, and the
+-- figures above are what it costs.
 -- ---------------------------------------------------------------------------
 
 select cron.schedule(
   'app-prewarm-dentally',
-  '*/15 * * * *',
+  -- HOURLY, at :40 — LAST in the hour's background queue, after the four lifecycle
+  -- syncs (:05 reactivation, :10 recall, :15 no-show, :20 coordinator). Not to
+  -- "spread the spend": the ceiling does that. To fix the ORDER OF SACRIFICE, so a
+  -- short hour refuses a cache warmer and not a patient's recall reminder. See
+  -- "WHY '40 * * * *'" above, including the trade-off this buys.
+  '40 * * * *',
   $$select public.trigger_app_cron('/api/dentally/prewarm')$$
 );
 
 -- cron.schedule() on an existing job named 'app-prewarm-dentally' updates its
--- schedule/command but KEEPS the current active flag. If it was ever created
--- inactive, activate it explicitly (find the id in cron.job first):
---   select cron.alter_job(job_id := (select jobid from cron.job
---                                    where jobname = 'app-prewarm-dentally'),
---                         active := true);
+-- schedule/command but KEEPS the current active flag — and this job is currently
+-- DISABLED in production. It must be re-activated explicitly:
+select cron.alter_job(
+  job_id := (select jobid from cron.job where jobname = 'app-prewarm-dentally'),
+  active := true
+);
 
 -- Verify after applying:
 --   select jobname, schedule, active from cron.job where jobname = 'app-prewarm-dentally';
@@ -50,7 +219,31 @@ select cron.schedule(
 --     from cron.job_run_details
 --     where jobname = 'app-prewarm-dentally'
 --     order by start_time desc limit 5;
--- A healthy run returns HTTP 200 with a JSON body: {"ok":true,"ttlMs":1200000,
--- "warmed":[{"clientId":"vitality","dashboard":"fulfilled","outstanding":"fulfilled"}]}.
+-- A healthy run returns HTTP 200 with a JSON body:
+--   {"ok":true,"ttlMs":900000,
+--    "warmed":[{"clientId":"vitality","dashboard":"fulfilled","outstanding":"fulfilled"}],
+--    "budget":{"hour":"2026-08-20T13","used":412,"limit":3600,"pctUsed":11.4,
+--              "ceilings":{"background":2160,"interactive":3240,"critical":3420},
+--              "serving":["background","interactive","critical"],"readable":true}}
 -- "skipped":"another run in progress" is also healthy — the previous tick was still
 -- warming when this one fired.
+--
+-- WATCH TWO FIELDS, NOT ONE.
+--
+--   budget.used     the platform's own count of what it has spent of the practice's
+--                   3,600 this hour. Since the sticky refusal (budget.ts) this
+--                   tracks real consumption; before it, it counted refusals too and
+--                   could read half again as high as anything actually sent.
+--   budget.serving  the classes still being served at that consumption. If this is
+--                   missing "background" when THIS job runs, the hour's 2,160 was
+--                   already spent by the four syncs and the SWR refreshes, and this
+--                   job warmed nothing. Occasionally: fine, the rows age into
+--                   stale-serve. Every hour for a day: cut MAX_PATIENTS_PER_RUN in
+--                   the sync routes. Do NOT answer it by moving this cron minute.
+--
+-- The run's own cost is bounded at ~1,063 requests plus one per unreached debtor
+-- (see THE ARITHMETIC). A hot hour is one where budget.used is near 2,160 at :40 —
+-- that is background doing exactly what it is allowed to do, not an incident. An
+-- incident looks like budget.used near 3,240 with every job reporting
+-- budgetRefused:false, which means something is spending that this file does not
+-- know about.

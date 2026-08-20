@@ -1,7 +1,8 @@
 import { cache } from "react";
 import { after } from "next/server";
-import { DentallyClient } from "./client";
+import { DentallyBudgetExceededError, DentallyClient, rethrowIfBudgetRefused } from "./client";
 import { normaliseAppointmentState } from "./appointment-state";
+import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "./budget";
 import { notesFromEnvelope, toNoteRecords, type NoteRecord } from "./notes-shape";
 import { dentallySiteId, siteIdFromDentally, clientIdForSites } from "@/lib/mock/clients";
 import {
@@ -360,6 +361,20 @@ const MAX_PAGES = 100; // hard bound: up to 10k rows/site/endpoint, so a bad ups
 // case where a source ignores the filter and returns the whole (mostly-paid) index.
 const OUTSTANDING_MAX_PAGES = 40;
 
+/**
+ * How long an outstanding-balances blob stays fresh in the shared cache.
+ *
+ * Deliberately NOT the 60s default. This read is the second most expensive
+ * thing the platform asks of Dentally (the invoice index plus a direct read
+ * for every debtor the book scan did not reach), and the pre-warm stamps its
+ * rows for fifteen minutes. With a 60s stamp here, a reader's own refresh
+ * re-stamped the row back down to a minute, so the row spent most of the hour
+ * expiring and re-paging the whole invoice book - the exact treadmill the
+ * cross-instance cache exists to stop. One constant, so the warmer and the
+ * reader cannot disagree about how long the answer is good for.
+ */
+export const OUTSTANDING_TTL_MS = 15 * 60_000;
+
 // The debtors the bounded book scan does not cover are resolved by a direct id
 // read (getPatientById). That fan-out runs in bounded-concurrency chunks of this
 // size, so the round-trip depth of the fallback is misses/chunk rather than one
@@ -395,7 +410,7 @@ async function pageAll<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: n
 // never touch either layer -- they always reflect this exact second. Stale by at
 // most the TTL. Every entry is keyed by (clientId + params), so no practice can ever
 // be served another's blob.
-const READ_CACHE_TTL_MS = 60_000;
+export const READ_CACHE_TTL_MS = 60_000;
 
 /**
  * Run a stale-while-revalidate refresh so it SURVIVES the serverless response.
@@ -410,11 +425,34 @@ const READ_CACHE_TTL_MS = 60_000;
  * pre-warm cron never hits this path — it computes on a true miss, synchronously).
  */
 function afterScheduler(task: () => Promise<void>): void {
+  // A STALE-WHILE-REVALIDATE REFRESH IS BACKGROUND WORK, BY DEFINITION: the reader
+  // has already been handed the stale value and is not waiting on this. Classifying
+  // it as background (src/lib/dentally/budget.ts) means it is refused FIRST, at 60%
+  // of the hour's Dentally budget, instead of competing with the very reads it
+  // exists to make fast.
+  //
+  // That is not a nicety. `refreshing` in display-cache.ts dedupes a refresh PER
+  // INSTANCE, and Fluid Compute runs many; a stale dashboard key can therefore fan
+  // one full re-page out per cold instance that happens to be asked for it. Under
+  // the interactive class those re-pages would keep spending right up to 90% and
+  // blank the screen they were refreshing. Under the background class they stop at
+  // 60% and the stale value — which is still served, verbatim, with its own honest
+  // "Stats updated" stamp — carries on being served.
+  const scoped = asBackgroundRefresh(task);
   try {
-    after(task);
+    after(scoped);
   } catch {
-    void task().catch(() => {});
+    void scoped().catch(() => {});
   }
+}
+
+/**
+ * Wrap a stale-while-revalidate refresh so its Dentally reads spend from the
+ * BACKGROUND class. Named and exported so the property can be asserted directly
+ * rather than inferred from the scheduler it is used by.
+ */
+export function asBackgroundRefresh(task: () => Promise<void>): () => Promise<void> {
+  return () => runWithDentallyPriority("background", task);
 }
 
 // Null under VITEST so the unit suite exercises the REAL reads uncached, exactly as
@@ -480,6 +518,51 @@ export async function writeDisplayCache(
   await displayCache.setCached(clientId, key, value, ttlMs);
 }
 
+// ---------------------------------------------------------------------------
+// A REFUSED READ MUST NOT BE CACHED  (the same rule the dashboard assembly follows)
+// ---------------------------------------------------------------------------
+//
+// Every read below that degrades a failure into an empty array / null does so INSIDE
+// a cachedRead, so whatever it returns is promoted into the shared L2 as the answer
+// for the rest of the TTL — and, on a stale-while-revalidate refresh, promoted ON TOP
+// of the good value that was being served. That is right for a real Dentally failure
+// (there is nothing better to offer) and wrong for a BUDGET REFUSAL, which is the
+// platform declining to spend quota while a perfectly good previous answer sits in
+// the row it is about to overwrite. Worse, a refusal is not per-site: every site in
+// the fan-out is refused at the same instant, so what gets cached is not a partial
+// result but a completely blank one.
+//
+// The shape used below is: the UNCACHED compute re-throws the refusal
+// (rethrowIfBudgetRefused, ./client) so no promote can happen, and the PUBLIC entry
+// point catches it OUTSIDE the cache and answers with exactly the degraded value it
+// answered with before. Callers see no new failure mode; the cache simply never
+// learns about it.
+//
+// Three reads in this file already got this right and are unchanged:
+// listAppointmentsSafe (promotes only when failedSiteIds is empty),
+// listSitePractitionersSafe and listDiaryAvailabilitySafe (promote only when
+// !result.failed). A refusal sets their failure flags, so they already decline to
+// cache it.
+
+/**
+ * Turn a BUDGET REFUSAL into `fallback` — the value this read already degraded to —
+ * and let every other error through untouched.
+ *
+ * Use it on the CACHED side of a read whose uncached half re-throws refusals, so the
+ * refusal is absorbed after the cache has already declined to promote it.
+ */
+function degradeOnBudgetRefusal<T>(label: string, fallback: T): (err: unknown) => T {
+  return (err: unknown): T => {
+    if (!(err instanceof DentallyBudgetExceededError)) throw err;
+    console.warn(
+      `[dentally] ${label}: the shared Dentally budget refused this read. Serving the ` +
+        `degraded value WITHOUT caching it, so the good cached value survives and the ` +
+        `next read retries.`,
+    );
+    return fallback;
+  };
+}
+
 /** All patients across the given sites. The 3 sites are paged CONCURRENTLY (peak
  *  concurrency = site count), so wall-clock is the slowest single site, not the sum.
  *  /v1/patients DOES honour site_id server-side, so this stays a per-site scan.
@@ -487,7 +570,11 @@ export async function writeDisplayCache(
  *  first ~300); callers that omit it keep the full scan (name resolution, sync, etc.). */
 export function listPatients(siteIds: string[], opts?: { maxPages?: number }): Promise<PatientRecord[]> {
   const key = `patients:${[...siteIds].sort().join("|")}:${opts?.maxPages ?? "all"}`;
-  return cachedRead(clientIdForSites(siteIds), key, () => _listPatientsUncached(siteIds, opts?.maxPages));
+  return cachedRead(
+    clientIdForSites(siteIds),
+    key,
+    () => _listPatientsUncached(siteIds, opts?.maxPages),
+  ).catch(degradeOnBudgetRefusal("listPatients", [] as PatientRecord[]));
 }
 async function _listPatientsUncached(siteIds: string[], maxPages?: number): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
@@ -501,6 +588,9 @@ async function _listPatientsUncached(siteIds: string[], maxPages?: number): Prom
         );
         return rows.map((p) => toPatient(p as Record<string, unknown>));
       } catch (err) {
+        // A REFUSAL IS NOT A FAILED SITE: it propagates so the empty book is never
+        // promoted over the good cached one. listPatients absorbs it above.
+        rethrowIfBudgetRefused(err);
         // Skip a site that errors, but LOG it: on live Dentally a 500/timeout/rate-limit
         // here is otherwise indistinguishable from a genuinely empty site and silently
         // drops the whole site's data.
@@ -526,7 +616,12 @@ export function searchPatients(siteIds: string[], query: string): Promise<Patien
   const q = query.trim();
   if (q.length < 2) return Promise.resolve([]);
   const key = `patsearch:${[...siteIds].sort().join("|")}:${q}`;
-  return cachedRead(clientIdForSites(siteIds), key, () => _searchPatientsUncached(siteIds, q), 30_000);
+  return cachedRead(
+    clientIdForSites(siteIds),
+    key,
+    () => _searchPatientsUncached(siteIds, q),
+    30_000,
+  ).catch(degradeOnBudgetRefusal("searchPatients", [] as PatientRecord[]));
 }
 async function _searchPatientsUncached(siteIds: string[], query: string): Promise<PatientRecord[]> {
   const client = dentallyFromEnv();
@@ -542,6 +637,7 @@ async function _searchPatientsUncached(siteIds: string[], query: string): Promis
         );
         return rows.map((p) => toPatient(p as Record<string, unknown>));
       } catch (err) {
+        rethrowIfBudgetRefused(err); // never cache an empty result set that we refused to fetch
         console.error(`[dentally] searchPatients failed for site ${siteId}; skipping this site`, err);
         return [] as PatientRecord[];
       }
@@ -557,7 +653,14 @@ async function _searchPatientsUncached(siteIds: string[], query: string): Promis
  *  to counting whatever slice they fetched. */
 export function countPatients(siteIds: string[]): Promise<number | null> {
   const key = `patcount:${[...siteIds].sort().join("|")}`;
-  return cachedRead(clientIdForSites(siteIds), key, () => _countPatientsUncached(siteIds), 300_000);
+  // The 5-minute TTL is what makes this one matter: a refusal-shaped null would sit
+  // on the headline patient count for five minutes over a figure that was correct.
+  return cachedRead(
+    clientIdForSites(siteIds),
+    key,
+    () => _countPatientsUncached(siteIds),
+    300_000,
+  ).catch(degradeOnBudgetRefusal<number | null>("countPatients", null));
 }
 async function _countPatientsUncached(siteIds: string[]): Promise<number | null> {
   const client = dentallyFromEnv();
@@ -566,6 +669,9 @@ async function _countPatientsUncached(siteIds: string[]): Promise<number | null>
       try {
         return await client.countPatients(dentallySiteId(siteId));
       } catch (err) {
+        // A refusal on ANY site propagates: a partial sum is a WRONG headline count,
+        // and caching it for five minutes would state it as fact.
+        rethrowIfBudgetRefused(err);
         console.error(`[dentally] countPatients failed for site ${siteId}`, err);
         return null;
       }
@@ -580,6 +686,26 @@ async function _countPatientsUncached(siteIds: string[]): Promise<number | null>
  *  caller resolving a single patient (e.g. reviews attend) never has to page the whole
  *  patient list and never 404s a patient just because they sit past page 1. */
 export async function getPatientById(patientId: string): Promise<PatientRecord | null> {
+  try {
+    return await getPatientByIdOrRefusal(patientId);
+  } catch {
+    // Only a budget refusal reaches here (everything else is already absorbed and
+    // logged below). This entry point's contract is "null on any failure", and
+    // twenty-odd callers depend on it, so it is kept exactly as it was.
+    return null;
+  }
+}
+
+/**
+ * getPatientById, except that a BUDGET REFUSAL propagates instead of becoming `null`.
+ *
+ * For the one caller that is INSIDE a cache entry and must not let a refusal be
+ * promoted: the debtor fan-out in _listOutstandingUncached. There, "null" means the
+ * patient could not be resolved and their balance is silently dropped from the
+ * practice's outstanding total — so a refusal that answered null for every debtor
+ * would cache a total missing most of the money owed.
+ */
+async function getPatientByIdOrRefusal(patientId: string): Promise<PatientRecord | null> {
   const client = dentallyFromEnv();
   try {
     const res = await client.getPatient(patientId);
@@ -588,6 +714,7 @@ export async function getPatientById(patientId: string): Promise<PatientRecord |
     return toPatient(p as Record<string, unknown>);
   } catch (err) {
     console.error(`[dentally] getPatient(${patientId}) failed`, err);
+    rethrowIfBudgetRefused(err);
     return null;
   }
 }
@@ -649,6 +776,10 @@ const listAppointmentsCached = cache(
           );
           return rows.map((a) => toAppointment(a as Record<string, unknown>, siteId));
         } catch (err) {
+          // Unlike listAppointmentsSafe below, this feed has no `failed` flag to stop
+          // the promote, so the refusal has to propagate instead. listAppointments
+          // absorbs it after the cache has declined to cache it.
+          rethrowIfBudgetRefused(err);
           console.error(`[dentally] listAppointments failed for site ${siteId}; skipping this site`, err);
           return [] as AppointmentRecord[];
         }
@@ -668,7 +799,7 @@ export async function listAppointments(
     clientIdForSites(siteIds),
     `appts:${siteIds.join("|")}:${from}:${to}`,
     () => listAppointmentsCached(siteIds.join("|"), from, to),
-  );
+  ).catch(degradeOnBudgetRefusal("listAppointments", [] as AppointmentRecord[]));
   return [...rows].sort((a, b) => (a.start < b.start ? -1 : 1));
 }
 
@@ -987,7 +1118,31 @@ export function getPatientDetail(patientId: string, siteId: string): Promise<Pat
     `patientdetail:${siteId}:${patientId}`,
     () => _getPatientDetailUncached(patientId, siteId),
     30_000,
-  );
+  ).catch(degradeOnBudgetRefusal("getPatientDetail", unavailablePatientDetail()));
+}
+
+/**
+ * The patient record with EVERY read reported as failed and no figures invented.
+ *
+ * Byte-identical to what the four per-read catches produced while they absorbed a
+ * budget refusal, so the panels render exactly the "we could not read this" they
+ * rendered before — a clinician is never shown "No clinical notes in Dentally" for a
+ * read the platform declined to make. The difference is only that this value is never
+ * CACHED: it is built at the entry point, after the cache has already declined to
+ * promote the refusal. Exported for lib/patient/record.ts, which owns its own entry.
+ */
+export function unavailablePatientDetail(): PatientDetail {
+  return {
+    appointments: [],
+    plans: [],
+    notes: [],
+    lifetimeSpend: 0,
+    outstanding: 0,
+    credit: 0,
+    totalInvoiced: 0,
+    invoices: [],
+    reads: { appointments: "failed", plans: "failed", notes: "failed", invoices: "failed" },
+  };
 }
 /** The detail read with NO cache of its own, for a caller that is already inside a
  *  cache entry of its own (lib/patient/record.ts). Prefer getPatientDetail. */
@@ -1000,6 +1155,18 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   // Each read reports whether it actually succeeded, so an outage is never rendered
   // as "this patient has none of that". Flipped in the catch, read into `reads` below.
   const health: ReadHealth = { appointments: "ok", plans: "ok", notes: "ok", invoices: "ok" };
+
+  // A BUDGET REFUSAL IS NOT ONE OF THOSE OUTAGES. Absorbed, it produced a complete,
+  // all-"failed" record - which getPatientDetail's own 30-second entry and
+  // lib/patient/record.ts's `patientrecord:` entry then promoted over the good one,
+  // and a reader's stale-while-revalidate refresh (BACKGROUND class, refused at 60%)
+  // is exactly the caller that hits it. Captured here rather than thrown from inside
+  // a .catch, so all four reads still settle and the health flags are still filled;
+  // the throw happens once, below, before anything can be returned or cached.
+  const refusals: DentallyBudgetExceededError[] = [];
+  const noteRefusal = (err: unknown): void => {
+    if (err instanceof DentallyBudgetExceededError) refusals.push(err);
+  };
 
   // includeCancelled = true, and PAGED.
   //
@@ -1021,7 +1188,8 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
     10,
   )
     .then((rows) => rows.map((a) => toAppointment(a as Record<string, unknown>, siteId)))
-    .catch(() => {
+    .catch((err: unknown) => {
+      noteRefusal(err);
       health.appointments = "failed";
       return [] as AppointmentRecord[];
     });
@@ -1052,7 +1220,8 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
           acceptedAt: str(r.start_date) ?? str(r.accepted_at) ?? str(r.created_at),
         })),
     )
-    .catch(() => {
+    .catch((err: unknown) => {
+      noteRefusal(err);
       health.plans = "failed";
       return [] as PlanRecord[];
     });
@@ -1075,7 +1244,8 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
     10,
   )
     .then(toNoteRecords)
-    .catch(() => {
+    .catch((err: unknown) => {
+      noteRefusal(err);
       health.notes = "failed";
       return [] as NoteRecord[];
     });
@@ -1090,12 +1260,16 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
     10,
   )
     .then((rows) => rows.map((inv) => inv as Record<string, unknown>))
-    .catch(() => {
+    .catch((err: unknown) => {
+      noteRefusal(err);
       health.invoices = "failed";
       return [] as Record<string, unknown>[];
     });
 
   const [appointments, plans, notes, invoices] = await Promise.all([apptsP, plansP, notesP, invoicesP]);
+  // Propagate, so neither cache entry above this one promotes a record that says the
+  // practice could not read its own patient when in fact nobody asked Dentally.
+  if (refusals.length > 0) throw refusals[0];
   const lifetimeSpend = invoices.reduce((sum, r) => sum + invoicePaid(r), 0);
   const outstanding = invoices.reduce((sum, r) => sum + invoiceOutstanding(r), 0);
   const credit = invoices.reduce((sum, r) => sum + invoiceCredit(r), 0);
@@ -1143,8 +1317,17 @@ export interface OutstandingRead {
  *  page cap (so the caller can tell a complete total from a floor). Shares the same
  *  60s cache entry as {@link listOutstanding}, so the two never double-scan. */
 export function listOutstandingDetailed(siteIds: string[]): Promise<OutstandingRead> {
-  return cachedRead(clientIdForSites(siteIds), outstandingCacheKey(siteIds), () =>
-    _listOutstandingUncached(siteIds),
+  return cachedRead(
+    clientIdForSites(siteIds),
+    outstandingCacheKey(siteIds),
+    () => _listOutstandingUncached(siteIds),
+    OUTSTANDING_TTL_MS,
+  ).catch(
+    // `truncated: true`, not false. The refusal means the scan is definitively
+    // incomplete, and that is exactly what this flag is for: the Payments page then
+    // presents the total as a FLOOR rather than as the practice's whole debt. Nothing
+    // here is cached — the refusal already stopped the promote.
+    degradeOnBudgetRefusal<OutstandingRead>("listOutstanding", { rows: [], truncated: true }),
   );
 }
 
@@ -1159,6 +1342,12 @@ function outstandingCacheKey(siteIds: string[]): string {
  * scan, bypassing the read path) and stamp it into L2 under the read's own key with
  * `ttlMs`. Tenant-correct by construction (clientIdForSites is the key). Called only
  * by the pre-warm cron; a no-op when the cache is disabled.
+ *
+ * THE WRITE IS UNCONDITIONAL AND UNREACHABLE ON A REFUSAL, exactly as
+ * prewarmPracticeDashboard's is. This runs in the BACKGROUND class, refused first at
+ * 60% of the hour, so a refused run is the normal outcome of a busy afternoon; while
+ * the scan absorbed the refusal, this line stamped "£0 outstanding, nothing owed by
+ * anybody" over the real debtors book with a fresh TTL. The scan now throws first.
  */
 export async function prewarmOutstanding(siteIds: string[], ttlMs: number): Promise<void> {
   const value = await _listOutstandingUncached(siteIds);
@@ -1302,6 +1491,12 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
         );
       }
     } catch (err) {
+      // THE FIRST THING A REFUSAL HITS. Page 1 of site 1 throws, so does every other
+      // site, byPatient stays empty and this function used to return "nobody owes the
+      // practice anything" — which the pre-warm then stamped over the real book and
+      // the SWR refresh promoted over the good row. It propagates instead; the two
+      // cached entry points above absorb it without caching it.
+      rethrowIfBudgetRefused(err);
       console.error(`[dentally] listInvoices failed for site ${siteId}; skipping this site`, err);
     }
     if (ignoredFilter) break;
@@ -1334,8 +1529,42 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
   const misses = [...byPatient.keys()].filter((id) => !byId.has(id));
   const resolvedById = new Map<string, PatientRecord>();
   for (let i = 0; i < misses.length; i += DEBTOR_RESOLVE_CHUNK) {
+    // THE LONGEST SWALLOWING LOOP IN THE PLATFORM. getPatientById catches every
+    // error and returns null, `misses` is UNBOUNDED (on the real base it is every
+    // debtor past the book scan's page cap — thousands), and an unresolved miss is
+    // simply dropped below. So a budget refusal landing here used to keep asking,
+    // once per debtor, for reads it never made — and each ask incremented the
+    // practice's shared hourly counter. The refusal is sticky now
+    // (src/lib/dentally/budget.ts) so it costs nothing, but walking the rest is
+    // still pointless work and, worse, SILENT: every remaining debtor's balance
+    // would drop out of the practice's outstanding total with nothing to say so.
+    if (dentallyScopeRefused()) {
+      const refusal = dentallyScopeRefusal();
+      console.warn(
+        `[dentally] listOutstanding: the shared Dentally budget refused this read after resolving ` +
+          `${resolvedById.size} of ${misses.length} debtors; the outstanding total would be ` +
+          `UNDERSTATED, so the read is ABANDONED rather than returned.`,
+      );
+      // IT USED TO SET truncated AND `break`, RETURNING THE PARTIAL. That was right
+      // when the only consumer was a sweep reading the array, and wrong the moment
+      // this value is CACHED: prewarmOutstanding (background, so this is exactly the
+      // scope that gets refused) would stamp a book missing most of the practice's
+      // debtors over the complete one, and the SWR refresh would promote the same.
+      // Throwing is what stops both promotes; the two cached entry points then answer
+      // with the honest `{ rows: [], truncated: true }` and cache nothing.
+      throw new DentallyBudgetExceededError(
+        refusal?.priority ?? "background",
+        refusal?.limit ?? 0,
+        "/v1/patients/:id (outstanding debtor resolve)",
+      );
+    }
     const chunk = misses.slice(i, i + DEBTOR_RESOLVE_CHUNK);
-    const found = await Promise.all(chunk.map((id) => getPatientById(id)));
+    // getPatientByIdOrRefusal, NOT getPatientById: the swallowing variant answers
+    // `null` for a refusal, and a null debtor is DROPPED below. Outside a priority
+    // scope dentallyScopeRefused() above is always false, so without this a refused
+    // reader-path scan would quietly cache an outstanding total missing every debtor
+    // the book scan did not reach. A refusal here propagates and is never cached.
+    const found = await Promise.all(chunk.map((id) => getPatientByIdOrRefusal(id)));
     chunk.forEach((id, j) => {
       const rec = found[j];
       if (rec) resolvedById.set(id, rec);

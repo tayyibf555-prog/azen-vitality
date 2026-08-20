@@ -1,7 +1,9 @@
+import { DentallyBudgetExceededError } from "@/lib/dentally/client";
 import {
   cachedRead,
   getPatientById,
   getPatientDetailUncached,
+  unavailablePatientDetail,
   type PatientDetail,
   type PatientRecord,
   type ReadHealth,
@@ -62,7 +64,27 @@ export function getPatientRecord(patientId: string, siteId: string): Promise<Pat
     `patientrecord:${siteId}:${patientId}`,
     () => resolve(patientId, siteId),
     RECORD_TTL_MS,
-  );
+  ).catch(async (err: unknown) => {
+    // A BUDGET REFUSAL MUST NOT BECOME THE CACHED RECORD. The detail read propagates
+    // it (dentally/read.ts, _getPatientDetailUncached) precisely so this cache entry
+    // never promotes an all-"failed" record over the good one it is already serving —
+    // the stale-while-revalidate refresh behind a reader is BACKGROUND work, refused
+    // at 60% of the hour, so this is the ordinary busy-afternoon case, not an edge.
+    //
+    // Rebuilt here, OUTSIDE the cache, so the surfaces still render exactly what they
+    // rendered before: the patient named, and every panel saying it could not be
+    // read. getPatientById swallows, and inside a refused scope it short-circuits
+    // without touching the budget store, so this costs nothing to answer.
+    if (!(err instanceof DentallyBudgetExceededError)) throw err;
+    console.warn(
+      `[patient-record] the shared Dentally budget refused the record read for ${patientId}; ` +
+        `serving the unavailable record WITHOUT caching it.`,
+    );
+    const patient = await getPatientById(patientId);
+    if (!patient) return null;
+    const detail = unavailablePatientDetail();
+    return { patient, detail, derived: derivePatient(patient, detail, new Date()), reads: detail.reads };
+  });
 }
 
 /**

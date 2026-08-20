@@ -1,3 +1,4 @@
+import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "@/lib/dentally/budget";
 import { DentallyClient } from "@/lib/dentally/client";
 import {
   toTreatmentOpportunity,
@@ -301,6 +302,13 @@ interface SiteResult {
   stalled?: boolean;
   /** True when Dentally ignored the patient_id filter: retirement was suppressed. */
   planFilterIgnored: boolean;
+  /**
+   * True when the shared Dentally budget refused this run part-way through
+   * (src/lib/dentally/budget.ts). NOT an error and NOT a fault of this site: the
+   * platform declined to spend more of the practice's hourly quota. Coverage is
+   * deliberately partial and the next tick picks up where this one stopped.
+   */
+  budgetRefused?: boolean;
   mode: string;
   backfillPage: number | null;
 }
@@ -414,7 +422,25 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
       ...recheckByPatient.keys(),
     ]),
   ];
+  let budgetRefused = false;
   await mapWithConcurrency(toScan, PLAN_CONCURRENCY, async (patientId) => {
+    // THE SHARED DENTALLY BUDGET HAS ALREADY REFUSED THIS RUN'S CLASS.
+    //
+    // fetchPlansForPatient below catches EVERYTHING and returns null, so without
+    // this check a refusal that lands early in the pool is invisible here and the
+    // pool walks every remaining patient — one refused read each, and (before the
+    // sticky refusal in budget.ts) one real increment of the practice's shared
+    // hourly counter each, for requests that were never sent. Up to 400 patients a
+    // site, three sites, and none of it does any work.
+    //
+    // Stopping is also the SAFE answer, not just the cheap one: an unscanned patient
+    // must go into scanFailed or step 7 would read "no open plans" and retire their
+    // opportunity on the strength of a read that never happened.
+    if (dentallyScopeRefused()) {
+      budgetRefused = true;
+      scanFailed.add(patientId);
+      return;
+    }
     const scan = await fetchPlansForPatient(client, dentallyId, patientId);
     if (!scan) {
       planReadFailures += 1;
@@ -427,6 +453,13 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
     }
     scanByPatient.set(patientId, scan);
   });
+  if (budgetRefused) {
+    console.warn(
+      `[sync-coordinator] site ${siteId}: the shared Dentally budget refused this run part-way ` +
+        `through the plan scan; the remaining patients were NOT scanned and NO opportunity was ` +
+        `retired on their behalf. The next tick picks them up.`,
+    );
+  }
   if (planFilterIgnored) {
     console.error(
       `[sync-coordinator] site ${siteId}: Dentally ignored the patient_id filter on /v1/treatment_plans; ` +
@@ -579,6 +612,11 @@ async function syncSite(client: DentallyClient, siteId: string): Promise<SiteRes
     unreadablePlans,
     rechecked: recheckByPatient.size,
     planFilterIgnored,
+    // TRUE when the shared Dentally budget refused this run mid-scan. Distinct from
+    // planReadFailures (which counts upstream errors): this is the platform declining
+    // to spend more of the practice's hourly quota, and the site's coverage is
+    // deliberately partial as a result.
+    budgetRefused: budgetRefused || undefined,
     mode,
     backfillPage: backfilling ? safeCursor : null,
     // Reported per site so a permanently stalled backfill is distinguishable from a
@@ -598,7 +636,7 @@ function bestOpenPlan(scan: PlanScan): PlanInput | null {
   return best;
 }
 
-export async function POST(request: Request) {
+async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
@@ -627,6 +665,18 @@ export async function POST(request: Request) {
     const perSite: Array<Record<string, unknown>> = [];
     const failedSites: string[] = [];
     for (const siteId of vitalitySiteIds()) {
+      // STOP AT A SITE BOUNDARY WHEN THE BUDGET HAS GONE. A refusal is sticky for
+      // this whole run (src/lib/dentally/budget.ts), so the next site could not read
+      // a single row — it would only burn function time and log noise before
+      // reporting a failure that is not the site's fault. Named in the body so the
+      // cron history says "the platform declined", not "the site broke".
+      if (dentallyScopeRefused()) {
+        console.warn(
+          `[sync-coordinator] stopping before site ${siteId}: the shared Dentally budget is spent ` +
+            `for background work this hour. The next tick resumes from here.`,
+        );
+        break;
+      }
       try {
         const result = await syncSite(client, siteId);
         perSite.push({ ...result });
@@ -648,10 +698,30 @@ export async function POST(request: Request) {
     // Postgres and records the SQL result (not the HTTP status) in
     // cron.job_run_details, so a non-200 would be swallowed exactly where an
     // operator looks. ok:false + failedSites is the signal that actually surfaces.
-    return Response.json({ ok: failedSites.length === 0, failedSites, perSite });
+    // budgetRefused is NOT a failure: the run did what it was allowed to do and the
+    // next tick continues. It is reported so an operator reading cron.job_run_details
+    // can tell "the practice's hourly Dentally quota ran out" apart from "this sync
+    // is broken" — two very different things that used to look identical.
+    const refusal = dentallyScopeRefusal();
+    return Response.json({
+      ok: failedSites.length === 0,
+      failedSites,
+      budgetRefused: refusal !== null,
+      budgetRefusalReason: refusal?.reason ?? null,
+      perSite,
+    });
   } finally {
     await releaseCronLock("sync-coordinator");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

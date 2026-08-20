@@ -1,3 +1,4 @@
+import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "@/lib/dentally/budget";
 import { DentallyClient } from "@/lib/dentally/client";
 import { dentallyReadKey } from "@/lib/dentally/read";
 import { upsertPatientCount } from "@/lib/patient-count/repository";
@@ -24,11 +25,21 @@ async function countSite(client: DentallyClient, siteId: string): Promise<{
   total: number;
   active: number;
   partial: boolean;
+  budgetRefused?: boolean;
 }> {
   let total = 0;
   let active = 0;
   let partial = true;
+  let budgetRefused = false;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
+    // The shared Dentally budget has refused this run (the refusal is sticky per
+    // scope, src/lib/dentally/budget.ts). The three sites page CONCURRENTLY here, so
+    // without this each of them would keep asking and the first refusal would be
+    // paid three times over. Stop with a partial count rather than a wrong one.
+    if (dentallyScopeRefused()) {
+      budgetRefused = true;
+      break;
+    }
     const res = await client.listPatients({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE });
     const rows = Array.isArray(res.patients) ? res.patients : [];
     for (const raw of rows) {
@@ -43,6 +54,19 @@ async function countSite(client: DentallyClient, siteId: string): Promise<{
       break;
     }
   }
+  if (budgetRefused) {
+    // NOT written to the store. This count is the dashboard's ONLY source for
+    // "active patients" (dashboard/read.ts readActiveCounts), and a short count from
+    // a refused scan would replace an exact figure with a smaller one that looks
+    // just as exact. An unchanged stored count that is a day old is strictly better
+    // than a fresh wrong one, and the panel already handles a missing site.
+    console.warn(
+      `[patient-count] site ${siteId}: the shared Dentally budget refused this run after ` +
+        `${total} patients; the stored count is left UNCHANGED rather than overwritten with a ` +
+        `partial figure. The next run recounts from page 1.`,
+    );
+    return { siteId, total, active, partial: true, budgetRefused: true };
+  }
   if (partial) {
     console.warn(`[patient-count] site ${siteId} hit the ${MAX_PAGES}-page bound; counts are partial`);
   }
@@ -50,7 +74,7 @@ async function countSite(client: DentallyClient, siteId: string): Promise<{
   return { siteId, total, active, partial };
 }
 
-export async function POST(request: Request) {
+async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
@@ -83,10 +107,25 @@ export async function POST(request: Request) {
         }
       }),
     );
-    return Response.json({ ok: true, perSite });
+    const refusal = dentallyScopeRefusal();
+    return Response.json({
+      ok: true,
+      budgetRefused: refusal !== null,
+      budgetRefusalReason: refusal?.reason ?? null,
+      perSite,
+    });
   } finally {
     await releaseCronLock("sync-patient-count");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

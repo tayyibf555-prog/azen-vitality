@@ -1,5 +1,6 @@
 import "server-only";
 import { dentallyFromEnv } from "@/lib/dentally/read";
+import { DentallyBudgetExceededError } from "@/lib/dentally/client";
 import { invoiceFromEnvelope, type InvoiceWithItems } from "@/lib/dentally/invoice-shape";
 import type { DayWindow } from "@/lib/dashboard/period";
 import {
@@ -106,6 +107,18 @@ async function readInvoiceOnce(
       // A shape failure is deterministic — do not spend the retry on it.
       return { invoice: invoiceFromEnvelope(envelope), retried };
     } catch (err) {
+      // A BUDGET REFUSAL IS NOT A TRANSIENT FAILURE, AND MUST NOT BE RETRIED.
+      // The retry exists for the ~0.4% of live invoice GETs that blip (1 in 235,
+      // measured). A refusal is the platform saying the practice's hourly Dentally
+      // quota is spent; retrying cannot make it un-spent, and each attempt still
+      // takes a token from the shared counter for a request that never leaves the
+      // building. Over a 235-invoice report that is 235 phantom tokens, which is
+      // more than the whole hard reserve — a retry loop turning the guard into the
+      // outage it exists to prevent.
+      if (err instanceof DentallyBudgetExceededError) {
+        console.error(`[reports] invoice read refused by the Dentally budget for ${id}`, err);
+        return { invoice: null, retried };
+      }
       if (attempt === 0) {
         retried = true;
         continue;

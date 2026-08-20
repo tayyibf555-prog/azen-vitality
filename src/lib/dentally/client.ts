@@ -1,3 +1,10 @@
+import {
+  consumeDentallyBudget,
+  currentDentallyPriority,
+  DENTALLY_HOURLY_LIMIT,
+  type DentallyPriority,
+} from "./budget";
+
 type FetchImpl = typeof fetch;
 
 export class DentallyError extends Error {
@@ -19,6 +26,69 @@ interface Opts {
    * at the point it is built — see the constructor.
    */
   readOnly?: boolean;
+  /**
+   * Which slice of the practice's hourly Dentally budget this client's reads spend
+   * (see ./budget.ts). OMIT IT unless this client is used from ONE class only: the
+   * default is the AMBIENT class of whatever execution scope the read happens in,
+   * which is what lets a helper shared by a dashboard and an hourly sweep be
+   * classified correctly at each call site instead of at construction.
+   */
+  priority?: DentallyPriority;
+}
+
+/**
+ * A read refused by the shared budget guard, BEFORE any request was sent.
+ *
+ * A distinct class because "the platform declined to spend more quota" is not the
+ * same fact as "Dentally said no", and a caller that can tell them apart can say
+ * so honestly. Every caller in this repo already treats a DentallyError as "this
+ * read is unavailable" rather than "there is no data", which is the correct
+ * handling for a refusal too — so nothing has to change to be safe, only to be
+ * more precise.
+ *
+ * Status 429 rather than 403: this is our own rate decision, and 429 is what it
+ * would be if Dentally had made it.
+ */
+export class DentallyBudgetExceededError extends DentallyError {
+  constructor(
+    public priority: DentallyPriority,
+    public limit: number,
+    path: string,
+  ) {
+    super(
+      429,
+      `refusing GET ${path}: the practice's hourly Dentally budget for ${priority} work ` +
+        `is spent (ceiling ${limit} of ${DENTALLY_HOURLY_LIMIT}/hour). Abort and retry in the next hour; ` +
+        `do NOT loop on this.`,
+    );
+  }
+}
+
+/**
+ * IN A `catch`, SEPARATE "WE DECLINED TO SPEND" FROM "DENTALLY SAID NO".
+ *
+ * Call it as the FIRST statement of a catch that degrades a failed read into an
+ * empty/null/"unavailable" value. A real upstream failure falls straight through and
+ * the caller's existing degrade runs exactly as before; a BUDGET REFUSAL is re-thrown
+ * so it reaches whatever boundary is entitled to decide what to do about it.
+ *
+ * WHY THE TWO CANNOT SHARE A DEGRADE. Both produce the same shape — an empty scan, a
+ * blanked panel — but they are not the same fact, and the difference matters at
+ * exactly one place: a CACHE PROMOTE. A read that genuinely failed upstream has
+ * nothing better to offer, so caching "unavailable" is honest. A read the platform
+ * REFUSED TO MAKE has something better sitting right there — the previously computed
+ * value the cache is already serving — and stamping a refusal-shaped blank on top of
+ * it destroys good data to record a decision we took about our own quota. Every scan
+ * in a multi-site fan-out refuses at once, so what lands in the cache is not a partial
+ * picture but a completely blank one, stamped fresh.
+ *
+ * src/lib/reports/allocation-read.ts made this distinction first (a refusal must not
+ * be RETRIED); this is the same distinction at the other end (a refusal must not be
+ * CACHED). Both exist because a refusal is a statement about the platform, not about
+ * the practice.
+ */
+export function rethrowIfBudgetRefused(err: unknown): void {
+  if (err instanceof DentallyBudgetExceededError) throw err;
 }
 
 /**
@@ -98,6 +168,17 @@ export class DentallyClient {
   }
 
   /**
+   * The budget class for the read about to be made. Resolved PER REQUEST, not once
+   * in the constructor: a client built by dentallyFromEnv() is handed to a practice
+   * manager's dashboard and to the hourly recall sync alike, so freezing the class
+   * at construction would classify one of them wrongly. An explicit opts.priority
+   * still wins, for the few clients that only ever serve one class.
+   */
+  private priorityFor(): DentallyPriority {
+    return this.opts.priority ?? currentDentallyPriority();
+  }
+
+  /**
    * Join base + path by string concatenation (not `new URL(path, base)`), so a
    * base URL that carries its own path prefix is preserved. This lets us point
    * at a local mock server (e.g. http://localhost:3000/api/mock-dentally) as
@@ -144,7 +225,33 @@ export class DentallyClient {
     }
   }
 
+  /**
+   * THE CHOKE POINT. Every read the platform makes goes through this method, so the
+   * shared budget guard sits here and nowhere else — a read path added later is
+   * guarded by construction rather than by remembering.
+   *
+   * Writes are deliberately NOT metered. There are five of them, they are gated off
+   * in production, they are single requests rather than paged scans, and refusing
+   * one mid-booking would leave a patient with a half-made appointment — a far worse
+   * failure than the handful of requests they cost. The hard reserve above is what
+   * covers them.
+   */
   private async get<T>(path: string, query: Record<string, string | number | Array<string | number> | undefined> = {}): Promise<T> {
+    const priority = this.priorityFor();
+    const decision = await consumeDentallyBudget(priority);
+    if (!decision.allowed) {
+      // ONE loud line per scope, not one per swallowed read. `scope-refused` means
+      // budget.ts already logged the refusal that started it and short-circuited
+      // this call without touching the shared counter; repeating it for every row a
+      // swallowing sweep walks would bury the line that actually matters.
+      if (decision.reason !== "scope-refused") {
+        console.warn(
+          `[dentally-budget] REFUSED ${priority} GET ${path} — hourly ceiling ${decision.limit} ` +
+            `of ${DENTALLY_HOURLY_LIMIT} reached (${decision.reason}).`,
+        );
+      }
+      throw new DentallyBudgetExceededError(priority, decision.limit, path);
+    }
     const url = this.buildUrl(path);
     for (const [k, v] of Object.entries(query)) {
       if (v === undefined) continue;

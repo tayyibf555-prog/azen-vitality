@@ -45,7 +45,14 @@ const state = vi.hoisted<ClientStubs>(() => ({
   getPatient: () => Promise.resolve({ patient: null }),
 }));
 
-vi.mock("./client", () => ({
+// PARTIAL mock: the DentallyClient is replaced by the stub below, but everything
+// else in client.ts is the REAL module. read.ts now branches on the real
+// DentallyBudgetExceededError class (a refused read must never be cached), and a
+// class replaced by a mock is a different class — `instanceof` would be false for the
+// error the real budget guard throws, which is exactly the bug the branch exists to
+// prevent. Keeping the module's identity here keeps the test honest.
+vi.mock("./client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client")>()),
   DentallyClient: class {
     constructor() {}
     listPatients(a: unknown) { return state.listPatients(a); }

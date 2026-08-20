@@ -1,3 +1,4 @@
+import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
 import { sendMessage } from "@/lib/messaging/send";
 import { toE164 } from "@/lib/messaging/phone";
@@ -85,7 +86,7 @@ async function sendCallbackSms(to: string, body: string): Promise<"sent" | "fail
   );
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function handleWithDentallyPriority(request: Request): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
@@ -352,4 +353,12 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   return twiml(spoken);
+}
+
+// Every Dentally read inside this handler is CRITICAL work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): a patient mid-booking, or the
+// 24/7 agent answering one, outranks every dashboard and every sweep and is served to
+// 95% consumption. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("critical", () => handleWithDentallyPriority(request));
 }

@@ -1,3 +1,4 @@
+import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { draftOutreach } from "@/lib/outreach/draft";
 import { assignVariant } from "@/lib/outreach/variant";
 import { stepDef, advanceAfter, OUTREACH_CADENCE } from "@/lib/outreach/cadence";
@@ -237,7 +238,7 @@ async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<Cam
   return r;
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function handleWithDentallyPriority(request: Request): Promise<Response> {
   if (!authorized(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   // Never overlap with another outreach sweep: two runs would both advance the same
@@ -300,6 +301,15 @@ export async function POST(request: Request): Promise<Response> {
   } finally {
     await releaseCronLock("sweep-outreach");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.

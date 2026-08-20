@@ -1,3 +1,4 @@
+import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "@/lib/dentally/budget";
 import { DentallyClient } from "@/lib/dentally/client";
 import {
   classifyRecall,
@@ -181,7 +182,24 @@ async function syncSite(
   siteId: string,
   cfg: RecallConfig,
   allowance: EnrolAllowance,
-): Promise<{ siteId: string; pulled: number; upserted: number; processed: number; remaining: number; converted: number; enrolled: number; mode: string; backfillPage: number | null }> {
+): Promise<{
+  siteId: string;
+  pulled: number;
+  upserted: number;
+  processed: number;
+  remaining: number;
+  converted: number;
+  enrolled: number;
+  mode: string;
+  backfillPage: number | null;
+  /**
+   * True when the shared Dentally budget refused this run part-way through
+   * (src/lib/dentally/budget.ts). NOT an error and NOT a fault of this site: the
+   * platform declined to spend more of the practice's hourly quota. Coverage is
+   * deliberately partial and the next tick picks up where this one stopped.
+   */
+  budgetRefused?: boolean;
+}> {
   const now = new Date();
 
   // Backfill vs incremental (mirrors the reactivation sync, which hit the exact
@@ -249,11 +267,22 @@ async function syncSite(
   //    read leaves the patient un-enriched: skipped below and RETRIED next run —
   //    never classified on unread data, never silently dropped.
   const enriched = new Map<string, { lastVisitAt: string | null; futureBookingExists: boolean }>();
+  let budgetRefused = false;
   await mapWithConcurrency(pending, 8, async ({ patient, excluded }) => {
     // Excluded patients need no appointment read (they are settled, not classified):
     // record a placeholder so they count as fully processed, never as a failure.
     if (excluded) {
       enriched.set(patient.id, { lastVisitAt: null, futureBookingExists: false });
+      return;
+    }
+    // THE SHARED DENTALLY BUDGET HAS ALREADY REFUSED THIS RUN'S CLASS. The catch
+    // below cannot tell a refusal from a transient error and treats both as "leave
+    // the patient un-enriched and carry on" — correct for a blip, and a way to walk
+    // the whole 300-patient cap producing nothing when it is a refusal. Leaving the
+    // patient unset here is the SAME outcome the catch produces, so the safety
+    // property is unchanged: never classified on unread data, retried next run.
+    if (dentallyScopeRefused()) {
+      budgetRefused = true;
       return;
     }
     try {
@@ -444,10 +473,15 @@ async function syncSite(
     enrolled,
     mode,
     backfillPage: backfilling ? safeCursor : null,
+    // TRUE when the shared Dentally budget refused this run mid-enrichment. The
+    // un-enriched patients are handled exactly as a failed read: skipped here, and
+    // the backfill cursor rewinds to just before their page (step 4 above), so
+    // nobody is lost — the coverage is simply partial and the next tick finishes it.
+    budgetRefused: budgetRefused || undefined,
   };
 }
 
-export async function POST(request: Request) {
+async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
@@ -513,6 +547,18 @@ export async function POST(request: Request) {
     const perSite: Array<Record<string, unknown>> = [];
     const failedSites: string[] = [];
     for (const siteId of ordered) {
+      // STOP AT A SITE BOUNDARY WHEN THE BUDGET HAS GONE. A refusal is sticky for
+      // this whole run (src/lib/dentally/budget.ts), so the next site could not read
+      // a single row: it would spend function time to produce an empty result and
+      // report a failure that is not the site's fault. The site rotation above means
+      // whichever sites are dropped here lead the next run.
+      if (dentallyScopeRefused()) {
+        console.warn(
+          `[sync-recall] stopping before site ${siteId}: the shared Dentally budget is spent for ` +
+            `background work this hour. The next tick resumes from here.`,
+        );
+        break;
+      }
       try {
         perSite.push(await syncSite(client, siteId, cfg, allowance));
       } catch (e) {
@@ -529,9 +575,16 @@ export async function POST(request: Request) {
     // Postgres and records the SQL result (not the HTTP status) in
     // cron.job_run_details, so a non-200 would be swallowed exactly where an
     // operator looks. ok:false + failedSites is the signal that actually surfaces.
+    // budgetRefused is NOT a failure: the run did what it was allowed to do and the
+    // next tick continues. Reported so an operator reading cron.job_run_details can
+    // tell "the practice's hourly Dentally quota ran out" apart from "this sync is
+    // broken" — two very different things that used to look identical.
+    const refusal = dentallyScopeRefusal();
     return Response.json({
       ok: failedSites.length === 0,
       failedSites,
+      budgetRefused: refusal !== null,
+      budgetRefusalReason: refusal?.reason ?? null,
       enrolBudget,
       enrolUnspent: allowance.remaining,
       perSite,
@@ -539,6 +592,15 @@ export async function POST(request: Request) {
   } finally {
     await releaseCronLock("sync-recall");
   }
+}
+
+// EVERY Dentally read inside this handler is BACKGROUND work against the practice's
+// shared 3,600/hour budget (src/lib/dentally/budget.ts): it is starved first, at 60%
+// consumption, so a bulk sweep can never be the reason a practice manager's screen or
+// a patient's booking calendar goes blank. A refusal aborts this run; the next tick
+// retries. Pinned by src/lib/dentally/budget-priority-coverage.test.ts.
+export async function POST(request: Request): Promise<Response> {
+  return runWithDentallyPriority("background", () => handleWithDentallyPriority(request));
 }
 
 // Vercel Cron triggers with GET; reuse the same handler.
