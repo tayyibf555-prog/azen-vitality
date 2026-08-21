@@ -18,6 +18,7 @@ import {
 import { PATIENT_ADMIN_ROLES, CLINICAL_WRITE_ROLES } from "@/lib/patient/roles";
 import { APPROVER_ROLES } from "@/lib/absence/rules";
 import { PAY_ACCESS_ROLES } from "@/lib/hr/access";
+import { copilotAccessForRole } from "@/lib/copilot/scope";
 import { CAPABILITIES, CAPABILITY_KEYS, type Capability } from "./keys";
 import { ALL_ROLES, DEFAULT_PROVENANCE, ROLE_DEFAULTS, defaultHoldersOf } from "./defaults";
 
@@ -265,12 +266,35 @@ const TIGHTENED: Record<string, Capability[]> = {
 };
 
 /**
- * WHAT THIS CHANGE GIVES. One role, one key, and the reason it is not a hole.
+ * WHAT THIS CHANGE GIVES. Two roles, one key each, and the reason neither is a hole.
  */
 const WIDENED: Record<string, Capability[]> = {
   agency_admin: [],
   client_owner: [],
-  client_coordinator: [],
+  client_coordinator: [
+    // THE MANAGER CO-PILOT (agent expansion, Wave 3 #5). This key is DERIVED, not
+    // typed: its provenance is { base: "module", slug: "co-pilot" }, and the
+    // co-pilot module's `roles` array in CLIENT_NAV gained "client_coordinator"
+    // in that lane, so the default holder set follows the module by construction
+    // (section 3 re-derives it and would fail if it did not).
+    //
+    // WHY IT IS NOT A HOLE. Holding this key means "you may ask the co-pilot",
+    // not "you may read what the owner's co-pilot reads". What the co-pilot will
+    // DO for the asker is decided per-turn from the SESSION's role by
+    // `copilotAccessForRole` (src/lib/copilot/scope.ts): the manager is handed a
+    // six-tool operational schema with no money tool, no report tool, no
+    // marketing tool and no send tool, her practice-brain reads are capped at her
+    // own clearance tier, and the one allowed tool that carries money has it
+    // projected out before the result leaves the server. Capability and scope
+    // compose exactly like capability and route guard do everywhere else in this
+    // file: holding this is necessary and nowhere near sufficient.
+    //
+    // AND IT REMAINS REVOCABLE. It is a default, not a grant in stone — the owner
+    // can switch it off for one named person on People & logins, which is the
+    // whole reason the co-pilot was given a capability key rather than being left
+    // to the module gate alone.
+    "system.copilot.ask",
+  ],
   client_clinician: [
     // NO EFFECTIVE ACCESS CHANGES TODAY. POST /api/absence still calls
     // requireApproverRole and still refuses a clinician — the "Holiday & absence"
@@ -344,13 +368,22 @@ describe("1. the four existing roles are unchanged apart from the named deltas",
     expect(TIGHTENED.agency_admin.concat(TIGHTENED.client_owner, TIGHTENED.client_clinician)).toEqual([]);
   });
 
-  it("the widening is one key, on one role, and the route still refuses it", () => {
+  it("the widenings are one key each, on two roles, and neither is sufficient on its own", () => {
+    // The two roles that gained anything, named exactly. The two that did not are
+    // asserted empty, so a third widening cannot arrive unannounced.
     expect(WIDENED.client_clinician).toEqual(["people.absence.request"]);
-    expect(WIDENED.agency_admin.concat(WIDENED.client_owner, WIDENED.client_coordinator)).toEqual([]);
+    expect(WIDENED.client_coordinator).toEqual(["system.copilot.ask"]);
+    expect(WIDENED.agency_admin.concat(WIDENED.client_owner)).toEqual([]);
     // The capability is necessary, not sufficient: APPROVER_ROLES is what the
     // route checks and the clinician is not in it. If that ever changes, this
     // line fails and the widening has to be re-argued as a real one.
     expect(APPROVER_ROLES).not.toContain("client_clinician");
+    // The same shape for the co-pilot key, and this is the line that keeps it
+    // honest: holding it lets the manager ASK, and `copilotAccessForRole` decides
+    // what she is answered with. If the manager were ever mapped to "full", the
+    // capability would stop being a scoped grant and this fails.
+    expect(copilotAccessForRole("client_coordinator")).toBe("manager");
+    expect(copilotAccessForRole("client_owner")).toBe("full");
   });
 
   it("no role lost anything that is not in TIGHTENED", () => {

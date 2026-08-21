@@ -154,6 +154,30 @@ const WIDENED: Partial<Record<(typeof EXISTING_ROLES)[number], string[]>> = {
   client_clinician: [], // "my-work" is counted once, under ADDED
 };
 
+/**
+ * WIDENED, A LATER LANE — the manager co-pilot (agent expansion, Wave 3 #5).
+ *
+ * Its own map rather than a line appended to WIDENED above, for the reason this
+ * whole file is built the way it is: a delta folded into the layer beneath it
+ * stops being a decision anybody can read, and the next reviewer cannot tell
+ * which change granted what.
+ *
+ * - client_coordinator gains "co-pilot". The module was owner-only because the
+ *   co-pilot reads across the whole practice and there was no way to give a
+ *   manager less of it. There is now: `copilotAccessForRole`
+ *   (src/lib/copilot/scope.ts) derives a six-tool operational allow-list from the
+ *   SESSION's role, caps her practice-brain clearance at her own tier, and
+ *   projects the money out of the patient record — server-side, before the model
+ *   is handed a tool schema. Reaching the module stopped being the same question
+ *   as reaching the owner's data.
+ *
+ * The fifth role is untouched: "co-pilot" is not in STAFF_SLUGS, the staff branch
+ * returns before this array is read, and test 2 proves it over the full slug list.
+ */
+const WIDENED_MANAGER_COPILOT: Partial<Record<(typeof EXISTING_ROLES)[number], string[]>> = {
+  client_coordinator: ["co-pilot"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<(typeof EXISTING_ROLES)[number], string[]> = {
   agency_admin: ["practice-brain"],
@@ -163,7 +187,12 @@ const EXTRA_ALLOWED_NOT_IN_NAV: Record<(typeof EXISTING_ROLES)[number], string[]
 };
 
 function expected(role: (typeof EXISTING_ROLES)[number]): string[] {
-  return [...BASELINE[role], ...ADDED[role], ...(WIDENED[role] ?? [])];
+  return [
+    ...BASELINE[role],
+    ...ADDED[role],
+    ...(WIDENED[role] ?? []),
+    ...(WIDENED_MANAGER_COPILOT[role] ?? []),
+  ];
 }
 
 describe("1. the four existing roles are unchanged apart from the named deltas", () => {
@@ -194,12 +223,17 @@ describe("1. the four existing roles are unchanged apart from the named deltas",
   it("the staff branch is unreachable for the other four (their path is the old one)", () => {
     // Direct statement of the mechanism: the early return keys on the ROLE only, so
     // for any other role STAFF_SLUGS membership is irrelevant. "payments" is in no
-    // allow-list yet is open to three of them; "co-pilot" is in no allow-list and is
+    // allow-list yet is open to three of them; "controls" is in no allow-list and is
     // owner-only. Both answers come from the ORIGINAL rules, not the new branch.
+    //
+    // ("co-pilot" was the owner-only example here until the manager-co-pilot lane
+    // made it shared with the practice manager. "controls" replaces it and is the
+    // stronger example anyway: the kill switches never leave the owner.)
     expect(STAFF_SLUGS.has("payments")).toBe(false);
     expect(canRoleAccessModule("client_coordinator", "payments")).toBe(true);
-    expect(canRoleAccessModule("client_coordinator", "co-pilot")).toBe(false);
-    expect(canRoleAccessModule("client_owner", "co-pilot")).toBe(true);
+    expect(STAFF_SLUGS.has("controls")).toBe(false);
+    expect(canRoleAccessModule("client_coordinator", "controls")).toBe(false);
+    expect(canRoleAccessModule("client_owner", "controls")).toBe(true);
   });
 });
 
@@ -254,6 +288,10 @@ describe("3. the staff role never reaches the diary or the patient database", ()
 });
 
 describe("4. the staff role is denied every owner-only module and the owner shell extras", () => {
+  // "co-pilot" stays on this list after the manager-co-pilot lane made it shared
+  // with the practice manager, and the claim below is unchanged and still true:
+  // this test is about the STAFF role, and the staff allow-list has never held it.
+  // The owner control on each line still holds too.
   const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings", "controls", "permissions"];
 
   it.each(OWNER_ONLY)("cannot reach '%s'", (slug) => {

@@ -26,6 +26,7 @@ import {
 } from "@/lib/outreach/repository";
 import type { OutreachTarget, OutreachTargetStatus } from "@/lib/outreach/types";
 import { handleNoshowInbound } from "@/lib/noshow/inbound";
+import { handlePostopInbound } from "@/lib/postop/inbound";
 import {
   findTargetByAddress as findCoordinatorTargetByAddress,
   insertInboundTouch as insertCoordinatorInboundTouch,
@@ -36,6 +37,16 @@ import {
   stopOpportunity as stopCloserOpportunity,
 } from "@/lib/closer/repository";
 import { classifyInboundReply } from "@/lib/closer/cadence";
+import {
+  findTargetByAddress as findCollectionTargetByAddress,
+  insertInboundTouch as insertCollectionInboundTouch,
+  stopTarget as stopCollectionTarget,
+} from "@/lib/collection/repository";
+import {
+  classifyCollectionReply,
+  stopReasonForReply,
+  escalationForReply,
+} from "@/lib/collection/cadence";
 import { isOutsideHours, getSiteById } from "@/lib/after-hours/hours";
 import { insertCapture, hasOpenCaptureFrom } from "@/lib/after-hours/repository";
 import Anthropic from "@anthropic-ai/sdk";
@@ -263,6 +274,57 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     return twiml();
   }
 
+  // POST-OP CHECK-IN: a reply to an aftercare check is TRIAGED HERE AND NEVER REACHES
+  // THE BOOKING AGENT.
+  //
+  // This is the compliance-critical branch of the whole webhook. The agent below is a
+  // fluent Claude loop, and `checkAgentReply` — the only thing standing between it and
+  // the patient — blocks funding jargon, an invented price and a short list of explicit
+  // clinical phrasings. "That usually settles after a day or two" is none of those. So a
+  // reply to "how are you feeling after your extraction" must be answered by a fixed
+  // sentence or not at all, and never by a model.
+  //
+  // handlePostopInbound returns handled:true for every reply it recognises, INCLUDING
+  // the ones it has nothing to say to (system switched off, patient opted out). That is
+  // deliberate: staying silent is a valid outcome and the agent must not fill the gap.
+  // It returns handled:false for a STOP (which belongs to the suppression path below),
+  // for a number with no recent post-op check-in, and for one whose check-in is outside
+  // the reply window — all of which are ordinary conversations the agent should have.
+  //
+  // The kill switch gates the ACKNOWLEDGEMENT only. Triage and escalation run whatever
+  // the switch says: a system the practice turned off afterwards must never be the
+  // reason a symptom went unseen.
+  try {
+    const postop = await handlePostopInbound({
+      from,
+      body,
+      channel,
+      sendingEnabled: await isSystemEnabledForSend("vitality", "postop-checkin"),
+    });
+    if (postop.handled) {
+      if (postop.reply) {
+        try {
+          await sendMessage({ channel, to: from, body: postop.reply });
+        } catch {
+          // The escalation is already recorded; a failed acknowledgement must not
+          // make Twilio retry the whole webhook and escalate the same reply twice.
+        }
+      }
+      console.warn(
+        `[inbound] post-op reply handled: ${postop.outcome}` +
+          (postop.triageReason ? ` (${postop.triageReason})` : ""),
+      );
+      return twiml();
+    }
+  } catch (err) {
+    // A failure here must NOT hand a clinical reply to the booking agent as a
+    // consolation prize. Answer Twilio and stop: the message is still in the Twilio
+    // log and the practice's own worklist still shows the check-in as unanswered,
+    // which is a quiet failure rather than a wrong reply.
+    console.error("[inbound] post-op triage failed; not answering this message", err);
+    return twiml();
+  }
+
   // Who is texting us? Reactivation linkage drives cadence side-effects; the
   // identity drives who the agent thinks it is talking to. Either may be absent.
   const target = await findTargetByAddress(from);
@@ -384,6 +446,39 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     }
   } catch (err) {
     console.error("[inbound] closer reply linkage failed; continuing", err);
+  }
+
+  // The same reply may correlate to a BALANCE REMINDER, and this module's escape
+  // hatch is the widest in the platform. Every inbound reply at all stops the
+  // conversation for good AND raises a work item for a person, including a reply
+  // the classifier cannot place: somebody replying to a message about money is
+  // telling the practice something about their finances, and there is no version
+  // of that a machine should be answering. The stop happens here and now rather
+  // than at the next sweep tick, because the minutes between a reply landing and a
+  // sweep running are exactly the window in which an already-drafted reminder could
+  // be approved and sent to somebody who has just said "I already paid this".
+  //
+  // Nothing in this block replies to the patient. Best effort, and never allowed to
+  // break the webhook.
+  try {
+    const collectionTarget = await findCollectionTargetByAddress(from);
+    if (collectionTarget) {
+      await insertCollectionInboundTouch({
+        patientId: collectionTarget.patientId,
+        siteId: collectionTarget.siteId,
+        channel,
+        body,
+      });
+      const kind = classifyCollectionReply(body);
+      await stopCollectionTarget(
+        collectionTarget.patientId,
+        collectionTarget.siteId,
+        stopReasonForReply(kind),
+        escalationForReply(kind),
+      );
+    }
+  } catch (err) {
+    console.error("[inbound] collection reply linkage failed; continuing", err);
   }
 
   // Segment-outreach reply linkage. A reply from an outreach target pauses its

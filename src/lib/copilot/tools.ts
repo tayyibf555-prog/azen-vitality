@@ -107,6 +107,15 @@ import { parseFilters, parseDailyCap, describeSegment } from "@/lib/outreach/val
 import type { OutreachFilters } from "@/lib/outreach/types";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { logCopilotAction } from "./actions";
+// THE ROLE-SCOPED TOOL LOCK. Pure decisions (which tools, which knowledge tier,
+// which fields of a patient record) live in scope.ts; this file only obeys them.
+import {
+  type CopilotAccess,
+  copilotKnowledgeTier,
+  copilotToolAllowed,
+  copilotToolRefusal,
+  projectPatientRecord,
+} from "./scope";
 
 // The co-pilot's "today" must be the REAL current day in the practice's timezone,
 // not the frozen mock clock: once live against real Dentally, a hardcoded date
@@ -530,8 +539,56 @@ async function findLikelyExistingPatient(
   return { ok: true, match: null };
 }
 
-export function makeCopilotDispatch(siteIds: string[], clientId: string, actor = "owner") {
+/**
+ * The co-pilot's tool dispatcher, scoped to one session.
+ *
+ * `access` DEFAULTS TO "full", which is what every existing caller and every
+ * existing test already means, so the owner's path through this function is
+ * unchanged by construction rather than by inspection. A manager session passes
+ * "manager" and three things become true, all of them here on the server:
+ *
+ *   1. every tool outside the allow-list is refused BEFORE it runs (below);
+ *   2. `search_knowledge` reads at the manager's clearance tier, not tier 4;
+ *   3. `patient_record` is money-projected before it leaves the tool.
+ */
+export function makeCopilotDispatch(
+  siteIds: string[],
+  clientId: string,
+  actor = "owner",
+  access: CopilotAccess = "full",
+) {
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
+    // ---------------------------------------------------------------------
+    // THE GATE. First statement, before anything is parsed, read or awaited.
+    //
+    // The model is only SHOWN the tools this access level may have
+    // (`copilotToolsFor` in the route), so in the normal case nothing reaches
+    // here that is not allowed. This is the case that is not normal: a model
+    // that invents a tool name, a name learned from another tool's prose (the
+    // leads list mentions `nudge_lead` by name in its own note), or a name
+    // pushed at it by injected text in a patient note. None of those get data.
+    //
+    // Deliberately BEFORE the try/catch: a refusal is not an error and must not
+    // be reachable through the catch-all at the bottom.
+    // ---------------------------------------------------------------------
+    if (!copilotToolAllowed(access, name)) {
+      // Best-effort, never awaited: an attempt to reach outside the scope is
+      // exactly the thing a practice would want a trail of, and an audit-write
+      // failure must not turn a refusal into an error.
+      void logCopilotAction({
+        clientId,
+        siteId: null,
+        actor,
+        action: `tool:${name}`,
+        targetRef: null,
+        targetName: null,
+        channel: null,
+        body: null,
+        status: `blocked:out_of_scope:${access}`,
+      });
+      return copilotToolRefusal();
+    }
+
     try {
       switch (name) {
         case "search_patients": {
@@ -554,7 +611,11 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
           }
           const p = matches[0];
           const detail = await getPatientDetail(p.id, p.siteId);
-          return JSON.stringify({
+          // Built whole, then PROJECTED for the caller's access level. A manager
+          // gets the operational record without the money (lifetime spend, plan
+          // values); the owner gets this object untouched. See scope.ts for why
+          // the projection is an allow-list rather than a money deny-list.
+          const record: Record<string, unknown> = {
             found: true,
             patient: {
               ...patientSummary(p),
@@ -580,7 +641,8 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
             appointmentHistory: detail.appointments.slice(0, 40), // newest first
             // So a failed Dentally read is never reported to the user as "none".
             reads: detail.reads,
-          });
+          };
+          return JSON.stringify(projectPatientRecord(record, access));
         }
 
         case "appointments": {
@@ -647,8 +709,12 @@ export function makeCopilotDispatch(siteIds: string[], clientId: string, actor =
 
         case "search_knowledge": {
           const q = String(input.query ?? "").trim();
-          // Owner co-pilot has full clearance (tier 4); employee scoping is handled later.
-          const results = await searchKnowledge(clientId, q, 4);
+          // CLEARANCE IS RETRIEVAL'S JOB, NOT THE MODEL'S: `searchKnowledge` drops
+          // every above-tier node BEFORE ranking, so an above-tier body is never in
+          // the prompt to be talked out of. The owner keeps tier 4; a manager reads
+          // at her own clearance (see copilotKnowledgeTier). This line is the
+          // "employee scoping is handled later" the owner co-pilot shipped with.
+          const results = await searchKnowledge(clientId, q, copilotKnowledgeTier(access));
           return JSON.stringify({
             count: results.length,
             knowledge: results.map((r) => ({

@@ -50,7 +50,14 @@ vi.mock("@/lib/supabase/server", () => {
     // the closer's outbox. Serve an explicit enabled row for it: this test is
     // about opt-out, not about the switch, and the switch has its own tests.
     if (table === "system_toggle") {
-      const rows = [{ module_slug: "treatment-closer", enabled: true }];
+      // ...and 'balance-reminders' for exactly the same reason: it is default-OFF
+      // too, and this test is about opt-out reaching every outbox, not about the
+      // switch, which has its own tests.
+      const rows = [
+        { module_slug: "treatment-closer", enabled: true },
+        { module_slug: "postop-checkin", enabled: true },
+        { module_slug: "balance-reminders", enabled: true },
+      ];
       const toggleBuilder = {
         select: () => toggleBuilder,
         eq: () => toggleBuilder,
@@ -161,6 +168,8 @@ const fakes = vi.hoisted(() => {
       noshow: makeModule(),
       coordinator: makeModule(),
       closer: makeModule(),
+      postop: makeModule(),
+      collection: makeModule(),
       reviews: makeModule(),
       outreach: makeModule(),
     },
@@ -187,6 +196,8 @@ vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
 vi.mock("@/lib/closer/repository", () => repoMock("closer"));
+vi.mock("@/lib/postop/repository", () => repoMock("postop"));
+vi.mock("@/lib/collection/repository", () => repoMock("collection"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
 vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
 vi.mock("@/lib/dentally/client", () => ({
@@ -228,7 +239,7 @@ import { POST } from "./route";
 // "diary" is the reschedule notice raised when an appointment is moved. It is a
 // source like any other and must be covered by the STOP guard: a patient who
 // opted out is not texted about a move either.
-const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "reviews", "outreach"] as const;
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "postop", "collection", "reviews", "outreach"] as const;
 type Source = (typeof ALL_SOURCES)[number];
 
 const SITE = "site-stop";

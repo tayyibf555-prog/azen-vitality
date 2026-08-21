@@ -58,6 +58,8 @@ const fakes = vi.hoisted(() => {
       noshow: makeModule(),
       coordinator: makeModule(),
       closer: makeModule(),
+      postop: makeModule(),
+      collection: makeModule(),
       reviews: makeModule(),
       outreach: makeModule(),
     },
@@ -88,6 +90,8 @@ vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
 vi.mock("@/lib/closer/repository", () => repoMock("closer"));
+vi.mock("@/lib/postop/repository", () => repoMock("postop"));
+vi.mock("@/lib/collection/repository", () => repoMock("collection"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
 vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
 vi.mock("@/lib/dentally/client", () => ({
@@ -128,7 +132,7 @@ vi.mock("@/lib/messaging/frequency", () => ({
 import { POST } from "./route";
 
 // "diary" is the reschedule notice raised when an appointment is moved.
-const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "reviews", "outreach"] as const;
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "postop", "collection", "reviews", "outreach"] as const;
 const fetchSpy = vi.fn(async () => { throw new Error("network egress attempted in test"); });
 
 function seed(module: (typeof ALL_SOURCES)[number], overrides: Partial<FakeRow> = {}): FakeRow {
@@ -214,7 +218,12 @@ describe("shared messaging drain", () => {
     const json = await res.json();
 
     expect(res.status).toBe(200);
-    expect(json).toMatchObject({ ok: true, drained: 9, sent: 9, failed: 0, blocked: 0 });
+    // Derived from ALL_SOURCES rather than a literal: one row per source plus the
+    // extra email row seeded above. A hard-coded count means every module added to
+    // the drain has to edit this line, which is how a new source ends up quietly
+    // left OUT of ALL_SOURCES instead.
+    const expected = ALL_SOURCES.length + 1;
+    expect(json).toMatchObject({ ok: true, drained: expected, sent: expected, failed: 0, blocked: 0 });
     // No module outbox forgotten: the drain reports one section per source.
     expect(Object.keys(json.perSource).sort()).toEqual([...ALL_SOURCES].sort());
     for (const m of ALL_SOURCES) {

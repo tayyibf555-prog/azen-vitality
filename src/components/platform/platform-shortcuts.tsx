@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, usePathname } from "next/navigation";
 import { CommandPalette } from "./command-palette";
 import { CopilotChat } from "./copilot-chat";
+import type { CopilotAccess } from "@/lib/copilot/scope";
 
 /**
  * Global keyboard shortcuts + the surfaces they open.
@@ -11,7 +12,7 @@ import { CopilotChat } from "./copilot-chat";
  *   Cmd/Ctrl + J  → co-pilot chat
  * Mounted once per authenticated shell (owner + client layouts).
  */
-export function PlatformShortcuts() {
+export function PlatformShortcuts({ copilotAccess = "full" }: { copilotAccess?: CopilotAccess } = {}) {
   const params = useParams<{ client: string }>();
   const pathname = usePathname();
   const clientSlug = params?.client ?? "";
@@ -67,7 +68,7 @@ export function PlatformShortcuts() {
         clientSlug={clientSlug}
         onOpenCopilot={() => setCopilot(true)}
       />
-      <CopilotChat open={copilot} onClose={() => setCopilot(false)} clientSlug={clientSlug} />
+      <CopilotChat open={copilot} onClose={() => setCopilot(false)} clientSlug={clientSlug} access={copilotAccess} />
     </>
   );
 }

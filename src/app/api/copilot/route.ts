@@ -5,6 +5,7 @@ import { getViewScope } from "@/lib/site-view";
 import { runAgentTurn } from "@/lib/agent/run";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "@/lib/copilot/tools";
 import { buildCopilotSystemPrompt } from "@/lib/copilot/prompt";
+import { copilotAccessForRole, copilotToolsFor } from "@/lib/copilot/scope";
 import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
 import { requireCapability } from "@/lib/auth/capability-guard";
 import { recordUsage } from "@/lib/telemetry";
@@ -47,11 +48,16 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return Response.json({ ok: false, error: "unknown client" }, { status: 400 });
   const denied = requireClientAccess(auth, client.id);
   if (denied) return denied;
-  // The co-pilot can read ANY patient record for the practice, so restrict it to
-  // the owner (and agency admins). A coordinator/employee login must not get the
-  // full-DB co-pilot until per-role tool scoping exists. (auth is null only when
-  // enforcement is off, i.e. local/dev, where everything is already open.)
-  if (auth && auth.role !== "client_owner" && auth.role !== "agency_admin") {
+  // WHICH CO-PILOT THIS PERSON GETS — derived from the SESSION's role on the
+  // server, never from anything in the request body or the conversation. This is
+  // the per-role tool scoping the owner-only 403 that used to live here was
+  // waiting for: the owner and the agency admin keep "full" (every tool, tier-4
+  // knowledge, unprojected results, byte-for-byte what they had), the practice
+  // manager gets "manager" (the six operational read tools), and everyone else
+  // still gets nothing. (auth is null only when enforcement is off, i.e.
+  // local/dev, where everything is already open, so that stays "full".)
+  const access = auth ? copilotAccessForRole(auth.role) : "full";
+  if (access === "none") {
     return Response.json({ ok: false, error: "The co-pilot is available to the practice owner." }, { status: 403 });
   }
   // Redundant against the owner check immediately above, and deliberately so: this
@@ -77,9 +83,12 @@ export async function POST(request: Request): Promise<Response> {
     const history: MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
     const result = await runAgentTurn(history, {
       anthropic: new Anthropic(),
-      dispatch: makeCopilotDispatch(siteIds, client?.id ?? "", actor),
-      systemPrompt: buildCopilotSystemPrompt({ label: scope.label, isAllSites: scope.isAllSites }),
-      tools: COPILOT_TOOLS,
+      // BOTH HALVES OF THE LOCK, and they are not the same lock twice. The
+      // dispatch refuses a tool outside this access level even if the model
+      // names it; `copilotToolsFor` means the model is never shown it to name.
+      dispatch: makeCopilotDispatch(siteIds, client?.id ?? "", actor, access),
+      systemPrompt: buildCopilotSystemPrompt({ label: scope.label, isAllSites: scope.isAllSites, access }),
+      tools: copilotToolsFor(access, COPILOT_TOOLS),
       maxRounds: 6,
       // Sonnet 5's tokenizer runs ~30% larger than 4.6, so give the co-pilot's
       // "answer anything" replies headroom to avoid truncation.

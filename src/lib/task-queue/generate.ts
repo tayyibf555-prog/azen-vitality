@@ -9,6 +9,7 @@ import { afterHoursTaskCopy, captureTiming } from "@/lib/after-hours/call-outcom
 import { getSiteById } from "@/lib/after-hours/hours";
 import { listResponses } from "@/lib/smile-assessment/repository";
 import { listNeedsHumanConversations } from "@/lib/agent/repository";
+import { listOpenEscalations } from "@/lib/postop/repository";
 import { realPatientId } from "@/lib/agent/conversation-key";
 import { isMedicalHistoryEnabled } from "@/lib/patient-medical/gate";
 import { listOutstandingReviews } from "@/lib/patient-medical/repository";
@@ -265,6 +266,58 @@ async function agentEscalationCandidates(ctx: TaskQueueContext): Promise<Candida
   }));
 }
 
+/**
+ * Post-op check-in replies that the triage classifier would not clear.
+ *
+ * THIS IS THE OUTPUT OF THE POST-OP MODULE, and the whole reason it exists: the
+ * agent's only job is to put one of these in front of a person. It is deliberately
+ * NOT gated on the 'postop-checkin' kill switch. An escalation recorded before the
+ * owner switched the system off is still a patient who was told the team would
+ * call them, and hiding it would turn a safety valve into an off switch for work
+ * that has already been promised.
+ *
+ * The subtitle carries the patient's OWN WORDS, truncated, rather than the triage
+ * label alone. The label says why the software escalated; the words are what the
+ * person picking it up actually needs, and a queue row that says only "symptom"
+ * makes them open another screen to find out anything at all.
+ */
+async function postopCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
+  let escalations: Awaited<ReturnType<typeof listOpenEscalations>>;
+  try {
+    escalations = await listOpenEscalations(ctx.siteIds);
+  } catch (err) {
+    // A deployment where migration 0091 has not run has no postop_escalation table,
+    // and "the module does not exist here" is not a failed read of work that does:
+    // counting it would make every task queue in that environment report degraded
+    // health forever. Any OTHER error still propagates and is counted.
+    if (isMissingRelation(err)) return [];
+    throw err;
+  }
+  return escalations.map((e) => ({
+    key: `postop:${e.id}:escalation`,
+    module: "postop" as const,
+    kind: "postop_escalation" as const,
+    title: `Call ${e.patientName} about their post-op check-in`,
+    subtitle: e.replyBody.trim().slice(0, 70) || `Reply flagged: ${e.triageReason}`,
+    patientName: e.patientName,
+    // From the escalation's OWN dentally_patient_id, which the target carried from
+    // the Dentally appointment. Never a name match.
+    patientId: e.dentallyPatientId,
+    siteId: e.siteId,
+    priority: computePriority("postop_escalation"),
+    dueHint: "waiting for a call",
+    href: `/c/${ctx.clientSlug}/task-queue`,
+  }));
+}
+
+/** PostgREST's "relation does not exist" (Postgres 42P01), however it is shaped. */
+function isMissingRelation(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null | undefined;
+  if (e && typeof e.code === "string" && e.code === "42P01") return true;
+  const message = e && typeof e.message === "string" ? e.message : String(err);
+  return /does not exist/i.test(message) && /relation|table/i.test(message);
+}
+
 async function medicalHistoryCandidates(ctx: TaskQueueContext): Promise<CandidateTask[]> {
   // GATED OFF by default, and off is the shipping default. When the feature is off
   // the repository would THROW rather than return [], so it is not called at all —
@@ -323,6 +376,9 @@ const CANDIDATE_BUILDERS: readonly ((ctx: TaskQueueContext) => Promise<Candidate
   smileAssessmentCandidates,
   mediumAssessmentCandidates,
   agentEscalationCandidates,
+  // Ungated on purpose: an escalation already promised a patient a phone call, so it
+  // survives the module's own kill switch. Returns [] where migration 0091 has not run.
+  postopCandidates,
   // Gated OFF by default (perio precedent): returns [] until MEDICAL_HISTORY_ENABLED
   // is set, so it adds no tasks in the shipping state.
   medicalHistoryCandidates,

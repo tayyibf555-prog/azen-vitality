@@ -12,7 +12,8 @@ export type TaskModule =
   | "smile-assessment"
   | "agent"
   | "compliance"
-  | "medical-history";
+  | "medical-history"
+  | "postop";
 
 export type TaskKind =
   | "contact_lead"
@@ -31,6 +32,16 @@ export type TaskKind =
   | "review_enquiry"
   /** A live patient conversation the assistant handed to a human. */
   | "agent_escalation"
+  /**
+   * A post-op check-in reply that the triage classifier would not clear.
+   *
+   * Its own kind rather than a second `agent_escalation`: that one is a patient
+   * waiting for an answer to a question, this one is a patient who may have a
+   * post-surgical complication and has been told a member of the team will CALL
+   * them. Same urgency, different promise, and the person working the queue needs
+   * to see which they are picking up.
+   */
+  | "postop_escalation"
   | "compliance_audit"
   | "compliance_policy"
   | "compliance_training"
@@ -48,6 +59,7 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   action_assessment: "Review assessment",
   review_enquiry: "Review enquiry",
   agent_escalation: "Patient asked for a human",
+  postop_escalation: "Post-op check-in needs a call",
   compliance_audit: "Compliance audit",
   compliance_policy: "Compliance policy",
   compliance_training: "Staff training",

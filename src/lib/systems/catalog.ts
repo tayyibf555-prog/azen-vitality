@@ -79,6 +79,48 @@ export const SYSTEMS: SystemDef[] = [
     defaultEnabled: false,
   },
   {
+    // Headless system: the post-op engine ships before its worklist UI, so it has no
+    // CLIENT_NAV page yet and its switch lives in the systems control panel.
+    //
+    // DEFAULT-OFF, for the same reason as the treatment-closer and with more force.
+    // It is a brand new outbound surface aimed at patients who have just had a tooth
+    // out, and the reply path is the most compliance-sensitive in the platform: the
+    // absence of a toggle row must mean OFF rather than ON. Migration 0091 also seeds
+    // an explicit disabled row for 'vitality'; the two are deliberately independent,
+    // because the seed only covers one client and one database.
+    //
+    // Switching it OFF halts the sweep and the outbox. It does NOT stop an inbound
+    // reply being triaged and escalated: a switch the practice flipped afterwards
+    // must never be the reason a patient's symptom went unseen. See
+    // src/lib/postop/inbound.ts.
+    slug: "postop-checkin",
+    label: "Post-op check-in",
+    group: "Patient lifecycle",
+    halts: "No aftercare check-ins are drafted, and its queue stops sending. Replies are still triaged and escalated to a person.",
+    defaultEnabled: false,
+  },
+  {
+    // Headless system: the engine ships before its worklist UI, so it has no
+    // CLIENT_NAV page yet and its switch lives in the systems control panel.
+    //
+    // DEFAULT-OFF, for the same reason the closer is and then some. It is a new
+    // outbound surface that tells patients they owe the practice money, so the
+    // absence of a toggle row must mean OFF rather than ON. Migration 0090 also
+    // seeds an explicit disabled row for 'vitality'; the two are deliberately
+    // independent, because the seed only covers one client and one database.
+    //
+    // NOTE THE LABEL. It is what an owner sees in the control panel, and "Balance
+    // reminders" is what this is: a reminder about an invoice. Anything with
+    // "collection" or "chasing" in it would describe a thing this module refuses
+    // to be, and its own compliance scan refuses every word that would make it one.
+    slug: "balance-reminders",
+    label: "Balance reminders",
+    group: "Patient lifecycle",
+    halts:
+      "No reminders are drafted about unpaid invoices, and any approved ones stop sending.",
+    defaultEnabled: false,
+  },
+  {
     slug: "no-show-defence",
     label: "No-show defence",
     group: "Patient lifecycle",
@@ -229,8 +271,8 @@ export const SYSTEM_SLUGS: string[] = SYSTEMS.map((s) => s.slug);
 /**
  * The messaging drain iterates per-module outbox "sources" whose `name` is the
  * source, not the nav slug. This maps a drain source name to the system slug so
- * the drain can skip a disabled system's outbox. Only the five modules that
- * enqueue to the shared drain appear here.
+ * the drain can skip a disabled system's outbox. Only the modules that enqueue
+ * to the shared drain appear here.
  */
 export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
   // The owner's kill switch for diary moves also stops the texts those moves
@@ -242,6 +284,8 @@ export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
   noshow: "no-show-defence",
   coordinator: "treatment-coordinator",
   closer: "treatment-closer",
+  collection: "balance-reminders",
+  postop: "postop-checkin",
   reviews: "reviews",
   outreach: "outreach",
 };

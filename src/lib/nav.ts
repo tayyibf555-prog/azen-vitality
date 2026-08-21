@@ -496,8 +496,23 @@ export const CLIENT_NAV: NavGroup[] = [
         label: "Ask the brain",
         icon: Bot,
         status: "live",
-        roles: OWNER_ROLES,
-        note: "Practice co-pilot. Ask the knowledge base anything; answers are grounded in stored knowledge and filtered to your access level.",
+        // WIDENED to the practice manager, and the widening is the whole of
+        // Wave 3 #5. It is NOT the owner's co-pilot handed to another role: the
+        // page and the route are shared, but `copilotAccessForRole`
+        // (src/lib/copilot/scope.ts) derives a SIX-TOOL operational allow-list
+        // from the session's role on the server, caps her practice-brain
+        // clearance at her own tier, and money-projects the patient record. The
+        // owner's surface is unchanged. The clinician and staff roles are still
+        // denied — by their own allow-lists, which run before this array.
+        //
+        // Because `system.copilot.ask` takes its default holders from THIS array
+        // (DEFAULT_PROVENANCE: { base: "module", slug: "co-pilot" }), the
+        // coordinator also gains that capability by derivation, which is named as
+        // a deliberate WIDENED delta in capabilities/non-widening.test.ts — so an
+        // owner can still take it away from one named person on the People &
+        // logins screen.
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "Practice co-pilot. Ask the knowledge base anything; answers are grounded in stored knowledge and filtered to your access level. The owner's view reads the whole practice, including money and campaigns; a practice manager's view is the operational one (the diary, patients, enquiries and how the practice does things) and cannot reach financials, reports, marketing performance, the system controls or any way of sending to a patient.",
       },
       {
         slug: "controls",

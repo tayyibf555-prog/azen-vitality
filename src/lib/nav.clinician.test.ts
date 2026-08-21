@@ -52,8 +52,9 @@ import type { AuthedUser } from "./auth/session";
 /** Every slug either predicate can be asked about, nav modules plus the owner-shell extras. */
 const ALL_SLUGS = [...CLIENT_MODULE_SLUGS, ...EXTRA_OWNER_ONLY_SLUGS];
 
-/** The owner-only list, copied from nav.test.ts:13 so this file stands alone. */
-const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings"];
+/** The owner-only list, copied from nav.test.ts so this file stands alone.
+ *  "co-pilot" left it in the manager-co-pilot lane — see ADDED_MANAGER_COPILOT. */
+const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "settings"];
 
 function navSlugs(role: Parameters<typeof navForRole>[0]): string[] {
   return navForRole(role).flatMap((g) => g.items.map((i) => i.slug));
@@ -145,6 +146,29 @@ const ADDED_CAMPAIGN_6: Record<string, string[]> = {
   client_coordinator: ["my-work", "hours", "staff-hr", "rota"],
 };
 
+/**
+ * A THIRD DELTA — the manager co-pilot (agent expansion, Wave 3 #5). One module,
+ * one role, and it is a widening of an existing module rather than a new one.
+ *
+ * "co-pilot" was owner-only because the co-pilot reads across the whole practice
+ * and there was no way to give a manager less of it. There is now:
+ * `copilotAccessForRole` (src/lib/copilot/scope.ts) derives a six-tool
+ * operational allow-list from the SESSION's role, caps the practice-brain
+ * clearance at her own tier, and projects money out of the patient record — all
+ * server-side, all before the model is handed a schema. Reaching the module is
+ * therefore no longer the same question as reaching the owner's data, which is
+ * what let this line be written at all.
+ *
+ * The two allow-list roles are unaffected: "co-pilot" is in neither
+ * CLINICIAN_SLUGS nor STAFF_SLUGS, and their branches return before this array is
+ * ever read. Tests 2 and 6 below still prove it.
+ */
+const ADDED_MANAGER_COPILOT: Record<string, string[]> = {
+  agency_admin: [],
+  client_owner: [],
+  client_coordinator: ["co-pilot"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<string, string[]> = {
   agency_admin: ["practice-brain"],
@@ -160,7 +184,12 @@ describe("1. the existing three roles are byte-identical apart from the named de
   it.each(["agency_admin", "client_owner", "client_coordinator"] as const)(
     "%s sees exactly its baseline nav plus tonight's named additions, and nothing else",
     (role) => {
-      const expected = [...BASELINE[role], ...ADDED_TONIGHT[role], ...ADDED_CAMPAIGN_6[role]];
+      const expected = [
+        ...BASELINE[role],
+        ...ADDED_TONIGHT[role],
+        ...ADDED_CAMPAIGN_6[role],
+        ...ADDED_MANAGER_COPILOT[role],
+      ];
       expect(sorted(navSlugs(role))).toEqual(sorted(expected));
     },
   );
@@ -172,6 +201,7 @@ describe("1. the existing three roles are byte-identical apart from the named de
         ...BASELINE[role],
         ...ADDED_TONIGHT[role],
         ...ADDED_CAMPAIGN_6[role],
+        ...ADDED_MANAGER_COPILOT[role],
         ...EXTRA_ALLOWED_NOT_IN_NAV[role],
       ];
       expect(sorted(allowedSlugs(role))).toEqual(sorted(expected));
@@ -181,12 +211,17 @@ describe("1. the existing three roles are byte-identical apart from the named de
   it("the clinician branch is unreachable for the other three (their path is the old one)", () => {
     // Direct statement of the mechanism: the early return keys on the role only, so
     // for any other role CLINICIAN_SLUGS membership is irrelevant. "payments" is in
-    // no allow-list yet is open to all three; "co-pilot" is in no allow-list and is
+    // no allow-list yet is open to all three; "controls" is in no allow-list and is
     // owner-only. Both answers come from the ORIGINAL rules, not the new branch.
+    //
+    // ("co-pilot" was the owner-only example here until the manager-co-pilot lane
+    // made it shared. "controls" replaces it and is a stronger one: the kill
+    // switches are the thing this platform will never hand to a non-owner.)
     expect(CLINICIAN_SLUGS.has("payments")).toBe(false);
     expect(canRoleAccessModule("client_coordinator", "payments")).toBe(true);
-    expect(canRoleAccessModule("client_coordinator", "co-pilot")).toBe(false);
-    expect(canRoleAccessModule("client_owner", "co-pilot")).toBe(true);
+    expect(CLINICIAN_SLUGS.has("controls")).toBe(false);
+    expect(canRoleAccessModule("client_coordinator", "controls")).toBe(false);
+    expect(canRoleAccessModule("client_owner", "controls")).toBe(true);
   });
 });
 

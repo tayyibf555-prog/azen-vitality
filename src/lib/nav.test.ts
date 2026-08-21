@@ -10,7 +10,12 @@ import {
   categoriesForRole,
 } from "./nav";
 
-const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings"];
+// "co-pilot" LEFT this list in the manager-co-pilot lane (Wave 3 #5): the module
+// is now shared with the practice manager, who gets a role-scoped six-tool
+// version of it (src/lib/copilot/scope.ts). It is asserted on its own terms
+// below — shared with the coordinator, still denied to the clinician and staff —
+// rather than dropped quietly out of a list.
+const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "settings"];
 // "booking" (owner + coordinator tab) and "getting-started" (coordinator can now
 // tick the checklist too) are shared, so both belong alongside the rest here.
 const ALL_ROLE = ["", "reviews", "onboarding", "calendar", "patients", "recall", "booking", "getting-started"];
@@ -93,7 +98,7 @@ describe("sidebar categories (rail + panel nav)", () => {
     for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
   });
 
-  it("gives the coordinator exactly six Operations modules: the workforce block plus Getting started", () => {
+  it("gives the coordinator exactly seven Operations modules: the workforce block, Getting started and the scoped co-pilot", () => {
     const cats = categoriesForRole("client_coordinator");
     const keys = cats.map((c) => c.key);
     // The everyday categories survive.
@@ -122,8 +127,17 @@ describe("sidebar categories (rail + panel nav)", () => {
     //   "hours"     new module (Hours & pay): the month's worked hours and cost.
     //   "staff-hr"  new module (Staff HR): the employee file and document vault.
     //
+    // WIDENED A THIRD TIME, manager-co-pilot lane (Wave 3 #5), one module:
+    //
+    //   "co-pilot"  the practice manager gets a SCOPED co-pilot. Not the owner's:
+    //               `copilotAccessForRole` (src/lib/copilot/scope.ts) derives a
+    //               six-tool operational allow-list from her session role on the
+    //               server, caps her practice-brain clearance at her own tier, and
+    //               strips money out of the patient record. The page and the API
+    //               route are shared; what they will DO for her is not.
+    //
     // Nothing else moved: everything still absent from this list (compliance,
-    // reports, co-pilot, controls, permissions, settings) remains owner-only, and the
+    // reports, controls, permissions, settings) remains owner-only, and the
     // assertion is still an exact toEqual in NAV_CATEGORIES order, so the NEXT
     // unannounced addition fails here.
     expect(operations?.items.map((i) => i.slug)).toEqual([
@@ -133,6 +147,7 @@ describe("sidebar categories (rail + panel nav)", () => {
       "staff-check-in",
       "hours",
       "staff-hr",
+      "co-pilot",
     ]);
   });
 
@@ -193,17 +208,41 @@ describe("canRoleAccessModule", () => {
     expect(item?.roles).toBeUndefined();
   });
 
-  it("owner shell nav: hides Practice brain AND Co-pilot from a coordinator, keeps them for owner/agency", () => {
+  it("owner shell nav: hides Practice brain from a coordinator, keeps it for owner/agency", () => {
     // The owner shell's nav (@/lib/nav-shell) adds the owner-only Practice brain
     // to the shared sidebar and filters it with canRoleAccessModule, so its
     // owner-only entries never render for a coordinator (defence in depth on top
     // of the /owner layout guard). These assert the exact predicate it uses.
-    // Co-pilot comes through CLIENT_NAV's own `roles` array on the same predicate.
-    for (const slug of ["practice-brain", "co-pilot"]) {
+    //
+    // Co-pilot USED TO BE ASSERTED HERE TOO and no longer is: the module became
+    // shared with the practice manager in the manager-co-pilot lane. Practice
+    // brain did not move — it is the RAW knowledge tree, every tier of it, with no
+    // clearance filter between the reader and the body text, which is exactly what
+    // the co-pilot's `search_knowledge` has and the reason the co-pilot can be
+    // shared when this cannot.
+    for (const slug of ["practice-brain"]) {
       expect(canRoleAccessModule("client_coordinator", slug)).toBe(false);
       expect(canRoleAccessModule("client_owner", slug)).toBe(true);
       expect(canRoleAccessModule("agency_admin", slug)).toBe(true);
     }
+  });
+
+  it("co-pilot is shared with the practice manager, and with nobody else new", () => {
+    // THE MODULE-LEVEL HALF of Wave 3 #5, stated exactly. Reaching the page and the
+    // API route is now open to the coordinator; what the co-pilot DOES for her is
+    // decided per-tool in src/lib/copilot/scope.ts, which has its own leak battery.
+    expect(canRoleAccessModule("client_owner", "co-pilot")).toBe(true);
+    expect(canRoleAccessModule("agency_admin", "co-pilot")).toBe(true);
+    expect(canRoleAccessModule("client_coordinator", "co-pilot")).toBe(true);
+    // And the two allow-list roles are untouched: their branches run FIRST in both
+    // predicates and neither allow-list contains "co-pilot".
+    expect(canRoleAccessModule("client_clinician", "co-pilot")).toBe(false);
+    expect(canRoleAccessModule("client_staff", "co-pilot")).toBe(false);
+    // The grant is an explicit `roles` array, not the allow-by-default fallthrough:
+    // a slug with no array is open to all three non-clinician roles by accident, and
+    // this one is open on purpose.
+    const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "co-pilot");
+    expect(item?.roles).toEqual(["agency_admin", "client_owner", "client_coordinator"]);
   });
 
   it("allows shared modules for every role", () => {

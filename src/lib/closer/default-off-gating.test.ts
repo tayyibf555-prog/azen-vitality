@@ -67,15 +67,29 @@ describe("the closer is the platform's one default-OFF system", () => {
     expect(defaultEnabledFor(SLUG)).toBe(false);
   });
 
-  it("is the ONLY default-off system, so this inversion has not spread by accident", () => {
-    // Every other module's absent-row contract is unchanged. If a future system
-    // wants this treatment it should be a deliberate edit that lands here.
-    expect([...DEFAULT_OFF_SLUGS]).toEqual([SLUG]);
+  it("the inversion has not spread by accident: every default-off slug declared it", () => {
+    // This assertion used to be `toEqual([SLUG])`, when the closer was the only
+    // default-off system in the platform. It is not any more (the post-op check-in
+    // is the second), and pinning the exact membership would mean every new
+    // default-OFF send surface has to edit the CLOSER's test to ship — which trains
+    // people to loosen this file rather than to think about it.
+    //
+    // What still has to hold is the property the old assertion was protecting:
+    // DEFAULT_OFF_SLUGS is DERIVED from the catalog, so nothing can appear in it by
+    // accident. Every member must be a real catalog entry that says
+    // `defaultEnabled: false` in its own declaration, with the comment that goes
+    // with it. A slug that drifts in any other way fails here.
+    expect(DEFAULT_OFF_SLUGS.has(SLUG)).toBe(true);
+    for (const slug of DEFAULT_OFF_SLUGS) {
+      const def = SYSTEMS.find((s) => s.slug === slug);
+      expect(def, `${slug} is in DEFAULT_OFF_SLUGS but not in the catalog`).toBeTruthy();
+      expect(def?.defaultEnabled, slug).toBe(false);
+    }
   });
 
-  it("leaves every OTHER system default-ON, byte for byte", () => {
+  it("leaves every system that did NOT declare it default-ON, byte for byte", () => {
     for (const s of SYSTEMS) {
-      if (s.slug === SLUG) continue;
+      if (s.defaultEnabled === false) continue;
       expect(defaultEnabledFor(s.slug), s.slug).toBe(true);
     }
   });

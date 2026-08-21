@@ -21,10 +21,10 @@ const ASSIGNMENTS = [...SRC.matchAll(/patientId:\s*([^,\n]+)/g)].map((m) => m[1]
 
 describe("task -> patient attribution", () => {
   it("assigns a patientId in every candidate builder, so none can be forgotten", () => {
-    // ten modules: speed-to-lead, recall, reactivation, coordinator, noshow,
+    // eleven modules: speed-to-lead, recall, reactivation, coordinator, noshow,
     // after-hours, smile-assessment (high band), smile-assessment (medium band),
-    // agent escalations, medical-history.
-    expect(ASSIGNMENTS).toHaveLength(10);
+    // agent escalations, post-op escalations, medical-history.
+    expect(ASSIGNMENTS).toHaveLength(11);
   });
 
   it("derives it ONLY from a target's own dentallyPatientId, or leaves it null", () => {
@@ -44,14 +44,16 @@ describe("task -> patient attribution", () => {
     }
   });
 
-  it("keys exactly the six modules whose targets carry a patient id", () => {
+  it("keys exactly the seven modules whose targets carry a patient id", () => {
     const keyed = ASSIGNMENTS.filter((v) => v !== "null");
-    // recall, reactivation, no-show, after-hours, agent escalations and
-    // medical-history. All carry a dentallyPatientId on the stored row (an
-    // after-hours capture carries one whenever the caller was identified by phone,
-    // and null when they were not; an agent conversation carries one whenever the
-    // number resolved to a patient, and a `lead:<phone>` key when it did not).
-    expect(keyed).toHaveLength(6);
+    // recall, reactivation, no-show, after-hours, agent escalations, post-op
+    // escalations and medical-history. All carry a dentallyPatientId on the stored
+    // row (an after-hours capture carries one whenever the caller was identified by
+    // phone, and null when they were not; an agent conversation carries one whenever
+    // the number resolved to a patient, and a `lead:<phone>` key when it did not; a
+    // post-op escalation always carries one, because the target was built from a
+    // Dentally appointment and cannot exist without the patient id on it).
+    expect(keyed).toHaveLength(7);
   });
 
   it("surfaces the after-hours capture's own dentallyPatientId, so an identified caller's callback reaches their record", () => {

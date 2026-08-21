@@ -15,6 +15,16 @@ export const KIND_BASE: Record<TaskKind, number> = {
   // maximum-boost task but never beaten, and a tie falls through to the existing
   // name ordering.
   agent_escalation: 100,
+  // AT THE CEILING TOO, and sharing it with agent_escalation deliberately.
+  //
+  // A post-op escalation is a patient who has just had surgery, has been asked how
+  // they are, has answered with something the classifier would not clear, and has
+  // been told a member of the team will call them. There is no honest way to rank
+  // that above or below "a patient is mid-conversation and waiting" — both are a
+  // real person holding their phone on a promise the practice made minutes ago — so
+  // they tie at 100 and fall through to the existing name ordering. Nothing in this
+  // queue may outrank either.
+  postop_escalation: 100,
   confirm_appt: 90, // a high-risk appointment today/tomorrow
   contact_lead: 82, // a fresh enquiry, speed matters most
   after_hours_callback: 80, // someone tried to reach the practice out of hours

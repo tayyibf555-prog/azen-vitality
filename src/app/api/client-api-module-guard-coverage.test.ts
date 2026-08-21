@@ -243,6 +243,8 @@ const EXEMPT: Record<string, Exemption> = {
   "coordinator/sweep": { kind: "cron", reason: "treatment-coordinator sweep" },
   "noshow/sweep": { kind: "cron", reason: "no-show defence sweep" },
   "outreach/sweep": { kind: "cron", reason: "segment outreach sweep" },
+  "postop/sweep": { kind: "cron", reason: "post-op check-in sweep (flags + drafts only, never queues)" },
+  "collection/sweep": { kind: "cron", reason: "outstanding-balance sweep (verifies + drafts only, never queues)" },
   "reactivation/sweep": { kind: "cron", reason: "reactivation sweep" },
   "recall/sweep": { kind: "cron", reason: "recall sweep" },
   "reviews/sweep": { kind: "cron", reason: "review-request sweep" },

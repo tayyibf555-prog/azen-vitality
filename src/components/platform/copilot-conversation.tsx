@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Send, Loader2, Bot, X } from "lucide-react";
-import { COPILOT_STARTERS, useCopilotThread } from "@/components/platform/copilot-thread";
+import { copilotStartersFor, useCopilotThread } from "@/components/platform/copilot-thread";
+import type { CopilotAccess } from "@/lib/copilot/scope";
 
 // ---------------------------------------------------------------------------
 // THE BOTTOM-DOCKED POP-UP, and ONLY the pop-up.
@@ -29,10 +30,19 @@ export function CopilotConversation({
   clientSlug,
   autoFocus = true,
   onClose,
+  access = "full",
 }: {
   clientSlug: string;
   autoFocus?: boolean;
   onClose?: () => void;
+  /**
+   * Which co-pilot this person has, from their session (resolved in the /c shell
+   * layout and threaded down). It filters the STARTERS and nothing else: a
+   * manager has no money tool, so a "Who has an outstanding balance?" button
+   * would fetch a refusal and, on the way, advertise what she cannot have.
+   * Defaults to the owner's set, which is what the /owner shell always gets.
+   */
+  access?: CopilotAccess;
 }) {
   const { messages, busy, send: sendTurn } = useCopilotThread(clientSlug);
   const [input, setInput] = useState("");
@@ -113,7 +123,7 @@ export function CopilotConversation({
           <div className="px-3 py-3">
             <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">Try asking</p>
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {COPILOT_STARTERS.map((s) => {
+              {copilotStartersFor(access).map((s) => {
                 const Icon = s.icon;
                 return (
                   <button

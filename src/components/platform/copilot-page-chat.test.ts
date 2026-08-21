@@ -10,11 +10,13 @@ import {
   CopilotEmptyState,
   CopilotPageChat,
   CopilotThreadView,
+  copilotPageCopyFor,
 } from "./copilot-page-chat";
 import {
   COPILOT_FAILED_REPLY,
   COPILOT_STARTERS,
   COPILOT_UNREACHABLE_REPLY,
+  copilotStartersFor,
   postCopilotTurn,
   type CopilotMessage,
 } from "./copilot-thread";
@@ -379,5 +381,99 @@ describe("the transport both surfaces send through", () => {
       messages: [{ role: "user", content: "hello" }],
       client: CLIENT,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE MANAGER'S SURFACE — the same page, offering only what it can answer.
+//
+// The practice manager's co-pilot has six tools and no money tool, no report
+// tool and no send tool (src/lib/copilot/scope.ts). The page above was written
+// for the owner, and two of its four starter buttons run tools the manager does
+// not have, while its own copy promises "full visibility", "money owed" and "I
+// can draft and send a message".
+//
+// None of that is a data leak — the server refuses each of those tools three
+// separate ways. It is the OTHER failure: an interface that offers what the
+// server will refuse. A dead button is also an advertisement for what somebody
+// cannot have, which is a smaller leak of the same kind as a refusal that
+// enumerates the owner's toolbox.
+// ---------------------------------------------------------------------------
+describe("the co-pilot page, scoped to the practice manager", () => {
+  const managerHtml = renderToStaticMarkup(
+    createElement(CopilotEmptyState, { practiceName: PRACTICE, onStart: () => {}, access: "manager" }),
+  );
+  const ownerHtml = renderToStaticMarkup(
+    createElement(CopilotEmptyState, { practiceName: PRACTICE, onStart: () => {} }),
+  );
+
+  it("offers no starter that runs a tool she does not have", () => {
+    const managerSafe = copilotStartersFor("manager");
+    // Not vacuous in either direction: some are dropped, some survive.
+    expect(managerSafe.length).toBeGreaterThan(0);
+    expect(managerSafe.length).toBeLessThan(COPILOT_STARTERS.length);
+    expect(count(managerHtml, "<button")).toBe(managerSafe.length);
+    for (const starter of COPILOT_STARTERS) {
+      const shown = managerSafe.includes(starter);
+      expect(managerHtml.includes(asRendered(starter.label)), `"${starter.label}" for a manager`).toBe(shown);
+    }
+  });
+
+  it("drops exactly the money and overview starters, by name", () => {
+    const dropped = COPILOT_STARTERS.filter((s) => !copilotStartersFor("manager").includes(s));
+    expect(dropped.map((s) => s.id).sort()).toEqual(["outstanding", "overview"]);
+  });
+
+  it("does not promise money, reports or sending in its opening copy", () => {
+    const copy = copilotPageCopyFor("manager");
+    expect(copy.emptyBody).not.toMatch(/money owed/i);
+    expect(copy.emptyBody).not.toMatch(/send a message/i);
+    expect(copy.subtitle).not.toMatch(/full visibility/i);
+    // ...and says where those things actually live, rather than going quiet.
+    expect(copy.emptyBody).toMatch(/sit with the practice owner/i);
+    expect(copy.emptyBody).toMatch(/cannot message anyone/i);
+    expect(managerHtml).toContain(asRendered(copy.emptyBody));
+  });
+
+  it("leaves the owner's page exactly as it was", () => {
+    // The default IS the owner's, so every caller that passes no access — and
+    // every test above — renders what it always rendered.
+    expect(ownerHtml).toEqual(
+      renderToStaticMarkup(
+        createElement(CopilotEmptyState, { practiceName: PRACTICE, onStart: () => {}, access: "full" }),
+      ),
+    );
+    expect(copilotPageCopyFor()).toEqual(COPILOT_PAGE_COPY);
+    expect(copilotPageCopyFor("full")).toEqual(COPILOT_PAGE_COPY);
+    expect(copilotStartersFor()).toEqual(COPILOT_STARTERS);
+    expect(count(ownerHtml, "<button")).toBe(COPILOT_STARTERS.length);
+  });
+
+  it("every starter still names the narrowest co-pilot that can answer it", () => {
+    // Guards the guard: a starter added without a `minAccess` would be handed to
+    // everybody, which is the deny-by-default rule broken in the UI layer.
+    for (const starter of COPILOT_STARTERS) {
+      expect(["manager", "full"], `${starter.id} has no minAccess`).toContain(starter.minAccess);
+    }
+  });
+
+  it("the pop-up surface is scoped by the same selector, not a second list", () => {
+    const popup = renderToStaticMarkup(
+      createElement(CopilotConversation, { clientSlug: CLIENT, access: "manager" }),
+    );
+    for (const starter of COPILOT_STARTERS) {
+      const shown = copilotStartersFor("manager").includes(starter);
+      expect(popup.includes(asRendered(starter.label)), `pop-up "${starter.label}"`).toBe(shown);
+    }
+  });
+});
+
+describe("a role with no co-pilot at all", () => {
+  it("is never offered the owner's money starters by the Cmd-J panel", () => {
+    // The clinician and staff logins get a 403 from /api/copilot, but the shell
+    // mounts the Cmd-J panel for every role. The narrower list is the harmless
+    // direction; the owner's would show them four buttons about the money.
+    expect(copilotStartersFor("none")).toEqual(copilotStartersFor("manager"));
+    expect(copilotStartersFor("none")).not.toEqual(COPILOT_STARTERS);
   });
 });

@@ -151,6 +151,8 @@ const DESTRUCTIVE_EXEMPT: Record<string, DestructiveExemption> = {
   "coordinator/sweep": { kind: "cron", reason: "treatment-coordinator sweep" },
   "noshow/sweep": { kind: "cron", reason: "the no-show defence sweep, run by the scheduler" },
   "outreach/sweep": { kind: "cron", reason: "the segment-outreach sweep, run by the scheduler" },
+  "postop/sweep": { kind: "cron", reason: "the post-op check-in sweep, run by the scheduler; it flags procedures and writes DRAFTS, never an outbox row" },
+  "collection/sweep": { kind: "cron", reason: "the outstanding-balance sweep, run by the scheduler; it verifies balances and writes DRAFTS, never an outbox row" },
   "reactivation/sweep": { kind: "cron", reason: "the reactivation sweep, run by the scheduler" },
   "recall/sweep": { kind: "cron", reason: "the recall concierge sweep, run by the scheduler" },
   "reviews/sweep": { kind: "cron", reason: "the review-request sweep, run by the scheduler" },

@@ -84,10 +84,26 @@ const CLINICAL_WRITE: readonly Role[] = ["agency_admin", "client_owner", "client
  */
 const PAY_ACCESS: readonly Role[] = ["agency_admin", "client_owner"];
 
+/**
+ * The roles that may ASK the co-pilot. THE SAME THREE as APPROVER today, and
+ * deliberately its own list rather than a reuse of it, for the reason PAY_ACCESS
+ * states: they answer different questions and are meant to diverge.
+ *
+ * The practice manager joined in the manager-co-pilot lane (agent expansion,
+ * Wave 3 #5) because asking the co-pilot stopped being the same act as reading
+ * the owner's data: `copilotAccessForRole` (src/lib/copilot/scope.ts) hands her
+ * session a six-tool operational schema, caps her practice-brain clearance at her
+ * own tier and projects the money out of the patient record, all server-side.
+ * Writing it as "approver" would record the wrong reason — approving holiday has
+ * nothing to do with it — and the first time the two lists diverge the comment
+ * would be a lie.
+ */
+const COPILOT_ACCESS: readonly Role[] = ["agency_admin", "client_owner", "client_coordinator"];
+
 /** The roles that reach a module today, spelled out per slug this file depends on. */
 const MODULE_HOLDERS: Record<string, readonly Role[]> = {
-  // Owner-only modules.
-  "co-pilot": OWNER,
+  // The co-pilot: owner, agency and the practice manager (scoped — see above).
+  "co-pilot": COPILOT_ACCESS,
   // Front-desk modules: the three original roles, and neither new role.
   "no-show-defence": APPROVER,
   onboarding: APPROVER,

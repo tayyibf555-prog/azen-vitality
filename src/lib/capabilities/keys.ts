@@ -237,7 +237,7 @@ const RAW_CAPABILITIES = [
     group: "messaging",
     label: "Send a recall or reactivation message",
     description:
-      "Release a drafted recall, reactivation, treatment-coordinator or treatment-plan-closer message to the patient.",
+      "Release a drafted recall, reactivation, treatment-coordinator, treatment-plan-closer, post-op check-in or unpaid-balance message to the patient.",
     destructive: true,
     // The closer is on this key rather than one of its own because it is the same
     // act: a drafted lifecycle message is released to a patient in the practice's
@@ -252,6 +252,17 @@ const RAW_CAPABILITIES = [
       "reactivation/[action]",
       "coordinator/[action]",
       "closer/[action]",
+      // The post-op check-in, on APPROVE for the same reason the closer is: it has
+      // no `send` action either, and the approval IS the release. Note what the
+      // capability does NOT gate there: DISCARD is deliberately ungated, because
+      // requiring the send permission in order to REFUSE a send would stop the
+      // person most likely to spot that a patient should not be texted.
+      "postop/[action]",
+      // The outstanding-balance reminder, on APPROVE for the same reason again, and
+      // it is the surface this key matters most on: releasing it tells a patient
+      // they owe the practice money. It has no `send` action and never will, so the
+      // approval IS the release, and DISCARD is ungated here too.
+      "collection/[action]",
     ],
   },
   {

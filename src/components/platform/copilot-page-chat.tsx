@@ -5,10 +5,11 @@ import { ArrowDown, Check, Copy, Loader2, Send, SquarePen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CopilotProse } from "@/components/platform/copilot-prose";
 import {
-  COPILOT_STARTERS,
+  copilotStartersFor,
   useCopilotThread,
   type CopilotMessage,
 } from "@/components/platform/copilot-thread";
+import type { CopilotAccess } from "@/lib/copilot/scope";
 
 // ===========================================================================
 // THE CO-PILOT, AS A PAGE.
@@ -81,6 +82,28 @@ export const COPILOT_PAGE_COPY = {
   keys: "Enter to send, Shift + Enter for a new line",
 } as const;
 
+/**
+ * THE TWO SENTENCES THAT ARE NOT TRUE FOR EVERYBODY.
+ *
+ * The copy above is the owner's and stays exactly as it was. Two of its lines
+ * are claims about what the co-pilot can do — "full visibility", and "money
+ * owed ... I can draft and send a message" — and for the practice manager both
+ * are false: her tool set has no money tool and no send tool at all
+ * (src/lib/copilot/scope.ts). An interface that promises what the server will
+ * refuse is the same defect as a dead starter button, so the promise moves with
+ * the access level rather than the reader finding out by being told no.
+ */
+const COPILOT_MANAGER_COPY = {
+  subtitle: "The operational view of the site selected in the top bar.",
+  emptyBody:
+    "Ask about a patient, the diary, new enquiries and leads, or how the practice does something. I read the practice's own records to answer. Financial figures, reports and marketing sit with the practice owner, and I cannot message anyone from here.",
+} as const;
+
+/** The copy for this access level: the owner's, with the two claims corrected. */
+export function copilotPageCopyFor(access: CopilotAccess = "full") {
+  return access === "full" ? COPILOT_PAGE_COPY : { ...COPILOT_PAGE_COPY, ...COPILOT_MANAGER_COPY };
+}
+
 /** How tall the composer may grow before it scrolls internally, in pixels. */
 const COMPOSER_MAX_HEIGHT = 200;
 /** Distance from the bottom, in pixels, still counted as "reading the latest". */
@@ -122,10 +145,15 @@ function VitalityMark({ practiceName, size }: { practiceName: string; size: "tur
 export function CopilotEmptyState({
   practiceName,
   onStart,
+  access = "full",
 }: {
   practiceName: string;
   onStart: (prompt: string) => void;
+  /** Defaults to the owner's, so every existing caller renders what it always did. */
+  access?: CopilotAccess;
 }) {
+  const copy = copilotPageCopyFor(access);
+  const starters = copilotStartersFor(access);
   return (
     <div className="flex flex-col items-center text-center">
       <VitalityMark practiceName={practiceName} size="hero" />
@@ -133,7 +161,7 @@ export function CopilotEmptyState({
         {COPILOT_PAGE_COPY.emptyHeading}
       </h2>
       <p className="mt-2 max-w-lg text-[13.5px] leading-relaxed text-muted">
-        {COPILOT_PAGE_COPY.emptyBody}
+        {copy.emptyBody}
       </p>
       <p className="mt-7 w-full text-left text-[11px] font-semibold uppercase tracking-[0.05em] text-faint">
         {COPILOT_PAGE_COPY.starters}
@@ -142,7 +170,7 @@ export function CopilotEmptyState({
           same source. Each one maps to a real tool, so a first click returns
           the practice's own data rather than a general answer. */}
       <div className="mt-2 grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-        {COPILOT_STARTERS.map((starter) => {
+        {starters.map((starter) => {
           const Icon = starter.icon;
           return (
             <button
@@ -259,9 +287,17 @@ export function CopilotThreadView({
 export function CopilotPageChat({
   clientSlug,
   practiceName,
+  access = "full",
 }: {
   clientSlug: string;
   practiceName: string;
+  /**
+   * Which co-pilot this person has, resolved on the SERVER from their session
+   * (see copilot-view.tsx). It changes copy and starters only — it is not a
+   * lock, and nothing here is trusted by the route, which derives the same
+   * answer again from the session before it dispatches a single tool.
+   */
+  access?: CopilotAccess;
 }) {
   const { messages, busy, send, reset } = useCopilotThread(clientSlug);
   const [input, setInput] = useState("");
@@ -404,7 +440,7 @@ export function CopilotPageChat({
             <h1 className="truncate text-[14px] font-semibold tracking-[-0.01em] text-navy">
               {COPILOT_PAGE_COPY.title}
             </h1>
-            <p className="truncate text-[11.5px] text-muted">{COPILOT_PAGE_COPY.subtitle}</p>
+            <p className="truncate text-[11.5px] text-muted">{copilotPageCopyFor(access).subtitle}</p>
           </div>
         </div>
         <button
@@ -437,7 +473,7 @@ export function CopilotPageChat({
         >
           <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
             {empty ? (
-              <CopilotEmptyState practiceName={practiceName} onStart={submit} />
+              <CopilotEmptyState practiceName={practiceName} onStart={submit} access={access} />
             ) : (
               <CopilotThreadView
                 messages={messages}

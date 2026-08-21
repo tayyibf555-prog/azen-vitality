@@ -4,6 +4,8 @@ import { updateOutboxStatusByMessageId as updateRecallStatus } from "@/lib/recal
 import { updateOutboxStatusByMessageId as updateNoshowStatus } from "@/lib/noshow/repository";
 import { updateOutboxStatusByMessageId as updateCoordinatorStatus } from "@/lib/coordinator/repository";
 import { updateOutboxStatusByMessageId as updateCloserStatus } from "@/lib/closer/repository";
+import { updateOutboxStatusByMessageId as updateCollectionStatus } from "@/lib/collection/repository";
+import { updateOutboxStatusByMessageId as updatePostopStatus } from "@/lib/postop/repository";
 import { updateOutboxStatusByMessageId as updateReviewsStatus } from "@/lib/reviews/repository";
 import { updateAttemptStatusByMessageId as updateSpeedToLeadStatus } from "@/lib/speed-to-lead/repository";
 
@@ -74,6 +76,8 @@ export async function POST(request: Request): Promise<Response> {
       updateNoshowStatus(sid, mapped),
       updateCoordinatorStatus(sid, mapped),
       updateCloserStatus(sid, mapped),
+      updateCollectionStatus(sid, mapped),
+      updatePostopStatus(sid, mapped),
       updateReviewsStatus(sid, mapped),
       updateSpeedToLeadStatus(sid, mapped),
     ]);

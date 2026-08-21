@@ -55,6 +55,20 @@ import {
   markOutboxBlocked as markCloserBlocked,
 } from "@/lib/closer/repository";
 import {
+  listQueuedOutbox as listCollectionQueued,
+  claimOutbox as claimCollection,
+  recordOutboxSent as recordCollectionSent,
+  markOutboxFailed as markCollectionFailed,
+  markOutboxBlocked as markCollectionBlocked,
+} from "@/lib/collection/repository";
+import {
+  listQueuedOutbox as listPostopQueued,
+  claimOutbox as claimPostop,
+  recordOutboxSent as recordPostopSent,
+  markOutboxFailed as markPostopFailed,
+  markOutboxBlocked as markPostopBlocked,
+} from "@/lib/postop/repository";
+import {
   listQueuedOutbox as listReviewsQueued,
   claimOutbox as claimReviews,
   recordOutboxSent as recordReviewsSent,
@@ -149,7 +163,32 @@ const SOURCES: OutboxSource[] = [
   // a second chase. This source only ever has rows once a human has APPROVED a
   // closer draft; the sweep itself queues nothing.
   { name: "closer", list: listCloserQueued, claim: claimCloser, recordSent: recordCloserSent, markFailed: markCloserFailed, markBlocked: markCloserBlocked },
+  // The post-op check-in drains AFTER the closer and BEFORE reviews, and it is NOT
+  // transactional. The ordering is a real decision: an aftercare check is the most
+  // time-sensitive OUTREACH message this platform sends (it is only true the day
+  // after a procedure, and its own staleness guard retires it after 48 hours), so it
+  // must not lose the recipient's one daily slot to a recall or a review request.
+  // But it is not marked `transactional`, because the exemption exists for messages
+  // the patient is EXPECTING about an appointment they booked, and a patient who has
+  // already had a recall text that morning should not also get this. It yields, and
+  // the practice's own worklist still shows the check-in waiting.
+  //
+  // Its listQueuedOutbox additionally honours QUIET HOURS via not_before_at, exactly
+  // as the diary's does: the drain itself has no time-of-day gate at all.
+  { name: "postop", list: listPostopQueued, claim: claimPostop, recordSent: recordPostopSent, markFailed: markPostopFailed, markBlocked: markPostopBlocked },
   { name: "reviews", list: listReviewsQueued, claim: claimReviews, recordSent: recordReviewsSent, markFailed: markReviewsFailed, markBlocked: markReviewsBlocked },
+  // The balance reminder drains AFTER every automatic lifecycle message, and that
+  // order is a deliberate judgement about what a patient should receive on a day
+  // when two things are queued for them. A recall invite, a reactivation note, a
+  // treatment follow-up and a review request are all the practice offering them
+  // something; a reminder about an unpaid invoice is the practice asking. If only
+  // one may arrive today, it is not the asking one, and the reminder's own cadence
+  // is measured in weeks so losing a day costs it nothing. It still drains ahead of
+  // segment outreach, because a campaign is discretionary and a balance is a fact.
+  //
+  // This source only ever has rows once a human has APPROVED a draft; the sweep
+  // queues nothing, ever, and has no configuration that could make it.
+  { name: "collection", list: listCollectionQueued, claim: claimCollection, recordSent: recordCollectionSent, markFailed: markCollectionFailed, markBlocked: markCollectionBlocked },
   // Segment outreach drains LAST: it is a deliberate campaign, so it yields its
   // once-per-day slot to every automatic lifecycle message (recall/reactivation/
   // coordinator/reviews) already established for a recipient.

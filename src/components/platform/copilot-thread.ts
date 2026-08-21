@@ -8,6 +8,7 @@ import {
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
+import type { CopilotAccess } from "@/lib/copilot/scope";
 
 // ---------------------------------------------------------------------------
 // ONE TRANSPORT, TWO SURFACES.
@@ -48,6 +49,17 @@ export interface CopilotStarter {
   popupTint: string;
   /** Icon tile classes for the page, on the app's status tokens. */
   pageTint: string;
+  /**
+   * The narrowest co-pilot that can actually ANSWER this one.
+   *
+   * Every starter maps to a real tool, which is what makes a click return live
+   * data rather than a dead end — and that promise breaks the moment a role
+   * exists whose tool set is smaller. The practice manager has no
+   * `outstanding_balances` and no `practice_overview`, so two of these four would
+   * have rendered for her as buttons that fetch a refusal. Worse than useless: a
+   * dead button is also an advertisement for what she cannot have.
+   */
+  minAccess: CopilotAccess;
 }
 
 export const COPILOT_STARTERS: CopilotStarter[] = [
@@ -59,6 +71,8 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: CalendarDays,
     popupTint: "bg-blue-dark/10 text-blue-dark",
     pageTint: "bg-tint-blue text-status-blue ring-1 ring-tint-blue-line",
+    // The diary. Everybody who has the co-pilot at all has `appointments`.
+    minAccess: "manager",
   },
   {
     id: "outstanding",
@@ -68,6 +82,8 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: PoundSterling,
     popupTint: "bg-emerald-500/10 text-emerald-600",
     pageTint: "bg-tint-green text-status-green ring-1 ring-tint-green-line",
+    // `outstanding_balances`. Money, so the owner only.
+    minAccess: "full",
   },
   {
     id: "noshow",
@@ -77,6 +93,8 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: AlertTriangle,
     popupTint: "bg-amber-500/10 text-amber-600",
     pageTint: "bg-tint-amber text-status-amber ring-1 ring-tint-amber-line",
+    // Answered from the diary the manager can already read. No money in it.
+    minAccess: "manager",
   },
   {
     id: "overview",
@@ -86,8 +104,29 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: TrendingUp,
     popupTint: "bg-violet-500/10 text-violet-600",
     pageTint: "bg-tint-royal text-status-royal ring-1 ring-tint-royal-line",
+    // `practice_overview`, whose own hint says "money owed and recovery".
+    minAccess: "full",
   },
 ];
+
+/**
+ * The starters a given co-pilot can actually answer.
+ *
+ * Defaults to the owner's, so every existing caller and every existing test
+ * renders the same four buttons it always did.
+ *
+ * "none" takes the NARROWER branch rather than a third one, exactly as
+ * `projectPatientRecord` does and for the same reason. A role with no co-pilot
+ * never reaches the page (requireModuleAccess 404s it) and gets a 403 from the
+ * route on any question, so the only way here is the Cmd-J panel, which the shell
+ * mounts for every role. Falling to the smaller list there is the harmless
+ * direction; falling to the owner's would be the one that shows a clinician four
+ * buttons describing the practice's money.
+ */
+export function copilotStartersFor(access: CopilotAccess = "full"): CopilotStarter[] {
+  if (access === "full") return COPILOT_STARTERS;
+  return COPILOT_STARTERS.filter((s) => s.minAccess !== "full");
+}
 
 /**
  * Post one turn and return the text to show as the assistant's reply.

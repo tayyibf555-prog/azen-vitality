@@ -7,6 +7,9 @@ import { PatientQuickViewProvider } from "@/components/platform/patient-quick-vi
 import { FeedbackWidget } from "@/components/platform/feedback-widget";
 import { UsageBeacon } from "@/components/platform/usage-beacon";
 import { guardPage } from "@/lib/auth/page-guard";
+import { authEnforced } from "@/lib/auth/guard";
+import { getSessionUser } from "@/lib/auth/session";
+import { copilotAccessForRole } from "@/lib/copilot/scope";
 import { getClient } from "@/lib/mock/clients";
 import {
   SIDEBAR_GROUPS_COOKIE,
@@ -31,7 +34,7 @@ export default async function ClientLayout({
   // fail-open display read - never throws), and the site-switcher cookie (free).
   // Serialising them added a needless hop to every entry into the client area;
   // a guard redirect still wins because Promise.all rejects with it.
-  const [, disabled, selectedSite, cookieStore] = await Promise.all([
+  const [, disabled, selectedSite, cookieStore, sessionUser] = await Promise.all([
     guardPage({
       // client_clinician AND client_staff belong here or those roles cannot log in
       // AT ALL: "/" routes agency to /agency, owner to /owner, and EVERYTHING ELSE
@@ -61,8 +64,17 @@ export default async function ClientLayout({
     clientRecord ? getDisabledSlugs(clientRecord.id) : Promise.resolve(new Set<string>()),
     clientRecord ? getViewSiteSelection(clientRecord.id) : Promise.resolve(undefined),
     cookies(),
+    // WHICH CO-PILOT THE Cmd-J PANEL OFFERS. `getSessionUser` is React-cached and
+    // `guardPage` above resolves the same session, so this joins the existing hop
+    // rather than adding one; where sign-in is not configured guardPage does not
+    // resolve a session at all, so neither does this. Display only — it decides
+    // which STARTER BUTTONS render, and two of the four run tools the practice
+    // manager does not have. /api/copilot re-derives the real answer from the
+    // session on every turn and trusts nothing sent from the browser.
+    authEnforced() ? getSessionUser() : Promise.resolve(null),
   ]);
   const disabledSlugs = [...disabled];
+  const copilotAccess = authEnforced() ? copilotAccessForRole(sessionUser?.role) : "full";
   // The sidebar's remembered layout is read HERE rather than from localStorage in
   // the component, so the very first paint is already the right width and the
   // right areas are open. Nothing flashes and nothing has to correct itself.
@@ -135,7 +147,7 @@ export default async function ClientLayout({
             </div>
           </div>
         </div>
-        <PlatformShortcuts />
+        <PlatformShortcuts copilotAccess={copilotAccess} />
         <FeedbackWidget />
         <UsageBeacon />
       </div>

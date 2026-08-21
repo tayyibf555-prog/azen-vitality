@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   listResponses: vi.fn<(a: unknown) => Promise<unknown[]>>(async () => []),
   listNeedsHuman: vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []),
   listOutstandingReviews: vi.fn<(a: unknown) => Promise<unknown[]>>(async () => []),
+  listOpenEscalations: vi.fn<(a: unknown) => Promise<unknown[]>>(async () => []),
   getOverlayMap: vi.fn<(a: unknown) => Promise<Map<string, unknown>>>(async () => new Map()),
 }));
 
@@ -38,6 +39,7 @@ vi.mock("@/lib/noshow/repository", () => ({ listTargets: h.listNoshow }));
 vi.mock("@/lib/after-hours/repository", () => ({ listCaptures: h.listCaptures }));
 vi.mock("@/lib/smile-assessment/repository", () => ({ listResponses: h.listResponses }));
 vi.mock("@/lib/agent/repository", () => ({ listNeedsHumanConversations: h.listNeedsHuman }));
+vi.mock("@/lib/postop/repository", () => ({ listOpenEscalations: h.listOpenEscalations }));
 vi.mock("@/lib/patient-medical/gate", () => ({ isMedicalHistoryEnabled: () => false }));
 vi.mock("@/lib/patient-medical/repository", () => ({
   listOutstandingReviews: h.listOutstandingReviews,
@@ -302,8 +304,9 @@ describe("an escalation reaches a human even with no alert phone configured", ()
 describe("the new sources cannot blank the queue", () => {
   it("counts them in the source total", async () => {
     const { totalSources } = await generateTasksWithHealth(CTX);
-    // eight pre-existing builders, plus medium-band and escalations, plus the overlay.
-    expect(totalSources).toBe(11);
+    // nine pre-existing builders (post-op escalations is the newest of them), plus
+    // medium-band and agent escalations, plus the overlay.
+    expect(totalSources).toBe(12);
   });
 
   it("a dead escalation read is counted, not swallowed, and the rest still render", async () => {
