@@ -1,13 +1,17 @@
 import { HeartPulse } from "lucide-react";
 import { PageHeader, StatCard, EmptyState } from "@/components/primitives";
-import { Worklist } from "@/components/client/coordinator/worklist";
+import { CoordinatorTabs } from "@/components/client/coordinator/coordinator-tabs";
 import { getClient } from "@/lib/mock/clients";
 import { getViewSiteIds } from "@/lib/site-view";
 import { listOpportunities } from "@/lib/coordinator/repository";
+import { closerQueueCounts, listAwaitingApproval } from "@/lib/closer/repository";
 import type { TreatmentOpportunity } from "@/lib/coordinator/types";
+import type { CloserDraftView } from "@/lib/closer/types";
 import { gbp } from "@/lib/utils";
 
 const DAY = 86_400_000;
+
+const NO_COUNTS = { awaiting: 0, sent: 0, replies: 0 };
 
 function daysStalled(acceptedAt: string, now: Date): number {
   if (!acceptedAt) return 0;
@@ -20,6 +24,53 @@ async function loadOpportunities(siteIds: string[]): Promise<TreatmentOpportunit
   } catch {
     // DB may be empty or unreachable in this environment. Treat as no data.
     return [];
+  }
+}
+
+/**
+ * The closer's drafts, joined to the opportunities already loaded for the worklist.
+ *
+ * Joined in memory rather than in SQL because the opportunities are ALREADY here —
+ * the worklist needs every one of them — so a second query would fetch rows this
+ * function is holding. A draft whose opportunity is not in that map is DROPPED
+ * rather than rendered with blanks: without the patient's name, the treatment and
+ * the figure there is nothing for a human to judge, and an approval made without
+ * them would be a rubber stamp. It cannot happen in practice (both reads are
+ * scoped to the same site selection, and the touch's opportunity_id is a foreign
+ * key) which is precisely why the impossible case must not render a half-empty
+ * card somebody clicks Approve on.
+ */
+async function loadCloserQueue(
+  siteIds: string[],
+  opportunities: TreatmentOpportunity[],
+): Promise<{ drafts: CloserDraftView[]; counts: typeof NO_COUNTS }> {
+  try {
+    const [touches, counts] = await Promise.all([
+      listAwaitingApproval(siteIds),
+      closerQueueCounts(siteIds),
+    ]);
+    const byId = new Map(opportunities.map((o) => [o.id, o]));
+    const drafts: CloserDraftView[] = [];
+    for (const t of touches) {
+      const o = byId.get(t.opportunityId);
+      if (!o) continue;
+      drafts.push({
+        touchId: t.id,
+        opportunityId: t.opportunityId,
+        patientName: o.patientName,
+        treatment: o.treatment,
+        amountOutstanding: o.amountOutstanding,
+        step: t.step,
+        channel: t.channel,
+        body: t.body,
+        createdAt: t.createdAt,
+      });
+    }
+    return { drafts, counts };
+  } catch {
+    // The closer tables may not exist in this environment (migration 0085 is a
+    // file, not yet applied everywhere). An empty queue, never a broken page.
+    return { drafts: [], counts: NO_COUNTS };
   }
 }
 
@@ -37,6 +88,7 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
 
   const siteIds = await getViewSiteIds(client.id);
   const opportunities = await loadOpportunities(siteIds);
+  const { drafts, counts } = await loadCloserQueue(siteIds, opportunities);
 
   // Real current time, never the frozen mock clock: "days stalled" must count from
   // today, not a hardcoded date, once this reads live data.
@@ -92,7 +144,12 @@ export async function TreatmentCoordinatorView({ clientSlug }: { clientSlug: str
           description="Run the Dentally sync to pull accepted but incomplete treatment plans into this worklist. This view is mock safe, so it stays empty until real data lands."
         />
       ) : (
-        <Worklist opportunities={opportunities} nowIso={now.toISOString()} />
+        <CoordinatorTabs
+          opportunities={opportunities}
+          drafts={drafts}
+          counts={counts}
+          nowIso={now.toISOString()}
+        />
       )}
     </>
   );

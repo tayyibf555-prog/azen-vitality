@@ -236,9 +236,23 @@ const RAW_CAPABILITIES = [
     key: "messaging.lifecycle.send",
     group: "messaging",
     label: "Send a recall or reactivation message",
-    description: "Release a drafted recall, reactivation or treatment-coordinator message to the patient.",
+    description:
+      "Release a drafted recall, reactivation, treatment-coordinator or treatment-plan-closer message to the patient.",
     destructive: true,
-    enforcedAt: ["recall/[action]", "reactivation/[action]", "coordinator/[action]"],
+    // The closer is on this key rather than one of its own because it is the same
+    // act: a drafted lifecycle message is released to a patient in the practice's
+    // name. Four surfaces, one permission — an owner who withholds "release a
+    // drafted message" means it, and should not have to withhold it four times.
+    //
+    // NOTE the closer's is on APPROVE, not on a `send` action. It has none: the
+    // approval IS the release (it writes the outbox row the shared drain picks up),
+    // which is also the shape the coordinator's own `send` has drifted into.
+    enforcedAt: [
+      "recall/[action]",
+      "reactivation/[action]",
+      "coordinator/[action]",
+      "closer/[action]",
+    ],
   },
   {
     key: "messaging.campaign.launch",

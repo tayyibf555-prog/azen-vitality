@@ -27,6 +27,20 @@ export interface SystemDef {
   group: "Patient lifecycle" | "Acquisition" | "Conversational agents" | "Operations";
   /** One line: what stops the moment this is switched OFF. Owner-facing copy. */
   halts: string;
+  /**
+   * What the ABSENCE of a system_toggle row means for this system. Omitted (the
+   * case for every system but one) keeps the platform's default-ON contract: no
+   * row means enabled, which is what makes the kill switch dormant until an owner
+   * uses it.
+   *
+   * `false` inverts that for a single slug: no row means DISABLED, for every
+   * client, in every environment, including one where the seeding migration has
+   * not run. A brand new SEND surface has to be default-off — a system nobody has
+   * ever switched on must not start messaging patients because a row is missing —
+   * and a seeded row alone cannot deliver that, because a seed only covers the
+   * clients and the databases it was applied to.
+   */
+  defaultEnabled?: boolean;
 }
 
 export const SYSTEMS: SystemDef[] = [
@@ -48,6 +62,21 @@ export const SYSTEMS: SystemDef[] = [
     label: "Treatment Coordinator",
     group: "Patient lifecycle",
     halts: "Treatment follow-up messaging stops.",
+  },
+  {
+    // Headless system: the closer's engine ships before its worklist UI, so it has
+    // no CLIENT_NAV page yet and its switch lives in the systems control panel.
+    //
+    // THE ONLY DEFAULT-OFF SYSTEM. It is a new outbound surface aimed at patients
+    // the practice has already messaged through the Treatment Coordinator, so the
+    // absence of a toggle row must mean OFF rather than ON. Migration 0085 also
+    // seeds an explicit disabled row for 'vitality'; the two are deliberately
+    // independent, because the seed only covers one client and one database.
+    slug: "treatment-closer",
+    label: "Treatment-plan closer",
+    group: "Patient lifecycle",
+    halts: "The closer stops drafting follow-ups on unfinished treatment plans, and its queue stops sending.",
+    defaultEnabled: false,
   },
   {
     slug: "no-show-defence",
@@ -212,6 +241,7 @@ export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
   recall: "recall",
   noshow: "no-show-defence",
   coordinator: "treatment-coordinator",
+  closer: "treatment-closer",
   reviews: "reviews",
   outreach: "outreach",
 };
@@ -219,4 +249,24 @@ export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
 /** Whether a slug is a real controllable system (guards toggle writes). */
 export function isControllableSystem(slug: string): boolean {
   return SYSTEM_BY_SLUG.has(slug);
+}
+
+/**
+ * Slugs whose ABSENT system_toggle row means DISABLED. Derived from the catalog
+ * rather than maintained by hand, so declaring `defaultEnabled: false` on a
+ * system is the whole of the work.
+ */
+export const DEFAULT_OFF_SLUGS: Set<string> = new Set(
+  SYSTEMS.filter((s) => s.defaultEnabled === false).map((s) => s.slug),
+);
+
+/**
+ * What the absence of a system_toggle row means for `slug`. Every read path in
+ * src/lib/systems/repository.ts consults this instead of hard-coding `true`, so a
+ * default-off system stays off when no row exists AND when the toggle read fails.
+ * An unknown slug is treated as default-on, matching the historical behaviour for
+ * anything not in the catalog.
+ */
+export function defaultEnabledFor(slug: string): boolean {
+  return !DEFAULT_OFF_SLUGS.has(slug);
 }

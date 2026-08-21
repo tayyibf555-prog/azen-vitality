@@ -1,6 +1,6 @@
 import { serviceClient } from "@/lib/supabase/server";
 import { isDryRun } from "@/lib/messaging/types";
-import { SYSTEMS, SYSTEM_SLUGS } from "./catalog";
+import { DEFAULT_OFF_SLUGS, SYSTEMS, SYSTEM_SLUGS, defaultEnabledFor } from "./catalog";
 
 // Persistence for the per-system kill switch (table system_toggle, migration 0034).
 //
@@ -15,8 +15,40 @@ import { SYSTEMS, SYSTEM_SLUGS } from "./catalog";
 // and the drain have nothing to act on anyway (their own reads fail the same way).
 // The switch is authoritative whenever the DB is reachable, which is exactly when
 // sends can happen.
+//
+// THE ONE EXCEPTION, and why it exists. A system may declare
+// `defaultEnabled: false` in the catalog, which inverts BOTH rules above for that
+// slug alone: no row means disabled, and a failed read means disabled. That is
+// what a brand new outbound surface needs, because "nobody has ever opened the
+// control panel" and "the toggle table is briefly unreadable" must not be the
+// reasons a patient receives the first message from a system nobody switched on.
+// Seeding a disabled row cannot deliver this on its own: a seed covers only the
+// clients and the databases it was applied to, while defaultEnabledFor covers
+// every client and every environment, including one where the migration has not
+// run. Today exactly one slug uses it ('treatment-closer'); for every other slug
+// defaultEnabledFor returns true and the behaviour is unchanged, byte for byte.
 
 const TABLE = "system_toggle";
+
+interface ToggleRow {
+  module_slug: string;
+  enabled: boolean;
+}
+
+/**
+ * The DISABLED set for one client, given its toggle rows: every slug explicitly
+ * set to false, plus every default-off slug the client has NOT explicitly
+ * enabled. Written once and shared by both getDisabledSlugs variants so the
+ * display path and the send path can never disagree about what is off.
+ */
+function disabledSetFrom(rows: ToggleRow[] | null | undefined): Set<string> {
+  const explicit = new Map<string, boolean>();
+  for (const r of rows ?? []) explicit.set(String(r.module_slug), Boolean(r.enabled));
+  const disabled = new Set<string>();
+  for (const [slug, enabled] of explicit) if (!enabled) disabled.add(slug);
+  for (const slug of DEFAULT_OFF_SLUGS) if (explicit.get(slug) !== true) disabled.add(slug);
+  return disabled;
+}
 
 // ---------------------------------------------------------------------------
 // DEDUPE for getDisabledSlugs' fail-open log line.
@@ -71,10 +103,15 @@ export async function isSystemEnabled(clientId: string, slug: string): Promise<b
       .eq("module_slug", slug)
       .maybeSingle();
     if (error) throw error;
-    return data ? Boolean(data.enabled) : true; // no row => enabled
+    return data ? Boolean(data.enabled) : defaultEnabledFor(slug); // no row => the slug's default
   } catch (err) {
-    console.error(`[systems] isSystemEnabled(${clientId}, ${slug}) failed; defaulting to enabled`, err);
-    return true;
+    // Fail-open, EXCEPT for a default-off slug, which fails closed.
+    const fallback = defaultEnabledFor(slug);
+    console.error(
+      `[systems] isSystemEnabled(${clientId}, ${slug}) failed; defaulting to ${fallback ? "enabled" : "DISABLED"}`,
+      err,
+    );
+    return fallback;
   }
 }
 
@@ -99,7 +136,7 @@ export async function isSystemEnabledStrict(clientId: string, slug: string): Pro
       .eq("module_slug", slug)
       .maybeSingle();
     if (error) throw error;
-    return data ? Boolean(data.enabled) : true; // no row => enabled
+    return data ? Boolean(data.enabled) : defaultEnabledFor(slug); // no row => the slug's default
   } catch (err) {
     console.error(
       `[systems] isSystemEnabledStrict(${clientId}, ${slug}) failed; failing CLOSED (disabled)`,
@@ -116,13 +153,15 @@ export async function isSystemEnabledStrict(clientId: string, slug: string): Pro
  */
 export async function getDisabledSlugs(clientId: string): Promise<Set<string>> {
   try {
+    // Read enabled as well as disabled rows: a default-off slug is disabled unless
+    // an explicit row says otherwise, which cannot be established from the
+    // disabled rows alone.
     const { data, error } = await serviceClient()
       .from(TABLE)
-      .select("module_slug")
-      .eq("client_id", clientId)
-      .eq("enabled", false);
+      .select("module_slug, enabled")
+      .eq("client_id", clientId);
     if (error) throw error;
-    return new Set((data ?? []).map((r) => String((r as { module_slug: string }).module_slug)));
+    return disabledSetFrom(data as ToggleRow[] | null);
   } catch (err) {
     const key = `${clientId}::${disabledSlugsFailureReason(err)}`;
     if (!loggedDisabledSlugsFailures.has(key)) {
@@ -130,9 +169,13 @@ export async function getDisabledSlugs(clientId: string): Promise<Set<string>> {
         loggedDisabledSlugsFailures.clear();
       }
       loggedDisabledSlugsFailures.add(key);
-      console.error(`[systems] getDisabledSlugs(${clientId}) failed; defaulting to none disabled`, err);
+      console.error(
+        `[systems] getDisabledSlugs(${clientId}) failed; defaulting to none disabled except the default-off slugs`,
+        err,
+      );
     }
-    return new Set();
+    // Fail-open for everything except the default-off slugs, which stay disabled.
+    return new Set(DEFAULT_OFF_SLUGS);
   }
 }
 
@@ -158,12 +201,14 @@ export async function isSystemEnabledForSend(clientId: string, slug: string): Pr
       .eq("module_slug", slug)
       .maybeSingle();
     if (error) throw error;
-    return data ? Boolean(data.enabled) : true; // no row => enabled
+    return data ? Boolean(data.enabled) : defaultEnabledFor(slug); // no row => the slug's default
   } catch (err) {
-    const failOpen = isDryRun();
+    // A default-off slug fails closed whatever the dry-run flag says: it is not
+    // safe to arm a system nobody has switched on, simulated sends or not.
+    const failOpen = isDryRun() && defaultEnabledFor(slug);
     console.error(
       `[systems] isSystemEnabledForSend(${clientId}, ${slug}) failed; ` +
-        (failOpen ? "dry-run so defaulting to enabled" : "messaging is LIVE so failing CLOSED (disabled)"),
+        (failOpen ? "dry-run so defaulting to enabled" : "failing CLOSED (disabled)"),
       err,
     );
     return failOpen;
@@ -178,19 +223,21 @@ export async function getDisabledSlugsForSend(clientId: string): Promise<Set<str
   try {
     const { data, error } = await serviceClient()
       .from(TABLE)
-      .select("module_slug")
-      .eq("client_id", clientId)
-      .eq("enabled", false);
+      .select("module_slug, enabled")
+      .eq("client_id", clientId);
     if (error) throw error;
-    return new Set((data ?? []).map((r) => String((r as { module_slug: string }).module_slug)));
+    return disabledSetFrom(data as ToggleRow[] | null);
   } catch (err) {
     const failOpen = isDryRun();
     console.error(
       `[systems] getDisabledSlugsForSend(${clientId}) failed; ` +
-        (failOpen ? "dry-run so defaulting to none disabled" : "messaging is LIVE so failing CLOSED (all disabled)"),
+        (failOpen
+          ? "dry-run so defaulting to none disabled except the default-off slugs"
+          : "messaging is LIVE so failing CLOSED (all disabled)"),
       err,
     );
-    return failOpen ? new Set() : new Set(SYSTEM_SLUGS);
+    // Even fail-open keeps the default-off slugs disabled.
+    return failOpen ? new Set(DEFAULT_OFF_SLUGS) : new Set(SYSTEM_SLUGS);
   }
 }
 
@@ -218,7 +265,7 @@ export async function getSystemStates(
     const row = bySlug.get(s.slug);
     return {
       slug: s.slug,
-      enabled: row ? Boolean(row.enabled) : true,
+      enabled: row ? Boolean(row.enabled) : defaultEnabledFor(s.slug),
       updatedAt: row?.updated_at ?? null,
       updatedBy: row?.updated_by ?? null,
     };

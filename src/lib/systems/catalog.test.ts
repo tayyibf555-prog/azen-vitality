@@ -23,12 +23,16 @@ import { CLIENT_NAV } from "@/lib/nav";
 // Staff HR and My work rather than a module, and it ships DISABLED (migration
 // 0077) because the legal framing must be agreed before anyone signs anything —
 // so the switch that turns it on has to exist somewhere the owner can reach.
+// "treatment-closer" is headless for the same reason as "outreach": the closer's
+// engine ships before its worklist UI, so it has no CLIENT_NAV page yet but must
+// still have an owner switch. It is also the platform's only DEFAULT-OFF system.
 const HEADLESS_SYSTEM_SLUGS = new Set([
   "online-booking",
   "outreach",
   "whatsapp-agent",
   "calendar-writes",
   "staff-esign",
+  "treatment-closer",
 ]);
 
 describe("systems catalog", () => {
@@ -62,13 +66,17 @@ describe("systems catalog", () => {
     for (const [source, slug] of Object.entries(DRAIN_SOURCE_TO_SLUG)) {
       expect(isControllableSystem(slug), `${source} -> ${slug} not controllable`).toBe(true);
     }
-    // The drain has exactly these seven outbox sources.
+    // The drain has exactly these eight outbox sources.
     expect(Object.keys(DRAIN_SOURCE_TO_SLUG).sort()).toEqual(
-      ["coordinator", "diary", "noshow", "outreach", "reactivation", "recall", "reviews"].sort(),
+      ["closer", "coordinator", "diary", "noshow", "outreach", "reactivation", "recall", "reviews"].sort(),
     );
     // The tricky remaps are correct.
     expect(DRAIN_SOURCE_TO_SLUG.noshow).toBe("no-show-defence");
     expect(DRAIN_SOURCE_TO_SLUG.coordinator).toBe("treatment-coordinator");
+    // An unmapped source is an UNKILLABLE source: the drain skips a system only
+    // when it can turn the source name into a slug, so the closer being here is
+    // what makes its kill switch reach its outbox.
+    expect(DRAIN_SOURCE_TO_SLUG.closer).toBe("treatment-closer");
     // The diary's reschedule texts are stopped by the same switch that stops the
     // moves themselves, so a halted write can never still text the patient.
     expect(DRAIN_SOURCE_TO_SLUG.diary).toBe("calendar-writes");

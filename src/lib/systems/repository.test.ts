@@ -35,7 +35,7 @@ import {
   setSystemEnabled,
   __resetDisabledSlugsFailureLogForTests,
 } from "./repository";
-import { SYSTEMS } from "./catalog";
+import { SYSTEMS, DEFAULT_OFF_SLUGS } from "./catalog";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -74,10 +74,17 @@ describe("getDisabledSlugs", () => {
     expect(disabled.has("reactivation")).toBe(false);
   });
 
-  it("fails OPEN: on error returns an empty set (nothing disabled)", async () => {
+  it("fails OPEN: on error nothing is disabled EXCEPT the default-off slugs", async () => {
     h.set({ data: null, error: { message: "down" } });
     const disabled = await getDisabledSlugs("vitality");
-    expect(disabled.size).toBe(0);
+    // Fail-open is what keeps the kill switch dormant: a toggle-table blip must
+    // not blank the nav. The one exception is a system declared defaultEnabled:
+    // false, which has never been switched on by anybody and so must not be armed
+    // by an error either.
+    expect(disabled).toEqual(DEFAULT_OFF_SLUGS);
+    expect(disabled.has("treatment-closer")).toBe(true);
+    expect(disabled.has("recall")).toBe(false);
+    expect(disabled.has("reviews")).toBe(false);
   });
 });
 
@@ -124,12 +131,12 @@ describe("getDisabledSlugs failure log dedupe (the 120-issues bug)", () => {
     spy.mockRestore();
   });
 
-  it("the fail-open return value (empty set) is unchanged whether logged or suppressed", async () => {
+  it("the fail-open return value is unchanged whether logged or suppressed", async () => {
     h.set({ data: null, error: { message: "table missing" } });
     const first = await getDisabledSlugs("vitality");
     const second = await getDisabledSlugs("vitality");
-    expect(first.size).toBe(0);
-    expect(second.size).toBe(0);
+    expect(first).toEqual(DEFAULT_OFF_SLUGS);
+    expect(second).toEqual(DEFAULT_OFF_SLUGS);
   });
 });
 
