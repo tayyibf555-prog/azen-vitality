@@ -59,6 +59,38 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     );
   }
 
+  // RECALL-AWARE REPLY. This inbound answers a recall, reactivation or
+  // treatment-plan message the practice sent in the last few weeks, and the
+  // correlation proved which patient and which practice it belongs to. Telling the
+  // agent what we sent is the whole feature: without it a "yes please" to a recall
+  // text opens a fresh interrogation of somebody who has already answered.
+  //
+  // BOTH STRINGS ARE FIXED VOCABULARY chosen in src/lib/agent/reply-context.ts, so
+  // no Dentally free text and no patient text can reach the model through here.
+  //
+  // SUPPRESSED WHEN AN OUTREACH INVITE IS ALSO PRESENT. That block below primes a
+  // specific clinician and its own treatment angle, and find_slots acts on it, so
+  // running both would hand the model two different answers to the same question.
+  // The outreach invite is the more specific of the two, so it wins outright rather
+  // than being blended.
+  //
+  // SUPPRESSED FOR AN UNRECOGNISED NUMBER, belt and braces. chooseReplyContext
+  // already refuses to resolve anything without a known patient on both sides, so
+  // this cannot fire today; it is here so a future caller that hand-builds a context
+  // cannot make the prompt say "we messaged them about their check-up" two lines
+  // under "this number does NOT match anyone on our records".
+  if (ctx.replyContext && !ctx.outreachInvite && known) {
+    const rc = ctx.replyContext;
+    lines.push(
+      "",
+      "WHAT WE LAST SENT THEM:",
+      `We messaged them recently about ${rc.invitedFor}, so this message is very likely their reply to it.`,
+      `If they say yes, or ask about times, go straight to offering appointments: call find_slots with the treatment "${rc.bookingTreatment}" and offer them what it returns. Do not ask them what they need or start the conversation again from the beginning.`,
+      "If they actually want something else, follow what they ask for instead.",
+      "Everything else still applies exactly as written above. Read back the exact date, time, practice and appointment and get a clear yes before you book anything. If they raise anything clinical, or a complaint, or say they are not interested, escalate or stop rather than booking.",
+    );
+  }
+
   // Segment-outreach invite: this conversation is a reply to a campaign that invited
   // the patient back for a specific reason, ideally with a specific clinician. Prime
   // the agent to offer that clinician's slots first and frame the visit around the

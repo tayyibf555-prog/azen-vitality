@@ -1,3 +1,5 @@
+import type { AgentReplyContext } from "./reply-context";
+
 export type ConversationStatus = "active" | "needs_human" | "booked" | "closed";
 export type MessageRole = "patient" | "agent" | "system" | "tool";
 
@@ -72,6 +74,19 @@ export interface AgentContext {
     practitionerName: string | null;
     practitionerId: string | null;
   };
+  /**
+   * Present when this inbound is a reply to a recall, reactivation or
+   * treatment-plan-closer message the practice sent recently, and we could prove
+   * which patient and which practice it belongs to. It carries FIXED VOCABULARY
+   * only (see src/lib/agent/reply-context.ts): nothing the practice stored, and
+   * nothing the patient wrote, reaches the prompt through it.
+   *
+   * ABSENT IS THE DEFAULT AND ABSENT CHANGES NOTHING. buildSystemPrompt emits not
+   * one byte differently without it, which is what lets a failed correlation, a
+   * shared handset, another site's record or the owner's switch all degrade to
+   * exactly the behaviour that shipped before this field existed.
+   */
+  replyContext?: AgentReplyContext;
 }
 
 /** A patient resolved from an inbound phone number. */

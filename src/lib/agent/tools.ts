@@ -27,11 +27,32 @@ import type { AgentContext } from "./types";
 // against developer.dentally.co): Exam, Scale & Polish, Exam + Scale & Polish,
 // Continuing Treatment, Emergency, Review, Other. The patient's treatment interest is
 // mapped onto the closest reason; the specific treatment name is carried in the notes.
-function reasonForTreatment(treatment: string): string {
-  const t = treatment.toLowerCase();
-  if (/\b(check\s*-?up|exam|recall)\b/.test(t)) return "Exam";
-  if (/\b(hygien|scale|polish|clean)\b/.test(t)) return "Scale & Polish";
-  if (/\b(emergency|urgent|knocked|broken tooth|severe pain)\b/.test(t)) return "Emergency";
+//
+// THE STEMS ARE SPELLED OUT, and that is a fix rather than a style. These patterns
+// used to end a stem with a word boundary ("hygien\b", "exam\b"), which cannot match
+// the very words this codebase generates: "Hygiene visit" is our OWN catalogue's
+// canonical name for a hygienist appointment (src/lib/treatments/catalog.ts), and it
+// booked into the practice's real diary as reason "Other" because "hygien" is followed
+// by an "e". Same for "hygienist", "cleaning" and "examination". Nothing tested it, so
+// every hygiene appointment the agent has ever written went in mislabelled.
+//
+// Explicit alternatives rather than a "\w*" suffix: a loose stem would let "example"
+// book as an Exam, and this string ends up on a real clinical record.
+const EXAM_WORDS = /\b(check\s*-?ups?|exams?|examinations?|recalls?)\b/;
+const HYGIENE_WORDS = /\b(hygiene|hygienist|scale|scaling|polish|polishing|cleans?|cleaning)\b/;
+const EMERGENCY_WORDS = /\b(emergency|urgent|knocked|broken tooth|severe pain)\b/;
+
+export function reasonForTreatment(treatment: string): string {
+  const t = (treatment ?? "").toLowerCase();
+  // Emergency first: "emergency check-up" is an emergency, not a routine exam.
+  if (EMERGENCY_WORDS.test(t)) return "Emergency";
+  const exam = EXAM_WORDS.test(t);
+  const hygiene = HYGIENE_WORDS.test(t);
+  // Dentally has a combined reason and it is the honest label for a visit that is
+  // both, rather than silently dropping half of what the patient is coming in for.
+  if (exam && hygiene) return "Exam + Scale & Polish";
+  if (exam) return "Exam";
+  if (hygiene) return "Scale & Polish";
   return "Other";
 }
 

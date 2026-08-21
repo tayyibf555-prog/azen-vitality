@@ -78,6 +78,8 @@ import {
   upsertPhoneIdentity,
 } from "@/lib/agent/repository";
 import type { AgentContext, PhoneIdentity } from "@/lib/agent/types";
+import { chooseReplyContext } from "@/lib/agent/reply-context";
+import { collectReplyContext } from "@/lib/agent/reply-context-repository";
 import { isSystemEnabled, isSystemEnabledForSend } from "@/lib/systems/repository";
 import { serviceClient } from "@/lib/supabase/server";
 
@@ -428,6 +430,11 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
   // paid") is recorded as its own reason so it surfaces as needing a person, not
   // as a patient who simply went quiet. Best effort, and never allowed to break
   // the webhook.
+  // Hoisted out of the try below so the recall-aware reply context can see it: a
+  // reply that DISPUTES what we sent is never primed towards a booking, whatever
+  // else the number correlates to. Left null when the lookup fails, which primes
+  // nothing extra and takes nothing away.
+  let closerReplyKind: ReturnType<typeof classifyInboundReply> | null = null;
   try {
     const closerTarget = await findCloserTargetByAddress(from);
     if (closerTarget) {
@@ -438,6 +445,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         body,
       });
       const kind = classifyInboundReply(body);
+      closerReplyKind = kind;
       await stopCloserOpportunity(
         closerTarget.opportunityId,
         closerTarget.siteId,
@@ -753,6 +761,55 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     /* context only */
   }
 
+  // RECALL-AWARE BOOKING REPLIES.
+  //
+  // Recall and reactivation have thousands of patients queued. When one of them
+  // replies "yes please" to an invite we sent yesterday, everything above has
+  // already paused their cadence and logged the touch, and then the booking agent
+  // opens a COLD conversation and asks a patient who has already answered what it
+  // is they need. This resolves the outbound the reply plausibly answers and hands
+  // the agent an opening state that already knows it.
+  //
+  // FOUR REASONS IT CANNOT MISFIRE, and each holds on its own:
+  //   1. The owner's switch. DEFAULT-OFF (catalog + migration 0092), and
+  //      isSystemEnabledForSend fails CLOSED for a default-off slug, so an
+  //      unreadable toggle table primes nothing.
+  //   2. The correlation is site- AND patient-scoped inside chooseReplyContext,
+  //      and requires a KNOWN patient on both sides, so a shared family handset or
+  //      another practice's record can never prime this thread.
+  //   3. STOP, a no-show reply and a post-op reply have all already returned far
+  //      above; a dispute and a recent balance reminder refuse here.
+  //   4. Any failure at all leaves replyContext undefined, and undefined makes
+  //      buildSystemPrompt emit the exact bytes it emitted before this existed.
+  //
+  // It does NOT touch the confirmation gate: the agent still has to read the slot
+  // back and get a clear yes before anything is written (src/lib/agent/run.ts).
+  let replyContext: AgentContext["replyContext"];
+  try {
+    if (await isSystemEnabledForSend(agentClientId, "booking-reply-context")) {
+      const { candidates, vetoes } = await collectReplyContext(from);
+      replyContext =
+        chooseReplyContext({
+          candidates,
+          vetoes,
+          conversationSiteId: siteId,
+          conversationPatientId: identity?.patientId ?? null,
+          disputed: closerReplyKind === "dispute",
+          now: Date.now(),
+        }) ?? undefined;
+      if (replyContext) {
+        console.warn(
+          `[inbound] reply context: ${replyContext.module} ${replyContext.reference} -> ${replyContext.bookingTreatment}`,
+        );
+      }
+    }
+  } catch (err) {
+    // Context only. A patient's reply must never fail because we could not work
+    // out what it was answering.
+    console.error("[inbound] reply-context resolution failed; answering without it", err);
+    replyContext = undefined;
+  }
+
   const context: AgentContext = {
     patientId,
     siteId,
@@ -768,6 +825,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     assessmentAnswers,
     practiceSites,
     outreachInvite,
+    replyContext,
   };
 
   // Serialize agent turns per conversation: two rapid inbounds (distinct
