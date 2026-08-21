@@ -50,6 +50,12 @@ vi.mock("@/lib/coordinator/repository", () => ({
   insertInboundTouch: vi.fn(async () => {}),
   updateOutboxStatusByMessageId: vi.fn(async () => {}),
 }));
+vi.mock("@/lib/closer/repository", () => ({
+  findTargetByAddress: vi.fn(async () => null),
+  insertInboundTouch: vi.fn(async () => {}),
+  stopOpportunity: vi.fn(async () => {}),
+  updateOutboxStatusByMessageId: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/reviews/repository", () => ({
   updateOutboxStatusByMessageId: vi.fn(async () => {}),
 }));
@@ -113,6 +119,7 @@ import * as reactivationRepo from "@/lib/reactivation/repository";
 import * as recallRepo from "@/lib/recall/repository";
 import * as coordinatorRepo from "@/lib/coordinator/repository";
 import * as noshowRepo from "@/lib/noshow/repository";
+import * as closerRepo from "@/lib/closer/repository";
 import * as reviewsRepo from "@/lib/reviews/repository";
 import * as stlRepo from "@/lib/speed-to-lead/repository";
 import { handleNoshowInbound } from "@/lib/noshow/inbound";
@@ -243,6 +250,7 @@ describe("status webhook: signature enforcement", () => {
       recallRepo.updateOutboxStatusByMessageId,
       noshowRepo.updateOutboxStatusByMessageId,
       coordinatorRepo.updateOutboxStatusByMessageId,
+      closerRepo.updateOutboxStatusByMessageId,
       reviewsRepo.updateOutboxStatusByMessageId,
     ]) {
       expect(fn).toHaveBeenCalledWith("SM123", "delivered");
@@ -267,6 +275,7 @@ describe("status webhook: signature enforcement", () => {
       recallRepo.updateOutboxStatusByMessageId,
       noshowRepo.updateOutboxStatusByMessageId,
       coordinatorRepo.updateOutboxStatusByMessageId,
+      closerRepo.updateOutboxStatusByMessageId,
       reviewsRepo.updateOutboxStatusByMessageId,
     ]) {
       expect(fn).toHaveBeenCalledWith("SM3", "delivered");

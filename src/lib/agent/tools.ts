@@ -6,6 +6,7 @@ import {
   fetchAvailabilityDays,
   findExactSlot,
   chunkWindowIntoSlots,
+  ceilToSlotGrid,
   BOOKING_SLOT_DURATION_MIN,
   type BookingDay,
   type BookingSlot,
@@ -410,7 +411,13 @@ export function makeDispatch(deps: ToolDeps) {
         const now = new Date();
         const fromMs =
           typeof input.fromDate === "string" ? Date.parse(`${input.fromDate}T00:00:00.000Z`) : Number.NaN;
-        const startTime = new Date(Math.max(Number.isNaN(fromMs) ? now.getTime() : fromMs, now.getTime())).toISOString();
+        // Clamp to now rounded UP onto the booking grid, never to the raw instant:
+        // both the mock and live clip the window they return to the requested
+        // start, so a raw `now` had the agent offering the patient times like
+        // "13:02" and, worse, offering a different set on every read. See
+        // ceilToSlotGrid for the full account.
+        const nowFloor = ceilToSlotGrid(now.getTime());
+        const startTime = new Date(Math.max(Number.isNaN(fromMs) ? nowFloor : fromMs, nowFloor)).toISOString();
         const finishTime =
           typeof input.toDate === "string" && !Number.isNaN(Date.parse(`${input.toDate}T23:59:59.999Z`))
             ? new Date(`${input.toDate}T23:59:59.999Z`).toISOString()

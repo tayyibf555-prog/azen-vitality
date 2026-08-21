@@ -3,6 +3,7 @@ import type {
   MessageParam,
   ContentBlockParam,
   TextBlock,
+  TextBlockParam,
   Tool,
   ToolUseBlock,
   ToolResultBlockParam,
@@ -47,6 +48,53 @@ const DEFAULT_MAX_ROUNDS = 4;
 const LEAKED_TOOL_MARKUP = /<(?:antml:)?invoke\b|<function_calls|<tool_use\b|<parameter\b/i;
 const DEFAULT_MAX_TOKENS = 700;
 const MODEL = SONNET;
+
+// ---------------------------------------------------------------------------
+// PROMPT CACHING
+// ---------------------------------------------------------------------------
+//
+// WHAT IS BEING PAID FOR TWICE. This loop is the only agent loop in the product:
+// the 24/7 SMS booking agent runs it up to 4 rounds per inbound message, and the
+// owner co-pilot runs it up to 6 rounds per question. Every one of those rounds
+// re-sends the ENTIRE tool schema and the ENTIRE system prompt, because the
+// Messages API is stateless. Measured on this tree:
+//
+//   booking agent   AGENT_TOOLS   ~1,470 tok  +  system ~1,240-1,740 tok
+//   co-pilot        COPILOT_TOOLS ~5,860 tok  +  system ~4,110 tok
+//
+// So a single co-pilot question that takes 4 rounds pays for ~40,000 input
+// tokens of prompt that never changed between the rounds. That is the whole cost
+// of the feature, and none of it is the owner's question.
+//
+// WHAT THIS DOES. One ephemeral cache breakpoint on the system block. The wire
+// order is tools -> system -> messages, so a breakpoint on the last system block
+// covers BOTH the tools and the system prompt in one cached prefix. Round 1 pays
+// a 1.25x write; every later round in the turn, and every later turn inside the
+// 5-minute TTL, pays 0.1x for that prefix instead of 1x.
+//
+// WHY IT IS SAFE. cache_control is a billing/latency directive. It is not visible
+// to the model, it does not change the rendered prompt, and it cannot change what
+// the model says. A prefix under the model's cacheable minimum (1,024 tokens on
+// Sonnet 5) is silently not cached rather than rejected, which is why the unit
+// tests here — whose systemPrompt is "sys" and whose tools are [] — keep passing
+// unchanged.
+//
+// WHAT WOULD BREAK IT. Caching is a byte-exact PREFIX match, so anything that
+// varies per request and sits ahead of the breakpoint destroys the hit rate. Both
+// callers are clean today and must stay that way:
+//   - buildSystemPrompt (agent) interpolates only per-PATIENT facts (name, treatment,
+//     last visit, recall date, the practice's USPs). Stable for a whole conversation.
+//   - buildCopilotSystemPrompt interpolates the current DAY and the site-scope label.
+//     Stable for a day, and identical across every owner on the same scope.
+// Never interpolate a timestamp, a request id, or a per-turn counter into either
+// one: it would not fail, it would just quietly stop caching. Pinned by
+// prompt-caching.test.ts.
+const CACHE_EPHEMERAL = { type: "ephemeral" } as const;
+
+/** The system prompt as a single cached block (covers `tools` too — see above). */
+function cachedSystem(prompt: string): TextBlockParam[] {
+  return [{ type: "text", text: prompt, cache_control: CACHE_EPHEMERAL }];
+}
 
 // Appointment WRITES that must never happen without an explicit patient confirmation.
 const APPOINTMENT_MUTATIONS = new Set(["book", "reschedule", "cancel"]);
@@ -194,7 +242,8 @@ export async function runAgentTurn(
       model: MODEL,
       thinking: NO_THINKING,
       max_tokens: deps.maxTokens ?? DEFAULT_MAX_TOKENS,
-      system: deps.systemPrompt,
+      // Cached prefix: tools + system. See the PROMPT CACHING note above.
+      system: cachedSystem(deps.systemPrompt),
       tools: deps.tools,
       messages,
     });

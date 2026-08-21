@@ -3,6 +3,7 @@ import { updateOutboxStatusByMessageId as updateReactivationStatus } from "@/lib
 import { updateOutboxStatusByMessageId as updateRecallStatus } from "@/lib/recall/repository";
 import { updateOutboxStatusByMessageId as updateNoshowStatus } from "@/lib/noshow/repository";
 import { updateOutboxStatusByMessageId as updateCoordinatorStatus } from "@/lib/coordinator/repository";
+import { updateOutboxStatusByMessageId as updateCloserStatus } from "@/lib/closer/repository";
 import { updateOutboxStatusByMessageId as updateReviewsStatus } from "@/lib/reviews/repository";
 import { updateAttemptStatusByMessageId as updateSpeedToLeadStatus } from "@/lib/speed-to-lead/repository";
 
@@ -56,12 +57,31 @@ export async function POST(request: Request): Promise<Response> {
   if (sid && mapped) {
     // The message id lives in exactly one outbox (or the speed-to-lead attempt
     // table); the others are no-ops.
-    await updateReactivationStatus(sid, mapped);
-    await updateRecallStatus(sid, mapped);
-    await updateNoshowStatus(sid, mapped);
-    await updateCoordinatorStatus(sid, mapped);
-    await updateReviewsStatus(sid, mapped);
-    await updateSpeedToLeadStatus(sid, mapped);
+    //
+    // ISOLATED, NOT SEQUENTIAL. These were seven bare awaits in a row, which
+    // made every module downstream of a failure invisible: one table missing
+    // (a migration not yet applied) or one transient PostgREST error threw,
+    // and the writes AFTER it never ran. Speed-to-lead was last in that line
+    // and is the live-armed one - its undelivered-retry path depends on this
+    // callback, so it was the most likely to be silently skipped and the most
+    // expensive to lose. allSettled means the id still finds its own outbox
+    // whatever the others do; a genuine failure is logged, not swallowed
+    // silently, and Twilio still gets its 204 (a retry would only replay the
+    // same write against an idempotent updater).
+    const writes = await Promise.allSettled([
+      updateReactivationStatus(sid, mapped),
+      updateRecallStatus(sid, mapped),
+      updateNoshowStatus(sid, mapped),
+      updateCoordinatorStatus(sid, mapped),
+      updateCloserStatus(sid, mapped),
+      updateReviewsStatus(sid, mapped),
+      updateSpeedToLeadStatus(sid, mapped),
+    ]);
+    for (const w of writes) {
+      if (w.status === "rejected") {
+        console.error("[twilio/status] one status write failed", w.reason);
+      }
+    }
   }
   return new Response(null, { status: 204 });
 }

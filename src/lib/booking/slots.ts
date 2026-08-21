@@ -210,6 +210,36 @@ function londonDayStartMs(ymd: string): number {
   return Date.parse(`${ymd}T00:00:00Z`);
 }
 
+/**
+ * Round an instant UP onto the absolute booking grid (multiples of `stepMin`
+ * minutes since the epoch, i.e. :00 and :30 on the London wall clock, because
+ * every UK offset is a whole number of hours).
+ *
+ * THE BUG THIS EXISTS TO STOP. Availability for TODAY is queried from "now",
+ * because Dentally will not answer for a start_time in the past. Both the local
+ * mock and (on the evidence of its own contract) live Dentally CLIP the window
+ * they return to that requested start, and the reader then chunks the window
+ * from wherever it begins. With a raw `now` that chunk boundary moved every
+ * second, so:
+ *
+ *   - the calendar offered same-day times like 13:02 and 13:32, which is not a
+ *     time any practice books at, and
+ *   - the slot a patient tapped had ceased to exist by the time they pressed
+ *     Book: revalidation re-read availability a few seconds later, the whole grid
+ *     had shifted, findExactSlot missed, and the create route answered "that time
+ *     has just been taken" for a slot nobody had taken. Every same-day booking in
+ *     the first open window was unbookable, permanently.
+ *
+ * Anchoring to an ABSOLUTE grid (rather than to the query, or to `now` rounded)
+ * makes the answer identical for every caller at every instant within the slot,
+ * which is what revalidation needs to be able to agree with the offer.
+ */
+export function ceilToSlotGrid(ms: number, stepMin: number = BOOKING_SLOT_DURATION_MIN): number {
+  const step = Math.max(1, Math.round(stepMin)) * MINUTE_MS;
+  if (!Number.isFinite(ms)) return ms;
+  return Math.ceil(ms / step) * step;
+}
+
 /** `YYYY-MM-DD` shifted by whole days. Pure calendar arithmetic on the key
  *  itself (no timezone involved); an unparseable key is returned unchanged. */
 function shiftDayKey(ymd: string, days: number): string {
@@ -241,10 +271,13 @@ export async function fetchAvailabilityDays(
   if (practitionerIds.length === 0) return [];
 
   // 2. One availability call covering every practitioner. start_time must be a
-  //    real datetime and must not sit in the past, so clamp to now. Both ends
-  //    are London day boundaries (see londonDayStartMs).
+  //    real datetime and must not sit in the past, so clamp to now — rounded UP
+  //    onto the booking grid, so the same window yields the same slots however
+  //    many seconds apart two callers ask (see ceilToSlotGrid). Both ends are
+  //    London day boundaries (see londonDayStartMs).
   const fromMs = londonDayStartMs(fromDate);
-  const startIso = new Date(Math.max(Number.isNaN(fromMs) ? now.getTime() : fromMs, now.getTime())).toISOString();
+  const nowFloor = ceilToSlotGrid(now.getTime());
+  const startIso = new Date(Math.max(Number.isNaN(fromMs) ? nowFloor : fromMs, nowFloor)).toISOString();
   const toMs = londonDayStartMs(shiftDayKey(toDate, 1)) - 1; // last instant of the London day
   const finishIso = new Date(
     Number.isNaN(toMs) ? now.getTime() + BOOKING_HORIZON_DAYS * DAY_MS : toMs,

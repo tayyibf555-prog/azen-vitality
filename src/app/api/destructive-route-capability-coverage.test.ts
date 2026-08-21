@@ -147,6 +147,7 @@ const DESTRUCTIVE_EXEMPT: Record<string, DestructiveExemption> = {
   "webhooks/twilio/voice": { kind: "webhook", reason: "Twilio voice webhook" },
 
   // --- the scheduler: CRON_SECRET, never a browser session ------------------
+  "closer/sweep": { kind: "cron", reason: "the treatment-plan closer sweep, run by the scheduler; it only ever writes DRAFTS" },
   "coordinator/sweep": { kind: "cron", reason: "treatment-coordinator sweep" },
   "noshow/sweep": { kind: "cron", reason: "the no-show defence sweep, run by the scheduler" },
   "outreach/sweep": { kind: "cron", reason: "the segment-outreach sweep, run by the scheduler" },

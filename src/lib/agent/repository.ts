@@ -114,8 +114,51 @@ export async function getConversation(id: string): Promise<AgentConversation | n
   return toConv(data as ConvRow);
 }
 
-export async function listMessages(conversationId: string): Promise<AgentMessageRow[]> {
+/**
+ * A conversation's messages, oldest first.
+ *
+ * `limit` takes the MOST RECENT n and returns them still oldest-first, which is
+ * not the same query as "the first n": it reads descending, slices, and reverses.
+ * That direction matters twice over.
+ *
+ *   COST. A conversation here is per (site, patient, channel) and is only replaced
+ *   once it is CLOSED, so a returning patient's thread accumulates for as long as
+ *   they are a patient: first contact, three nurture touches, every booking,
+ *   reschedule and cancel, and up to 20 agent turns an hour on top. The booking
+ *   agent re-sends this whole thread to the model on every round of every turn, so
+ *   an unbounded read is an unbounded per-message bill that only ever grows.
+ *
+ *   CORRECTNESS. PostgREST applies its own server-side row ceiling (db-max-rows)
+ *   when one is configured, and it truncates the result of the query as written.
+ *   Ascending-with-no-limit therefore keeps the OLDEST rows and silently drops the
+ *   newest — the agent would answer having never seen the message it is replying
+ *   to. Anchoring to the newest end makes the ceiling harmless: the rows a cap
+ *   could take are the ones we were discarding anyway.
+ *
+ * No limit is the previous behaviour exactly, for the staff inbox, which wants the
+ * whole thread.
+ */
+export async function listMessages(
+  conversationId: string,
+  opts?: { limit?: number },
+): Promise<AgentMessageRow[]> {
   const db = serviceClient();
+  const limit = opts?.limit;
+  if (typeof limit === "number" && limit > 0) {
+    const { data, error } = await db
+      .from("agent_message")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    // Reverse in place of a second sort: the rows came back newest-first, so
+    // reversing restores the oldest-first order every caller expects. The tie
+    // break on id keeps two messages written in the same millisecond in a stable
+    // order rather than letting the page boundary fall between them at random.
+    return (data as MsgRow[]).map(toMsg).reverse();
+  }
   const { data, error } = await db
     .from("agent_message").select("*").eq("conversation_id", conversationId).order("created_at", { ascending: true });
   if (error) throw error;

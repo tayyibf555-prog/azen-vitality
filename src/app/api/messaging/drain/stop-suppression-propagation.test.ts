@@ -9,7 +9,7 @@
 // It records a STOP through the real addSuppression() into an in-memory
 // message_suppression store, then drives the real drain route with a queued
 // outbox row in EACH module source (reactivation, recall, noshow, coordinator,
-// reviews) for that suppressed recipient, and asserts NONE is sent — every one
+// closer, reviews) for that suppressed recipient, and asserts NONE is sent — every one
 // is markBlocked. The real isSuppressed() reads the same store addSuppression()
 // wrote, so we exercise the actual suppression module, not a mock of it.
 //
@@ -37,7 +37,29 @@ const store = vi.hoisted(() => ({ rows: [] as SuppressionRow[] }));
 // module touches (message_suppression). select().eq().eq().eq().maybeSingle()
 // and upsert(..., { onConflict }) are the only chains real code exercises.
 vi.mock("@/lib/supabase/server", () => {
-  function from(table: string) {
+  interface SuppressionBuilder {
+    select(): SuppressionBuilder;
+    eq(col?: keyof SuppressionRow, val?: string): SuppressionBuilder;
+    maybeSingle?(): Promise<{ data: { id: string } | null; error: null }>;
+    upsert?(row: SuppressionRow, opts: { onConflict: string }): Promise<{ error: null }>;
+  }
+  function from(table: string): SuppressionBuilder {
+    // The drain reads the kill switch before it drains anything. 'treatment-closer'
+    // is the platform's one DEFAULT-OFF system, so with no row at all it would be
+    // skipped and this test would silently stop proving that suppression reaches
+    // the closer's outbox. Serve an explicit enabled row for it: this test is
+    // about opt-out, not about the switch, and the switch has its own tests.
+    if (table === "system_toggle") {
+      const rows = [{ module_slug: "treatment-closer", enabled: true }];
+      const toggleBuilder = {
+        select: () => toggleBuilder,
+        eq: () => toggleBuilder,
+        then: (
+          resolve: (v: { data: typeof rows; error: null }) => unknown,
+        ) => Promise.resolve({ data: rows, error: null }).then(resolve),
+      };
+      return toggleBuilder as unknown as SuppressionBuilder;
+    }
     if (table !== "message_suppression") {
       throw new Error(`unexpected table in suppression test: ${table}`);
     }
@@ -138,6 +160,7 @@ const fakes = vi.hoisted(() => {
       recall: makeModule(),
       noshow: makeModule(),
       coordinator: makeModule(),
+      closer: makeModule(),
       reviews: makeModule(),
       outreach: makeModule(),
     },
@@ -163,6 +186,7 @@ vi.mock("@/lib/reactivation/repository", () => repoMock("reactivation"));
 vi.mock("@/lib/recall/repository", () => repoMock("recall"));
 vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
+vi.mock("@/lib/closer/repository", () => repoMock("closer"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
 vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
 vi.mock("@/lib/dentally/client", () => ({
@@ -204,7 +228,7 @@ import { POST } from "./route";
 // "diary" is the reschedule notice raised when an appointment is moved. It is a
 // source like any other and must be covered by the STOP guard: a patient who
 // opted out is not texted about a move either.
-const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "reviews", "outreach"] as const;
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "reviews", "outreach"] as const;
 type Source = (typeof ALL_SOURCES)[number];
 
 const SITE = "site-stop";

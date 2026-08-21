@@ -30,6 +30,12 @@ import {
   findTargetByAddress as findCoordinatorTargetByAddress,
   insertInboundTouch as insertCoordinatorInboundTouch,
 } from "@/lib/coordinator/repository";
+import {
+  findTargetByAddress as findCloserTargetByAddress,
+  insertInboundTouch as insertCloserInboundTouch,
+  stopOpportunity as stopCloserOpportunity,
+} from "@/lib/closer/repository";
+import { classifyInboundReply } from "@/lib/closer/cadence";
 import { isOutsideHours, getSiteById } from "@/lib/after-hours/hours";
 import { insertCapture, hasOpenCaptureFrom } from "@/lib/after-hours/repository";
 import Anthropic from "@anthropic-ai/sdk";
@@ -75,6 +81,22 @@ const DEFAULT_SITE_ID = process.env.AGENT_DEFAULT_SITE_ID ?? "site-cc";
 // consumeBudget() guard the sibling public AI endpoints use. Overridable.
 const SENDER_BUDGET_LIMIT = Number(process.env.AGENT_SENDER_BUDGET_LIMIT ?? "20");
 const SENDER_BUDGET_WINDOW_SECONDS = Number(process.env.AGENT_SENDER_BUDGET_WINDOW ?? "3600");
+
+// How much of the thread the MODEL is shown. The staff inbox still renders the
+// whole conversation; this bounds only what is re-sent to Claude on every round of
+// every turn.
+//
+// A conversation is per (site, patient, channel) and lives until it is closed, so
+// a returning patient's thread accumulates for years: first contact, nurture
+// touches, every booking and change, and up to SENDER_BUDGET_LIMIT (20) agent
+// turns an hour on top. Unbounded, that is a bill that only grows, on a table that
+// only grows.
+//
+// 60 messages is 30 exchanges — deliberately far past any real booking
+// conversation (the guardrail hands a stuck thread to a human long before then,
+// and the per-sender budget caps a single hour at 20 turns), so this trims a tail
+// nobody reaches rather than shortening the agent's memory of a live chat.
+const AGENT_HISTORY_MESSAGES = Number(process.env.AGENT_HISTORY_MESSAGES ?? "60");
 
 // Segment-outreach reply-linkage guards (see the linkage block in POST). Only an
 // ACTIVE, RECENT campaign target may be regressed to 'replied' and used to prime the
@@ -335,6 +357,33 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       channel,
       body,
     });
+  }
+  // The same reply may correlate to a treatment-plan CLOSER follow-up. Unlike the
+  // cadences above, the closer is stopped here and now rather than at the next
+  // sweep tick: the minutes between a reply landing and a sweep running are
+  // exactly the window in which an already-drafted follow-up could be approved and
+  // sent to someone who has just answered. A dispute ("this is wrong", "I already
+  // paid") is recorded as its own reason so it surfaces as needing a person, not
+  // as a patient who simply went quiet. Best effort, and never allowed to break
+  // the webhook.
+  try {
+    const closerTarget = await findCloserTargetByAddress(from);
+    if (closerTarget) {
+      await insertCloserInboundTouch({
+        opportunityId: closerTarget.opportunityId,
+        siteId: closerTarget.siteId,
+        channel,
+        body,
+      });
+      const kind = classifyInboundReply(body);
+      await stopCloserOpportunity(
+        closerTarget.opportunityId,
+        closerTarget.siteId,
+        kind === "dispute" ? "dispute" : kind === "optout" ? "opted_out" : "patient_replied",
+      );
+    }
+  } catch (err) {
+    console.error("[inbound] closer reply linkage failed; continuing", err);
   }
 
   // Segment-outreach reply linkage. A reply from an outreach target pauses its
@@ -648,7 +697,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
   let handoverReason: HandoverReason | null = null;
   try {
   try {
-    const prior = await listMessages(conversation.id);
+    const prior = await listMessages(conversation.id, { limit: AGENT_HISTORY_MESSAGES });
     const history = prior.map((m) => ({
       role: m.role === "patient" ? ("user" as const) : ("assistant" as const),
       content: m.body,

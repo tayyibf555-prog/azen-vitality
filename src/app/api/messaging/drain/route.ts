@@ -48,6 +48,13 @@ import {
   markOutboxBlocked as markCoordinatorBlocked,
 } from "@/lib/coordinator/repository";
 import {
+  listQueuedOutbox as listCloserQueued,
+  claimOutbox as claimCloser,
+  recordOutboxSent as recordCloserSent,
+  markOutboxFailed as markCloserFailed,
+  markOutboxBlocked as markCloserBlocked,
+} from "@/lib/closer/repository";
+import {
   listQueuedOutbox as listReviewsQueued,
   claimOutbox as claimReviews,
   recordOutboxSent as recordReviewsSent,
@@ -134,6 +141,14 @@ const SOURCES: OutboxSource[] = [
   { name: "recall", list: listRecallQueued, claim: claimRecall, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
   { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
   { name: "coordinator", list: listCoordinatorQueued, claim: claimCoordinator, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },
+  // The treatment-plan closer drains immediately AFTER the coordinator, and that
+  // order is the anti-overlap rule between the two: they follow up the same
+  // patients about the same plans, so on a day where both have something queued
+  // the coordinator's message wins the recipient's one outreach slot and the
+  // closer's is blocked by the cross-module frequency cap rather than arriving as
+  // a second chase. This source only ever has rows once a human has APPROVED a
+  // closer draft; the sweep itself queues nothing.
+  { name: "closer", list: listCloserQueued, claim: claimCloser, recordSent: recordCloserSent, markFailed: markCloserFailed, markBlocked: markCloserBlocked },
   { name: "reviews", list: listReviewsQueued, claim: claimReviews, recordSent: recordReviewsSent, markFailed: markReviewsFailed, markBlocked: markReviewsBlocked },
   // Segment outreach drains LAST: it is a deliberate campaign, so it yields its
   // once-per-day slot to every automatic lifecycle message (recall/reactivation/
