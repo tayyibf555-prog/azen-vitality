@@ -5,6 +5,7 @@ import { X, Loader2, Check, CalendarCheck, XCircle, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusPill, type Tone } from "@/components/primitives";
 import { useEscapeKey } from "@/lib/hooks/use-escape-key";
+import { funnelProgressLabel } from "@/lib/smile-assessment/funnel-progress";
 import type { Lead, LeadStage } from "@/lib/types";
 
 const STAGE_TONE: Record<LeadStage, Tone> = {
@@ -52,9 +53,16 @@ function slaLabel(seconds: number | null): { tone: Tone; text: string } {
 
 export function LeadDrawer({
   lead,
+  nowIso,
   onClose,
 }: {
   lead: Lead;
+  /**
+   * The clock the funnel's quiet period is measured against. Passed in rather than
+   * read here so the drawer and the row behind it cannot disagree about whether
+   * this person has abandoned their assessment.
+   */
+  nowIso: string;
   onClose: () => void;
 }) {
   useEscapeKey(onClose);
@@ -92,6 +100,12 @@ export function LeadDrawer({
 
   const sla = slaLabel(lead.firstResponseSeconds);
   const resolved = stage === "booked" || stage === "lost";
+  // WHERE THEY GOT TO IN THE FUNNEL. null for every lead that did not come through
+  // an authored Smile Assessment funnel, which is most of them — and the drawer
+  // renders exactly what it rendered before this feature for those.
+  const funnel = lead.funnelProgress ? funnelProgressLabel(lead.funnelProgress, nowIso) : null;
+  // The timestamp behind the sentence, so "abandoned" is answerable with "when".
+  const funnelWhen = lead.funnelProgress?.completedAt ?? lead.funnelProgress?.lastStepAt ?? null;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -120,6 +134,10 @@ export function LeadDrawer({
             {lead.assessmentScore !== null ? (
               <StatusPill tone="info">Score {lead.assessmentScore}</StatusPill>
             ) : null}
+            {/* PROMINENT, in the same row as the stage and the SLA, because "they
+                never finished" is exactly the kind of thing that changes what the
+                team says when they pick up the phone. */}
+            {funnel ? <StatusPill tone={funnel.tone}>{funnel.text}</StatusPill> : null}
           </div>
 
           <section className="space-y-3">
@@ -131,6 +149,19 @@ export function LeadDrawer({
               <dd className="text-ink capitalize">{lead.source}</dd>
               <dt className="text-muted">Channel</dt>
               <dd className="text-ink">{CHANNEL_LABEL[lead.channel] ?? lead.channel}</dd>
+              {funnel ? (
+                <>
+                  <dt className="text-muted">Assessment</dt>
+                  <dd className="text-ink">
+                    {funnel.text}
+                    {funnelWhen ? (
+                      <span className="block text-xs text-muted">
+                        {funnel.complete ? "Finished" : "Last activity"} {whenLabel(funnelWhen)}
+                      </span>
+                    ) : null}
+                  </dd>
+                </>
+              ) : null}
             </dl>
           </section>
 

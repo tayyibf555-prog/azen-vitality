@@ -230,6 +230,11 @@ const EXEMPT: Record<string, Exemption> = {
     reason:
       "public quiz: anonymous, PII-free step-view beacon. No session exists (a visitor is the caller); the guards are a payload cap, three api_budget ceilings (per IP, per campaign per minute, per campaign per day) and a strict kill-switch check, and it answers the same opaque 202 for every outcome. Its READ side is a different route entirely (campaign/[slug]/drop-off), which IS module-guarded",
   },
+  "smile-assessment/funnel-progress": {
+    kind: "public",
+    reason:
+      "public quiz: a patient's own browser reporting which screen of the funnel it has reached, AFTER that patient gave their contact details. No session exists (a visitor is the caller). Authorisation is a server-minted bearer stored under a unique index on the one lead it belongs to, so a caller without it cannot address any row; the guards are a payload cap, two api_budget ceilings (per IP, per token) and a strict kill-switch check resolved from the LEAD's own site, never from the body; it selects seven columns by name so no patient contact detail enters the process; it can write only funnel_* columns of that single lead; and it answers the same opaque 202 for every outcome, so the token cannot be probed for",
+  },
   "speed-to-lead/intake": { kind: "public", reason: "public lead intake from website / missed call" },
   "prefs": { kind: "public", reason: "patient channel choice + opt-out behind a signed /prefs token" },
 

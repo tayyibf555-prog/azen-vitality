@@ -102,6 +102,138 @@ export function nextDayKey(dayKey: string): string {
   return new Date(Date.parse(`${dayKey}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
+// ===========================================================================
+// THE WINDOW DENTALLY WILL ACTUALLY ANSWER.
+//
+// GET /v1/appointments/availability VALIDATES the window before it looks at
+// anything, and refuses two shapes outright (400, "The appointment could not be
+// processed"):
+//
+//   start_time  "must be in the future"              -- a start at or before now
+//   finish_time "must be greater than 24 hours"      -- a span of 24h or less
+//
+// MEASURED against live Dentally on 2026-08-21 with a read-only key:
+//   today 00:00 -> today 23:59   400, BOTH errors        <- what the diary sent
+//   now+1min    -> now+23h       400, finish_time error
+//   now+1min    -> now+25h       200
+//   17:55       -> +25h          200, and the 17:50-18:00 row came back WHOLE
+//
+// That last line is the one that makes this safe: rows are NOT clipped to
+// start_time, so moving the start forward only loses windows that had ENTIRELY
+// ended before it. The rest of the requested day comes back intact.
+//
+// So the diary asks for a window Dentally accepts and then trims the answer back
+// to the days it was actually asked about (availabilityRowsWithinDays). Nothing
+// about the requested days is inferred, invented or extrapolated: a day that has
+// already ended is reported as unanswerable rather than as "nobody was working".
+// ===========================================================================
+
+/**
+ * How far past `now` the start is pushed. Dentally requires STRICTLY future, and
+ * "now" as we measure it is not "now" as their clock measures it, so a couple of
+ * minutes absorbs ordinary clock skew between the two machines. Because rows are
+ * not clipped (see above) the only cost is a window that ends inside the buffer.
+ */
+export const AVAILABILITY_START_BUFFER_MS = 2 * 60_000;
+
+/**
+ * The minimum span asked for: 25 hours, not the 24 the API names.
+ *
+ * The rule is "greater than 24 hours", so 24h exactly is refused, and a server
+ * comparing `finish > start + 1.day` in a zone-aware way measures 23 or 25 wall
+ * hours across a DST changeover. An extra hour costs one wider read and is
+ * immune to both.
+ */
+export const AVAILABILITY_MIN_SPAN_MS = 25 * 3_600_000;
+
+export interface DiaryAvailabilityRequest {
+  /** ISO start, always strictly after now. */
+  startTime: string;
+  /** ISO finish, always more than 24 hours after `startTime`. */
+  finishTime: string;
+  /**
+   * Requested days Dentally CANNOT answer for, because they had already ended
+   * when the window was built. Not a failure and not "nobody was working": a day
+   * whose availability is no longer knowable, which the column says in words.
+   */
+  unanswerableDayKeys: string[];
+}
+
+/**
+ * The request to send for a requested day range, or null when every requested day
+ * has already ended and there is nothing worth asking.
+ *
+ * `nowMs` is a parameter rather than a clock read so this is pure and testable.
+ */
+export function diaryAvailabilityRequest(args: {
+  fromDayKey: string;
+  toDayKey: string;
+  nowMs: number;
+}): DiaryAvailabilityRequest | null {
+  const dayKeys = dayKeysBetween(args.fromDayKey, args.toDayKey);
+  if (dayKeys.length === 0) return null;
+
+  const requestedStartMs = londonInstantMs(args.fromDayKey, 0, 0);
+  const requestedEndMs = londonDayEndMs(args.toDayKey);
+  if (!Number.isFinite(requestedStartMs) || !Number.isFinite(requestedEndMs)) return null;
+
+  const earliestMs = args.nowMs + AVAILABILITY_START_BUFFER_MS;
+  // The whole range is over. Dentally can never answer it, so no request is made
+  // at all: a guaranteed 400 against a shared rate budget, whose only product is
+  // an outage message on a day that is simply in the past.
+  if (requestedEndMs <= earliestMs) {
+    return null;
+  }
+
+  const startMs = Math.max(requestedStartMs, earliestMs);
+  const finishMs = Math.max(requestedEndMs, startMs + AVAILABILITY_MIN_SPAN_MS);
+
+  return {
+    startTime: new Date(startMs).toISOString(),
+    finishTime: new Date(finishMs).toISOString(),
+    unanswerableDayKeys: dayKeys.filter((k) => londonDayEndMs(k) <= startMs),
+  };
+}
+
+/** The instant the London day `dayKey` ends (23:59:59.999). */
+function londonDayEndMs(dayKey: string): number {
+  return londonInstantMs(dayKey, 23, 59) + 59_999;
+}
+
+/**
+ * Trim raw availability rows back to the requested London day range.
+ *
+ * The window SENT is wider than the days asked for -- it has to be, or Dentally
+ * refuses it -- so without this a one-day diary would quietly inherit tomorrow's
+ * windows, and the untagged-row ratio would be computed over rows nobody asked
+ * for.
+ *
+ * Only a row PROVEN to lie outside the range is dropped. A row whose times are
+ * unparseable is kept and left to parseAvailabilityWindows, which already has a
+ * policy for it; silently discarding it here would hide a shape change.
+ */
+export function availabilityRowsWithinDays(
+  rows: readonly unknown[],
+  fromDayKey: string,
+  toDayKey: string,
+): unknown[] {
+  const fromMs = londonInstantMs(fromDayKey, 0, 0);
+  const toMs = londonDayEndMs(toDayKey);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return [...rows];
+
+  return rows.filter((raw) => {
+    const r = asRecord(raw);
+    const startMs = Date.parse(typeof r.start_time === "string" ? r.start_time : "");
+    const finishMs = Date.parse(typeof r.finish_time === "string" ? r.finish_time : "");
+    // Starts after the range ends.
+    if (!Number.isNaN(startMs) && startMs > toMs) return false;
+    // Ended before the range began. `<=` because a window finishing exactly at
+    // London midnight belongs to the day before (see splitAcrossLondonDays).
+    if (!Number.isNaN(finishMs) && finishMs <= fromMs) return false;
+    return true;
+  });
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }

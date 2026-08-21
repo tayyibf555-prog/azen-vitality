@@ -18,11 +18,15 @@ import {
 // The invoice fan-out behind Report B. ORCHESTRATION ONLY — every rule lives in
 // allocation-split.ts / allocation-report.ts and is tested there.
 //
-// The payments pass is unchanged: flagship-read.ts still pages /v1/payments
-// backwards with scanBackwards / REPORTS_PER_PAGE and still reports coverage the
-// same way, and it hands the RAW rows here. Doing it that way means the window is
-// scanned once, not twice, and the two SCAN_* unavailable reasons stay exactly
-// where they were.
+// THE PAYMENTS PASS IS THE CALLER'S. flagship-read.ts asks /v1/payments for exactly
+// the window (start_date/end_date, both inclusive on `dated_on`), pages it to
+// Dentally's own meta.total so the set is provably whole, and hands the RAW rows
+// here. It used to page the endpoint BACKWARDS until a row fell past the window's
+// first day, on the belief that these rows were date-ordered and unfilterable —
+// both false, and on an id-ordered index that walk stopped early while skipping
+// in-window rows deeper in. Nothing in this file changed with that fix: it still
+// receives raw rows for a window scanned once, and still spends its invoice budget
+// only on the payments that are actually in scope.
 //
 // WHY THIS COSTS SO MANY REQUESTS. Dentally exposes invoice lines on the DETAIL
 // route only: the index carries none and `include=invoice_items` is ignored

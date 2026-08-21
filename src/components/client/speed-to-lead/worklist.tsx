@@ -6,7 +6,24 @@ import { SectionCard, StatusPill, DataTable, EmptyState, type Column, type Tone 
 import { cn } from "@/lib/utils";
 import type { Lead, LeadStage } from "@/lib/types";
 import { sourceLabel } from "@/lib/speed-to-lead/source-label";
+import { funnelProgressLabel } from "@/lib/smile-assessment/funnel-progress";
 import { LeadDrawer } from "./lead-drawer";
+
+/**
+ * The funnel sub-line's ink, by tone. A table cell is the wrong place for a pill —
+ * eight rows of them turn the Source column into a wall of badges — so the
+ * indicator is one small line of coloured text under the source it belongs to, and
+ * the drawer carries the full sentence.
+ *
+ * The amber is the same literal the drawer already uses for warning copy: there is
+ * no `text-warning` token in this palette, and inventing one for this line would
+ * put a ninth amber in the app.
+ */
+const FUNNEL_INK: Record<"success" | "warning" | "info", string> = {
+  success: "text-success",
+  warning: "text-[#9a6700]",
+  info: "text-muted",
+};
 
 const STAGE_TONE: Record<LeadStage, Tone> = {
   new: "info",
@@ -115,7 +132,28 @@ export function Worklist({
       header: "Interest",
       cell: (l) => <span className="text-ink">{l.treatmentInterest || "General enquiry"}</span>,
     },
-    { key: "source", header: "Source", cell: (l) => <span className="text-muted">{sourceLabel(l.source)}</span> },
+    {
+      key: "source",
+      header: "Source",
+      // The funnel indicator folds in HERE rather than into a column of its own:
+      // it is a fact about the source (only a Smile Assessment funnel has one), it
+      // is absent for most leads, and a ninth column would cost every row width for
+      // a cell that is usually empty. sourceLabel is untouched — the sub-line is a
+      // second line, never a change to the label's own words.
+      cell: (l) => {
+        const funnel = l.funnelProgress ? funnelProgressLabel(l.funnelProgress, nowIso) : null;
+        return (
+          <span className="flex flex-col leading-tight">
+            <span className="text-muted">{sourceLabel(l.source)}</span>
+            {funnel ? (
+              <span className={cn("mt-0.5 text-xs font-semibold", FUNNEL_INK[funnel.tone])}>
+                {funnel.short}
+              </span>
+            ) : null}
+          </span>
+        );
+      },
+    },
     {
       key: "score",
       header: "Score",
@@ -185,7 +223,13 @@ export function Worklist({
         />
       </SectionCard>
 
-      {selected ? <LeadDrawer lead={selected} onClose={() => setSelectedId(null)} /> : null}
+      {/* The SAME `nowIso` the rows are rendered against, deliberately: the quiet
+          period is computed at display time, and a drawer using its own clock could
+          call a lead "abandoned" while the row behind it still said "not finished
+          yet" — one lead, two sentences, on the same screen. */}
+      {selected ? (
+        <LeadDrawer lead={selected} nowIso={nowIso} onClose={() => setSelectedId(null)} />
+      ) : null}
     </>
   );
 }

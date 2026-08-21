@@ -138,6 +138,11 @@ const DESTRUCTIVE_EXEMPT: Record<string, DestructiveExemption> = {
     reason:
       "public quiz: anonymous, PII-free step-view beacon. It writes scalar rows to one telemetry table and nothing else — no message, no lead, no Dentally call — so the authorisation question ('who may do this to whom') has no subject: the caller is a visitor and the row is about a screen, not a person. What bounds it instead is cost and volume: a payload cap, three api_budget ceilings (per IP, per campaign per minute, per campaign per day) and a strict kill-switch check",
   },
+  "smile-assessment/funnel-progress": {
+    kind: "public",
+    reason:
+      "public quiz: the patient's own browser reporting which screen of the funnel it has reached, after that patient submitted their contact details. No session exists (a visitor is the caller), so the authorisation is a BEARER: a server-minted token, stored under a unique index on the one lead it belongs to and handed back to that one browser, without which a caller cannot address any row at all. It is not destructive in the ordinary sense — it deletes nothing, sends nothing, creates nothing, and the single conditional UPDATE can only raise funnel_last_step (never lower it, never past the funnel's own length, only on the lead holding the token, only on the flow version that lead's numbers came from) and stamp funnel_completed_at once. It touches no other column, in particular not stage and not updated_at. Cost and volume are bounded by a payload cap and two api_budget ceilings (per IP, per token), and it is behind a strict kill-switch check resolved from the lead's own site",
+  },
   "speed-to-lead/intake": { kind: "public", reason: "public lead intake from website / missed call" },
   prefs: { kind: "public", reason: "patient channel choice + opt-out behind a signed /prefs token" },
 

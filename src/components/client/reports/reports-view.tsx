@@ -47,7 +47,12 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
     readNhsClinicalReport({ siteIds, window: defaultWindow, now }),
   ]);
 
-  const hasActivity = month.enquiries > 0;
+  // "No activity yet" is a CLAIM ABOUT THE PRACTICE, so it may only be made from a
+  // read that actually worked. A failed enquiry read (or a period too busy to count
+  // in one read) previously arrived here as enquiries === 0 and was rendered as the
+  // awaiting state — telling an owner mid-campaign that nobody had been in touch.
+  const snapshotUnavailable = month.readFailed || month.truncated;
+  const hasActivity = !snapshotUnavailable && month.enquiries > 0;
 
   return (
     <>
@@ -81,6 +86,20 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
 
       {hasActivity ? (
         <ReportsWorkspace clientSlug={clientSlug} snapshots={{ week, month }} />
+      ) : snapshotUnavailable ? (
+        <EmptyState
+          icon={FileText}
+          title={
+            month.readFailed
+              ? "Your enquiry activity could not be read"
+              : "This period is bigger than one read"
+          }
+          description={
+            month.readFailed
+              ? "The live enquiry store did not answer, so the monthly figures and the AI review cannot be written from it. This is a read failing, not a quiet month — nothing here says your enquiries have stopped. Try again shortly."
+              : "This month holds more enquiries than a single read carries, so the figures behind the review would be a floor rather than a total. They are not shown from a partial count."
+          }
+        />
       ) : (
         <EmptyState
           icon={FileText}

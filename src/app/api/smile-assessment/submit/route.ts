@@ -11,7 +11,15 @@ import {
   setLeadStage,
   claimLeadForContact,
   releaseLeadClaim,
+  stampLeadFunnelCapture,
 } from "@/lib/speed-to-lead/repository";
+import { randomUUID } from "node:crypto";
+import { normaliseAndValidateFlow } from "@/lib/smile-assessment/flow-validate";
+import { stepNumbering } from "@/lib/smile-assessment/step-numbering";
+import {
+  funnelCaptureStamp,
+  type FunnelCaptureStamp,
+} from "@/lib/smile-assessment/funnel-progress";
 import { consumeBudget } from "@/lib/rate-budget";
 import { clientIp } from "@/lib/http/client-ip";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
@@ -73,9 +81,28 @@ function tooManyForIp(ip: string, now: number): boolean {
 // spoofed prefixes from one client land on one key. Pinned by the spoof-variant
 // tests in public-gates.test.ts.
 
-function ok(band: string, message: string, leadCreated: boolean, bookingUrl?: string): Response {
+function ok(
+  band: string,
+  message: string,
+  leadCreated: boolean,
+  bookingUrl?: string,
+  /**
+   * The 0094 bearer, present ONLY when this request created a lead AND stamped its
+   * funnel position on it. It is the browser's authorisation to report further
+   * progress on that one lead and nothing else. Opaque and PII-free: a random UUID
+   * minted here, meaningful only to the row it was written on.
+   */
+  funnelToken?: string,
+): Response {
   return Response.json(
-    { ok: true, band, message, leadCreated, ...(bookingUrl ? { bookingUrl } : {}) },
+    {
+      ok: true,
+      band,
+      message,
+      leadCreated,
+      ...(bookingUrl ? { bookingUrl } : {}),
+      ...(funnelToken ? { funnelToken } : {}),
+    },
     { status: 202 },
   );
 }
@@ -93,6 +120,42 @@ const BAND_MESSAGE: Record<"high" | "medium" | "low", string> = {
   medium: "Thanks. A team member will reach out soon.",
   low: "Thanks. Here's what we'd suggest as your next step.",
 };
+
+/**
+ * WHERE IN THE FUNNEL THIS PERSON WAS when they gave their details (0094), or null
+ * when we cannot say honestly.
+ *
+ * SERVER-DERIVED, ALWAYS. The browser tells us ONE thing — which save of the funnel
+ * it walked — and nothing else: not the step, not the length. Both numbers come
+ * from re-deriving the canonical numbering (step-numbering.ts) off the campaign's
+ * OWN stored graph, so a caller cannot put a fraction of their choosing on a
+ * practice's worklist.
+ *
+ * AND THE VERSIONS MUST MATCH, which is the whole reason the browser sends one.
+ * flow_version bumps on every save (0078) and only the CURRENT graph is stored, so
+ * if the owner republished while this patient was answering, the funnel we can
+ * measure is not the funnel they walked — its screens may have been added, removed
+ * or reordered. There is no older graph to fall back to, so the honest answer is to
+ * record nothing: "N of M" from two different versions is not a smaller truth, it
+ * is a wrong one, and a blank is a statement the practice can read correctly.
+ *
+ * ONLY A PUBLISHED, VALID FUNNEL. This is exactly the gate the public page applies
+ * before it serves the deterministic runtime at all (assess/[client]/[slug]), so a
+ * campaign running the ADAPTIVE fallback stamps nothing — and it must not, because
+ * an adaptive session's screens are the model's, so "step 3" would mean a different
+ * question for every patient and the fraction would not add up.
+ */
+function captureStampFor(
+  campaign: { flow: unknown; flowVersion: number; flowPublished: boolean } | null,
+  declaredFlowVersion: unknown,
+): FunnelCaptureStamp | null {
+  if (!campaign || !campaign.flowPublished) return null;
+  if (typeof declaredFlowVersion !== "number" || !Number.isInteger(declaredFlowVersion)) return null;
+  if (declaredFlowVersion !== campaign.flowVersion) return null;
+  const checked = normaliseAndValidateFlow(campaign.flow);
+  if (!checked.graph || !checked.result.ok) return null;
+  return funnelCaptureStamp(stepNumbering(checked.graph));
+}
 
 /** Coerce a raw responses object into a clean { questionId: optionValue } map. */
 function parseResponses(raw: unknown): Record<string, string> {
@@ -367,6 +430,15 @@ export async function POST(request: Request): Promise<Response> {
     // check, the guardrail and both kill switches are untouched and still decide
     // whether a single character reaches anybody.
     let leadCreated = false;
+    /**
+     * 0094. Set only when THIS request created a lead and successfully stamped its
+     * funnel position, so it is returned to exactly the browser that earned it.
+     * Deliberately NOT set on either dedup path below: those link the response to a
+     * lead that already existed (from the website form, a missed call, an earlier
+     * submit), and writing this funnel's screens onto somebody else's enquiry would
+     * put a sentence on the worklist about a journey that lead did not take.
+     */
+    let funnelToken: string | undefined;
     const hasContact = Boolean(phone || email);
     const followUp = followUpConfig(campaign);
     if (shouldFollowUp(followUp, band) && hasContact && trusted && smileEnabled && speedToLeadEnabled) {
@@ -434,6 +506,44 @@ export async function POST(request: Request): Promise<Response> {
 
         await setResponseLead(response.id, lead.id);
         leadCreated = true;
+
+        // ------------------------------------------------------------------
+        // WHERE IN THE FUNNEL THEY WERE (0094). Its own statement, its own
+        // try/catch, and nothing above depends on it:
+        //
+        //   IT CANNOT COST AN ENQUIRY. The lead is already committed. On a
+        //   database where 0094 has not been applied the update is rejected and
+        //   caught here, the lead and the first contact below are untouched, and
+        //   the worklist simply says nothing about this person's funnel — which is
+        //   exactly what it says about every lead today. Folding these columns into
+        //   the insert would have made an un-migrated database lose the enquiry.
+        //
+        //   THE TOKEN IS ONLY RETURNED IF THE ROW REALLY HOLDS IT. A token the
+        //   database never stored is one every later post is dropped for, and the
+        //   browser would spend the session posting into a bin.
+        //
+        //   MINTED HERE, NOT ACCEPTED FROM THE CALLER. randomUUID is unguessable
+        //   whatever the patient's browser has, cannot collide with a token already
+        //   in the table, and — being a different mint from the anonymous step
+        //   beacon's nonce — can never make assessment_step_event joinable to this
+        //   named person. See supabase/migrations/0094.
+        // ------------------------------------------------------------------
+        const stamp = captureStampFor(campaign, body.flowVersion);
+        if (stamp && campaign) {
+          const token = randomUUID();
+          try {
+            const stamped = await stampLeadFunnelCapture({
+              leadId: lead.id,
+              lastStep: stamp.lastStep,
+              totalSteps: stamp.totalSteps,
+              flowVersion: campaign.flowVersion,
+              nonce: token,
+            });
+            if (stamped) funnelToken = token;
+          } catch {
+            // No progress recorded for this lead. Nothing else changes.
+          }
+        }
         // Fire first contact in-request so the patient hears back instantly — but
         // CLAIM the lead first (mirrors the intake route): without the atomic
         // 'new' -> 'contacting' flip, the SLA sweep can pick the same brand-new
@@ -468,7 +578,7 @@ export async function POST(request: Request): Promise<Response> {
     // A high scorer we didn't auto-contact (untrusted submit) gets the softer
     // "a team member will reach out" message, not "in moments".
     const message = band === "high" && !leadCreated ? BAND_MESSAGE.medium : BAND_MESSAGE[band];
-    return ok(band, message, leadCreated, bookingUrl);
+    return ok(band, message, leadCreated, bookingUrl, funnelToken);
   } catch {
     // Never throw to the client.
     return bad("could not record your assessment", 500);

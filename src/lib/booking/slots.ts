@@ -1,3 +1,7 @@
+import {
+  AVAILABILITY_MIN_SPAN_MS,
+  AVAILABILITY_START_BUFFER_MS,
+} from "@/lib/calendar/availability";
 import { dentallySiteId } from "@/lib/mock/clients";
 import { londonDayKey } from "@/lib/time/london";
 
@@ -248,12 +252,125 @@ function shiftDayKey(ymd: string, days: number): string {
   return new Date(ms + days * DAY_MS).toISOString().slice(0, 10);
 }
 
+// ===========================================================================
+// THE WINDOW DENTALLY WILL ACTUALLY ANSWER (the patient-facing half).
+//
+// GET /v1/appointments/availability VALIDATES the window before it looks at
+// anything, and refuses two shapes outright (400, "The appointment could not be
+// processed"):
+//
+//   start_time  "must be in the future"            -- a start at or before now
+//   finish_time "must be greater than 24 hours"    -- a span of 24h or less
+//
+// MEASURED against live Dentally on 2026-08-21 with a read-only key:
+//   today 00:00 -> today 23:59   400, BOTH errors
+//   now+1min    -> now+23h       400, finish_time error
+//   now+1min    -> now+25h       200
+//
+// The diary hit this first (src/lib/calendar/availability.ts) and it was here
+// too. `?from=X&to=X` on /api/booking/slots -- what the picker sends the moment a
+// patient asks about ONE day -- spans at most 24 hours, so it 400d, the route's
+// catch turned that into "we could not load available times", and a patient was
+// told nothing was free on a day the practice was fully open. The 14-day default
+// range never spans under 24 hours, which is why every manual click-through
+// looked fine.
+//
+// So the booking path asks for a window Dentally accepts and then trims the
+// answer back to the days it was actually asked about (bookingDaysWithin).
+// Nothing about the requested days is inferred or extrapolated.
+//
+// THE TWO RULES ARE IMPORTED, NOT COPIED. AVAILABILITY_START_BUFFER_MS and
+// AVAILABILITY_MIN_SPAN_MS live on the diary's module because they describe ONE
+// API contract; forking them is how a future calibration fixes one caller and
+// leaves the other 400ing.
+//
+// WHY NOT diaryAvailabilityRequest ITSELF. That helper clamps the start to
+// now + buffer. Booking cannot: its start must land on the ABSOLUTE 30-minute
+// grid (see ceilToSlotGrid) or the same-day grid moves under the patient between
+// the offer and the write, which is a bug this file has already had once. So the
+// clamp is grid-aligned here, and the trim happens one seam later -- on grouped
+// London DAYS rather than on raw rows, because by then every window has already
+// been chunked into slots.
+// ===========================================================================
+
+/** A `YYYY-MM-DD` London day key, as every caller of the reader passes. */
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+export interface BookingAvailabilityWindow {
+  /** ISO start: on the booking grid, and always strictly after now. */
+  startTime: string;
+  /** ISO finish: always more than 24 hours after `startTime`. */
+  finishTime: string;
+}
+
+/**
+ * The availability window to SEND for a requested London day range, or null when
+ * the whole range has already ended and there is nothing worth asking.
+ *
+ * `nowMs` is a parameter rather than a clock read, so this is pure and testable.
+ */
+export function bookingAvailabilityWindow(
+  fromDate: string,
+  toDate: string,
+  nowMs: number,
+): BookingAvailabilityWindow | null {
+  // The earliest start Dentally will accept, snapped UP onto the booking grid.
+  //
+  // The buffer absorbs clock skew between our machine and theirs, and the one
+  // instant per slot where `now` sits exactly ON the grid -- ceilToSlotGrid
+  // rightly leaves that alone, and Dentally would refuse it as not being in the
+  // future. Rounding AFTER adding the buffer keeps the grid property that
+  // ceilToSlotGrid exists for; adding it after rounding would not.
+  const earliestMs = ceilToSlotGrid(nowMs + AVAILABILITY_START_BUFFER_MS);
+
+  const fromMs = londonDayStartMs(fromDate);
+  const toMs = londonDayStartMs(shiftDayKey(toDate, 1)) - 1; // last instant of the London day
+  // An unreadable `to` falls back to the booking horizon rather than refusing to
+  // read at all, exactly as it did before this window existed.
+  const requestedEndMs = Number.isNaN(toMs) ? nowMs + BOOKING_HORIZON_DAYS * DAY_MS : toMs;
+
+  // The whole range is over. Dentally can never answer for it, so nothing is
+  // asked: the alternative is a guaranteed 400 against the practice's shared
+  // 3,600/hour budget whose only product is an outage message about a past day.
+  if (requestedEndMs <= earliestMs) return null;
+
+  const startMs = Math.max(Number.isNaN(fromMs) ? earliestMs : fromMs, earliestMs);
+  const finishMs = Math.max(requestedEndMs, startMs + AVAILABILITY_MIN_SPAN_MS);
+  return {
+    startTime: new Date(startMs).toISOString(),
+    finishTime: new Date(finishMs).toISOString(),
+  };
+}
+
+/**
+ * Trim grouped days back to the London day range the caller actually asked for.
+ *
+ * The window SENT is wider than those days -- it has to be, or Dentally refuses
+ * it -- so without this a patient who tapped Tuesday would be shown Wednesday's
+ * times as well, and the create route would revalidate against days nobody asked
+ * about.
+ *
+ * A range that cannot be read (an unparseable key, or a reversed pair) is NOT
+ * trimmed. A caller passing a bad range seeing too many days is a caller bug;
+ * a patient shown an empty calendar is an outage.
+ */
+export function bookingDaysWithin(days: BookingDay[], fromDate: string, toDate: string): BookingDay[] {
+  if (!DAY_KEY.test(fromDate) || !DAY_KEY.test(toDate) || toDate < fromDate) return days;
+  return days.filter((d) => d.date >= fromDate && d.date <= toDate);
+}
+
 /**
  * Fetch live availability for one of OUR internal sites over a date range and
  * return it as future-only London days. Maps the internal site id to the real
  * Dentally site UUID; always queries at the public booking duration (30 min).
  * The range spans whole EUROPE/LONDON days, so the practice's own day is what
  * gets queried whether or not the clocks are on BST.
+ *
+ * The window actually SENT is decided by bookingAvailabilityWindow -- wider than
+ * the days asked for, because Dentally refuses anything narrower -- and the
+ * answer is trimmed back by bookingDaysWithin, so a caller only ever sees the
+ * days it asked about.
+ *
  * No caching here: the create route relies on this being a LIVE read for slot
  * revalidation (the GET route layers its own short cache on top).
  */
@@ -264,32 +381,27 @@ export async function fetchAvailabilityDays(
   toDate: string,
   now: Date = new Date(),
 ): Promise<BookingDay[]> {
+  // 1. The window is settled BEFORE a single request is issued, so a range that
+  //    has entirely ended costs nothing and is answered here: no slots, no error.
+  const queryWindow = bookingAvailabilityWindow(fromDate, toDate, now.getTime());
+  if (queryWindow === null) return [];
+
   const siteUuid = dentallySiteId(internalSiteId);
-  // 1. The site's active practitioners: availability is queried per practitioner.
+  // 2. The site's active practitioners: availability is queried per practitioner.
   const pr = await dentally.listPractitioners(siteUuid);
   const practitionerIds = parsePractitionerIds(Array.isArray(pr.practitioners) ? pr.practitioners : [], siteUuid);
   if (practitionerIds.length === 0) return [];
 
-  // 2. One availability call covering every practitioner. start_time must be a
-  //    real datetime and must not sit in the past, so clamp to now — rounded UP
-  //    onto the booking grid, so the same window yields the same slots however
-  //    many seconds apart two callers ask (see ceilToSlotGrid). Both ends are
-  //    London day boundaries (see londonDayStartMs).
-  const fromMs = londonDayStartMs(fromDate);
-  const nowFloor = ceilToSlotGrid(now.getTime());
-  const startIso = new Date(Math.max(Number.isNaN(fromMs) ? nowFloor : fromMs, nowFloor)).toISOString();
-  const toMs = londonDayStartMs(shiftDayKey(toDate, 1)) - 1; // last instant of the London day
-  const finishIso = new Date(
-    Number.isNaN(toMs) ? now.getTime() + BOOKING_HORIZON_DAYS * DAY_MS : toMs,
-  ).toISOString();
+  // 3. One availability call covering every practitioner, then back down to the
+  //    days the caller asked for.
   const res = await dentally.getAvailability({
     practitionerIds,
-    startTime: startIso,
-    finishTime: finishIso,
+    startTime: queryWindow.startTime,
+    finishTime: queryWindow.finishTime,
     duration: BOOKING_SLOT_DURATION_MIN,
   });
   const rows = Array.isArray(res.availability) ? res.availability : [];
-  return groupSlotsIntoLondonDays(parseAvailabilityRows(rows), now);
+  return bookingDaysWithin(groupSlotsIntoLondonDays(parseAvailabilityRows(rows), now), fromDate, toDate);
 }
 
 /**

@@ -106,9 +106,15 @@ export function DiaryDays({
               ? // NOT "Not working": they may be working at another of these
                 // practices, and availability carries no site to tell us which.
                 "Not confirmed here"
-              : d.workState === "off"
-                ? "Not working"
-                : columnCounts(d.appointments);
+              : d.workState === "past"
+                ? // NOT "Hours not loaded": nothing failed and nothing will load.
+                  // Dentally will not answer for a date that has gone by.
+                  "Date has passed"
+                : d.workState === "off"
+                  ? "Not working"
+                  : columnCounts(d.appointments);
+        // A date in the past is as quiet as a pending read: there is nothing for
+        // the reader to do about either.
         const loud =
           unavailable ||
           (d.workState === "unknown" && !hoursPending) ||

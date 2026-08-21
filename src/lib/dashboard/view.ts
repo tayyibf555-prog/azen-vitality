@@ -53,6 +53,7 @@ import {
   computeTakingsStripFromRollup,
   type DashboardRollupDay,
   type TakingsStrip,
+  type TakingsWindowTotals,
 } from "@/lib/dashboard/takings";
 import {
   computeUdaByPractitioner,
@@ -95,6 +96,17 @@ const UNAVAILABLE = {
     "Unavailable: the nightly patient count has not recorded a figure for this site.",
   plansTruncated:
     "Unavailable: the treatment plan scan ran out of page budget, so a count would be short.",
+  // A SCAN THAT STOPPED SHORT IS NOT AN OUTAGE, AND MUST NOT READ LIKE ONE. Dentally
+  // states how many rows match a filtered query (meta.total), so these three scans
+  // now KNOW when they read fewer than exist. "Could not be read" would send someone
+  // looking for a broken connection; the truth is that there is more data here than
+  // one page budget can carry, and the figure is withheld rather than shortened.
+  claimsTruncated:
+    "Unavailable: there are more NHS claims this contract year than one read can cover, so a UDA total would be short.",
+  invoicesTruncated:
+    "Unavailable: there are more invoices in this period than one read can cover, so a total would be short.",
+  balancesTruncated:
+    "Unavailable: there are more unpaid invoices than one read can cover, so a balance would be short.",
   planOpenWindowed:
     "Unavailable: the plan scan reads recent changes only, so it cannot see plans left open before that.",
 } as const;
@@ -296,6 +308,13 @@ export interface BuildViewInput {
   payments: readonly DashboardPayment[];
   paymentsCoverage: DayCoverage | null;
   droppedPayments?: number;
+  /**
+   * EXACT per-site, per-period takings from Dentally's own aggregate. When present
+   * this is what the strip's money is, and `payments`/`paymentsCoverage` are not
+   * consulted for it. See src/lib/dashboard/takings.ts for why there are two paths
+   * and which one the live dashboard uses.
+   */
+  takingsWindowTotals?: TakingsWindowTotals | null;
   /** Stored daily rollup rows, for periods the live scan cannot reach. */
   rollups?: readonly DashboardRollupDay[] | null;
 
@@ -330,6 +349,15 @@ export interface BuildViewInput {
 
   /** Invoices already reduced to gross, outstanding, day and patient. */
   invoices: readonly DashboardInvoice[] | null;
+  /**
+   * True when a null above is a scan that STOPPED SHORT rather than one that failed.
+   * Dentally publishes meta.total on a filtered query, so the reads genuinely know
+   * the difference; saying "could not be read" for a page-budget truncation would
+   * send someone hunting a broken connection instead of a data volume.
+   */
+  invoicesTruncated?: boolean;
+  balancesTruncated?: boolean;
+  claimsTruncated?: boolean;
   /** Invoices read but carrying no date, so unplaceable in a window. */
   undatedInvoices?: number;
 
@@ -440,12 +468,19 @@ export function toAppointmentRow(
 /**
  * Merge the live strip with the rollup strip.
  *
- * Today and yesterday come from a cheap live scan; the longer periods are meant
- * to come from the stored daily rollup, because Dentally ignores every date
- * filter on /v1/payments and paging ninety days back on a page load is not
- * acceptable. A cell takes the live figure when the live scan genuinely covered
- * it, then the rollup, then nothing. The source is recorded so the panel can say
- * which, rather than presenting two different freshnesses as one number.
+ * A cell takes the live figure when the live read genuinely produced one, then the
+ * rollup, then nothing. The source is recorded so the panel can say which, rather
+ * than presenting two different freshnesses as one number.
+ *
+ * THE ROLLUP IS NO LONGER THE PLAN FOR THE LONG PERIODS. This used to read "the
+ * longer periods are meant to come from the stored daily rollup, because Dentally
+ * ignores every date filter on /v1/payments and paging ninety days back on a page
+ * load is not acceptable". Dentally does NOT ignore the filter: start_date +
+ * end_date returns the exact windowed total in meta, in one request, so ninety days
+ * costs the same as today (verified live 2026-08-21 — see listPayments in
+ * src/lib/dentally/client.ts). Every period is now live and exact. The rollup seam
+ * stays because it is a genuine fallback for an upstream outage, but nothing is
+ * waiting on it any more.
  */
 function mergeStrips(
   live: TakingsStrip,
@@ -508,9 +543,10 @@ function buildInvoicedPanel(
   window: DayWindow,
   siteByPatientId: ReadonlyMap<string, string> | null,
   siteId: string | null,
+  unreadableReason: string,
 ): InvoicedPanel {
   if (invoices === null) {
-    const reason = UNAVAILABLE.invoicesFailed;
+    const reason = unreadableReason;
     return {
       totalPence: metric(null, reason),
       paidPence: metric(null, reason),
@@ -644,9 +680,10 @@ function buildUdaWindowPanel(
   window: DayWindow,
   siteId: string | null,
   practitionerNameById: ReadonlyMap<string, string>,
+  unreadableReason: string,
 ): UdaWindowPanel {
   if (claims === null) {
-    const reason = UNAVAILABLE.claimsFailed;
+    const reason = unreadableReason;
     return {
       completedUda: metric(null, reason),
       invalidUda: metric(null, reason),
@@ -680,9 +717,10 @@ function buildAccountsPanel(
   dropped: number,
   siteByPatientId: ReadonlyMap<string, string> | null,
   siteId: string | null,
+  unreadableReason: string,
 ): AccountsPanel {
   if (balances === null) {
-    const reason = UNAVAILABLE.balancesFailed;
+    const reason = unreadableReason;
     return {
       netBalancePence: metric(null, reason),
       totalOwedPence: metric(null, reason),
@@ -708,10 +746,11 @@ function buildUdaProgressPanel(
   siteId: string | null,
   targets: Readonly<Record<string, number>>,
   now: Date,
+  unreadableReason: string,
 ): UdaProgressPanel {
   const contractYear = nhsContractYear(now);
   if (claims === null) {
-    const reason = UNAVAILABLE.claimsFailed;
+    const reason = unreadableReason;
     return {
       contractYear,
       completedUda: metric(null, reason),
@@ -759,6 +798,10 @@ function buildScope(
   practitionerNameById: ReadonlyMap<string, string>,
 ): ScopeView {
   const siteByPatientId = input.siteByPatientId ?? null;
+  // A claim scan that stopped short and a claim scan that failed both hand us null.
+  // Only the caller knows which, so it says, and the panels quote it verbatim.
+  const claimsReason =
+    input.claimsTruncated === true ? UNAVAILABLE.claimsTruncated : UNAVAILABLE.claimsFailed;
 
   const live = computeTakingsStrip({
     payments: input.payments,
@@ -768,6 +811,11 @@ function buildScope(
     appointmentsCoverage: input.appointmentsCoverage,
     now: input.now,
     siteId,
+    windowTotals: input.takingsWindowTotals ?? null,
+    // The scope's own site list, so a group total can tell a site that took nothing
+    // from a site that could not be read. buildScope already computes it for the
+    // rollup path; the exact path needs exactly the same list.
+    siteIdsInScope,
   });
   const rollupRows = input.rollups ?? null;
   const rollup =
@@ -799,6 +847,7 @@ function buildScope(
         window,
         siteByPatientId,
         siteId,
+        input.invoicesTruncated === true ? UNAVAILABLE.invoicesTruncated : UNAVAILABLE.invoicesFailed,
       ),
       patients: buildPatientsPanel(
         input.patients,
@@ -810,7 +859,7 @@ function buildScope(
         input.sites.map((s) => s.id),
       ),
       plans: buildPlansPanel(input.plans, window, siteId, input.plansWindowed === true),
-      uda: buildUdaWindowPanel(input.claims, window, siteId, practitionerNameById),
+      uda: buildUdaWindowPanel(input.claims, window, siteId, practitionerNameById, claimsReason),
     };
   }
 
@@ -824,6 +873,7 @@ function buildScope(
       input.droppedBalances ?? 0,
       siteByPatientId,
       siteId,
+      input.balancesTruncated === true ? UNAVAILABLE.balancesTruncated : UNAVAILABLE.balancesFailed,
     ),
     udaProgress: buildUdaProgressPanel(
       input.claims,
@@ -831,6 +881,7 @@ function buildScope(
       siteId,
       input.udaTargets ?? {},
       input.now,
+      claimsReason,
     ),
     periods,
     unattributedPayments: live.unattributedPayments,

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AvailabilityWindow } from "./availability";
-import { columnWorkState, mergeSpans, offSpans, workingSpans, type Span } from "./working-spans";
+import {
+  columnIsHatched,
+  columnWorkState,
+  mergeSpans,
+  offSpans,
+  workingSpans,
+  type ColumnWorkState,
+  type Span,
+} from "./working-spans";
 
 const w = (startMin: number, endMin: number, practitionerId = "p"): AvailabilityWindow => ({
   practitionerId,
@@ -125,5 +133,61 @@ describe("columnWorkState and the cross-site fourth state", () => {
     expect(
       columnWorkState({ ...base, windows: [w(540, 1020)], presenceConfirmed: false }),
     ).toBe("unconfirmed");
+  });
+});
+
+describe("columnWorkState and the day that has already gone", () => {
+  const base = { availabilityFailed: false, appointmentsFailed: false, windows: [], apptSpans: [] };
+
+  it("is 'past', not 'off', when Dentally could not be asked about the day", () => {
+    // Dentally refuses every availability window that is not in the future, so a
+    // day that has ended is UNASKABLE. Grey would claim the practice was shut on
+    // a day we never got to ask about.
+    expect(columnWorkState({ ...base, availabilityUnanswerable: true })).toBe("past");
+  });
+
+  it("is 'past' even when the day's own bookings prove somebody was in", () => {
+    // The bookings still draw, but the HOURS are not a claim this column can make:
+    // a booking proves 10:00-10:30, never that the session ran 09:00-17:00.
+    expect(
+      columnWorkState({ ...base, apptSpans: [s(600, 630)], availabilityUnanswerable: true }),
+    ).toBe("past");
+  });
+
+  it("still prefers 'unknown' when a read FAILED on a past day", () => {
+    // An outage we do not understand must not be explained away by the calendar.
+    expect(
+      columnWorkState({ ...base, availabilityFailed: true, availabilityUnanswerable: true }),
+    ).toBe("unknown");
+    expect(
+      columnWorkState({ ...base, appointmentsFailed: true, availabilityUnanswerable: true }),
+    ).toBe("unknown");
+  });
+
+  it("is unchanged for every caller that does not pass the flag", () => {
+    expect(columnWorkState({ ...base, windows: [w(540, 1020)] })).toBe("working");
+    expect(columnWorkState(base)).toBe("off");
+    expect(columnWorkState({ ...base, availabilityUnanswerable: false })).toBe("off");
+  });
+});
+
+describe("columnIsHatched", () => {
+  it("hatches every state that is not a claim about the clinician", () => {
+    expect(columnIsHatched("unknown")).toBe(true);
+    expect(columnIsHatched("unconfirmed")).toBe(true);
+    // The one this file exists to stop being forgotten: a state added to the
+    // union and not to the paint rule renders GREY, which is a positive claim
+    // that somebody was off, made by an omission.
+    expect(columnIsHatched("past")).toBe(true);
+  });
+
+  it("does NOT hatch the two states we can stand behind", () => {
+    expect(columnIsHatched("working")).toBe(false);
+    expect(columnIsHatched("off")).toBe(false);
+  });
+
+  it("covers every member of ColumnWorkState, so a new one cannot slip past", () => {
+    const all: ColumnWorkState[] = ["working", "off", "unknown", "unconfirmed", "past"];
+    expect(all.filter(columnIsHatched)).toEqual(["unknown", "unconfirmed", "past"]);
   });
 });

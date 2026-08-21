@@ -51,7 +51,14 @@ describe("takingsCaveats", () => {
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe("takings-source");
     expect(out[0].material).toBe(false);
-    expect(out[0].text).toContain("nightly rollup");
+    // The sentence a practice manager reads under the takings band has to be TRUE.
+    // It used to say the long periods came from the nightly rollup "because Dentally
+    // does not filter payments by date" — the false premise that understated her
+    // takings by 38% over thirty days and 85% over ninety.
+    expect(out[0].text).toContain("read live from Dentally");
+    expect(out[0].text).toContain("exact total for the dates asked for");
+    expect(out[0].text).not.toContain("nightly rollup");
+    expect(out[0].text).not.toContain("does not filter");
   });
 
   it("names every blank period and carries its reason", () => {

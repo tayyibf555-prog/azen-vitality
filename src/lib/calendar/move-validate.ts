@@ -58,6 +58,7 @@ export type MoveRefusalCode =
   | "continuing_treatment"
   | "continuity_unclear"
   | "hours_unknown"
+  | "hours_past"
   | "site_unconfirmed"
   | "outside_day"
   | "outside_hours"
@@ -74,8 +75,8 @@ function hhmm(minutes: number): string {
 }
 
 /**
- * Seven checks, in a fixed order. The order is part of the contract: when
- * several apply, the reader is told the most fundamental reason first.
+ * Nine checks, in a fixed order. The order is part of the contract: when several
+ * apply, the reader is told the most fundamental reason first.
  *
  *  1 unassigned     Unassigned is not a person and has no availability, so it is
  *                   settled before anything that would consult availability.
@@ -90,13 +91,20 @@ function hhmm(minutes: number): string {
  *                   whole point of building availability first was so a drop
  *                   could be checked, and a feature that silently stops checking
  *                   is worse than one that stops working.
- *  4 outside_day    Outside the drawn extent.
- *  5 outside_hours  The GREY check. The whole span must lie inside the union of
+ *  4 hours_past     The day has ENDED, so Dentally will not answer for it at all
+ *                   and there are no hours to check against. Separated from
+ *                   hours_unknown because nothing failed: it is a fact about the
+ *                   calendar, and no retry can change it.
+ *  5 site_unconfirmed  Their windows may describe another of these practices.
+ *  6 outside_day    Outside the drawn extent.
+ *  7 outside_hours  The GREY check. The whole span must lie inside the union of
  *                   the clinician's availability windows and their own bookings.
- *  6 occupied       The day's own appointments are subtracted EXPLICITLY rather
- *                   than trusting the window to have excluded them, because
- *                   whether Dentally's windows exclude booked time is unproven.
- *  7 on_break       A break occupies; a note does not.
+ *  8 occupied       The day's own appointments are subtracted EXPLICITLY rather
+ *                   than trusting the window to have excluded them. Live Dentally
+ *                   was measured on 2026-08-21 and its windows DO exclude booked
+ *                   time -- which is why the union in 7 exists -- but subtracting
+ *                   here as well is what keeps this correct if that ever changes.
+ *  9 on_break       A break occupies; a note does not.
  */
 export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation {
   const name = ctx.targetPractitionerName.trim() === "" ? "this clinician" : ctx.targetPractitionerName;
@@ -125,6 +133,19 @@ export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation 
       ok: false,
       code: "hours_unknown",
       message: `Working hours could not be read for ${name}, so this move cannot be checked.`,
+    };
+  }
+
+  // The day is over, so Dentally cannot report the hours this move would be
+  // checked against: its availability endpoint refuses any window that is not in
+  // the future. The drop is REFUSED rather than checked against the day's
+  // bookings alone, which would accept a patient into whatever gap happened to
+  // sit between two appointments on a day nobody can verify.
+  if (ctx.workState === "past") {
+    return {
+      ok: false,
+      code: "hours_past",
+      message: `Dentally cannot report working hours for a date that has passed, so this move cannot be checked.`,
     };
   }
 

@@ -1,40 +1,54 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Lock, RotateCcw } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Lock, RotateCcw } from "lucide-react";
 import { PageHeader, SectionCard, StatCard, StatusPill, Toggle } from "@/components/primitives";
 import { ROLE_LABELS } from "@/lib/provisioning/rules";
 import { cn } from "@/lib/utils";
 
 // ===========================================================================
-// THE PERMISSIONS GRID. Rows are people, columns are what they may do.
+// THE PERMISSIONS SCREEN. A LIST OF PEOPLE, COLLAPSED, AND NOTHING ELSE UNTIL
+// ONE IS OPENED.
 //
 // Owner-only. Reads and writes /api/permissions, which repeats every gate on the
-// server — nothing here is a security boundary, and the grid greys a control for
-// the same reason it tells you why: so the owner is not clicking things that
+// server — nothing here is a security boundary, and the screen greys a control
+// for the same reason it tells you why: so the owner is not clicking things that
 // will be refused.
 //
+// WHY PERSON-FIRST, AND NOT THE GRID THIS USED TO BE. The grid was one wide
+// table PER CAPABILITY GROUP, and every one of them listed every person again.
+// Five people and eight groups is the same five names printed eight times, each
+// table scrolling sideways off the screen, and the owner reading a wall of
+// switches to answer a question that is always about ONE person: "what may
+// Blerta do?". So the axes are inverted. The page is a list of names; you click
+// a name and you get that person's permissions, every group, stacked vertically
+// so it fits the width of any screen. No horizontal scrolling anywhere.
+//
+// ONE OPEN AT A TIME (an accordion), which is the house pattern for exactly this
+// shape — see the onboarding submissions worklist. A side detail panel would be
+// a new pattern in this app, and permissions is not the place to introduce one.
+//
 // PER-CELL OPTIMISTIC WRITES, not a save bar. Fifty staff by twenty-five
-// capabilities is over a thousand cells; a batch save would be a diff nobody can
-// review and one failed row would poison the whole submission. Each toggle
+// capabilities is over a thousand decisions; a batch save would be a diff nobody
+// can review and one failed row would poison the whole submission. Each toggle
 // writes one row, flips locally, and reverts with a message if the write fails —
 // the same shape as the kill-switch panel.
 //
-// TWO STATES PER CELL, and the difference is the whole point of the screen:
+// TWO STATES PER CAPABILITY, and the difference is the whole point of the screen:
 //   INHERITED  the answer comes from the person's role. No row is stored.
-//   DECIDED    somebody chose this for this person. A dot marks it, and "Reset"
-//              deletes the row so the cell goes back to following the role.
+//   DECIDED    somebody chose this for this person. A dot marks it, and the
+//              arrow deletes the row so it goes back to following the role.
 // ===========================================================================
 
 type CellSource = "role" | "granted" | "revoked";
 
-interface Cell {
+export interface Cell {
   capability: string;
   held: boolean;
   source: CellSource;
 }
 
-interface PersonRow {
+export interface PersonRow {
   id: string;
   name: string;
   email: string;
@@ -42,13 +56,19 @@ interface PersonRow {
   cells: Cell[];
 }
 
-interface CapabilityCol {
+export interface CapabilityCol {
   key: string;
   group: string;
   label: string;
   description: string;
   destructive: boolean;
   locked: boolean;
+}
+
+/** One capability group, with the capabilities that belong to it. */
+export interface CapabilityGroupView {
+  group: string;
+  columns: CapabilityCol[];
 }
 
 interface GridResponse {
@@ -72,7 +92,7 @@ const GROUP_ORDER = [
   "security",
 ];
 
-const GROUP_LABEL: Record<string, string> = {
+export const GROUP_LABEL: Record<string, string> = {
   diary: "The diary",
   patient: "Patients",
   clinical: "The clinical record",
@@ -83,14 +103,61 @@ const GROUP_LABEL: Record<string, string> = {
   security: "Permissions themselves",
 };
 
-const ROW_LABEL_WIDTH = 240;
-const COL_WIDTH = 168;
+/**
+ * The catalog, split into the groups the open panel stacks vertically.
+ *
+ * Exported and pure so the test can prove the panel heads EVERY group the real
+ * catalog contains — a group that quietly lost its heading is a capability the
+ * owner can no longer find.
+ */
+export function groupCapabilities(capabilities: CapabilityCol[]): CapabilityGroupView[] {
+  const seen = new Map<string, CapabilityCol[]>();
+  for (const c of capabilities) {
+    const list = seen.get(c.group) ?? [];
+    list.push(c);
+    seen.set(c.group, list);
+  }
+  const ordered = [
+    ...GROUP_ORDER.filter((g) => seen.has(g)),
+    ...[...seen.keys()].filter((g) => !GROUP_ORDER.includes(g)),
+  ];
+  return ordered.map((g) => ({ group: g, columns: seen.get(g)! }));
+}
+
+/** Why nobody at all may be given this capability, or null. */
+const OWNER_ONLY_REASON =
+  "This one comes with being an owner. It cannot be switched on or off for anybody.";
+
+/**
+ * Why this PERSON cannot be edited at all, or null when they can.
+ *
+ * Split out from `lockedReason` so the open panel can say it once at the top
+ * rather than repeating it on thirty rows — but it is the SAME function the
+ * per-capability rule composes with, so the banner and the greyed switch can
+ * never disagree.
+ */
+export function personLockReason(
+  person: PersonRow,
+  protectedRoles: Set<string>,
+  actorId: string | null,
+): string | null {
+  if (protectedRoles.has(person.role)) {
+    return "An owner's permissions cannot be changed here.";
+  }
+  if (actorId && person.id === actorId) {
+    return "You cannot change your own permissions. Ask the other owner.";
+  }
+  return null;
+}
 
 export function PermissionsView({ clientSlug }: { clientSlug: string }) {
   const [data, setData] = useState<GridResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [rowError, setRowError] = useState<string | null>(null);
+  // COLLAPSED IS THE STARTING STATE, deliberately: null means no one is open, so
+  // the screen opens as a short list of names and not a wall of switches.
+  const [openPersonId, setOpenPersonId] = useState<string | null>(null);
 
   // ---------------------------------------------------------------------------
   // THE READ IS SPLIT IN TWO, AND THE SPLIT IS THE HOUSE PATTERN.
@@ -158,19 +225,10 @@ export function PermissionsView({ clientSlug }: { clientSlug: string }) {
   const protectedRoles = useMemo(() => new Set(data?.protectedRoles ?? []), [data]);
   const actorId = data?.actorId ?? null;
 
-  const groups = useMemo(() => {
-    const seen = new Map<string, CapabilityCol[]>();
-    for (const c of capabilities) {
-      const list = seen.get(c.group) ?? [];
-      list.push(c);
-      seen.set(c.group, list);
-    }
-    const ordered = [
-      ...GROUP_ORDER.filter((g) => seen.has(g)),
-      ...[...seen.keys()].filter((g) => !GROUP_ORDER.includes(g)),
-    ];
-    return ordered.map((g) => ({ group: g, columns: seen.get(g)! }));
-  }, [capabilities]);
+  const groups: CapabilityGroupView[] = useMemo(
+    () => groupCapabilities(capabilities),
+    [capabilities],
+  );
 
   const decidedCount = people.reduce(
     (n, p) => n + p.cells.filter((c) => c.source !== "role").length,
@@ -178,18 +236,13 @@ export function PermissionsView({ clientSlug }: { clientSlug: string }) {
   );
 
   /** Why this cell cannot be changed, or null when it can. */
-  function lockedReason(person: PersonRow, column: CapabilityCol): string | null {
-    if (column.locked) {
-      return "This one comes with being an owner. It cannot be switched on or off for anybody.";
-    }
-    if (protectedRoles.has(person.role)) {
-      return "An owner's permissions cannot be changed here.";
-    }
-    if (actorId && person.id === actorId) {
-      return "You cannot change your own permissions. Ask the other owner.";
-    }
-    return null;
-  }
+  const lockedReason = useCallback(
+    (person: PersonRow, column: CapabilityCol): string | null => {
+      if (column.locked) return OWNER_ONLY_REASON;
+      return personLockReason(person, protectedRoles, actorId);
+    },
+    [protectedRoles, actorId],
+  );
 
   function applyLocal(personId: string, capability: string, next: Cell | null, fallback: Cell) {
     setData((d) => {
@@ -270,7 +323,7 @@ export function PermissionsView({ clientSlug }: { clientSlug: string }) {
     <>
       <PageHeader
         title="People & permissions"
-        description="Who can do what. Each person starts with what their role allows; switch one on or off here and that decision follows them everywhere. Changes apply immediately — they may need to refresh before a button disappears from their screen, but the platform refuses the action either way."
+        description="Who can do what. Each person starts with what their role allows; open a name to switch one on or off, and that decision follows them everywhere. Changes apply immediately — they may need to refresh before a button disappears from their screen, but the platform refuses the action either way."
         stats={
           data ? (
             <>
@@ -322,138 +375,235 @@ export function PermissionsView({ clientSlug }: { clientSlug: string }) {
         </SectionCard>
       ) : (
         <div className="space-y-4">
-          <Legend />
-          {groups.map(({ group, columns }) => (
-            <SectionCard key={group} title={GROUP_LABEL[group] ?? group} bodyClassName="p-0">
-              {/* The table scrolls inside its own card. The page body never scrolls
-                  sideways, and the name column stays put while it does. */}
-              <div className="overflow-x-auto">
-                <div
-                  className="grid min-w-max text-sm"
-                  // INLINE, not a Tailwind arbitrary class: Tailwind v4 never
-                  // generates an interpolated class name, so grid-cols-[...] built
-                  // from a variable silently produces no CSS at all.
-                  style={{
-                    gridTemplateColumns: `${ROW_LABEL_WIDTH}px repeat(${columns.length}, ${COL_WIDTH}px)`,
-                  }}
-                >
-                  <div
-                    className="sticky left-0 z-20 border-b border-line bg-card-muted px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted"
-                    style={{ width: ROW_LABEL_WIDTH }}
-                  >
-                    Person
-                  </div>
-                  {columns.map((c) => (
-                    <div
-                      key={c.key}
-                      title={c.description}
-                      className="border-b border-l border-line bg-card-muted px-3 py-2.5"
-                    >
-                      <p className="flex items-start gap-1 text-[12.5px] font-semibold leading-snug text-navy">
-                        {c.locked ? <Lock size={11} className="mt-[3px] shrink-0 text-muted" /> : null}
-                        {c.label}
-                      </p>
-                    </div>
-                  ))}
-
-                  {people.map((person) => (
-                    <PersonCells
-                      key={`${group}:${person.id}`}
-                      person={person}
-                      columns={columns}
-                      busy={busy}
-                      lockedReason={lockedReason}
-                      onToggle={write}
-                      onReset={reset}
-                    />
-                  ))}
-                </div>
-              </div>
-            </SectionCard>
-          ))}
+          <PermissionsLegend />
+          <SectionCard
+            title="Permissions"
+            description="Choose a person to see and change what they may do."
+          >
+            <ul className="divide-y divide-line">
+              {people.map((person) => (
+                <PersonAccordionRow
+                  key={person.id}
+                  person={person}
+                  groups={groups}
+                  expanded={openPersonId === person.id}
+                  onExpandToggle={() =>
+                    setOpenPersonId((current) => (current === person.id ? null : person.id))
+                  }
+                  lockReason={personLockReason(person, protectedRoles, actorId)}
+                  busy={busy}
+                  lockedReason={lockedReason}
+                  onToggle={write}
+                  onReset={reset}
+                />
+              ))}
+            </ul>
+            {/* Declared ONCE for the whole list rather than per row: the same
+                keyframes repeated behind every person is the same CSS parsed
+                fifty times. */}
+            <style>{`@keyframes permissionsEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+          </SectionCard>
         </div>
       )}
     </>
   );
 }
 
-function PersonCells({
+/** How many of this person's capabilities were decided by hand rather than by their role. */
+export function decidedForPerson(person: PersonRow): number {
+  return person.cells.filter((c) => c.source !== "role").length;
+}
+
+function roleLabel(role: string): string {
+  // ROLE_LABELS, not a private copy: the invite panel on THIS SAME PAGE takes its
+  // names from it through /api/people, and one screen naming a role two ways is
+  // how "Practice manager" and "Coordinator" end up side by side. An agency_admin
+  // cannot appear here — listClientPeople filters on client_id and agency rows
+  // carry none — so the raw role is the honest fallback rather than a fifth label.
+  return (ROLE_LABELS as Record<string, string | undefined>)[role] ?? role;
+}
+
+/**
+ * ONE PERSON in the list: the always-visible summary line, and — only when it is
+ * open — that person's whole permission set.
+ *
+ * The button is the disclosure (`aria-expanded` + `aria-controls`), the panel is
+ * a labelled region pointing back at it, and both ids are derived from the
+ * person's id so they are stable across a server render and hydration.
+ */
+export function PersonAccordionRow({
   person,
-  columns,
+  groups,
+  expanded,
+  onExpandToggle,
+  lockReason,
   busy,
   lockedReason,
   onToggle,
   onReset,
 }: {
   person: PersonRow;
-  columns: CapabilityCol[];
+  groups: CapabilityGroupView[];
+  expanded: boolean;
+  onExpandToggle: () => void;
+  /** Why this whole person cannot be edited, or null. */
+  lockReason: string | null;
   busy: Set<string>;
   lockedReason: (p: PersonRow, c: CapabilityCol) => string | null;
   onToggle: (p: PersonRow, c: CapabilityCol, granted: boolean) => void;
   onReset: (p: PersonRow, c: CapabilityCol) => void;
 }) {
+  const panelId = `permissions-panel-${person.id}`;
+  const buttonId = `permissions-person-${person.id}`;
+  const decided = decidedForPerson(person);
+
   return (
-    <>
-      <div
-        className="sticky left-0 z-10 border-b border-line bg-card px-4 py-3"
-        style={{ width: ROW_LABEL_WIDTH }}
+    <li>
+      <button
+        type="button"
+        id={buttonId}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        onClick={onExpandToggle}
+        className="flex w-full items-center gap-3 py-3.5 text-left transition-colors hover:bg-card-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30"
       >
-        <p className="truncate text-sm font-semibold text-navy">{person.name}</p>
-        <p className="mt-0.5 flex items-center gap-1.5">
-          {/* ROLE_LABELS, not a private copy: the invite panel on THIS SAME PAGE
-              takes its names from it through /api/people, and one screen naming
-              a role two ways is how "Practice manager" and "Coordinator" end up
-              side by side. An agency_admin cannot appear here — listClientPeople
-              filters on client_id and agency rows carry none — so the raw role
-              is the honest fallback rather than a fifth label. */}
-          <StatusPill tone="neutral">
-            {(ROLE_LABELS as Record<string, string | undefined>)[person.role] ?? person.role}
-          </StatusPill>
-        </p>
-      </div>
-      {columns.map((column) => {
-        const cell = person.cells.find((c) => c.capability === column.key);
-        const key = `${person.id}:${column.key}`;
-        const reason = lockedReason(person, column);
-        const overridden = cell ? cell.source !== "role" : false;
-        return (
-          <div
-            key={key}
-            title={reason ?? column.description}
-            className="flex items-center gap-2 border-b border-l border-line px-3 py-3"
-          >
-            <Toggle
-              checked={Boolean(cell?.held)}
-              onChange={(next) => onToggle(person, column, next)}
-              label={`${column.label} for ${person.name}`}
-              size="sm"
-              busy={busy.has(key)}
-              disabled={Boolean(reason)}
-            />
-            {overridden ? (
-              <button
-                type="button"
-                onClick={() => onReset(person, column)}
-                disabled={busy.has(key)}
-                title="Set by hand. Reset to what their role allows."
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] font-medium",
-                  "text-status-blue hover:bg-tint-blue disabled:opacity-50",
-                )}
-              >
+        <span className="text-muted" aria-hidden>
+          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-semibold text-navy">{person.name}</span>
+            <StatusPill tone="neutral">{roleLabel(person.role)}</StatusPill>
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
+            <span className="truncate">{person.email}</span>
+            <span aria-hidden>·</span>
+            {decided > 0 ? (
+              <span className="inline-flex items-center gap-1.5 text-status-blue">
                 <span className="h-1.5 w-1.5 rounded-full bg-status-blue" aria-hidden />
-                <RotateCcw size={10} aria-hidden />
-                <span className="sr-only">Reset {column.label} for {person.name} to their role default</span>
-              </button>
+                {decided} set by hand
+              </span>
+            ) : (
+              <span>Follows their role</span>
+            )}
+            {lockReason ? (
+              <>
+                <span aria-hidden>·</span>
+                <span className="inline-flex items-center gap-1">
+                  <Lock size={11} aria-hidden />
+                  Cannot be changed here
+                </span>
+              </>
             ) : null}
+          </span>
+        </span>
+      </button>
+
+      {expanded ? (
+        <div
+          id={panelId}
+          role="region"
+          aria-labelledby={buttonId}
+          className="motion-safe:[animation:permissionsEnter_200ms_ease-out] pb-5 pl-7 pr-1"
+        >
+          {/* SAID ONCE, AT THE TOP, rather than thirty times in thirty tooltips —
+              but every switch below is still individually disabled and still
+              carries the reason on hover, because a banner is not a lock. */}
+          {lockReason ? (
+            <p className="mb-4 flex items-start gap-2 rounded-xl border border-line bg-card-muted px-3.5 py-2.5 text-sm text-muted">
+              <Lock size={14} className="mt-0.5 shrink-0" aria-hidden />
+              {lockReason}
+            </p>
+          ) : null}
+
+          <div className="space-y-5">
+            {groups.map(({ group, columns }) => (
+              <div key={group}>
+                <h4 className="border-b border-line pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+                  {GROUP_LABEL[group] ?? group}
+                </h4>
+                <ul className="divide-y divide-line">
+                  {columns.map((column) => (
+                    <CapabilityLine
+                      key={column.key}
+                      person={person}
+                      column={column}
+                      busy={busy}
+                      reason={lockedReason(person, column)}
+                      onToggle={onToggle}
+                      onReset={onReset}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
-        );
-      })}
-    </>
+        </div>
+      ) : null}
+    </li>
   );
 }
 
-function Legend() {
+/** One capability, for one person: what it is on the left, the switch on the right. */
+function CapabilityLine({
+  person,
+  column,
+  busy,
+  reason,
+  onToggle,
+  onReset,
+}: {
+  person: PersonRow;
+  column: CapabilityCol;
+  busy: Set<string>;
+  reason: string | null;
+  onToggle: (p: PersonRow, c: CapabilityCol, granted: boolean) => void;
+  onReset: (p: PersonRow, c: CapabilityCol) => void;
+}) {
+  const cell = person.cells.find((c) => c.capability === column.key);
+  const key = `${person.id}:${column.key}`;
+  const overridden = cell ? cell.source !== "role" : false;
+  return (
+    <li title={reason ?? column.description} className="flex items-start gap-3 py-2.5">
+      <span className="min-w-0 flex-1">
+        <span className="flex items-start gap-1 text-sm font-medium leading-snug text-navy">
+          {column.locked ? <Lock size={11} className="mt-[5px] shrink-0 text-muted" aria-hidden /> : null}
+          {column.label}
+        </span>
+        <span className="mt-0.5 block text-xs leading-snug text-muted">{column.description}</span>
+      </span>
+      <span className="flex shrink-0 items-center gap-2 pt-0.5">
+        {overridden ? (
+          <button
+            type="button"
+            onClick={() => onReset(person, column)}
+            disabled={busy.has(key)}
+            title="Set by hand. Reset to what their role allows."
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] font-medium",
+              "text-status-blue hover:bg-tint-blue disabled:opacity-50",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/30",
+            )}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-status-blue" aria-hidden />
+            <RotateCcw size={10} aria-hidden />
+            <span className="sr-only">Reset {column.label} for {person.name} to their role default</span>
+          </button>
+        ) : null}
+        <Toggle
+          checked={Boolean(cell?.held)}
+          onChange={(next) => onToggle(person, column, next)}
+          label={`${column.label} for ${person.name}`}
+          size="sm"
+          busy={busy.has(key)}
+          disabled={Boolean(reason)}
+        />
+      </span>
+    </li>
+  );
+}
+
+export function PermissionsLegend() {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-line bg-card px-4 py-2.5 text-xs text-muted">
       <span className="flex items-center gap-1.5">

@@ -2,23 +2,41 @@
 // The takings strip: TODAY / YESTERDAY / LAST 7 DAYS / LAST 30 DAYS / LAST 90
 // DAYS, each a money total with an appointment count beneath it.
 //
-// Why this file is shaped around "coverage":
+// THERE ARE TWO WAYS TO TOTAL A PERIOD HERE, AND ONE OF THEM IS EXACT.
 //
-// Dentally IGNORES every date filter on /v1/payments (filter[from], from and
-// dated_on_from all return the full 40,243 rows) and returns newest first. It
-// does honour site_id. So the only honest way to total a period live is to page
-// from today backwards and stop once past the boundary. That is cheap for today
-// and yesterday, and far too slow on a page load for ninety days.
+// THE EXACT ONE — `windowTotals`. /v1/payments takes `start_date` and `end_date`
+// (both inclusive, both on `dated_on`) and answers with meta.total_amount, the
+// exact sum of the window, and meta.total, its exact row count. One request per
+// site per period. Verified by live read-only probe on 2026-08-21; the parameter
+// names and the arithmetic traps are recorded on listPayments in
+// src/lib/dentally/client.ts. When the caller supplies windowTotals, the money on
+// this strip IS Dentally's own aggregate — the same number the practice reads off
+// Dentally — and no row order, page budget or coverage span can shorten it.
 //
-// Which means a caller will sometimes hand us a set that only reaches back a
-// fortnight. Totalling that set for "last 90 days" would print a real-looking
-// number that is simply wrong, and a wrong takings figure is worse than a blank
-// one. So the caller declares how far back its scan genuinely reached, and any
-// period reaching further back is reported as unavailable with a reason.
+// THE OLD ONE — `payments` + `paymentsCoverage`. It totals rows the caller
+// scanned, and it is kept for the callers that have rows (fixtures, the rollup
+// path, anything holding a normalised set already). It is NOT the live path any
+// more, and this is why:
 //
-// The long periods are meant to be served from the stored daily rollup instead,
-// via computeTakingsStripFromRollup, which applies the same rule: every day of
-// every site in the window must be present and complete, or the cell is blank.
+//   The file used to state that "Dentally IGNORES every date filter on
+//   /v1/payments ... and returns newest first", so the only honest total was to
+//   page backwards from today until past the boundary. BOTH HALVES WERE FALSE.
+//   The filter works, and the rows are ordered by id, not by date, so a backdated
+//   payment sits wherever its id falls — on site N15 page 20 spans 2023 to 2026.
+//   A backwards walk therefore stopped early AND skipped in-window rows deeper in
+//   the index, while the coverage span it reported claimed the window was fully
+//   covered. The practice owner found the result: last 30 days read £16,997.10
+//   against Dentally's £27,240.90, and last 90 days £17,012.10 against
+//   £114,429.78. Today and last-7 looked right only because the newest payments
+//   happen to cluster on page 1.
+//
+// Coverage still does its job on the row path: a set that only reaches back a
+// fortnight must not be totalled for ninety days, because a wrong takings figure
+// is worse than a blank one. It just no longer has to carry the live path.
+//
+// The stored daily rollup remains a third source, via
+// computeTakingsStripFromRollup, and applies the same rule: every day of every
+// site in the window must be present and complete, or the cell is blank.
 //
 // Pure functions only: no I/O, callers pass `now`.
 // ---------------------------------------------------------------------------
@@ -35,6 +53,30 @@ import {
   type DayCoverage,
   type DayWindow,
 } from "@/lib/dashboard/period";
+
+/**
+ * The EXACT money and count for ONE site over ONE period, read from Dentally's own
+ * aggregate (`meta.total_amount` / `meta.total` on a `start_date`+`end_date` query).
+ *
+ * Per SITE and not per group, because the group total has to be able to tell
+ * "every site answered" from "two sites answered and one read failed" — summing
+ * whatever arrived would understate the practice by a whole site in silence, which
+ * is the exact failure mode this whole change exists to remove.
+ */
+export interface TakingsWindowTotal {
+  /** Whole pence taken in the window at this site. A real zero is a real answer. */
+  totalPence: number;
+  /** Payments counted in that total. */
+  paymentCount: number;
+}
+
+/** Keyed by takingsWindowKey(siteId, period). A missing key means UNREAD, not zero. */
+export type TakingsWindowTotals = ReadonlyMap<string, TakingsWindowTotal>;
+
+/** The key a per-site, per-period total is filed under. */
+export function takingsWindowKey(siteId: string, period: DashboardPeriod): string {
+  return `${siteId}|${period}`;
+}
 
 /** One cell of the strip. A null figure means "not sourceable", never zero. */
 export interface TakingsCell {
@@ -79,11 +121,31 @@ export interface TakingsStripInput {
   /** Scope to one site, or null/undefined for the whole group (the all-sites toggle). */
   siteId?: string | null;
   periods?: readonly DashboardPeriod[];
+  /**
+   * EXACT per-site, per-period totals from Dentally's own aggregate. When present,
+   * these ARE the money on the strip and `payments`/`paymentsCoverage` are not
+   * consulted for it at all.
+   */
+  windowTotals?: TakingsWindowTotals | null;
+  /**
+   * Every site the current scope covers. REQUIRED alongside windowTotals for the
+   * all-sites scope, and it is what makes a missing site detectable: without the
+   * list, "site-rv's read failed" and "site-rv took nothing" are the same empty
+   * map, and the group total would quietly drop a practice.
+   */
+  siteIdsInScope?: readonly string[];
 }
 
 const NO_PAYMENT_DATA = "Takings unavailable for this period.";
 const SHORT_SCAN = "Takings unavailable: the live scan does not reach back this far.";
 const NO_APPOINTMENT_DATA = "Appointment count unavailable for this period.";
+/**
+ * A site in the scope did not answer, so the group total would be short by a whole
+ * practice. Named for the SITE, not for the period, because that is the fact the
+ * practice manager needs: the figure is not late or partial, one of her practices
+ * is missing from it.
+ */
+const SITE_UNREAD = "Takings unavailable: one of the sites in this view could not be read.";
 
 /**
  * Build the five-cell strip from a live payment scan.
@@ -96,6 +158,12 @@ const NO_APPOINTMENT_DATA = "Appointment count unavailable for this period.";
 export function computeTakingsStrip(input: TakingsStripInput): TakingsStrip {
   const siteId = input.siteId ?? null;
   const periods = input.periods ?? DASHBOARD_PERIODS;
+  const windowTotals = input.windowTotals ?? null;
+  // Which sites this scope has to hear from before it may state a number. One site
+  // scope: that site. Group scope: every site the caller says is in it — and if the
+  // caller named none, the group cannot be verified as whole, so it states nothing.
+  const sitesInScope: readonly string[] =
+    siteId !== null ? [siteId] : input.siteIdsInScope ?? [];
 
   let unattributedPayments = 0;
   let deletedPayments = 0;
@@ -130,7 +198,28 @@ export function computeTakingsStrip(input: TakingsStripInput): TakingsStrip {
     let paymentCount: number | null = null;
     let unavailableReason: string | null = null;
 
-    if (!input.paymentsCoverage) {
+    if (windowTotals !== null) {
+      // THE EXACT PATH. Dentally's own aggregate for this exact window, summed over
+      // the sites in scope. Every site must be present: a partial sum is the bug.
+      let sum = 0;
+      let count = 0;
+      let whole = sitesInScope.length > 0;
+      for (const site of sitesInScope) {
+        const total = windowTotals.get(takingsWindowKey(site, period));
+        if (total === undefined) {
+          whole = false;
+          break;
+        }
+        sum += total.totalPence;
+        count += total.paymentCount;
+      }
+      if (whole) {
+        totalPence = sum;
+        paymentCount = count;
+      } else {
+        unavailableReason = sitesInScope.length === 0 ? NO_PAYMENT_DATA : SITE_UNREAD;
+      }
+    } else if (!input.paymentsCoverage) {
       unavailableReason = NO_PAYMENT_DATA;
     } else if (!coversWindow(input.paymentsCoverage, window)) {
       unavailableReason = SHORT_SCAN;

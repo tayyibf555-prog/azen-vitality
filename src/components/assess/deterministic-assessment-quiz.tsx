@@ -32,6 +32,10 @@ import {
 import type { PublicFlow } from "@/lib/smile-assessment/campaign";
 import { stepNumbering, stepIndexOf } from "@/lib/smile-assessment/step-numbering";
 import { createStepBeacon, type StepBeacon } from "@/lib/smile-assessment/step-beacon";
+import {
+  createFunnelProgressReporter,
+  type FunnelProgressReporter,
+} from "@/lib/smile-assessment/funnel-progress-beacon";
 import { metaSubmitFields, trackMetaLead } from "@/lib/assess/meta-pixel-consent";
 import { createFunnelTracker, type FunnelTracker } from "@/lib/funnel/client";
 import { FunnelBlocks } from "./funnel-blocks";
@@ -366,6 +370,25 @@ export function DeterministicAssessmentQuiz({
         }),
   );
 
+  // ---------------------------------------------------------------------------
+  // LEAD FUNNEL PROGRESS (0094), and it is NOT the beacon above wearing a hat.
+  //
+  // The beacon writes ANONYMOUS rows about screens. This writes a position onto ONE
+  // NAMED PERSON'S LEAD, so it may only exist after that person has chosen to give
+  // their contact details — which is why it is a ref filled in by `submit`, and null
+  // for the whole pre-contact half of every session. A visitor who leaves before the
+  // contact step is anonymous here exactly as they were before this feature.
+  //
+  // THE TOKEN COMES FROM THE SERVER, in the submit response, and is a different mint
+  // from the beacon's nonce. Nothing in this component can put the beacon's nonce on
+  // a lead, so assessment_step_event stays unjoinable to a person by construction
+  // rather than by care. See supabase/migrations/0094.
+  //
+  // A REF RATHER THAN STATE: setting it must not re-render (the patient is looking at
+  // their result), and the effect below reads it at the moment it fires.
+  // ---------------------------------------------------------------------------
+  const progressRef = useRef<FunnelProgressReporter | null>(null);
+
   const current = history[history.length - 1];
   const step = history.length;
 
@@ -398,14 +421,25 @@ export function DeterministicAssessmentQuiz({
   useEffect(() => {
     if (mode !== "flow") return;
 
+    // ONE call site per screen for BOTH records, so a screen cannot be counted in
+    // the drop-off chart and forgotten on the lead (or the reverse). They are not
+    // the same record: `beacon.view` is anonymous and always fires, while
+    // `progressRef.current` exists only once this session gave its contact details and
+    // the server issued it a token — so the second half is silent for every screen
+    // before the contact step, and for every session that never reaches one.
+    const record = (ordinal: number) => {
+      beacon.view(ordinal);
+      progressRef.current?.report(ordinal);
+    };
+
     if (phase === "question") {
       const ordinal = current.nodeId ? stepIndexOf(numbering, current.nodeId) : null;
-      if (ordinal !== null) beacon.view(ordinal);
+      if (ordinal !== null) record(ordinal);
       return;
     }
 
     if (phase === "contact") {
-      if (numbering.contactStep !== null) beacon.view(numbering.contactStep);
+      if (numbering.contactStep !== null) record(numbering.contactStep);
       return;
     }
 
@@ -419,7 +453,7 @@ export function DeterministicAssessmentQuiz({
     // FLUSHED here rather than left to the debounce — the last screen a session saw
     // is the one the whole chart is about, and this is the moment we know there
     // will be no more. The beacon de-duplicates, so arriving twice costs nothing.
-    if (numbering.outcomeStep !== null) beacon.view(numbering.outcomeStep);
+    if (numbering.outcomeStep !== null) record(numbering.outcomeStep);
     beacon.flush();
   }, [phase, current, mode, numbering, beacon]);
 
@@ -581,11 +615,29 @@ export function DeterministicAssessmentQuiz({
           email: email.trim() || undefined,
           responses: answers,
           pageToken,
+          // 0094: which SAVE of the funnel this session walked, and the ONLY thing
+          // the browser gets to say about its position — the server derives the
+          // step and the length itself from the graph of that version.
+          //
+          // SENT ONLY WHILE STILL WALKING IT. A session that degraded to the
+          // adaptive funnel (mode !== "flow") has no fixed screens left, so it
+          // sends nothing and the server records no position at all. The
+          // alternative would be a fraction whose denominator describes a funnel
+          // this patient stopped following halfway.
+          ...(mode === "flow" && typeof flowVersion === "number" ? { flowVersion } : {}),
           ...meta,
         }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; band?: string; message?: string; error?: string; bookingUrl?: unknown; leadCreated?: unknown }
+        | {
+            ok?: boolean;
+            band?: string;
+            message?: string;
+            error?: string;
+            bookingUrl?: unknown;
+            leadCreated?: unknown;
+            funnelToken?: unknown;
+          }
         | null;
       if (!res.ok || !data?.ok || !data.band || !data.message) {
         setError(
@@ -602,6 +654,16 @@ export function DeterministicAssessmentQuiz({
         leadCreated: data.leadCreated === true,
         bookingUrl: typeof data.bookingUrl === "string" && data.bookingUrl ? data.bookingUrl : undefined,
       });
+      // 0094. The bearer for this session's later progress posts, and it exists
+      // only when the server actually stamped a position on a lead it just created:
+      // absent for an adaptive session, absent in preview, and absent when this
+      // submission was linked to a lead that already existed. Armed BEFORE the
+      // phase change, so the effect that records the result screen — the moment
+      // that decides "completed" against "abandoned" — finds a live reporter.
+      const token = typeof data.funnelToken === "string" ? data.funnelToken : "";
+      if (token && mode === "flow" && typeof flowVersion === "number" && !previewMode) {
+        progressRef.current = createFunnelProgressReporter({ token, flowVersion });
+      }
       setPhase("thanks");
       tracker.track("submitted", { band: data.band });
       // The browser half of the conversion. A no-op unless this visitor consented

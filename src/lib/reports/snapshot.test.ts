@@ -100,3 +100,64 @@ describe("buildSnapshot computes real activity only", () => {
     expect(m.hasEnoughData).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A BOUNDED READ MUST NOT BE PRESENTED AS A COMPLETE COUNT.
+//
+// This snapshot used to ask for the newest 500 leads across ALL history and then
+// filter to the window in memory — the same shape as the Dentally reads this pass
+// corrected: a read with a bound, whose result was stated as a total. listLeads'
+// own doc-comment warns about exactly this ("which under-reports silently the
+// moment a busy day is longer than the bound"), which is why `sinceIso` exists.
+//
+// These figures are not decoration: the AI business review narrates them as fact,
+// so a floor read aloud as a total is a report that lies, and a failed read read
+// aloud as "no enquiries" tells an owner mid-campaign that nobody rang.
+// ---------------------------------------------------------------------------
+describe("the snapshot states only counts it can stand behind", () => {
+  it("asks the STORE for the window instead of filtering the newest 500 in memory", async () => {
+    listLeadsMock.mockResolvedValue([lead({ createdAt: daysAgo(1) })]);
+    await buildSnapshot("week", ["site-cc"]);
+
+    const args = listLeadsMock.mock.calls[0][0] as { sinceIso?: string; limit?: number };
+    expect(args.sinceIso, "without sinceIso the bound is spent on history, not the window").toBeTruthy();
+    const since = Date.parse(args.sinceIso!);
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    expect(Math.abs(since - sevenDaysAgo)).toBeLessThan(60_000);
+    expect(args.limit).toBe(500);
+  });
+
+  it("a window that saturates the bound is reported truncated, never as a total", async () => {
+    // 500 in-window leads: there may be more, and "may" is not a count.
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 500 }, (_, i) => lead({ createdAt: daysAgo(1), stage: i % 4 === 0 ? "booked" : "new" })),
+    );
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.truncated).toBe(true);
+    expect(m.readFailed).toBe(false);
+    expect(m.hasEnoughData, "a review written over a floor would state it as a total").toBe(false);
+  });
+
+  it("a read that fails is NOT a quiet month", async () => {
+    listLeadsMock.mockRejectedValue(new Error("db down"));
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.readFailed).toBe(true);
+    expect(m.truncated).toBe(false);
+    expect(m.hasEnoughData).toBe(false);
+  });
+
+  it("a complete, quiet window is neither truncated nor failed", async () => {
+    // The control: the honest flags must stay OFF for the ordinary case, or they
+    // would blank a perfectly good report.
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => lead({ createdAt: daysAgo(i + 1) })),
+    );
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.readFailed).toBe(false);
+    expect(m.truncated).toBe(false);
+    expect(m.hasEnoughData).toBe(true);
+  });
+});

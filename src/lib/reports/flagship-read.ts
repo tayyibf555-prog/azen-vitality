@@ -1,14 +1,7 @@
 import "server-only";
 import { dentallyFromEnv } from "@/lib/dentally/read";
 import { dentallySiteId } from "@/lib/mock/clients";
-import {
-  isDayKey,
-  londonDayOfIso,
-  londonToday,
-  coversWindow,
-  type DayCoverage,
-  type DayWindow,
-} from "@/lib/dashboard/period";
+import { shiftDayKey, type DayCoverage, type DayWindow } from "@/lib/dashboard/period";
 import {
   computeNhsBandReport,
   normaliseReportNhsClaims,
@@ -24,19 +17,57 @@ import {
   type AllocationReport,
 } from "@/lib/reports/allocation-report";
 import { readAllocationPass } from "@/lib/reports/allocation-read";
-import { intersectCoverage, scanBackwards, REPORTS_PER_PAGE } from "@/lib/reports/scan";
+import { pageAll, REPORTS_PER_PAGE, REPORTS_SCAN_MAX_PAGES } from "@/lib/reports/scan";
 
 // ---------------------------------------------------------------------------
-// The server read for the two flagship reports.
+// The server read for the three flagship reports.
 //
-// Both sources (nhs_claims, payments) are the same date-unfilterable, newest-first
-// endpoints the dashboard reads, so both are assembled by paging each site
-// backwards to the window's first day and reporting how far the scan reached. A
-// window a scan could not fully cover is reported UNAVAILABLE with a reason — the
-// report she pays dentists from must never show a total quietly missing its first
-// days. One dead site fails the whole scope, on the same all-or-nothing reasoning
-// the takings strip uses: a group total silently missing a site is worse than a
+// THE ENDPOINTS FILTER BY DATE. THIS FILE USED TO SAY THEY DID NOT.
+//
+// What stood here was: "Both sources (nhs_claims, payments) are the same
+// date-unfilterable, newest-first endpoints the dashboard reads, so both are
+// assembled by paging each site backwards to the window's first day and reporting
+// how far the scan reached." Both halves were false, proven against live Dentally
+// by read-only probe on 2026-08-21, and the identical premise had already cost the
+// practice owner a takings strip that read £17,012.10 for ninety days against
+// Dentally's own £114,429.78 — 85% short — before it was corrected on the dashboard
+// (src/lib/dashboard/read.ts). These reports were built on the same sand:
+//
+//   1. THE ROWS ARE NOT DATE-ORDERED. They are ordered by id, so a claim submitted
+//      today for a course closed last year, or a payment entered today for work done
+//      in 2023, sits wherever its id falls. On site N15, /v1/payments page 1 spans
+//      2026-08-11..21 and page 20 spans 2023-09-14..2026-03-31. "Page back until you
+//      pass the boundary" therefore stopped on page one AND skipped in-window rows
+//      further in — and then reported coverage that claimed the window was covered.
+//      On a report the practice pays dentists from, that is the worst possible
+//      failure: a wrong number wearing a complete number's clothes.
+//
+//   2. EACH ENDPOINT TAKES A DATE FILTER, UNDER ITS OWN NAME:
+//        /v1/payments    start_date / end_date  — INCLUSIVE both edges, on dated_on
+//        /v1/nhs_claims  after / before         — on submitted_date
+//      They are NOT interchangeable. start_date/end_date on /v1/nhs_claims is
+//      ACCEPTED and returns zero rows for every range, 2000..2030 included, so
+//      copying the payments parameters onto the claims read would blank Report A
+//      while looking like a working filter. The parameter tables live on
+//      listPayments / listNhsClaims in src/lib/dentally/client.ts.
+//
+// WHAT SURVIVES, BECAUSE IT WAS THE RIGHT INSTINCT ON A WRONG PREMISE: a window
+// that cannot be read IN FULL is reported UNAVAILABLE with a reason, never totalled
+// from what happened to arrive. The difference is that completeness is now MEASURED
+// against Dentally's own `meta.total` (see pageAll in ./scan.ts) instead of guessed
+// from where a walk stopped — the one thing an id-ordered index can never tell you.
+// One dead site still fails the whole scope, on the same all-or-nothing reasoning
+// the takings strip uses: a group total silently missing a practice is worse than a
 // blank one.
+//
+// COST. Narrowing at the server made these reads CHEAPER, not dearer: Report A over
+// a month now pages the month's claims rather than walking 60 pages a site hoping to
+// reach its first day, and Report B pages only the window it attributes. These are
+// display reads on a page a person is looking at, so they run at the default
+// `interactive` Dentally priority (src/lib/dentally/budget.ts) and nothing here
+// pre-warms or runs on a cron. They do not participate in the display cache: a
+// report is read fresh, so there is no stale row for a failed read to be promoted
+// over.
 // ---------------------------------------------------------------------------
 
 export interface PractitionerRef {
@@ -44,11 +75,14 @@ export interface PractitionerRef {
   name: string;
 }
 
-const SCAN_UNAVAILABLE =
-  "Unavailable: the live scan did not reach the start of this period. Dentally does not filter these endpoints by date, so a long window is served by paging back from today, and this one ran past the page budget. Choose a shorter period.";
-
 const SCAN_FAILED =
   "Unavailable: a live read failed for one of the sites in scope, so the total cannot be shown honestly for the whole group.";
+
+const CLAIMS_INCOMPLETE =
+  "Unavailable: this period holds more NHS claims than a single run can read. Dentally publishes no UDA total on this endpoint — unlike payments, where the envelope carries the sum — so every claim in the window has to be paged, and this window holds more than the page budget allows. The figures are not shown from a partial read. Choose a shorter period.";
+
+const PAYMENTS_INCOMPLETE =
+  "Unavailable: this period holds more payments than a single run can read, so the money received in it cannot be attributed in full. The figures are not shown from a partial read. Choose a shorter period.";
 
 /**
  * Site's practitioners, id → display name, across every site in scope. EXPORTED
@@ -95,13 +129,50 @@ export interface NhsBandReadResult {
   droppedClaims: number;
 }
 
+/**
+ * One site's claims for the window, narrowed at the server and read to the end.
+ *
+ * BOTH EDGES ARE PADDED A DAY, on purpose. `before=<today>` was observed to EXCLUDE
+ * that day's own claims (live: 30,336 -> 30,333) and `after`'s edge convention is
+ * unstated, so the request asks for a superset and computeNhsBandReport trims to the
+ * window client-side on `submitted_date`. A superset costs at most one extra day of
+ * rows; a missing boundary day would silently drop a clinician's work.
+ *
+ * `submitted_date` arrives as a full ISO instant with an offset on live
+ * ("2026-08-21T12:55:02.776+01:00") and as a bare day key in the fixtures, which is
+ * why the trimming is done by the normaliser (londonDayOfIso) and not by comparing
+ * strings here.
+ */
+async function readWindowClaims(
+  client: ReturnType<typeof dentallyFromEnv>,
+  siteId: string,
+  window: DayWindow,
+) {
+  const after = shiftDayKey(window.from, -1) ?? window.from;
+  const before = shiftDayKey(window.to, 1) ?? window.to;
+  return pageAll(
+    (page) =>
+      client
+        .listNhsClaims({
+          siteId: dentallySiteId(siteId),
+          after,
+          before,
+          page,
+          perPage: REPORTS_PER_PAGE,
+        })
+        .then((res) => ({ rows: res.nhs_claims ?? [], meta: res.meta })),
+    REPORTS_SCAN_MAX_PAGES,
+  );
+}
+
 export async function readNhsBandReport(args: {
   siteIds: readonly string[];
   window: DayWindow;
+  /** Kept for signature parity with the other reports; the window fully determines
+   *  the read now that the server does the narrowing. */
   now: Date;
 }): Promise<NhsBandReadResult> {
   const { siteIds, window } = args;
-  const today = londonToday(args.now);
   const client = dentallyFromEnv();
 
   const [practitioners, scans] = await Promise.all([
@@ -109,39 +180,38 @@ export async function readNhsBandReport(args: {
     Promise.all(
       siteIds.map(async (siteId) => {
         try {
-          const { raw, coverage } = await scanBackwards(
-            (page) =>
-              client
-                .listNhsClaims({ siteId: dentallySiteId(siteId), page, perPage: REPORTS_PER_PAGE })
-                .then((res) => res.nhs_claims ?? []),
-            (row) => {
-              const v = (row as Record<string, unknown>)?.["submitted_date"];
-              return isDayKey(v) ? v : londonDayOfIso(v);
-            },
-            window.from,
-            today,
-          );
+          const { raw, complete } = await readWindowClaims(client, siteId, window);
+          if (!complete) {
+            console.error(
+              `[reports] NHS claim read incomplete for site ${siteId} over ${window.from}..${window.to}; ` +
+                `reporting the band report unavailable rather than totalling a slice`,
+            );
+            return { rows: [], dropped: 0, ok: true, complete: false };
+          }
           const { rows, dropped } = normaliseReportNhsClaims(raw);
-          return { rows: rows.map((c) => ({ ...c, siteId })), coverage, dropped, ok: true };
+          return { rows: rows.map((c) => ({ ...c, siteId })), dropped, ok: true, complete: true };
         } catch (err) {
           console.error(`[reports] NHS claim scan failed for site ${siteId}`, err);
-          return { rows: [], coverage: null as DayCoverage | null, dropped: 0, ok: false };
+          return { rows: [], dropped: 0, ok: false, complete: false };
         }
       }),
     ),
   ]);
 
-  if (scans.some((s) => !s.ok)) {
-    return { window, report: null, practitioners, coverage: null, unavailableReason: SCAN_FAILED, droppedClaims: 0 };
-  }
+  const empty = (unavailableReason: string): NhsBandReadResult => ({
+    window,
+    report: null,
+    practitioners,
+    coverage: null,
+    unavailableReason,
+    droppedClaims: 0,
+  });
 
-  const coverage = scans.reduce<DayCoverage | null>(
-    (acc, s, i) => (i === 0 ? s.coverage : intersectCoverage(acc, s.coverage)),
-    null,
-  );
-  if (!coversWindow(coverage, window)) {
-    return { window, report: null, practitioners, coverage, unavailableReason: SCAN_UNAVAILABLE, droppedClaims: 0 };
-  }
+  // A GENUINE OUTAGE OUTRANKS "too much data". They send someone looking in
+  // different places — one at a broken connection, the other at the period picker —
+  // and dressing an outage up as a volume problem makes it look smaller than it is.
+  if (scans.some((s) => !s.ok)) return empty(SCAN_FAILED);
+  if (scans.some((s) => !s.complete)) return empty(CLAIMS_INCOMPLETE);
 
   const claims = scans.flatMap((s) => s.rows);
   const report = computeNhsBandReport({ claims, window });
@@ -149,7 +219,9 @@ export async function readNhsBandReport(args: {
     window,
     report,
     practitioners,
-    coverage,
+    // Every site answered in full for the whole window, which is the only shape of
+    // coverage this read can now produce: it is complete or it is unavailable.
+    coverage: { from: window.from, to: window.to },
     unavailableReason: null,
     droppedClaims: scans.reduce((n, s) => n + s.dropped, 0),
   };
@@ -173,55 +245,75 @@ export interface PaymentAllocationReadResult {
 }
 
 /**
- * Report B. The payments scan is unchanged — the same backwards paging and the
- * same all-or-nothing coverage discipline as Report A, with both SCAN_* reasons
- * byte-identical. On top of it, the allocation pass reads each settled invoice and
- * attributes the money by its LINES (see allocation-read.ts). The window is capped
- * first, before a single request is made, because a longer one cannot be read
- * inside one request and a truncated attribution is a wrong wage.
+ * Report B. The payments read asks /v1/payments for exactly the window —
+ * `start_date` and `end_date` are inclusive on `dated_on` — and pages it to
+ * `meta.total`, so the set it attributes is the whole set. Unlike the takings strip
+ * it cannot stop at the envelope's `total_amount`: this report has to attribute the
+ * money LINE BY LINE, and `explanations[]` lives on the rows. The aggregate is the
+ * right answer to "what came in"; it says nothing about who earned it.
+ *
+ * On top of that the allocation pass reads each settled invoice and attributes by
+ * its lines (see allocation-read.ts). The window is capped first, before a single
+ * request is made, because a longer one cannot be read inside one request and a
+ * truncated attribution is a wrong wage.
  */
 export async function readPaymentAllocation(args: {
   siteIds: readonly string[];
   window: DayWindow;
   siteId: string | null;
+  /** Kept for signature parity; see readNhsBandReport. */
   now: Date;
 }): Promise<PaymentAllocationReadResult> {
   const { siteIds, window, siteId } = args;
-  const today = londonToday(args.now);
   const client = dentallyFromEnv();
 
-  if (allocationWindowTooLong(window)) {
-    return {
-      window,
-      report: null,
-      practitioners: [],
-      coverage: null,
-      unavailableReason: ALLOCATION_WINDOW_UNAVAILABLE,
-      droppedPayments: 0,
-      multiSite: siteIds.length > 1,
-      invoicesRequested: 0,
-      invoicesRead: 0,
-      invoicesUnreadable: 0,
-    };
-  }
+  const blank = (
+    practitioners: PractitionerRef[],
+    unavailableReason: string,
+  ): PaymentAllocationReadResult => ({
+    window,
+    report: null,
+    practitioners,
+    coverage: null,
+    unavailableReason,
+    droppedPayments: 0,
+    multiSite: siteIds.length > 1,
+    invoicesRequested: 0,
+    invoicesRead: 0,
+    invoicesUnreadable: 0,
+  });
+
+  if (allocationWindowTooLong(window)) return blank([], ALLOCATION_WINDOW_UNAVAILABLE);
 
   const [practitioners, scans] = await Promise.all([
     readPractitioners(siteIds),
     Promise.all(
       siteIds.map(async (site) => {
         try {
-          const { raw, coverage } = await scanBackwards(
+          const { raw, complete } = await pageAll(
             (page) =>
               client
-                .listPayments({ siteId: dentallySiteId(site), page, perPage: REPORTS_PER_PAGE })
-                .then((res) => res.payments ?? []),
-            (row) => {
-              const v = (row as Record<string, unknown>)?.["dated_on"];
-              return isDayKey(v) ? v : null;
-            },
-            window.from,
-            today,
+                .listPayments({
+                  siteId: dentallySiteId(site),
+                  // Both edges INCLUSIVE, on `dated_on` — the bare London day the
+                  // practice banked the money on. No padding needed or wanted: the
+                  // edges are known, and the allocation pass spends one live invoice
+                  // read per in-scope payment, so an overshoot costs real requests.
+                  from: window.from,
+                  to: window.to,
+                  page,
+                  perPage: REPORTS_PER_PAGE,
+                })
+                .then((res) => ({ rows: res.payments ?? [], meta: res.meta })),
+            REPORTS_SCAN_MAX_PAGES,
           );
+          if (!complete) {
+            console.error(
+              `[reports] payment read incomplete for site ${site} over ${window.from}..${window.to}; ` +
+                `reporting the allocation unavailable rather than attributing a slice`,
+            );
+            return { rows: [] as unknown[], ok: true, complete: false };
+          }
           // Rows stay RAW here: the allocation pass has its own normaliser, which
           // reads explanations[] as well. The site we asked for is authoritative
           // (live returns a Dentally uuid, not our internal key), so it is stamped
@@ -231,48 +323,17 @@ export async function readPaymentAllocation(args: {
               ? { ...(row as Record<string, unknown>), site_id: site }
               : row,
           );
-          return { rows, coverage, ok: true };
+          return { rows, ok: true, complete: true };
         } catch (err) {
           console.error(`[reports] payment scan failed for site ${site}`, err);
-          return { rows: [] as unknown[], coverage: null as DayCoverage | null, ok: false };
+          return { rows: [] as unknown[], ok: false, complete: false };
         }
       }),
     ),
   ]);
 
-  if (scans.some((s) => !s.ok)) {
-    return {
-      window,
-      report: null,
-      practitioners,
-      coverage: null,
-      unavailableReason: SCAN_FAILED,
-      droppedPayments: 0,
-      multiSite: siteIds.length > 1,
-      invoicesRequested: 0,
-      invoicesRead: 0,
-      invoicesUnreadable: 0,
-    };
-  }
-
-  const coverage = scans.reduce<DayCoverage | null>(
-    (acc, s, i) => (i === 0 ? s.coverage : intersectCoverage(acc, s.coverage)),
-    null,
-  );
-  if (!coversWindow(coverage, window)) {
-    return {
-      window,
-      report: null,
-      practitioners,
-      coverage,
-      unavailableReason: SCAN_UNAVAILABLE,
-      droppedPayments: 0,
-      multiSite: siteIds.length > 1,
-      invoicesRequested: 0,
-      invoicesRead: 0,
-      invoicesUnreadable: 0,
-    };
-  }
+  if (scans.some((s) => !s.ok)) return blank(practitioners, SCAN_FAILED);
+  if (scans.some((s) => !s.complete)) return blank(practitioners, PAYMENTS_INCOMPLETE);
 
   // When one site is selected, scope to it; for "all sites" the report totals the
   // group. The allocation pass reads each settled invoice and attributes by line.
@@ -286,7 +347,11 @@ export async function readPaymentAllocation(args: {
     window,
     report: pass.report,
     practitioners,
-    coverage,
+    // The PAYMENTS read's own coverage, which is what this field has always meant:
+    // every site answered in full for the whole window. It stays stated even when
+    // the allocation pass itself declines (an over-budget invoice fan-out, a failed
+    // identity) — those are different facts, each with their own reason on screen.
+    coverage: { from: window.from, to: window.to },
     unavailableReason: pass.unavailableReason,
     droppedPayments: pass.droppedPayments,
     multiSite: siteIds.length > 1,
@@ -309,6 +374,12 @@ export async function readPaymentAllocation(args: {
 // whole-group-slice fallback filtered to the roster if it regresses. Either way,
 // a window that cannot be read in full returns UNAVAILABLE, never a truncated
 // total: the NO-COUNT-VANISHES invariant then reconciles what WAS read.
+//
+// COMPLETENESS IS MEASURED HERE TOO. This path never had the backwards-walk bug —
+// it is narrowed by `updated_since` and windowed client-side — but it did decide it
+// was finished on a short page alone, which on an index that is not date-ordered
+// proves nothing. `meta.total` IS published on this endpoint, so pageAll now checks
+// the walk against it and an under-read is reported unavailable like any other.
 
 /** Which read path produced the figures — surfaced so a regression is visible. */
 export type ClinicalFilterPath = "practitioner" | "group-slice";
@@ -337,7 +408,7 @@ const CLINICAL_SCAN_FAILED =
   "Unavailable: a live read of the treatment records failed for a clinician in scope, so the completion totals cannot be shown honestly for the whole group.";
 
 const CLINICAL_WINDOW_TOO_LARGE =
-  "Unavailable: this period holds more treatment-plan items than a single run can read. Dentally serves this endpoint newest-first with no server-side band or completion filter, so a long window is paged live and this one ran past the page budget. Choose a shorter period.";
+  "Unavailable: this period holds more treatment-plan items than a single run can read. Dentally offers no server-side band or completion filter on this endpoint, so a long window is paged live and this one either ran past the page budget or came back with fewer rows than Dentally says exist. Choose a shorter period.";
 
 const CLINICAL_IDENTITY_UNAVAILABLE =
   "Unavailable: this run's item counts did not reconcile — the band cells plus the excluded rows did not add back up to the items scanned. A total that does not reconcile is not shown.";
@@ -366,7 +437,7 @@ async function mapWithConcurrency<T, R>(
 async function itemsPageOnce(
   client: ReturnType<typeof dentallyFromEnv>,
   args: { practitionerId?: string; updatedSince: string; page: number },
-): Promise<unknown[]> {
+): Promise<{ rows: unknown[]; meta: unknown }> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const res = await client.listTreatmentPlanItemsByPractitioner({
@@ -375,32 +446,30 @@ async function itemsPageOnce(
         page: args.page,
         perPage: REPORTS_PER_PAGE,
       });
-      return res.treatment_plan_items ?? [];
+      return { rows: res.treatment_plan_items ?? [], meta: res.meta };
     } catch (err) {
       if (attempt === 0) continue;
       throw err;
     }
   }
-  return [];
+  return { rows: [], meta: null };
 }
 
 /**
- * Page ONE clinician's window (per_page=100) until a short page or the budget.
- * `overBudget` true means more rows remained — the caller must not total a
- * truncated scan, so it returns the window UNAVAILABLE instead.
+ * Page ONE clinician's window (per_page=100) to Dentally's own `meta.total` or the
+ * budget. `incomplete` true means rows were missing — the caller must not total a
+ * partial scan, so it returns the window UNAVAILABLE instead.
  */
 async function pagePractitioner(
   client: ReturnType<typeof dentallyFromEnv>,
   practitionerId: string,
   updatedSince: string,
-): Promise<{ raw: unknown[]; overBudget: boolean }> {
-  const raw: unknown[] = [];
-  for (let page = 1; page <= CLINICAL_PER_PRACTITIONER_MAX_PAGES; page += 1) {
-    const rows = await itemsPageOnce(client, { practitionerId, updatedSince, page });
-    raw.push(...rows);
-    if (rows.length < REPORTS_PER_PAGE) return { raw, overBudget: false };
-  }
-  return { raw, overBudget: true };
+): Promise<{ raw: unknown[]; incomplete: boolean }> {
+  const read = await pageAll(
+    (page) => itemsPageOnce(client, { practitionerId, updatedSince, page }),
+    CLINICAL_PER_PRACTITIONER_MAX_PAGES,
+  );
+  return { raw: read.raw, incomplete: !read.complete };
 }
 
 /**
@@ -496,7 +565,7 @@ export async function readNhsClinicalReport(args: {
       const results = await mapWithConcurrency(practitioners, CLINICAL_SCAN_CONCURRENCY, (p) =>
         pagePractitioner(client, p.id, window.from),
       );
-      if (results.some((r) => r.overBudget)) return empty(CLINICAL_WINDOW_TOO_LARGE, "practitioner");
+      if (results.some((r) => r.incomplete)) return empty(CLINICAL_WINDOW_TOO_LARGE, "practitioner");
       return finalize(results.flatMap((r) => r.raw), "practitioner");
     } catch (err) {
       console.error("[reports] clinical per-practitioner scan failed", err);
@@ -506,21 +575,16 @@ export async function readNhsClinicalReport(args: {
 
   // FALLBACK (probe === "regressed"): pull the whole-group updated_since slice and
   // filter it to the roster client-side. It must be read IN FULL — a slice cut off
-  // by the budget might miss a roster row, so an over-budget slice is UNAVAILABLE.
+  // by the budget, or short of meta.total, might miss a roster row, so an incomplete
+  // slice is UNAVAILABLE.
   try {
     const rosterIds = new Set(practitioners.map((p) => p.id));
-    const raw: unknown[] = [];
-    let overBudget = true;
-    for (let page = 1; page <= CLINICAL_GROUP_SLICE_MAX_PAGES; page += 1) {
-      const rows = await itemsPageOnce(client, { updatedSince: window.from, page });
-      raw.push(...rows);
-      if (rows.length < REPORTS_PER_PAGE) {
-        overBudget = false;
-        break;
-      }
-    }
-    if (overBudget) return empty(CLINICAL_WINDOW_TOO_LARGE, "group-slice");
-    const filtered = raw.filter((row) => {
+    const slice = await pageAll(
+      (page) => itemsPageOnce(client, { updatedSince: window.from, page }),
+      CLINICAL_GROUP_SLICE_MAX_PAGES,
+    );
+    if (!slice.complete) return empty(CLINICAL_WINDOW_TOO_LARGE, "group-slice");
+    const filtered = slice.raw.filter((row) => {
       const pid = (row as Record<string, unknown>)?.["practitioner_id"];
       const id = typeof pid === "string" ? pid : typeof pid === "number" ? String(pid) : null;
       return id !== null && rosterIds.has(id);

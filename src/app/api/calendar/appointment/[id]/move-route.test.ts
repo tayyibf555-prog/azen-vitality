@@ -30,7 +30,12 @@ const h = vi.hoisted(() => ({
   // write is meant to land, so the read-back sees what a real write would leave.
   book: new Map<string, Record<string, unknown>[]>(),
   practitioners: { practitioners: [{ id: "prac-1", name: "Jin Kim" }, { id: "prac-2", name: "Femi Osei" }], failed: false },
-  availability: { rows: [] as unknown[], failed: false },
+  availability: { rows: [], failed: false } as {
+    rows: unknown[];
+    failed: boolean;
+    /** Set only by the past-day case; the mock defaults it to none. */
+    unanswerableDayKeys?: string[];
+  },
   entries: { entries: [] as unknown[], failed: false },
   updateAppointment: vi.fn(async (_id: string, _payload: Record<string, unknown>) => ({ appointment: { id: _id } })),
   applyWrite: true,
@@ -114,7 +119,10 @@ vi.mock("@/lib/dentally/write", () => ({
 vi.mock("@/lib/dentally/read", () => ({
   listSitePractitionersSafe: async (siteId: string) =>
     siteId === "site-cc" ? h.practitioners : h.otherSitePractitioners,
-  listDiaryAvailabilitySafe: async () => h.availability,
+  // The real read also reports which requested days Dentally cannot answer for
+  // (a day that has ended). Defaulted to none here so every existing case is
+  // unchanged; a case that wants that path sets it on h.availability.
+  listDiaryAvailabilitySafe: async () => ({ unanswerableDayKeys: [] as string[], ...h.availability }),
   invalidateAppointmentsCache: h.invalidate,
 }));
 
@@ -532,6 +540,19 @@ describe("the drop checks, server side", () => {
     const { res, json } = await call();
     expect(res.status).toBe(503);
     expect(String(json.error)).toContain("could not check the clinician's working hours");
+    expect(h.updateAppointment).not.toHaveBeenCalled();
+  });
+
+  it("refuses a move onto a day that has already gone, as a rule and not an outage", async () => {
+    // Dentally will not report working hours for a date that has passed, so there
+    // is nothing to check the drop against. Checking it against the day's own
+    // bookings alone would accept a patient into whatever gap happened to sit
+    // between two appointments on a day nobody can verify.
+    h.availability = { rows: [], failed: false, unanswerableDayKeys: [DAY] };
+    const { res, json } = await call();
+    // 409, not the 503 an outage gets: retrying cannot change a date.
+    expect(res.status).toBe(409);
+    expect(String(json.error)).toContain("passed");
     expect(h.updateAppointment).not.toHaveBeenCalled();
   });
 

@@ -11,6 +11,8 @@
  * the same shapes are populated from Supabase / the Dentally API.
  */
 
+import type { LeadFunnelProgress } from "@/lib/smile-assessment/funnel-progress";
+
 /* ----------------------------------------------------------------------------
  * Tenancy: Agency -> Client -> Site
  * -------------------------------------------------------------------------- */
@@ -160,6 +162,18 @@ export interface Lead {
   /** Seconds from enquiry to first contact (speed-to-lead instrumentation). */
   firstResponseSeconds: number | null;
   channel: Channel;
+  /**
+   * How far this person got through the Smile Assessment funnel they gave their
+   * details in, or absent when there was no funnel (a missed call, a website form,
+   * any lead created before 0094). OPTIONAL rather than nullable-required because
+   * most `Lead` values in this tree are not built by `toDashboardLead` — the mock
+   * operational data is a plain literal — and a required field would make every
+   * one of them carry a null it has nothing to say about.
+   *
+   * A TYPE-ONLY import, so this shared module gains no runtime dependency on the
+   * Smile Assessment tree.
+   */
+  funnelProgress?: LeadFunnelProgress | null;
 }
 
 /** Dentally appointment state machine. */

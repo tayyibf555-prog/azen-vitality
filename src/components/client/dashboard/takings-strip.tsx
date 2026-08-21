@@ -17,9 +17,13 @@ import { cn, num } from "@/lib/utils";
 // figure came from) sits small and quiet underneath.
 //
 // Freshness is still on the face of it, but as a mark on the heading rather than
-// a paragraph under the band. Today and yesterday are read live from Dentally;
-// longer periods come from the nightly rollup. A cell that could be sourced
-// neither way says so and gives the reason. It never shows £0.00.
+// a paragraph under the band. EVERY period is read live from Dentally now — the
+// endpoint takes start_date/end_date and answers with the exact total for the
+// window, so ninety days costs the same single request today does. (This comment
+// used to say the long periods came from the nightly rollup "because Dentally does
+// not filter payments by date"; that was false and it is what understated the
+// practice's takings.) A cell that could not be sourced says so and gives the
+// reason. It never shows £0.00 in place of a figure it does not have.
 // ---------------------------------------------------------------------------
 
 function Cell({

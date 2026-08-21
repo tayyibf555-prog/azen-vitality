@@ -4,7 +4,12 @@ import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import { occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
-import { offSpans, type ColumnWorkState, type Span } from "@/lib/calendar/working-spans";
+import {
+  columnIsHatched,
+  offSpans,
+  type ColumnWorkState,
+  type Span,
+} from "@/lib/calendar/working-spans";
 import { capacityLine, capacitySentence, columnCapacity } from "@/lib/calendar/capacity";
 import { labelMinutes, layoutColumn, type Placed } from "./diary-grid";
 import {
@@ -358,18 +363,13 @@ export function DiaryGrid({
                 // is NEVER grey: grey is a positive claim that a clinician is off,
                 // and a failed read turning the practice grey on a busy Monday
                 // would send a receptionist ringing patients to cancel.
-                // "unconfirmed" hatches for the same reason "unknown" does: we do
-                // not have an answer we can stand behind. Grey would claim they
-                // are off and white would offer another practice's free time as
-                // this one's capacity.
-                background:
-                  col.workState === "unknown" || col.workState === "unconfirmed"
-                    ? undefined
-                    : "var(--diary-off)",
-                backgroundImage:
-                  col.workState === "unknown" || col.workState === "unconfirmed"
-                    ? HOURS_UNKNOWN_HATCH
-                    : undefined,
+                // "unconfirmed" and "past" hatch for the same reason "unknown"
+                // does: we do not have an answer we can stand behind. Grey would
+                // claim they are off -- on a past day, a claim about a day we
+                // were never able to ask about -- and white would offer another
+                // practice's free time as this one's capacity.
+                background: columnIsHatched(col.workState) ? undefined : "var(--diary-off)",
+                backgroundImage: columnIsHatched(col.workState) ? HOURS_UNKNOWN_HATCH : undefined,
               }}
             >
               {/* WORKING AND FREE: white, painted per session, with a hard 1px rule
@@ -655,11 +655,16 @@ export function DiaryDay({
               ? // NOT "Not working". They may well be working, at another of these
                 // practices, and their availability carries no site to tell us.
                 "Not confirmed here"
-              : col.workState === "off"
-                ? "Not working"
-                : columnCounts(col.appointments);
-        // A pending read is quiet; a failed one is loud. Only one of the two is a
-        // problem the reader has to do something about.
+              : col.workState === "past"
+                ? // NOT "Hours not loaded" either: nothing failed and nothing will
+                  // load. Dentally will not answer for a date that has gone by.
+                  "Date has passed"
+                : col.workState === "off"
+                  ? "Not working"
+                  : columnCounts(col.appointments);
+        // A pending read is quiet, and so is a date in the past: neither is a
+        // problem the reader has to do anything about. Only a failure and a
+        // clinician we cannot place are loud.
         const loud =
           countsUnavailable ||
           (col.workState === "unknown" && !hoursPending) ||

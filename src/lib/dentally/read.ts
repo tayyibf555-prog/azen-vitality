@@ -12,7 +12,11 @@ import {
 } from "./display-cache";
 import { normaliseGender, type Gender } from "@/lib/patient/demographics";
 import { readPlanId } from "@/lib/calendar/funding";
-import { londonDayStartIso, londonDayEndIso } from "@/lib/calendar/availability";
+import {
+  availabilityRowsWithinDays,
+  dayKeysBetween,
+  diaryAvailabilityRequest,
+} from "@/lib/calendar/availability";
 
 /**
  * The Dentally API key for READ / sync operations (listing patients, appointments,
@@ -684,17 +688,47 @@ async function _countPatientsUncached(siteIds: string[]): Promise<number | null>
 /** One patient by id via the direct Dentally read (`GET /v1/patients/:id`), NOT a
  *  full-list scan. Returns null if the patient is not found or the read errors — so a
  *  caller resolving a single patient (e.g. reviews attend) never has to page the whole
- *  patient list and never 404s a patient just because they sit past page 1. */
-export async function getPatientById(patientId: string): Promise<PatientRecord | null> {
-  try {
-    return await getPatientByIdOrRefusal(patientId);
-  } catch {
-    // Only a budget refusal reaches here (everything else is already absorbed and
-    // logged below). This entry point's contract is "null on any failure", and
-    // twenty-odd callers depend on it, so it is kept exactly as it was.
-    return null;
-  }
-}
+ *  patient list and never 404s a patient just because they sit past page 1.
+ *
+ *  WRAPPED IN React cache(), which is a REQUEST-SCOPED dedup and not a cache with a
+ *  lifetime. It collapses the repeats WITHIN one render, and the patient record has
+ *  three of them on a single page load:
+ *
+ *    1. the layout's getPatientRecordInScope resolves the patient purely to learn
+ *       which site they are in, so the site-switcher scope can be checked;
+ *    2. the page's RecordTabContent does the SAME resolve again, because a layout
+ *       cannot hand data to its children in the App Router;
+ *    3. resolve() inside the 30s record entry reads the patient once more.
+ *
+ *  Three live `GET /v1/patients/:id` round trips against the shared Dentally rate
+ *  budget to answer one question, on every record open and every hover-prefetch of a
+ *  sibling tab. This makes it one. It is also why the prefetching added to the tab
+ *  strip is affordable at all: a prefetch pays the same three otherwise.
+ *
+ *  WHY NOT A CROSS-REQUEST TTL like the display reads above. This read's result
+ *  decides `patient.siteId`, which is the input to the caller's scope check, and the
+ *  cache key it would need (a bare patient id) carries no tenancy — exactly the shape
+ *  the display cache had to have clientId added to. cache() has no such surface: it
+ *  lives and dies inside one server render, so there is no cross-request staleness
+ *  and nothing to key wrong. The 30s record entry above already provides the
+ *  cross-request layer, keyed properly.
+ *
+ *  The contract is UNCHANGED — null on any failure, including a budget refusal — and
+ *  twenty-odd callers depend on it. Note that a null is memoised for the rest of the
+ *  render too, which is correct: two reads of a missing patient in one render must
+ *  not disagree about whether they found them.
+ */
+export const getPatientById = cache(
+  async (patientId: string): Promise<PatientRecord | null> => {
+    try {
+      return await getPatientByIdOrRefusal(patientId);
+    } catch {
+      // Only a budget refusal reaches here (everything else is already absorbed and
+      // logged below).
+      return null;
+    }
+  },
+);
 
 /**
  * getPatientById, except that a BUDGET REFUSAL propagates instead of becoming `null`.
@@ -940,10 +974,32 @@ export async function invalidateAppointmentsCache(siteIds: string[]): Promise<vo
  * our own opening-hours config has never been checked against the practice and is
  * already contradicted by live windows running past its configured close.
  *
- * Three decisions worth stating:
- *  - NO `duration` is sent. The diary wants the raw WINDOW so it can shade a
- *    session; chunking it into bookable slots at the parse seam (which the booking
- *    path does) throws away exactly the shape the grid needs.
+ * WHAT THE ROWS ACTUALLY ARE, measured against live Dentally on 2026-08-21: they
+ * are the practitioner's FREE GAPS inside their configured sessions, not the
+ * sessions themselves. A clinician booked solid from 09:30 to 17:50 with a
+ * session ending at 18:00 returned exactly one row, 17:50-18:00; a clinician
+ * booked solid all day returned none at all. Nothing outside their sessions ever
+ * came back, so the rows are bounded by real working time.
+ *
+ * That is why workingSpans() UNIONS these windows with the day's own booked
+ * appointments (see working-spans.ts) and why it MUST: taken alone, availability
+ * says a fully booked clinician is not working.
+ *
+ * Four decisions worth stating:
+ *  - THE WINDOW SENT IS NOT THE WINDOW ASKED FOR. Dentally rejects a start that
+ *    is not strictly in the future and a span of 24 hours or less, so the request
+ *    is clamped and widened (diaryAvailabilityRequest) and the answer is trimmed
+ *    back to the requested days (availabilityRowsWithinDays). Sending the plain
+ *    day range 400d on EVERY diary read at EVERY site, which is the bug this
+ *    exists to prevent coming back.
+ *  - A day that has ENTIRELY ENDED is unanswerable, not empty. No call is issued
+ *    for it and it is named in `unanswerableDayKeys`, because "Dentally cannot
+ *    tell us who worked last Monday" and "nobody worked last Monday" are
+ *    different sentences and the grid paints them differently.
+ *  - NO `duration` is sent. It is a FILTER, not a shape: `duration=30` dropped
+ *    the measured 10-minute gap entirely. The diary wants the raw WINDOW so it
+ *    can shade a session; chunking it into bookable slots at the parse seam
+ *    (which the booking path does) throws away exactly the shape the grid needs.
  *  - An EMPTY practitioner list issues NO call at all and is not a failure. It is
  *    the correct answer for a site whose practitioner read returned nobody.
  *  - A FAILED read is NEVER cached. Caching it would serve "nobody is working" back
@@ -957,6 +1013,23 @@ export async function invalidateAppointmentsCache(siteIds: string[]): Promise<vo
 const AVAILABILITY_PER_PAGE = 100;
 const AVAILABILITY_MAX_PAGES = 20;
 
+/** What is STORED. Deliberately not the returned shape: see the cache read. */
+interface CachedAvailability {
+  rows: unknown[];
+  failed: boolean;
+}
+
+export interface DiaryAvailabilityRead {
+  rows: unknown[];
+  failed: boolean;
+  /**
+   * Requested days Dentally cannot answer for because they have already ended.
+   * NOT a failure: no call was issued for them and none ever could be. The column
+   * says so in its own words rather than claiming the practice was shut.
+   */
+  unanswerableDayKeys: string[];
+}
+
 export async function listDiaryAvailabilitySafe(
   args: {
     siteId: string;
@@ -965,9 +1038,25 @@ export async function listDiaryAvailabilitySafe(
     toDayKey: string;
   },
   opts: ThroughClient = {},
-): Promise<{ rows: unknown[]; failed: boolean }> {
+): Promise<DiaryAvailabilityRead> {
   const ids = [...args.practitionerIds].filter((id) => id !== "");
-  if (ids.length === 0) return { rows: [], failed: false };
+  if (ids.length === 0) return { rows: [], failed: false, unanswerableDayKeys: [] };
+
+  // THE WINDOW IS DECIDED BEFORE THE CACHE IS TOUCHED. A range that has entirely
+  // ended can never be answered, so it costs nothing and is never stored: the
+  // answer is a property of the calendar, not of Dentally.
+  const window = diaryAvailabilityRequest({
+    fromDayKey: args.fromDayKey,
+    toDayKey: args.toDayKey,
+    nowMs: Date.now(),
+  });
+  if (window === null) {
+    return {
+      rows: [],
+      failed: false,
+      unanswerableDayKeys: dayKeysBetween(args.fromDayKey, args.toDayKey),
+    };
+  }
 
   const cacheKey = `diaryavail:${args.siteId}:${[...ids].sort().join("|")}:${args.fromDayKey}:${args.toDayKey}`;
   const clientId = clientIdForSites([args.siteId]);
@@ -975,12 +1064,23 @@ export async function listDiaryAvailabilitySafe(
   // both directions -- see the ThroughClient note on listSitePractitionersSafe.
   const useCache = displayCache && !opts.client;
   if (useCache) {
-    const hit = await displayCache!.getCached<{ rows: unknown[]; failed: boolean }>(clientId, cacheKey);
-    if (hit) return hit;
+    // ONLY THE ROWS COME OUT OF THE CACHE. Which days are past is derived from
+    // `now`, and a cache -- shared cross-instance and outliving a deploy -- is
+    // not the authority on the time. Recomputing it also means the stored shape
+    // never had to change, so entries written by the previous version are still
+    // read correctly rather than yielding an undefined list on a live diary.
+    const hit = await displayCache!.getCached<CachedAvailability>(clientId, cacheKey);
+    if (hit) {
+      return {
+        rows: hit.rows,
+        failed: hit.failed,
+        unanswerableDayKeys: window.unanswerableDayKeys,
+      };
+    }
   }
 
   const client = opts.client ?? dentallyFromEnv();
-  let result: { rows: unknown[]; failed: boolean };
+  let result: CachedAvailability;
   try {
     // PAGED, like every other list read here, and safe whether or not this
     // endpoint actually pages. Rows are keyed and de-duplicated, so an endpoint
@@ -995,20 +1095,29 @@ export async function listDiaryAvailabilitySafe(
     for (let page = 1; page <= AVAILABILITY_MAX_PAGES; page += 1) {
       const res = await client.getAvailability({
         practitionerIds: ids,
-        startTime: londonDayStartIso(args.fromDayKey),
-        finishTime: londonDayEndIso(args.toDayKey),
+        startTime: window.startTime,
+        finishTime: window.finishTime,
         page,
         perPage: AVAILABILITY_PER_PAGE,
       });
       const batch = Array.isArray(res.availability) ? res.availability : [];
+      // The days asked for are a subset of the window SENT, so each page is
+      // trimmed before it is kept.
+      const wanted = new Set(availabilityRowsWithinDays(batch, args.fromDayKey, args.toDayKey));
+      // `added` COUNTS THE UNTRIMMED PAGE, deliberately. It is the walk's
+      // end-of-pages signal (an endpoint that ignores `page` repeats itself and
+      // contributes nothing new), and that is a fact about Dentally's paging, not
+      // about our day range: counting only the trimmed rows would end the walk on
+      // the first page that happened to be all tomorrow and silently truncate the
+      // days we did ask for.
       let added = 0;
       for (const raw of batch) {
         const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
         const key = `${String(r.practitioner_id ?? "")}|${String(r.start_time ?? "")}|${String(r.finish_time ?? "")}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        rows.push(raw);
         added += 1;
+        if (wanted.has(raw)) rows.push(raw);
       }
       if (batch.length < AVAILABILITY_PER_PAGE || added === 0) {
         complete = true;
@@ -1031,7 +1140,13 @@ export async function listDiaryAvailabilitySafe(
   if (useCache && !result.failed) {
     await displayCache!.setCached(clientId, cacheKey, result, READ_CACHE_TTL_MS);
   }
-  return result;
+  // A FAILED read reports NO unanswerable days. The column must hatch as "we
+  // could not find out", not carry the calmer "that date has passed" wording over
+  // an outage we do not understand.
+  return {
+    ...result,
+    unanswerableDayKeys: result.failed ? [] : window.unanswerableDayKeys,
+  };
 }
 
 export interface PlanRecord {

@@ -326,3 +326,24 @@ describe("the cross-site refusal", () => {
     if (!unassigned.ok) expect(unassigned.code).toBe("unassigned");
   });
 });
+
+describe("a move onto a day that has already gone", () => {
+  it("is refused, and named as the calendar fact it is rather than an outage", () => {
+    const res = validateMove(move(), ctx({ workState: "past" }));
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.code).toBe("hours_past");
+    expect(res.ok === false && res.message).toContain("passed");
+  });
+
+  it("is refused even where the day's own bookings would have contained the drop", () => {
+    // The union of a past day is bookings ALONE -- Dentally will not report the
+    // hours -- so accepting a drop into the gap between two of them books a
+    // patient against hours nobody can verify.
+    const res = validateMove(
+      move(),
+      ctx({ workState: "past", workingSpans: [{ startMin: 0, endMin: 1440 }] }),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.code).toBe("hours_past");
+  });
+});

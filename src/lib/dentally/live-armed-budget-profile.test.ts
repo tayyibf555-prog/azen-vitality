@@ -15,7 +15,7 @@
 // live probe and nothing is presented as one. The counts are of requests the
 // platform ISSUES, which is exactly what the shared counter counts.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DentallyClient } from "./client";
 import {
   DENTALLY_HOURLY_LIMIT,
@@ -103,9 +103,24 @@ async function toolCost(name: string, input: Record<string, unknown>): Promise<n
 }
 
 describe("per-unit Dentally cost of each live-armed surface", () => {
+  // THE CLOCK IS PINNED, because these are measurements of a request COUNT and
+  // a count must not depend on what today is. Every date below is a fixed
+  // September one, and the readers legitimately issue NO request for a range
+  // that has entirely ended (Dentally cannot answer for a past window, so
+  // src/lib/booking/slots.ts does not ask) -- so on a real clock this whole
+  // block silently stops measuring anything the moment those dates go by.
+  const MEASURED_AT = new Date("2026-08-21T09:00:00.000Z");
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(MEASURED_AT);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("the public booking calendar costs 2 requests per uncached range", async () => {
     const { client, paths } = countingClient();
-    await fetchAvailabilityDays(client, SITE_ID, "2026-09-01", "2026-09-14");
+    await fetchAvailabilityDays(client, SITE_ID, "2026-09-01", "2026-09-14", MEASURED_AT);
     // One practitioner list, then ONE availability call covering every
     // practitioner. Per-practitioner availability would be the regression this
     // pins: it would multiply the calendar's cost by the size of the clinical team.

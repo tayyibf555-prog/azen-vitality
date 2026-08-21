@@ -554,6 +554,20 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
       from,
     );
   }
+  // THE SAME REFUSAL THE CLIENT MAKES, enforced independently here. A day that
+  // has ended cannot be asked about at all (Dentally requires a future window),
+  // so there are no hours to check the drop against. Checking it against the
+  // day's bookings alone would accept a patient into a gap on a day nobody can
+  // verify. 409 rather than 503: this is a rule, not an outage, and retrying
+  // cannot change it.
+  if (availability.unanswerableDayKeys.includes(targetDay)) {
+    return refuse(
+      409,
+      "Dentally cannot report working hours for a date that has already passed, so the appointment has not been moved.",
+      from,
+    );
+  }
+
   const parsedWindows = parseAvailabilityWindows(availability.rows);
   if (parsedWindows.total > 0 && parsedWindows.untagged / parsedWindows.total > UNTAGGED_FAIL_RATIO) {
     return refuse(

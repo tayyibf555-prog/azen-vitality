@@ -14,9 +14,17 @@ vi.mock("server-only", () => ({}));
 //
 //   AT MOCK VOLUME  — the local mock is capacity-derived and small (roughly one
 //                     page of patients and plans per site), so it measures the
-//                     scans that are expensive at ANY size: the backward walks
-//                     through payments and NHS claims, which Dentally will not
-//                     filter by date and which therefore have to be paged.
+//                     scans that are expensive at ANY size.
+//
+//                     THIS USED TO SAY those were "the backward walks through
+//                     payments and NHS claims, which Dentally will not filter by
+//                     date and which therefore have to be paged". Dentally DOES
+//                     filter both (start_date/end_date on payments, after/before on
+//                     nhs_claims — live-probed 2026-08-21), and the walks were not
+//                     only expensive, they were wrong: the practice owner found the
+//                     takings 38% short over thirty days and 85% short over ninety.
+//                     Payments now costs ONE request per site per period, because
+//                     the windowed total is in meta.total_amount.
 //
 //   AT LIVE VOLUME  — the mock cannot show the cost that actually caused the
 //                     incident, because that cost only appears on a book with
@@ -101,6 +109,11 @@ describe("one cold dashboard assembly, at mock volume", () => {
     // live-volume measurement below exists.
     expect(counter.byPath.get("/v1/patients")).toBeLessThanOrEqual(SITES * 2);
     expect(counter.byPath.get("/v1/treatment_plans")).toBeLessThanOrEqual(SITES * 2);
+
+    // THE TAKINGS READ IS NOW A FIXED, SIZE-INDEPENDENT COST: one request per site
+    // per period, whatever the book. It cannot drift back into a walk without this
+    // number moving, which is the whole point of pinning it.
+    expect(counter.byPath.get("/v1/payments")).toBe(SITES * 5);
   }, 120_000);
 });
 

@@ -612,14 +612,41 @@ export class DentallyClient {
     });
   }
   /**
-   * List invoices for the outstanding-balance scan. With `patientId` it is one
-   * patient's invoices; without, it is the practice index (paged), which real
-   * Dentally may return group-wide (like treatment_plans) regardless of site_id.
+   * List invoices for the invoiced-in-window and outstanding-balance scans. With
+   * `patientId` it is one patient's invoices; without, it is the practice index.
    * The balance is derived from each invoice's gross/total vs paid.
+   *
+   * WHICH FILTERS ACTUALLY WORK, live read-only probe 2026-08-21 (baseline
+   * meta.total 34,201 across the group):
+   *
+   *   - `created_after` / `created_before` WORK, on `created_at`:
+   *     created_after=2026-08-01 -> 597, created_before=2026-08-01 -> 33,604, and
+   *     597 + 33,604 = 34,201 exactly, which is what proves both edges are real
+   *     and that together they partition the index. Combined,
+   *     created_after=2026-05-24 & created_before=2026-08-21 -> 2,499.
+   *   - `site_id` WORKS: N15 alone -> 22,600. (The comment that stood here said
+   *     Dentally "may return group-wide regardless of site_id". It does not.)
+   *   - `paid` WORKS and matters enormously: paid=true -> 30,348, paid=false ->
+   *     3,853. The index is 89% settled rows, so an unfiltered bounded scan spends
+   *     almost all of its budget on invoices nobody owes anything on.
+   *   - `start_date`/`end_date`, `from`/`to`, `after`/`before`, `date_from`/
+   *     `date_to` and `on` are ALL IGNORED here (34,201 unchanged). The date
+   *     parameter names differ on every one of these three endpoints — payments
+   *     takes start_date/end_date, nhs_claims takes after/before, invoices takes
+   *     created_after/created_before — so never carry one across by analogy.
+   *   - `meta` carries `total` and `total_pages` but NO `total_amount`.
+   *
+   * `created_at` is an ISO datetime with an offset, so a caller filtering to a
+   * London day window should pad each edge by a day and trim client-side rather
+   * than trust the boundary instant.
    */
-  listInvoices(a: { patientId?: string; siteId?: string; page?: number; perPage?: number; paid?: boolean }) {
-    return this.get<{ invoices: unknown[] }>("/v1/invoices", {
+  listInvoices(a: {
+    patientId?: string; siteId?: string; createdAfter?: string; createdBefore?: string;
+    page?: number; perPage?: number; paid?: boolean;
+  }) {
+    return this.get<{ invoices: unknown[]; meta?: unknown }>("/v1/invoices", {
       patient_id: a.patientId, site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+      created_after: a.createdAfter, created_before: a.createdBefore,
       // Filter to UNPAID invoices server-side when asked. The invoices index is dominated
       // by settled rows; without this filter the bounded page scan spends its budget on
       // paid invoices and understates the outstanding total. Sent as a string; a source
@@ -711,35 +738,75 @@ export class DentallyClient {
   }
 
   /**
-   * Payments, for the dashboard takings strip. CALIBRATED against live Dentally on 2026-07-30 by the project owner's own read-only probe, NOT by the code below.
+   * Payments, for the dashboard takings strip.
    *
-   * Dentally IGNORES every date filter on this endpoint: filter[from], from and
-   * dated_on_from all come back with the whole set (40,243 rows). It DOES honour
-   * site_id (which drops that to 7,784). Results are returned NEWEST FIRST.
+   * THE DATE FILTER WORKS, AND THIS COMMENT USED TO SAY IT DID NOT.
    *
-   * So no date parameter is sent at all. Sending one would suggest to a reader
-   * that the window is filtered upstream when it is not, which is precisely the
-   * mistake that cost the no-show sync a whole run's budget. A period total is
+   * What stood here until 2026-08-21 was: "Dentally IGNORES every date filter on
+   * this endpoint ... So no date parameter is sent at all ... A period total is
    * built by paging from page 1 backwards through time and stopping once
-   * `dated_on` passes the boundary. That is cheap for today and yesterday; the
-   * 7, 30 and 90 day cells are served from the stored daily rollup instead.
+   * `dated_on` passes the boundary." Every clause of that was wrong, and it was
+   * load-bearing: it is the stated reason src/lib/dashboard/read.ts scanned forty
+   * pages a site and then totalled whatever it had reached. The practice owner
+   * caught the result — last 30 days read £16,997.10 against Dentally's own
+   * £27,240.90, and last 90 days £17,012.10 against £114,429.78, understated by
+   * 38% and 85%.
+   *
+   * VERIFIED BY LIVE READ-ONLY PROBE, 2026-08-21, site N15
+   * (3286d822-68c5-48ff-b1a2-065780dfcd15):
+   *
+   *   - THE PARAMETERS ARE `start_date` AND `end_date`. Not filter[from], not
+   *     dated_on_from, not from/to — those really are ignored, which is how the
+   *     original miscalibration reached the wrong conclusion. site_id&per_page=1
+   *     gives meta.total 29,155; adding start_date=2026-08-01 gives 215.
+   *   - BOTH EDGES ARE INCLUSIVE, and they filter on `dated_on`. Across four
+   *     paged windows on two sites (1,505 rows) every returned row's dated_on
+   *     fell inside the window and both boundary days were present.
+   *   - THE ROWS ARE NOT ORDERED BY DATE. They are ordered by id, so a backdated
+   *     payment sits wherever its id falls: on N15 page 1 spans 2026-08-11..21,
+   *     page 20 spans 2023-09-14..2026-03-31, page 40 spans 2025-10-15..23 and
+   *     page 41 spans 2024-09-20..2025-10-16. "Page backwards until you cross the
+   *     boundary" therefore stops early AND skips in-window rows further on. The
+   *     short windows looked right only because the newest payments happen to
+   *     cluster on page 1.
+   *   - `meta` CARRIES THE ANSWER: `total` (row count) and `total_amount` (a
+   *     decimal STRING, e.g. "27240.9"). With start_date + end_date + per_page=1
+   *     that is the exact windowed total in ONE request, no paging at all.
+   *     total_amount is an EXACT decimal sum, not a float: on N15 for July 2025 it
+   *     read "46721.8015" and summing that month's 484 rows in exact decimal
+   *     arithmetic gave 46721.8015 to the digit. Σ rows == meta.total_amount held
+   *     on all five windows checked across two sites.
+   *   - SUB-PENNY AMOUNTS EXIST. Payment 28647 on 2025-07-18 is "0.0015". So
+   *     total_amount can carry more than two decimal places and must be parsed
+   *     with exact integer arithmetic, never Number()*100 (Number("27240.9")*100
+   *     is 2724089.9999999995). See parseAggregateAmountPence in
+   *     src/lib/dashboard/money.ts.
+   *   - `deleted` is NOT a filterable parameter: deleted=true and deleted=false
+   *     both return the unfiltered count. No deleted row appeared in ~2,000
+   *     sampled rows.
+   *   - per_page is CAPPED AT 100: asking for 200, 250 or 500 silently returns 25.
    *
    * Field notes: `amount` is a STRING ("27.9"), `dated_on` is a bare YYYY-MM-DD
-   * with no time zone, and `deleted` is a boolean that must be excluded from
-   * totals. The `status` vocabulary is not verified; do not branch on it.
+   * with no time zone, and `deleted` is a boolean. The `status` vocabulary is not
+   * verified; do not branch on it.
    *
-   * Two further facts, from a read-only probe on 2026-08-03, recorded because the
-   * repo previously claimed the opposite. `patient_id` IS honoured: ?patient_id=
-   * returned exactly that patient's payments (meta.total 1), so a per-patient
-   * payments read is possible. And every row carries `explanations[]` — each entry
-   * holding invoice_id, invoice_reference, amount, payment_id and user_id —
-   * alongside `fully_explained` and `amount_unexplained`, so the payment→invoice
-   * allocation link is on this endpoint (30 of 50 sampled rows had a non-empty
-   * array). Neither is read by any caller yet.
+   * Two further facts, from a read-only probe on 2026-08-03. `patient_id` IS
+   * honoured: ?patient_id= returned exactly that patient's payments (meta.total 1),
+   * so a per-patient payments read is possible. And every row carries
+   * `explanations[]` — each entry holding invoice_id, invoice_reference, amount,
+   * payment_id and user_id — alongside `fully_explained` and `amount_unexplained`,
+   * so the payment→invoice allocation link is on this endpoint (30 of 50 sampled
+   * rows had a non-empty array).
+   *
+   * `from`/`to` are OPTIONAL so every existing caller keeps the request it made
+   * before (get() drops undefined params). The envelope now carries `meta`, which
+   * is what makes a windowed total a single request; callers that only want rows
+   * ignore it exactly as before.
    */
-  listPayments(a: { siteId?: string; page?: number; perPage?: number }) {
-    return this.get<{ payments: unknown[] }>("/v1/payments", {
-      site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+  listPayments(a: { siteId?: string; from?: string; to?: string; page?: number; perPage?: number }) {
+    return this.get<{ payments: unknown[]; meta?: unknown }>("/v1/payments", {
+      site_id: a.siteId, start_date: a.from, end_date: a.to,
+      page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
 
@@ -753,16 +820,50 @@ export class DentallyClient {
    * existed at that time. Re-probe before trusting these if the shape ever looks
    * wrong: nothing in this repo re-verifies them.
    *
-   * No date parameter is sent, on the same reasoning as listPayments: filtering
-   * is confirmed ignored on /v1/payments and was NOT confirmed working here, so
-   * assuming it works would be assuming the more convenient answer. Callers page
-   * from newest backwards and stop at their boundary. Only "submitted" is a
-   * confirmed claim_status value, so an unfamiliar status must count toward
-   * neither the completed nor the invalid UDA total.
+   * DATE FILTERING: `after` / `before`, NOT `start_date` / `end_date`.
+   *
+   * What stood here until 2026-08-21 was "No date parameter is sent, on the same
+   * reasoning as listPayments: filtering is confirmed ignored on /v1/payments and
+   * was NOT confirmed working here". The premise was false (see listPayments) and
+   * so was the conclusion, and the cost was the same shape of error: the caller
+   * paged newest-first and stopped at the first row older than 1 April, which on an
+   * id-ordered index happens on page one, so the UDA block totalled roughly a
+   * hundred of the contract year's several thousand claims and printed it as fact.
+   *
+   * VERIFIED BY LIVE READ-ONLY PROBE, 2026-08-21, site N15 (baseline meta.total
+   * 30,336):
+   *
+   *   - `after` WORKS: after=2026-04-01 -> 2,024. `before` WORKS:
+   *     before=2026-08-21 -> 30,333. The two COMBINE: after=2026-08-01 &
+   *     before=2026-08-10 -> 84.
+   *   - THEY FILTER ON `submitted_date`, which is what this endpoint's callers
+   *     bucket on. `created_after` is a SEPARATE, also-working filter on
+   *     `created_at` and gives a slightly different set (2,017 for the same
+   *     boundary) — do not confuse the two.
+   *   - `start_date` / `end_date` ARE A TRAP HERE. They are accepted and return
+   *     ZERO rows for every range, including 2000-01-01..2030-01-01. Sending them
+   *     would blank the whole UDA block while looking like a working filter. The
+   *     same two parameters are the CORRECT ones on /v1/payments; they are not
+   *     interchangeable between endpoints.
+   *   - `submitted_date_from`, `date_from`, `from` and `on` are all IGNORED
+   *     (30,336 unchanged).
+   *   - `meta` carries `total` and `total_pages` but NO `total_amount`, so unlike
+   *     payments a UDA total cannot be read from the envelope: the rows must be
+   *     paged, and a scan that cannot finish must say so rather than total a slice.
+   *   - `submitted_date` is a full ISO datetime with an offset
+   *     ("2026-08-21T12:55:02.776+01:00"), NOT the bare YYYY-MM-DD recorded above.
+   *     Read it through londonDayOfIso, never by string-slicing.
+   *   - per_page is CAPPED AT 100 (250 silently returns 25).
+   *
+   * Only "submitted" is a confirmed claim_status value, so an unfamiliar status
+   * must count toward neither the completed nor the invalid UDA total.
+   *
+   * `after`/`before` are OPTIONAL so existing callers keep their request unchanged.
    */
-  listNhsClaims(a: { siteId?: string; page?: number; perPage?: number }) {
-    return this.get<{ nhs_claims: unknown[] }>("/v1/nhs_claims", {
-      site_id: a.siteId, page: a.page ?? 1, per_page: a.perPage ?? 100,
+  listNhsClaims(a: { siteId?: string; after?: string; before?: string; page?: number; perPage?: number }) {
+    return this.get<{ nhs_claims: unknown[]; meta?: unknown }>("/v1/nhs_claims", {
+      site_id: a.siteId, after: a.after, before: a.before,
+      page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
 

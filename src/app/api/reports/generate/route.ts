@@ -52,14 +52,19 @@ export async function POST(request: Request): Promise<Response> {
   const period: ReportPeriod = body.period === "week" ? "week" : "month";
   const siteIds = await getViewSiteIds(client.id);
   const snapshot = await buildSnapshot(period, siteIds);
-  // No live activity narrative unless there is enough real activity to be reliable.
+  // No live activity narrative unless there is enough real activity to be reliable
+  // AND the figures behind it are known to be complete. The three ways that fails
+  // are DIFFERENT FACTS and must not share one message: "come back when you are
+  // busier" is wrong, and quietly misleading, when the truth is that the store could
+  // not be read or that the period is busier than one read carries.
   if (!snapshot.hasEnoughData) {
     const pw = period === "week" ? "weekly" : "monthly";
-    return Response.json({
-      ok: false,
-      awaiting: true,
-      error: `There is not enough live activity yet to write a reliable ${pw} review. Your first report unlocks once more enquiries have come through.`,
-    });
+    const error = snapshot.readFailed
+      ? `Your live enquiry activity could not be read just now, so the ${pw} review cannot be written from it. This is a read failing, not a quiet ${period}. Try again shortly.`
+      : snapshot.truncated
+        ? `This ${period} holds more enquiries than a single read carries, so the figures behind the ${pw} review cannot be stated in full. The review is not written from a partial count.`
+        : `There is not enough live activity yet to write a reliable ${pw} review. Your first report unlocks once more enquiries have come through.`;
+    return Response.json({ ok: false, awaiting: true, error });
   }
   const { system, user } = buildReportPrompt(snapshot, period, client.name);
 

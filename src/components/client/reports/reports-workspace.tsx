@@ -42,6 +42,24 @@ const PERIODS: { key: ReportPeriod; label: string }[] = [
 // (and alongside) the AI review: the inline dot-prefixed numeral row, not tiles.
 // Every figure here is live activity, never an estimate.
 function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
+  // A COUNT WE CANNOT STAND BEHIND IS NOT SHOWN. A failed read would otherwise
+  // render as four zeroes, which on this strip is indistinguishable from a quiet
+  // week and is acted on as one; a truncated window would render a floor as a total.
+  if (snapshot.readFailed || snapshot.truncated) {
+    return (
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Live snapshot, {snapshot.windowLabel}
+        </p>
+        <p className="mt-3 text-xs text-muted">
+          {snapshot.readFailed
+            ? "Your live enquiry activity could not be read just now, so these figures are not shown. This is a read failing, not a quiet period."
+            : "This period holds more enquiries than a single read carries, so these figures would be a floor rather than a total. They are not shown from a partial count."}
+        </p>
+      </div>
+    );
+  }
+
   const items: { label: string; value: string; dot: string }[] = [
     { label: "Enquiries", value: String(snapshot.enquiries), dot: "bg-status-blue" },
     { label: "Booked", value: String(snapshot.booked), dot: "bg-status-green" },

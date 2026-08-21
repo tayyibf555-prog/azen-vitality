@@ -49,9 +49,17 @@ export function takingsCaveats(args: {
     {
       id: "takings-source",
       label: "How these are sourced",
+      // THIS SENTENCE USED TO BE THE BUG, IN WRITING, ON HER SCREEN. It read: "Today
+      // and yesterday are read live from Dentally. Longer periods come from the
+      // nightly rollup, because Dentally does not filter payments by date and a
+      // ninety day scan cannot run on a page load." Dentally DOES filter payments by
+      // date, and totalling the rows we happened to reach is what understated the
+      // last thirty days by 38% and the last ninety by 85%. Every period is now asked
+      // for by name and answered by Dentally itself.
       text:
-        "Today and yesterday are read live from Dentally. Longer periods come from the nightly rollup, " +
-        "because Dentally does not filter payments by date and a ninety day scan cannot run on a page load.",
+        "Every period is read live from Dentally, which returns the exact total for the dates asked for. " +
+        "The figure is the same one Dentally reports for that window, including any refunds taken in it. " +
+        "A period that could not be read says so instead of showing a total.",
       material: false,
     },
   ];

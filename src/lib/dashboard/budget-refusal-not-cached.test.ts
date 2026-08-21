@@ -597,11 +597,18 @@ describe("the OTHER cached display reads", () => {
       const pracs = await listSitePractitionersSafe("site-cc");
       expect(pracs.failed).toBe(true);
 
+      // A FUTURE day, derived from the clock rather than written down. Dentally
+      // refuses an availability window that is not in the future, so the read
+      // does not issue a call at all for a day that has ended -- and a fixed date
+      // here would therefore stop testing the refusal the moment it went by.
+      const futureDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(
+        new Date(Date.now() + 2 * 86_400_000),
+      );
       const avail = await listDiaryAvailabilitySafe({
         siteId: "site-cc",
         practitionerIds: ["pr1"],
-        fromDayKey: "2026-08-20",
-        toDayKey: "2026-08-20",
+        fromDayKey: futureDay,
+        toDayKey: futureDay,
       });
       expect(avail.failed).toBe(true);
     });

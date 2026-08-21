@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  AVAILABILITY_MIN_SPAN_MS,
   UNTAGGED_FAIL_RATIO,
+  availabilityRowsWithinDays,
   dayKeysBetween,
+  diaryAvailabilityRequest,
   londonDayEndIso,
   londonDayStartIso,
   londonInstantMs,
@@ -148,5 +151,130 @@ describe("dayKeysBetween", () => {
     ]);
     expect(dayKeysBetween("2026-07-31", "2026-07-31")).toEqual(["2026-07-31"]);
     expect(dayKeysBetween("2026-08-02", "2026-07-31")).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// THE WINDOW DENTALLY WILL ACCEPT.
+//
+// THE BUG THIS PINS (live, every site, every day, until 2026-08-21): the diary
+// asked for londonDayStart(from) -> londonDayEnd(to), and live Dentally answered
+//
+//   400 {"start_time":["must be in the future"],
+//        "finish_time":["must be greater than 24 hours"]}
+//
+// so the availability read failed EVERYWHERE and every column hatched with
+// "Working hours could not be read". Both halves of that rule are asserted below;
+// break either and a named test here goes red.
+// ===========================================================================
+
+describe("diaryAvailabilityRequest", () => {
+  const NOON = Date.parse("2026-07-31T11:00:00Z"); // 12:00 London, BST
+
+  it("never asks about a moment in the past, even for a range starting today", () => {
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-07-31",
+      nowMs: NOON,
+    });
+    expect(req).not.toBeNull();
+    expect(Date.parse(req!.startTime)).toBeGreaterThan(NOON);
+  });
+
+  it("always asks for MORE than 24 hours, even for a single day", () => {
+    // A London day is at most 25 hours and at least 23, and NONE of them is
+    // "greater than 24 hours" once the start has been clamped to now.
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-07-31",
+      nowMs: NOON,
+    });
+    const spanMs = Date.parse(req!.finishTime) - Date.parse(req!.startTime);
+    expect(spanMs).toBeGreaterThan(24 * 3_600_000);
+    expect(spanMs).toBe(AVAILABILITY_MIN_SPAN_MS);
+  });
+
+  it("holds both rules together for a whole future week", () => {
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-08-03",
+      toDayKey: "2026-08-09",
+      nowMs: NOON,
+    });
+    expect(Date.parse(req!.startTime)).toBeGreaterThan(NOON);
+    expect(Date.parse(req!.finishTime) - Date.parse(req!.startTime)).toBeGreaterThan(24 * 3_600_000);
+  });
+
+  it("keeps the requested start when the range is entirely in the future", () => {
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-08-03",
+      toDayKey: "2026-08-04",
+      nowMs: NOON,
+    });
+    // Nothing is clamped away: a future Monday is asked about from its own
+    // midnight, so the morning is not lost.
+    expect(req!.startTime).toBe(londonDayStartIso("2026-08-03"));
+    expect(req!.finishTime).toBe(londonDayEndIso("2026-08-04"));
+    expect(req!.unanswerableDayKeys).toEqual([]);
+  });
+
+  it("returns null for a range that has entirely ended, so no doomed call is made", () => {
+    expect(
+      diaryAvailabilityRequest({ fromDayKey: "2026-07-29", toDayKey: "2026-07-30", nowMs: NOON }),
+    ).toBeNull();
+  });
+
+  it("names the elapsed days of a mixed week instead of dropping them silently", () => {
+    // Wednesday lunchtime, looking at Mon-Sun. Monday and Tuesday are over;
+    // today and the rest of the week are not.
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-27",
+      toDayKey: "2026-08-02",
+      nowMs: Date.parse("2026-07-29T11:00:00Z"),
+    });
+    expect(req!.unanswerableDayKeys).toEqual(["2026-07-27", "2026-07-28"]);
+    expect(Date.parse(req!.startTime)).toBeGreaterThan(Date.parse("2026-07-29T11:00:00Z"));
+  });
+
+  it("does not call TODAY unanswerable while any of it is left", () => {
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-07-31",
+      nowMs: NOON,
+    });
+    expect(req!.unanswerableDayKeys).toEqual([]);
+  });
+});
+
+describe("availabilityRowsWithinDays", () => {
+  const row = (start: string, finish: string) => ({
+    practitioner_id: 1,
+    start_time: start,
+    finish_time: finish,
+  });
+
+  it("drops the extra days the widened window drags in", () => {
+    const today = row("2026-07-31T14:00:00+01:00", "2026-07-31T17:00:00+01:00");
+    const tomorrow = row("2026-08-01T09:00:00+01:00", "2026-08-01T12:00:00+01:00");
+    expect(availabilityRowsWithinDays([today, tomorrow], "2026-07-31", "2026-07-31")).toEqual([today]);
+  });
+
+  it("keeps a row that merely OVERLAPS the requested range", () => {
+    // Split across the day boundary by parseAvailabilityWindows, so it must
+    // survive the trim: half of it belongs to the day that was asked for.
+    const overnight = row("2026-07-31T22:00:00+01:00", "2026-08-01T02:00:00+01:00");
+    expect(availabilityRowsWithinDays([overnight], "2026-07-31", "2026-07-31")).toEqual([overnight]);
+  });
+
+  it("treats a window finishing exactly at London midnight as the previous day's", () => {
+    const untilMidnight = row("2026-07-31T20:00:00+01:00", "2026-08-01T00:00:00+01:00");
+    expect(availabilityRowsWithinDays([untilMidnight], "2026-08-01", "2026-08-01")).toEqual([]);
+    expect(availabilityRowsWithinDays([untilMidnight], "2026-07-31", "2026-07-31")).toEqual([
+      untilMidnight,
+    ]);
+  });
+
+  it("keeps a row it cannot parse, rather than hiding a shape change", () => {
+    const junk = { practitioner_id: 1 };
+    expect(availabilityRowsWithinDays([junk], "2026-07-31", "2026-07-31")).toEqual([junk]);
   });
 });

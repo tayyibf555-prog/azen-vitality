@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { IntentLink } from "@/components/platform/intent-link";
 import { NavProgressBar } from "@/components/platform/nav-progress";
 import { useParams, usePathname, useRouter } from "next/navigation";
+import { isPlainNavigationClick, pendingHrefFor } from "@/lib/nav-intent";
 import {
   ChevronDown,
   LogOut,
@@ -110,7 +112,10 @@ export function ClientSidebar({
   // pathname it was recorded on lets us DERIVE staleness during render, rather
   // than clearing it from an effect a frame later.
   const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
-  const pendingHref = pending && pending.from === pathname ? pending.href : null;
+  // The rule itself now lives in @/lib/nav-intent, shared with the section bar and
+  // the patient tab strip, so the three surfaces cannot drift and the rule is
+  // covered by the node suite (a .tsx file is not collected by vitest here).
+  const pendingHref = pendingHrefFor(pending, pathname);
 
   const hrefFor = (slug: string) => moduleHref(base, slug);
   const isActive = (slug: string) => {
@@ -227,16 +232,30 @@ export function ClientSidebar({
               {groups.map((g) => {
                 const GIcon = g.icon;
                 const onRoute = g.key === routeKey;
+                // Straight to the area's FIRST module. The rail chooses an area;
+                // the section bar along the top then carries everything else in
+                // it. Nothing expands, so there is no second state to get wrong.
+                const href = moduleHref(base, g.items[0]?.slug ?? "");
                 return (
-                  <Link
+                  <IntentLink
                     key={g.key}
-                    // Straight to the area's FIRST module. The rail chooses an
-                    // area; the section bar along the top then carries everything
-                    // else in it. Nothing expands, so there is no second state of
-                    // this control to get wrong.
-                    href={moduleHref(base, g.items[0]?.slug ?? "")}
+                    href={href}
                     aria-label={`${g.label}${onRoute ? ", current area" : ""}`}
                     aria-current={onRoute ? "page" : undefined}
+                    // THE RAIL IS THE DESKTOP NAV, and until now it was the only
+                    // nav surface here with neither prefetch nor an optimistic
+                    // mark: the treatment below was written for the drawer, which
+                    // is the MOBILE one and never renders at lg. So on the screens
+                    // the practice actually uses, every area switch was a cold
+                    // dynamic round trip with the old area still highlighted.
+                    //
+                    // `onRoute` reads through routeKey -> isActive -> pendingHref,
+                    // so recording the click here moves the rail's own highlight
+                    // on the same frame, and lights the progress bar with it.
+                    onClick={(e) => {
+                      if (!isPlainNavigationClick(e)) return;
+                      if (href !== pathname) setPending({ href, from: pathname });
+                    }}
                     className={cn(
                       RAIL_BUTTON,
                       onRoute
@@ -246,7 +265,7 @@ export function ClientSidebar({
                   >
                     <GIcon size={17} />
                     <RailTip>{g.label}</RailTip>
-                  </Link>
+                  </IntentLink>
                 );
               })}
             </nav>
@@ -333,26 +352,20 @@ export function ClientSidebar({
                         const active = isActive(item.slug);
                         return (
                           <li key={item.slug || "overview"}>
-                            <Link
+                            <IntentLink
                               href={href}
                               aria-current={active ? "page" : undefined}
-                              // Hover/focus intent starts the full dynamic prefetch, so
-                              // by the time the click lands the page is often already
-                              // cached (default prefetch does nothing for dynamic routes
-                              // with no loading.tsx). Production-only by Next's design.
-                              onMouseEnter={() => router.prefetch(href)}
-                              onFocus={() => router.prefetch(href)}
+                              // Intent (a rested hover, a focus, a press) starts the
+                              // FULL dynamic prefetch, because the default does
+                              // nothing at all for dynamic routes with no loading.tsx.
+                              // This used to be a bare router.prefetch on the first
+                              // mouseenter; IntentLink is the same idea with a dwell
+                              // delay, so dragging the cursor down a column of thirty
+                              // modules no longer commissions thirty server renders.
+                              // Production-only by Next's design.
                               onClick={(e) => {
                                 // Plain left-click only (not cmd/ctrl/shift = new tab).
-                                if (
-                                  e.button !== 0 ||
-                                  e.metaKey ||
-                                  e.ctrlKey ||
-                                  e.shiftKey ||
-                                  e.altKey
-                                ) {
-                                  return;
-                                }
+                                if (!isPlainNavigationClick(e)) return;
                                 // Close the drawer even when tapping the CURRENT
                                 // page's link (no pathname change to auto-close it).
                                 setNavOpen(false);
@@ -385,7 +398,7 @@ export function ClientSidebar({
                                   soon
                                 </span>
                               ) : null}
-                            </Link>
+                            </IntentLink>
                           </li>
                         );
                       })}

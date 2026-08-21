@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
     entries: [],
     unconfirmed: [],
     availabilityFailed: false,
+    unanswerableDayKeys: [] as string[],
     fundingFailed: false,
     entriesFailed: false,
   })),
@@ -124,5 +125,31 @@ describe("the day range", () => {
   it("requires at least one day", async () => {
     const { res } = await call("");
     expect(res.status).toBe(400);
+  });
+});
+
+describe("the days Dentally cannot answer for", () => {
+  it("reaches the client, so a past day can hatch instead of claiming nobody worked", () => {
+    // The whole point of the flag is that it is SERVER-computed: the board must
+    // not have to decide from its own clock what "already over" means. If the
+    // route drops it, every elapsed column silently reverts to grey -- a positive
+    // claim that the practice was shut, from a question nobody could ask.
+    h.loadDiaryDay.mockResolvedValueOnce({
+      siteId: "site-cc",
+      dayKeys: ["2026-07-27"],
+      windows: [],
+      funding: {},
+      entries: [],
+      unconfirmed: [],
+      availabilityFailed: false,
+      unanswerableDayKeys: ["2026-07-27"],
+      fundingFailed: false,
+      entriesFailed: false,
+    });
+    return call("2026-07-27").then(({ res, json }) => {
+      expect(res.status).toBe(200);
+      expect(json.availabilityFailed).toBe(false);
+      expect(json.unanswerableDayKeys).toEqual(["2026-07-27"]);
+    });
   });
 });

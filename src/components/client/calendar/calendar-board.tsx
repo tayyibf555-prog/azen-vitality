@@ -548,6 +548,18 @@ export function CalendarBoard({
     [diaryDay.unconfirmed],
   );
 
+  // The days that had already ENDED when availability was read. Dentally refuses
+  // every question about a past instant, so these columns can never be answered
+  // -- which is a different sentence from "we could not read it" and a very
+  // different one from "nobody was working". Server-computed, so the client never
+  // has to decide from its own clock what "already over" means.
+  const unanswerableDays = useMemo(
+    () => new Set(diaryDay.unanswerableDayKeys),
+    [diaryDay.unanswerableDayKeys],
+  );
+  const allDaysUnanswerable =
+    viewDayKeys.length > 0 && viewDayKeys.every((k) => unanswerableDays.has(k));
+
   const columnWork = useCallback(
     (practitionerId: string | null, dayKey: string, appts: readonly DiaryAppointment[]) => {
       const windows = windowsFor(diaryDay.windows, practitionerId, dayKey);
@@ -569,12 +581,13 @@ export function CalendarBoard({
           windows,
           apptSpans,
           presenceConfirmed,
+          availabilityUnanswerable: unanswerableDays.has(dayKey),
         }),
         workingSpans: presenceConfirmed ? workingSpans(windows, apptSpans) : [],
         entries: entriesForColumn(entries, practitionerId, dayKey),
       };
     },
-    [diaryDay.windows, availabilityFailed, readFailed, entries, unconfirmedKeys],
+    [diaryDay.windows, availabilityFailed, readFailed, entries, unconfirmedKeys, unanswerableDays],
   );
 
   const dayGridColumns: DayColumnInput[] = useMemo(
@@ -1517,6 +1530,20 @@ export function CalendarBoard({
         <Alert>
           Working hours could not be read for {siteName}. The diary cannot say who is working today.
           Booked appointments below are still correct.
+        </Alert>
+      ) : null}
+      {/* A DATE THAT HAS PASSED IS NOT AN OUTAGE, and must not borrow the alarm
+          above. Dentally's availability endpoint refuses any window that is not
+          in the future, so a fully elapsed day can never be answered: "try again
+          shortly" would be false, and an alarm nobody can act on is how staff
+          learn to ignore the ones that matter. Only when EVERY day on screen is
+          in that state -- a week containing today still has hours to talk
+          about. */}
+      {!availabilityFailed && !diaryPending && allDaysUnanswerable ? (
+        <Alert>
+          {viewDayKeys.length === 1 ? "That date has passed" : "Those dates have passed"}, and Dentally
+          cannot report working hours once a date has. The columns are unshaded for that reason, not
+          because anyone was off. Booked appointments below are still correct.
         </Alert>
       ) : null}
       {fundingFailed && !diaryPending ? (

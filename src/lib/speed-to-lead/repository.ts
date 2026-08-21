@@ -1,4 +1,6 @@
 import { serviceClient } from "@/lib/supabase/server";
+import { isFunnelFinalStep } from "@/lib/smile-assessment/funnel-progress";
+import type { LeadFunnelProgress } from "@/lib/smile-assessment/funnel-progress";
 import type { LeadStage } from "@/lib/types";
 import type {
   LeadChannel,
@@ -35,6 +37,17 @@ interface LeadRow {
   updated_at: string;
   nurture_step: number | string | null;
   nurture_next_at: string | null;
+  // 0094. Optional in the TYPE on purpose, exactly as the campaign row's 0078
+  // columns are: 0094 is written and not applied, so `select("*")` against today's
+  // table simply does not return these six keys. Marking them required would be a
+  // lie the compiler believes, and the first lead read would hand the worklist
+  // `funnel_total_steps: undefined`. See the defaulting in rowToLead.
+  funnel_last_step?: number | string | null;
+  funnel_total_steps?: number | string | null;
+  funnel_flow_version?: number | string | null;
+  funnel_last_step_at?: string | null;
+  funnel_completed_at?: string | null;
+  funnel_session_nonce?: string | null;
 }
 
 interface AttemptRow {
@@ -79,6 +92,19 @@ function rowToLead(r: LeadRow): SpeedToLeadLead {
     updatedAt: r.updated_at,
     nurtureStep: numOrNull(r.nurture_step) ?? 0,
     nurtureNextAt: r.nurture_next_at,
+    // The pre-0094 default, decided once, here: no funnel behind this lead, so
+    // neither the worklist nor the drawer says anything about one. An un-migrated
+    // row, an un-migrated database and a lead that never came through an authored
+    // funnel are three roads to the same (silent) rendering. `?? null` rather than
+    // a cast so `undefined` and a NULL column are indistinguishable to every
+    // reader downstream.
+    funnelProgress: {
+      lastStep: numOrNull(r.funnel_last_step),
+      totalSteps: numOrNull(r.funnel_total_steps),
+      flowVersion: numOrNull(r.funnel_flow_version),
+      lastStepAt: r.funnel_last_step_at ?? null,
+      completedAt: r.funnel_completed_at ?? null,
+    },
   };
 }
 
@@ -302,6 +328,176 @@ export async function recordFirstResponse(
     })
     .eq("id", id);
   if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Funnel progress (0094). Three functions: one the submit route calls once, and
+// two the unauthenticated progress endpoint reaches — the latter pair shaped
+// around exactly that.
+// ---------------------------------------------------------------------------
+
+/**
+ * Record WHERE IN THE FUNNEL this lead's owner was when they gave their details,
+ * and mint nothing: the bearer token is chosen by the caller (server-side) and
+ * passed in, because the caller is the one that has to hand it back to the browser.
+ *
+ * A SEPARATE UPDATE, NOT A WIDER INSERT, and this is the one design decision in
+ * this feature that is about go-live rather than about funnels. Folding these
+ * columns into `insertLead` would put them on the statement that creates the lead —
+ * so on a database where 0094 has not been applied yet, PostgREST would reject the
+ * unknown columns and the INSERT would fail, and a real patient's enquiry would be
+ * lost to an analytics field. As its own statement it cannot do that: the lead is
+ * already committed, this either lands or it does not, and the caller treats a
+ * failure as "no progress recorded" (the pre-0094 rendering, i.e. silence).
+ *
+ * ONCE PER LEAD. `funnel_session_nonce is null` in the predicate, so a lead that
+ * already carries a token cannot have a second one written over it — which would
+ * orphan the first browser's session and hand a second one a bearer for somebody
+ * else's row.
+ *
+ * Returns true iff the stamp landed. The caller must only return the token to the
+ * browser on true: a token the database never stored is a token every later post
+ * would be dropped for, and the browser would spend a session posting into a bin.
+ */
+export async function stampLeadFunnelCapture(args: {
+  leadId: string;
+  lastStep: number;
+  totalSteps: number;
+  flowVersion: number;
+  nonce: string;
+}): Promise<boolean> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .update({
+      funnel_last_step: args.lastStep,
+      funnel_total_steps: args.totalSteps,
+      funnel_flow_version: args.flowVersion,
+      funnel_session_nonce: args.nonce,
+      funnel_last_step_at: new Date().toISOString(),
+    })
+    .eq("id", args.leadId)
+    .is("funnel_session_nonce", null)
+    .select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * The bare minimum about a lead that the public progress endpoint may hold.
+ *
+ * NOTE WHAT IS NOT HERE: no name, no phone, no email, no stage, no score. The
+ * lookup below selects these columns BY NAME rather than `*`, so a patient's
+ * contact details never enter the process that serves an unauthenticated request
+ * at all — not in a response body, not in a log line, not in a heap dump. It is
+ * the cheapest possible way to make "this endpoint cannot leak a patient" a fact
+ * about the query rather than a promise about the handler.
+ */
+export interface LeadFunnelSession {
+  id: string;
+  siteId: string;
+  progress: LeadFunnelProgress;
+}
+
+/**
+ * The one lead holding this bearer token, or null.
+ *
+ * A UNIQUE-INDEX SEEK (0094, partial unique on funnel_session_nonce), so a
+ * stranger posting a wrong token costs one index probe rather than a scan of the
+ * practice's enquiry history. `maybeSingle` and not `single`: "no such token" is
+ * the ordinary case on a public endpoint, not an error.
+ */
+export async function findLeadFunnelSession(nonce: string): Promise<LeadFunnelSession | null> {
+  if (!nonce) return null;
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("speed_to_lead_lead")
+    .select(
+      "id, site_id, funnel_last_step, funnel_total_steps, funnel_flow_version, funnel_last_step_at, funnel_completed_at",
+    )
+    .eq("funnel_session_nonce", nonce)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const r = data as Partial<LeadRow> & { id: string; site_id: string };
+  return {
+    id: r.id,
+    siteId: r.site_id,
+    progress: {
+      lastStep: numOrNull(r.funnel_last_step),
+      totalSteps: numOrNull(r.funnel_total_steps),
+      flowVersion: numOrNull(r.funnel_flow_version),
+      lastStepAt: r.funnel_last_step_at ?? null,
+      completedAt: r.funnel_completed_at ?? null,
+    },
+  };
+}
+
+/**
+ * Raise ONE lead's funnel position, and stamp completion if that position is the
+ * funnel's last screen. Returns true iff a row actually moved.
+ *
+ * EVERY RULE IS IN THE `WHERE`, not in the code that ran before it. The caller has
+ * already checked the same things with `canAdvanceFunnelProgress`, and that check
+ * is not the guard — it is what lets the caller stop early. Between a read and a
+ * write on a public endpoint anything can happen (two of the patient's own posts
+ * racing, a retry arriving late), so the conditional UPDATE is what makes the
+ * rules true:
+ *
+ *   funnel_session_nonce = nonce   ADDRESSING AND AUTHORISATION IN ONE. A caller
+ *                                  without the token cannot name a row at all, and
+ *                                  the id alone is not enough to move one — so a
+ *                                  guessed or leaked lead id is worth nothing here.
+ *   funnel_flow_version = version  N and M stay from the same save of the funnel.
+ *   funnel_last_step < step        FORWARD ONLY, and atomically: of two racing
+ *                                  posts the higher one wins and the lower one
+ *                                  simply matches no row.
+ *   funnel_completed_at is null    (completing writes only) so completion is
+ *                                  stamped AT MOST ONCE by the predicate itself
+ *                                  rather than by an argument about which posts
+ *                                  can arrive.
+ *
+ * `step > totalSteps - 1` is the one rule that cannot be a filter — PostgREST has
+ * no column-to-column comparison — so the ceiling is passed in from the row the
+ * caller just read and re-derived here rather than trusted from the request.
+ *
+ * AND IT TOUCHES NOTHING ELSE. The patch names funnel_* columns only. In
+ * particular it does NOT bump `updated_at`: resetStaleContacting reclaims a lead
+ * stranded at 'contacting' by comparing updated_at to a cutoff, and a patient's
+ * browser must not be able to postpone the practice's own failsafe. Nor does it
+ * touch `stage` — where somebody got to in a funnel is orthogonal to what the
+ * practice has done about them.
+ */
+export async function advanceLeadFunnelProgress(args: {
+  leadId: string;
+  nonce: string;
+  flowVersion: number;
+  step: number;
+  /** The lead's own funnel length, read a moment ago. The ceiling, never the caller's. */
+  totalSteps: number;
+}): Promise<boolean> {
+  const { leadId, nonce, flowVersion, step, totalSteps } = args;
+  if (!nonce || step > totalSteps - 1 || step < 0) return false;
+  const db = serviceClient();
+  const now = new Date().toISOString();
+  const completing = isFunnelFinalStep(totalSteps, step);
+
+  let q = db
+    .from("speed_to_lead_lead")
+    .update({
+      funnel_last_step: step,
+      funnel_last_step_at: now,
+      ...(completing ? { funnel_completed_at: now } : {}),
+    })
+    .eq("id", leadId)
+    .eq("funnel_session_nonce", nonce)
+    .eq("funnel_flow_version", flowVersion)
+    .lt("funnel_last_step", step);
+  if (completing) q = q.is("funnel_completed_at", null);
+
+  const { data, error } = await q.select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
 /**

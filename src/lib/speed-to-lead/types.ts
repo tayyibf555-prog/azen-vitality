@@ -5,6 +5,7 @@
 // needs; toDashboardLead narrows it to the shared Lead the worklist renders.
 
 import type { Lead, LeadStage, Channel } from "@/lib/types";
+import type { LeadFunnelProgress } from "@/lib/smile-assessment/funnel-progress";
 
 export type { LeadStage, Channel };
 
@@ -41,6 +42,21 @@ export interface SpeedToLeadLead {
   nurtureStep: number;
   /** When the next nurture touch is due (ISO), or null when not scheduled. */
   nurtureNextAt: string | null;
+  /**
+   * How far through the Smile Assessment funnel this person got (0094). All-null
+   * for every lead that did not come through an authored funnel, which is most of
+   * them. ORTHOGONAL TO `stage`: stage is what the PRACTICE has done about the
+   * lead, this is what the PATIENT did in the funnel, and neither is derived from
+   * the other.
+   *
+   * OPTIONAL, and not because it is sometimes unknown — `rowToLead` always builds
+   * it. It is optional because this interface is also written by hand in a couple
+   * of dozen fixtures across the messaging, nurture and co-pilot suites, and making
+   * every one of them declare an all-null funnel would be churn in files this
+   * feature has nothing to do with. Readers treat absent and all-null identically:
+   * both render nothing.
+   */
+  funnelProgress?: LeadFunnelProgress;
 }
 
 /** One outbound first-contact attempt. */
@@ -79,5 +95,9 @@ export function toDashboardLead(row: SpeedToLeadLead): Lead {
     firstResponseSeconds: firstResponseSeconds(row),
     // The shared Channel union includes "phone"; our first-contact channels are a subset.
     channel: row.channel as Channel,
+    // Passed through unchanged: the worklist and the drawer render the sentence
+    // from funnelProgressLabel, and narrowing it here would mean deciding the
+    // wording in two places.
+    funnelProgress: row.funnelProgress,
   };
 }

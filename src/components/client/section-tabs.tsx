@@ -1,11 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
+import { IntentLink } from "@/components/platform/intent-link";
+import { NavProgressBar } from "@/components/platform/nav-progress";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/mock-auth";
+import { isActiveWithPending, isPlainNavigationClick, pendingHrefFor } from "@/lib/nav-intent";
 import { shellAreas, shellBase } from "@/lib/nav-shell";
 import { groupKeyForActive, isModuleActive, moduleHref } from "@/lib/sidebar-prefs";
 
@@ -104,13 +106,20 @@ export function SectionTabs({
   const pathname = usePathname();
   const listRef = useRef<HTMLDivElement>(null);
 
+  // The module a click is in flight to. Same derive-during-render rule the rail
+  // and the patient tab strip use: these bars are force-dynamic routes with no
+  // loading.tsx (and must never have one), so without an optimistic mark the bar
+  // sat on the OLD tab for the whole server round trip and the click looked lost.
+  const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
+  const pendingHref = pendingHrefFor(pending, pathname);
+
   // Keep the selected tab in view. With eight or nine modules in an area the bar
   // scrolls on a laptop, and landing on a module whose tab sits off the right
   // edge reads as "this page is not in the bar at all".
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>('[data-active="true"]');
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [pathname]);
+  }, [pathname, pendingHref]);
 
   if (items.length < 2) return null;
 
@@ -119,6 +128,7 @@ export function SectionTabs({
       aria-label={`${areaLabel} sections`}
       className="border-b border-line bg-card"
     >
+      <NavProgressBar active={pendingHref !== null} />
       <div
         ref={listRef}
         // Scrolls horizontally rather than wrapping to a second row: a nav whose
@@ -126,14 +136,26 @@ export function SectionTabs({
         className="scrollbar-thin flex items-stretch gap-0.5 overflow-x-auto px-2 lg:px-4"
       >
         {items.map((item) => {
-          const active = isModuleActive(pathname, base, item.slug);
+          const href = moduleHref(base, item.slug);
+          // A module's own page AND anything nested under it count as settled —
+          // isModuleActive is a prefix rule, which is why the pending check is
+          // layered on top of it rather than replacing it.
+          const active = isActiveWithPending(
+            href,
+            pendingHref,
+            isModuleActive(pathname, base, item.slug),
+          );
           const Icon = item.icon;
           return (
-            <Link
+            <IntentLink
               key={item.slug || "index"}
-              href={moduleHref(base, item.slug)}
+              href={href}
               data-active={active}
               aria-current={active ? "page" : undefined}
+              onClick={(e) => {
+                if (!isPlainNavigationClick(e)) return;
+                if (href !== pathname) setPending({ href, from: pathname });
+              }}
               className={cn(
                 "group relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2 text-[12.5px] transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
@@ -163,7 +185,7 @@ export function SectionTabs({
                   active ? "bg-blue-royal" : "bg-transparent",
                 )}
               />
-            </Link>
+            </IntentLink>
           );
         })}
       </div>

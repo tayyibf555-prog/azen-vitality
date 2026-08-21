@@ -7,11 +7,20 @@
 // workingSpans = merge( that practitioner's availability windows for the day,
 //                       UNION their own booked appointment spans for the day )
 //
-// Booked appointments count as working time for two reasons. A booking is proof
-// of a session even when availability says nothing about it. And whether
-// Dentally's windows already exclude booked time is UNPROVEN: the union is
-// correct under both readings, whereas taking the windows alone would carve a
-// hole out of a working day wherever somebody is with a patient.
+// Booked appointments count as working time, and it is now PROVEN that they have
+// to. Measured against live Dentally on 2026-08-21: the availability endpoint
+// returns a practitioner's FREE GAPS inside their sessions, not the sessions
+// themselves. A clinician booked 09:30-17:50 against a session ending at 18:00
+// returned exactly one row, 17:50-18:00; a clinician booked solid returned NONE.
+// Taken alone, availability therefore says a fully booked clinician is not
+// working, and carves a hole out of the day wherever somebody is with a patient.
+// The union is what puts the day back.
+//
+// It is also what keeps TODAY honest. Dentally refuses to answer for any instant
+// in the past, so this morning's free gaps are unaskable by lunchtime; what the
+// union restores is the part of the morning that is actually EVIDENCED -- a
+// booked appointment is proof the clinician was in at that time. Nothing is
+// extrapolated from other days.
 //
 // ONLY OCCUPYING STATES COUNT. An earlier version unioned every state, cancelled
 // and did-not-attend included, on the reasoning that the clinician was in the
@@ -86,14 +95,31 @@ export function workingSpans(
  *   "unconfirmed"  they work at more than one of these practices and nothing
  *                  site-scoped puts them at THIS one today. -> the hatch, with
  *                  its own words. See site-presence.ts.
+ *   "past"         the day has ended, and Dentally's availability endpoint
+ *                  refuses every question about a time that is not in the
+ *                  future. -> the hatch, with its own words again. Nothing
+ *                  failed and nothing will change by retrying.
  *
- * These four must never collapse. A failed read painted grey is a positive claim
+ * These five must never collapse. A failed read painted grey is a positive claim
  * that the practice is closed, which on a busy Monday sends a receptionist
- * ringing patients to cancel. And "unconfirmed" painted white is another
- * practice's free time offered as this one's capacity, which is how a patient
- * ends up booked with a clinician who is not in the building.
+ * ringing patients to cancel. "unconfirmed" painted white is another practice's
+ * free time offered as this one's capacity, which is how a patient ends up booked
+ * with a clinician who is not in the building. And "past" told as a failure
+ * ("could not be read ... try again shortly") is an alarm about a date nobody can
+ * do anything about, which is how staff learn to ignore the alarms that matter.
  */
-export type ColumnWorkState = "working" | "off" | "unknown" | "unconfirmed";
+export type ColumnWorkState = "working" | "off" | "unknown" | "unconfirmed" | "past";
+
+/**
+ * The three states that get the HATCH rather than a colour.
+ *
+ * One predicate, in the module that owns the states, because the two grids draw
+ * this independently and a state added to one and forgotten in the other paints
+ * grey: a positive claim that somebody was off, made by an omission.
+ */
+export function columnIsHatched(state: ColumnWorkState): boolean {
+  return state === "unknown" || state === "unconfirmed" || state === "past";
+}
 
 export function columnWorkState(args: {
   availabilityFailed: boolean;
@@ -107,11 +133,24 @@ export function columnWorkState(args: {
    * with no cross-site picture is unchanged.
    */
   presenceConfirmed?: boolean;
+  /**
+   * True when this day had already ended when availability was read, so Dentally
+   * could not be asked about it at all. See day-load's unanswerableDayKeys.
+   */
+  availabilityUnanswerable?: boolean;
 }): ColumnWorkState {
   // A failed APPOINTMENT read matters as much as a failed availability read here,
   // because the union includes appointments: a missing appointment set would
   // shrink the white area and make booked time read as off.
+  //
+  // CHECKED FIRST, ahead of "past". A read that failed for reasons we do not
+  // understand must not be explained away by the calendar: if the appointments
+  // are missing too, the honest word is still "we do not know".
   if (args.availabilityFailed || args.appointmentsFailed) return "unknown";
+  // The day is over and the question is unaskable. Distinguished from "off"
+  // because grey would claim the practice was shut on a day we never got to ask
+  // about, and from "unknown" because nothing is wrong and retrying cannot help.
+  if (args.availabilityUnanswerable === true) return "past";
   // Checked BEFORE the emptiness test, so an unconfirmed clinician never reads as
   // "Not working": that is a claim about them, and the truth is a gap in what we
   // can see.

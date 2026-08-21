@@ -33,6 +33,12 @@ export interface DiaryDayState {
    */
   unconfirmed: UnconfirmedPresence[];
   availabilityFailed: boolean;
+  /**
+   * Days on screen that Dentally cannot report hours for, because they have
+   * already ended. NOT a failure and NOT an empty answer: the columns hatch and
+   * say the date has passed. See day-load.ts.
+   */
+  unanswerableDayKeys: string[];
   fundingFailed: boolean;
   entriesFailed: boolean;
   /** True while a fetch for the current key is in flight. */
@@ -53,6 +59,10 @@ const UNKNOWN: Omit<DiaryDayState, "loading"> = {
   entries: [],
   unconfirmed: [],
   availabilityFailed: true,
+  // EMPTY under "we did not get an answer". A day we could not read is "unknown",
+  // and claiming it was unanswerable would explain away an outage as a calendar
+  // fact.
+  unanswerableDayKeys: [],
   fundingFailed: true,
   entriesFailed: true,
 };
@@ -69,6 +79,7 @@ interface DayResponse {
   entries?: DiaryEntryRecord[];
   unconfirmed?: UnconfirmedPresence[];
   availabilityFailed?: boolean;
+  unanswerableDayKeys?: string[];
   fundingFailed?: boolean;
   entriesFailed?: boolean;
 }
@@ -145,6 +156,9 @@ export function useDiaryDay(
           // flag and each is honoured separately here. A missing flag is treated
           // as FAILED, never as success.
           availabilityFailed: body.availabilityFailed !== false,
+          // A missing list is EMPTY, never assumed: this one only ever softens
+          // what a column claims, so the safe default is not to soften it.
+          unanswerableDayKeys: Array.isArray(body.unanswerableDayKeys) ? body.unanswerableDayKeys : [],
           fundingFailed: body.fundingFailed !== false,
           entriesFailed: body.entriesFailed !== false,
           loading: false,
