@@ -43,8 +43,16 @@ export function takingsCaveats(args: {
   strip: TakingsStrip;
   unattributedPayments: number;
   droppedPayments: number;
+  /**
+   * The NAMES of any practices whose takings read did not answer, already resolved
+   * from ids by the caller. Appended to the blank-period sentence so a manager of
+   * three practices is told which one is missing rather than that one of them is.
+   * It never decides whether anything is blank — see BuildViewInput.takingsFailedSites.
+   */
+  failedSiteNames?: readonly string[];
 }): Caveat[] {
   const { strip, unattributedPayments, droppedPayments } = args;
+  const failedSiteNames = args.failedSiteNames ?? [];
   const out: Caveat[] = [
     {
       id: "takings-source",
@@ -68,14 +76,28 @@ export function takingsCaveats(args: {
   if (blanks.length > 0) {
     const names = blanks.map((c) => PERIOD_LABELS[c.period].toLowerCase()).join(", ");
     const reason = blanks[0]?.unavailableReason ?? "no reason was given.";
+    // WHICH PRACTICE. The read layer has always known and the screen has never said,
+    // so "one of the sites in this view could not be read" left a manager of three
+    // practices to guess. Nothing above this line depends on the list.
+    const named =
+      failedSiteNames.length === 0
+        ? ""
+        : ` The site${s(failedSiteNames.length)} that did not answer: ${failedSiteNames.join(", ")}.`;
     out.push({
       id: "takings-blank",
       label: `${blanks.length} period${s(blanks.length)} blank`,
-      text: `${names} ${isAre(blanks.length)} blank: ${reason}`,
+      text: `${names} ${isAre(blanks.length)} blank: ${reason}${named}`,
       material: true,
     });
   }
 
+  // THE NEXT TWO ARE FIXTURE-PATH ONLY, AND THAT IS DELIBERATE. Both describe rows
+  // the takings ROW path handled, and the live dashboard has no rows: its money is
+  // Dentally's own per-window aggregate, so it passes `payments: []` and neither
+  // counter can ever be non-zero there. They are kept rather than deleted because the
+  // row path is not dead code — the finance fixtures and dashboard-chrome.test.ts
+  // drive the entire screen through it, and the stored-rollup seam will use it — and
+  // because a caveat that only fires on one path still has to be right when it fires.
   if (strip.siteId !== null && unattributedPayments > 0) {
     out.push({
       id: "takings-unattributed",
@@ -154,20 +176,38 @@ export function accountsCaveats(panel: AccountsPanel): Caveat[] {
   return out;
 }
 
-/** Invoiced: bills that carry no date and so belong to no period. */
+/** Invoiced: bills that carry no date, and bills that could not be read at all. */
 export function invoicedCaveats(panel: InvoicedPanel): Caveat[] {
+  const out: Caveat[] = [];
+
   const n = panel.undatedInvoices;
-  if (n === 0) return [];
-  return [
-    {
+  if (n > 0) {
+    out.push({
       id: "invoiced-undated",
       label: `${n} invoice${s(n)} undated`,
       text:
         `${n} invoice${s(n)} ${n === 1 ? "carries" : "carry"} no date and cannot be placed in a period, ` +
         `so ${n === 1 ? "it is" : "they are"} counted here in no period at all.`,
       material: true,
-    },
-  ];
+    });
+  }
+
+  // A DIFFERENT FACT FROM UNDATED, AND THE REASON THE GRAMMAR COULD BE TIGHTENED.
+  // The row parser here used to be a private, looser one than the platform's; making
+  // it the strict shared parser is only honest if a row it refuses is COUNTED and
+  // shown, rather than skipped in silence and taken off the total.
+  const d = panel.droppedInvoices;
+  if (d > 0) {
+    out.push({
+      id: "invoiced-unread",
+      label: `${d} invoice${s(d)} unread`,
+      text:
+        `${d} invoice record${s(d)} could not be read and ${isAre(d)} in no total on this panel.`,
+      material: true,
+    });
+  }
+
+  return out;
 }
 
 /** UDAs: the missing contract target, and claims with a status we cannot file. */

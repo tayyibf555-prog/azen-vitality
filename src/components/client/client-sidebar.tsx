@@ -4,8 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { IntentLink } from "@/components/platform/intent-link";
 import { NavProgressBar } from "@/components/platform/nav-progress";
+import { usePendingNav } from "@/components/platform/use-pending-nav";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { isPlainNavigationClick, pendingHrefFor } from "@/lib/nav-intent";
 import {
   ChevronDown,
   LogOut,
@@ -108,14 +108,15 @@ export function ClientSidebar({
   const allKeys = groups.map((g) => g.key);
 
   // Optimistic active state: highlight the clicked item instantly instead of
-  // waiting for usePathname to commit after the server render. Storing the
-  // pathname it was recorded on lets us DERIVE staleness during render, rather
-  // than clearing it from an effect a frame later.
-  const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
-  // The rule itself now lives in @/lib/nav-intent, shared with the section bar and
-  // the patient tab strip, so the three surfaces cannot drift and the rule is
-  // covered by the node suite (a .tsx file is not collected by vitest here).
-  const pendingHref = pendingHrefFor(pending, pathname);
+  // waiting for usePathname to commit after the server render. The hook stores the
+  // pathname the click was recorded on, so staleness is DERIVED during render
+  // rather than cleared from an effect a frame later.
+  //
+  // The wiring itself now lives in @/components/platform/use-pending-nav, shared
+  // with the section bar, the patient tab strip and the agency sidebar, so the
+  // four surfaces cannot drift; the rules under it are pure and covered by the
+  // node suite (a .tsx file is not collected by vitest here).
+  const { pendingHref, markPending } = usePendingNav();
 
   const hrefFor = (slug: string) => moduleHref(base, slug);
   const isActive = (slug: string) => {
@@ -252,10 +253,7 @@ export function ClientSidebar({
                     // `onRoute` reads through routeKey -> isActive -> pendingHref,
                     // so recording the click here moves the rail's own highlight
                     // on the same frame, and lights the progress bar with it.
-                    onClick={(e) => {
-                      if (!isPlainNavigationClick(e)) return;
-                      if (href !== pathname) setPending({ href, from: pathname });
-                    }}
+                    onClick={markPending(href)}
                     className={cn(
                       RAIL_BUTTON,
                       onRoute
@@ -363,17 +361,13 @@ export function ClientSidebar({
                               // delay, so dragging the cursor down a column of thirty
                               // modules no longer commissions thirty server renders.
                               // Production-only by Next's design.
-                              onClick={(e) => {
-                                // Plain left-click only (not cmd/ctrl/shift = new tab).
-                                if (!isPlainNavigationClick(e)) return;
-                                // Close the drawer even when tapping the CURRENT
-                                // page's link (no pathname change to auto-close it).
-                                setNavOpen(false);
-                                // Mark pending only when something will actually
-                                // change: on the current page nothing navigates, so
-                                // nothing would ever clear the mark.
-                                if (href !== pathname) setPending({ href, from: pathname });
-                              }}
+                              //
+                              // Plain left-click only (not cmd/ctrl/shift = new
+                              // tab) — the hook's guard. The drawer closes on every
+                              // plain click, INCLUDING one on the current page's own
+                              // link, where there is no pathname change to close it;
+                              // that is what the second argument is for.
+                              onClick={markPending(href, () => setNavOpen(false))}
                               className={cn(
                                 "flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] leading-5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50",
                                 active

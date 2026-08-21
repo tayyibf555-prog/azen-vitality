@@ -132,6 +132,15 @@ export interface InvoicedPanel {
   invoiceCount: Metric;
   /** Invoices carrying no date, which cannot be placed in a window. Disclosed, not hidden. */
   undatedInvoices: number;
+  /**
+   * Invoices the row grammar could not read at all, so they are in NO period.
+   *
+   * Separate from `undatedInvoices` because they are separate facts: an undated bill
+   * was read and could not be placed, an unread one never became a bill. Both are
+   * money missing from this total, and both say so on the screen — which is what
+   * makes it safe to tighten the grammar this panel parses with.
+   */
+  droppedInvoices: number;
 }
 
 export interface PatientsPanel {
@@ -291,11 +300,32 @@ export interface PracticeDashboardView {
   /** True when the list was capped, so the panel says so instead of implying it is whole. */
   appointmentsCapped: boolean;
   appointmentsInWindow: number;
-  /** How far back the live payment scan genuinely reached. */
+  /**
+   * How far back the live payment scan genuinely reached.
+   *
+   * FIXTURE PATH ONLY, and permanently null on the live one. The live takings figure
+   * is Dentally's own per-window aggregate (readTakingsWindows), so there is no
+   * scanned row set and therefore no coverage span; inventing one to fill this field
+   * would be the same reassuring-looking claim that produced the wrong figures in the
+   * first place. It is kept, not deleted, because computeTakingsStrip's ROW path is
+   * still real code with real callers — the fixtures in _finance-fixtures.test.ts and
+   * dashboard-chrome.test.ts drive the whole screen through it, and the stored-rollup
+   * seam will want it back — and a field that is null on one path is honest, while a
+   * missing one would force those callers to fake a live shape.
+   */
   paymentsCoverage: DayCoverage | null;
   appointmentsCoverage: DayCoverage | null;
-  /** Payment rows the normaliser could not read at all. */
+  /** Payment rows the normaliser could not read at all. FIXTURE PATH ONLY: the live
+   *  path totals no rows, so it drops none — see paymentsCoverage. */
   droppedPayments: number;
+  /**
+   * Sites whose takings read did not answer, by id, for the caveat to NAME.
+   *
+   * Disclosure only. Whether a cell is blank is decided solely by a missing key in
+   * `takingsWindowTotals`, inside computeTakingsStrip; this list never widens or
+   * narrows that. Empty on every healthy assembly.
+   */
+  takingsFailedSites: string[];
   /** Claim rows the normaliser could not read at all. */
   droppedClaims: number;
 }
@@ -315,6 +345,19 @@ export interface BuildViewInput {
    * and which one the live dashboard uses.
    */
   takingsWindowTotals?: TakingsWindowTotals | null;
+  /**
+   * Site ids whose takings read did not answer. DISCLOSURE ONLY: it names the
+   * practices in the caveat and NEVER decides whether a cell is blank — that stays
+   * the missing-key test inside computeTakingsStrip, so there is exactly one rule
+   * about when a total may be stated.
+   */
+  takingsFailedSites?: readonly string[];
+  /**
+   * TRUE when the platform's own budget guard refused the assembly, so no takings
+   * read was made. Distinguishes "we chose not to spend the quota" from "a practice
+   * could not be read", which are different sentences and different actions.
+   */
+  takingsRefused?: boolean;
   /** Stored daily rollup rows, for periods the live scan cannot reach. */
   rollups?: readonly DashboardRollupDay[] | null;
 
@@ -360,6 +403,9 @@ export interface BuildViewInput {
   claimsTruncated?: boolean;
   /** Invoices read but carrying no date, so unplaceable in a window. */
   undatedInvoices?: number;
+  /** Invoices the row grammar REFUSED — no id, or an amount it will not parse. In no
+   *  period total, and disclosed rather than skipped: see InvoiceScan.dropped. */
+  droppedInvoices?: number;
 
   balances: readonly DashboardAccountBalance[] | null;
   droppedBalances?: number;
@@ -540,6 +586,7 @@ function buildAppointmentsPanel(
 function buildInvoicedPanel(
   invoices: readonly DashboardInvoice[] | null,
   undated: number,
+  dropped: number,
   window: DayWindow,
   siteByPatientId: ReadonlyMap<string, string> | null,
   siteId: string | null,
@@ -553,6 +600,7 @@ function buildInvoicedPanel(
       unpaidPence: metric(null, reason),
       invoiceCount: metric(null, reason),
       undatedInvoices: undated,
+      droppedInvoices: dropped,
     };
   }
   // Every invoice read carried no date: a window total would be a fabrication.
@@ -564,6 +612,7 @@ function buildInvoicedPanel(
       unpaidPence: metric(null, reason),
       invoiceCount: metric(null, reason),
       undatedInvoices: undated,
+      droppedInvoices: dropped,
     };
   }
 
@@ -589,6 +638,7 @@ function buildInvoicedPanel(
     unpaidPence: metric(totals.unpaidPence, reason),
     invoiceCount: metric(totals.invoiceCount, reason),
     undatedInvoices: undated,
+    droppedInvoices: dropped,
   };
 }
 
@@ -812,6 +862,9 @@ function buildScope(
     now: input.now,
     siteId,
     windowTotals: input.takingsWindowTotals ?? null,
+    // A platform-side refusal, not a practice-side outage. Passed straight through
+    // so the strip can say which it was; see TakingsStripInput.refused.
+    refused: input.takingsRefused === true,
     // The scope's own site list, so a group total can tell a site that took nothing
     // from a site that could not be read. buildScope already computes it for the
     // rollup path; the exact path needs exactly the same list.
@@ -844,6 +897,7 @@ function buildScope(
       invoiced: buildInvoicedPanel(
         input.invoices,
         input.undatedInvoices ?? 0,
+        input.droppedInvoices ?? 0,
         window,
         siteByPatientId,
         siteId,
@@ -932,6 +986,7 @@ export function buildDashboardView(input: BuildViewInput): PracticeDashboardView
     paymentsCoverage: input.paymentsCoverage,
     appointmentsCoverage: input.appointmentsCoverage,
     droppedPayments: input.droppedPayments ?? 0,
+    takingsFailedSites: [...(input.takingsFailedSites ?? [])],
     droppedClaims: input.droppedClaims ?? 0,
   };
 }

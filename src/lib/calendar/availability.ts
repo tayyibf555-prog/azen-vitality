@@ -126,6 +126,19 @@ export function nextDayKey(dayKey: string): string {
 // to the days it was actually asked about (availabilityRowsWithinDays). Nothing
 // about the requested days is inferred, invented or extrapolated: a day that has
 // already ended is reported as unanswerable rather than as "nobody was working".
+//
+// TODAY IS THE AWKWARD ONE, and it is awkward every single afternoon. A day that
+// has ENTIRELY ended is unanswerable and says so. A day still to come is answered
+// in full. Today, viewed at any hour but midnight, is neither: the clamp moves the
+// question forward to now+2min, and every window that had already CLOSED by then
+// is missing from the answer -- not because nobody was working, but because
+// nobody could ask. A clinician with a morning session and nothing booked reads,
+// at two o'clock, as an empty answer, and an empty answer collapses to grey.
+//
+// That is why the request also reports answerableFromMin: the wall-minute the
+// answer begins at, per day. Before it, silence is silence; from it, an empty
+// answer really does mean nobody is in. See columnWorkState, which refuses to say
+// "off" about a stretch of the day nobody was able to ask about.
 // ===========================================================================
 
 /**
@@ -157,6 +170,20 @@ export interface DiaryAvailabilityRequest {
    * whose availability is no longer knowable, which the column says in words.
    */
   unanswerableDayKeys: string[];
+  /**
+   * Per requested day, the London wall-minute from which the answer is COMPLETE.
+   *
+   * At most one day is ever named -- the one the clamped start lands in, which in
+   * practice is today -- and only when the clamp actually cost something. Every
+   * other requested day is answered from its own midnight and is ABSENT here,
+   * which readers take as zero. A day named with 902 means: nothing before 15:02
+   * was asked about, so nothing before 15:02 may be reported as "not working".
+   *
+   * A Record and not a single value because the diary asks for up to seven days
+   * at once and threads this per column; a bare number would have to be paired
+   * with its day key at every use site, and the pairing is exactly what gets lost.
+   */
+  answerableFromMin: Record<string, number>;
 }
 
 /**
@@ -187,11 +214,32 @@ export function diaryAvailabilityRequest(args: {
 
   const startMs = Math.max(requestedStartMs, earliestMs);
   const finishMs = Math.max(requestedEndMs, startMs + AVAILABILITY_MIN_SPAN_MS);
+  const unanswerableDayKeys = dayKeys.filter((k) => londonDayEndMs(k) <= startMs);
+
+  // WHERE THE CLAMP BIT. When the requested start won, this is a requested
+  // midnight and the wall-minute is 0, so nothing is named and every day is
+  // answered whole. When `now` won, the start lands inside one requested day and
+  // eats the part of it that had already gone by.
+  //
+  // A day already named unanswerable is NOT named again: it is answered for by
+  // nothing at all, which is a stronger statement than "answered from 23:59", and
+  // two names for one day is how a caller ends up honouring the weaker one.
+  const answerableFromMin: Record<string, number> = {};
+  const clampedDayKey = londonDayKey(new Date(startMs));
+  const clampedMin = londonWallMinutes(startMs);
+  if (
+    clampedMin > 0 &&
+    dayKeys.includes(clampedDayKey) &&
+    !unanswerableDayKeys.includes(clampedDayKey)
+  ) {
+    answerableFromMin[clampedDayKey] = clampedMin;
+  }
 
   return {
     startTime: new Date(startMs).toISOString(),
     finishTime: new Date(finishMs).toISOString(),
-    unanswerableDayKeys: dayKeys.filter((k) => londonDayEndMs(k) <= startMs),
+    unanswerableDayKeys,
+    answerableFromMin,
   };
 }
 

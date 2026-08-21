@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import { resolveMockSiteId, treatmentPlansForSite } from "@/app/api/mock-dentally/_fixtures";
 
 export const dynamic = "force-dynamic";
@@ -17,12 +18,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   const siteId = resolveMockSiteId(url.searchParams.get("site_id")) ?? "";
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(
-    1,
-    Number(url.searchParams.get("per_page") ?? String(DEFAULT_PER_PAGE)) ||
-      DEFAULT_PER_PAGE,
-  );
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"), DEFAULT_PER_PAGE);
 
   const all = siteId ? treatmentPlansForSite(siteId) : [];
   const total = all.length;

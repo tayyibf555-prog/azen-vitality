@@ -107,14 +107,25 @@ export function PracticeDashboard({
   // Every caveat the screen has to make, built once, per panel. Each panel gets
   // its own for the mark beside the figure it qualifies; the row under the band
   // shows them all, in the order the panels are read.
+  // Ids to names, so the takings caveat can NAME the practice that did not answer
+  // instead of saying one of them did not. The read layer sends ids (it has no
+  // display names); `view.sites` is the only place they are paired.
+  const failedSiteNames = useMemo(
+    () =>
+      view.takingsFailedSites.map(
+        (id) => view.sites.find((s) => s.id === id)?.name ?? id,
+      ),
+    [view.takingsFailedSites, view.sites],
+  );
   const takings = useMemo(
     () =>
       takingsCaveats({
         strip: scope.strip,
         unattributedPayments: scope.unattributedPayments,
         droppedPayments: view.droppedPayments,
+        failedSiteNames,
       }),
-    [scope.strip, scope.unattributedPayments, view.droppedPayments],
+    [scope.strip, scope.unattributedPayments, view.droppedPayments, failedSiteNames],
   );
   const appointments = useMemo(() => appointmentsCaveats(panels.appointments), [panels.appointments]);
   const accounts = useMemo(() => accountsCaveats(scope.accounts), [scope.accounts]);

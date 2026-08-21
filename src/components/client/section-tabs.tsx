@@ -1,13 +1,14 @@
 "use client";
 
 import { useParams, usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { LucideIcon } from "lucide-react";
 import { IntentLink } from "@/components/platform/intent-link";
 import { NavProgressBar } from "@/components/platform/nav-progress";
+import { usePendingNav } from "@/components/platform/use-pending-nav";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/mock-auth";
-import { isActiveWithPending, isPlainNavigationClick, pendingHrefFor } from "@/lib/nav-intent";
+import { isActiveWithPending } from "@/lib/nav-intent";
 import { shellAreas, shellBase } from "@/lib/nav-shell";
 import { groupKeyForActive, isModuleActive, moduleHref } from "@/lib/sidebar-prefs";
 
@@ -106,12 +107,12 @@ export function SectionTabs({
   const pathname = usePathname();
   const listRef = useRef<HTMLDivElement>(null);
 
-  // The module a click is in flight to. Same derive-during-render rule the rail
-  // and the patient tab strip use: these bars are force-dynamic routes with no
-  // loading.tsx (and must never have one), so without an optimistic mark the bar
-  // sat on the OLD tab for the whole server round trip and the click looked lost.
-  const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
-  const pendingHref = pendingHrefFor(pending, pathname);
+  // The module a click is in flight to. The rule is the shared one (usePendingNav),
+  // the same hook the rail, the patient tab strip and the agency sidebar use:
+  // these bars are force-dynamic routes with no loading.tsx (and must never have
+  // one), so without an optimistic mark the bar sat on the OLD tab for the whole
+  // server round trip and the click looked lost.
+  const { pendingHref, markPending } = usePendingNav();
 
   // Keep the selected tab in view. With eight or nine modules in an area the bar
   // scrolls on a laptop, and landing on a module whose tab sits off the right
@@ -152,10 +153,7 @@ export function SectionTabs({
               href={href}
               data-active={active}
               aria-current={active ? "page" : undefined}
-              onClick={(e) => {
-                if (!isPlainNavigationClick(e)) return;
-                if (href !== pathname) setPending({ href, from: pathname });
-              }}
+              onClick={markPending(href)}
               className={cn(
                 "group relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2 text-[12.5px] transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",

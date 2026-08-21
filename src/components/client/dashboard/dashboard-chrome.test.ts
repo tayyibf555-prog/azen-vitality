@@ -504,6 +504,7 @@ const INVOICED: InvoicedPanel = {
   unpaidPence: { value: 415_200, reason: null },
   invoiceCount: { value: 125, reason: null },
   undatedInvoices: 0,
+  droppedInvoices: 0,
 };
 
 describe("the invoiced panel fills its column and its axis is honest", () => {

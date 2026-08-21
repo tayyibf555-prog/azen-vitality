@@ -59,6 +59,7 @@ export type MoveRefusalCode =
   | "continuity_unclear"
   | "hours_unknown"
   | "hours_past"
+  | "hours_unreportable"
   | "site_unconfirmed"
   | "outside_day"
   | "outside_hours"
@@ -95,16 +96,21 @@ function hhmm(minutes: number): string {
  *                   and there are no hours to check against. Separated from
  *                   hours_unknown because nothing failed: it is a fact about the
  *                   calendar, and no retry can change it.
- *  5 site_unconfirmed  Their windows may describe another of these practices.
- *  6 outside_day    Outside the drawn extent.
- *  7 outside_hours  The GREY check. The whole span must lie inside the union of
+ *  5 hours_unreportable  PART of today had gone by before we could ask, and
+ *                   nothing came back for the rest of it. The grid hatches this
+ *                   column rather than greying it, and the refusal has to agree:
+ *                   a drop checked against an empty set of hours is not checked
+ *                   at all. Separated from hours_past because the DATE is today.
+ *  6 site_unconfirmed  Their windows may describe another of these practices.
+ *  7 outside_day    Outside the drawn extent.
+ *  8 outside_hours  The GREY check. The whole span must lie inside the union of
  *                   the clinician's availability windows and their own bookings.
- *  8 occupied       The day's own appointments are subtracted EXPLICITLY rather
+ *  9 occupied       The day's own appointments are subtracted EXPLICITLY rather
  *                   than trusting the window to have excluded them. Live Dentally
  *                   was measured on 2026-08-21 and its windows DO exclude booked
  *                   time -- which is why the union in 7 exists -- but subtracting
  *                   here as well is what keeps this correct if that ever changes.
- *  9 on_break       A break occupies; a note does not.
+ * 10 on_break       A break occupies; a note does not.
  */
 export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation {
   const name = ctx.targetPractitionerName.trim() === "" ? "this clinician" : ctx.targetPractitionerName;
@@ -146,6 +152,20 @@ export function validateMove(p: MoveProposal, ctx: MoveContext): MoveValidation 
       ok: false,
       code: "hours_past",
       message: `Dentally cannot report working hours for a date that has passed, so this move cannot be checked.`,
+    };
+  }
+
+  // Today, asked about after some of it has gone. Dentally answers availability
+  // only from `now` forward, so a morning session that had already closed is
+  // simply absent from the answer -- and NOTHING came back for the rest of the
+  // day either. The grid hatches this column instead of greying it, and this is
+  // the same refusal on the write side: the alternative is checking a drop
+  // against an empty set of working hours, which is not a check.
+  if (ctx.workState === "unreportable") {
+    return {
+      ok: false,
+      code: "hours_unreportable",
+      message: `Dentally only reports working hours from now onwards, so ${name}'s hours for today cannot be checked.`,
     };
   }
 

@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
     failed: boolean;
     /** Set only by the past-day case; the mock defaults it to none. */
     unanswerableDayKeys?: string[];
+    /** Set only by the part-elapsed-today case; the mock defaults it to none. */
+    answerableFromMin?: Record<string, number>;
   },
   entries: { entries: [] as unknown[], failed: false },
   updateAppointment: vi.fn(async (_id: string, _payload: Record<string, unknown>) => ({ appointment: { id: _id } })),
@@ -122,7 +124,11 @@ vi.mock("@/lib/dentally/read", () => ({
   // The real read also reports which requested days Dentally cannot answer for
   // (a day that has ended). Defaulted to none here so every existing case is
   // unchanged; a case that wants that path sets it on h.availability.
-  listDiaryAvailabilitySafe: async () => ({ unanswerableDayKeys: [] as string[], ...h.availability }),
+  listDiaryAvailabilitySafe: async () => ({
+    unanswerableDayKeys: [] as string[],
+    answerableFromMin: {} as Record<string, number>,
+    ...h.availability,
+  }),
   invalidateAppointmentsCache: h.invalidate,
 }));
 
@@ -553,6 +559,31 @@ describe("the drop checks, server side", () => {
     // 409, not the 503 an outage gets: retrying cannot change a date.
     expect(res.status).toBe(409);
     expect(String(json.error)).toContain("passed");
+    expect(h.updateAppointment).not.toHaveBeenCalled();
+  });
+
+  it("refuses a move onto TODAY when the hours we could ask about are already gone", async () => {
+    // Dentally answers availability only from now forward, so a session that had
+    // already closed is absent from the answer -- and nothing came back for the
+    // rest of the day either. The grid hatches that column instead of greying it,
+    // and this refusal is the same statement on the write side.
+    h.availability = { rows: [], failed: false, answerableFromMin: { [DAY]: 15 * 60 + 2 } };
+    const { res, json } = await call();
+    expect(res.status).toBe(409);
+    expect(String(json.error)).toContain("from now onwards");
+    // NOT the past-day sentence: the date is today, and today has not passed.
+    expect(String(json.error)).not.toContain("passed");
+    expect(h.updateAppointment).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an empty answer as plain 'outside working hours' when the day was answerable", async () => {
+    // The contrast that proves the new refusal is doing work rather than
+    // renaming the old one: with the whole day asked about, an empty answer
+    // really does mean the clinician is not in.
+    h.availability = { rows: [], failed: false };
+    const { res, json } = await call();
+    expect(res.status).toBe(409);
+    expect(String(json.error)).toContain("outside");
     expect(h.updateAppointment).not.toHaveBeenCalled();
   });
 

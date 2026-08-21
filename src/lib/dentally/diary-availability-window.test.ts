@@ -230,7 +230,56 @@ describe("a day Dentally can no longer answer for", () => {
       toDayKey: TODAY,
     });
     expect(state.calls).toHaveLength(0);
-    expect(read).toEqual({ rows: [], failed: false, unanswerableDayKeys: [] });
+    expect(read).toEqual({
+      rows: [],
+      failed: false,
+      unanswerableDayKeys: [],
+      answerableFromMin: {},
+    });
+  });
+});
+
+describe("the part of today the read could not ask about", () => {
+  it("reports the minute today's answer begins at, alongside the rows", async () => {
+    const mine = row(at(TODAY, 14), at(TODAY, 16));
+    state.pages = [[mine]];
+    const read = await listDiaryAvailabilitySafe({
+      siteId: "site-cc",
+      practitionerIds: ["1"],
+      fromDayKey: TODAY,
+      toDayKey: TODAY,
+    });
+    // 12:00 London plus the two minute buffer, and the same wall clock as the
+    // start actually sent -- the read must not report one window and send another.
+    expect(read.answerableFromMin).toEqual({ [TODAY]: 12 * 60 + 2 });
+    expect(read.failed).toBe(false);
+  });
+
+  it("reports NOTHING for a range entirely in the future", async () => {
+    state.pages = [[]];
+    const read = await listDiaryAvailabilitySafe({
+      siteId: "site-cc",
+      practitionerIds: ["1"],
+      fromDayKey: TOMORROW,
+      toDayKey: TOMORROW,
+    });
+    // Tomorrow is asked about from its own midnight, so an empty answer for it
+    // really does mean nobody is in and the column may say so.
+    expect(read.answerableFromMin).toEqual({});
+  });
+
+  it("reports NOTHING when the read failed, so an outage borrows no softer wording", async () => {
+    state.throws = true;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const read = await listDiaryAvailabilitySafe({
+      siteId: "site-cc",
+      practitionerIds: ["1"],
+      fromDayKey: TODAY,
+      toDayKey: TODAY,
+    });
+    err.mockRestore();
+    expect(read.failed).toBe(true);
+    expect(read.answerableFromMin).toEqual({});
   });
 });
 
@@ -270,5 +319,25 @@ describe("the display cache and the day that has already gone", () => {
     expect(state.calls).toHaveLength(0); // served from the cache, as before
     expect(read.rows).toEqual([cached]);
     expect(read.unanswerableDayKeys).toEqual([YESTERDAY]);
+  });
+
+  it("recomputes the minute today's answer begins at, rather than storing it", async () => {
+    // Same rule, same reason, and this one can only ever move FORWARD as the
+    // entry ages: an entry written an hour ago really does hold rows for a window
+    // that has since closed, and the fresher minute declines to claim hours we
+    // would rather not stand behind. The stored shape is the OLD one, with no
+    // word about any of this, and it still reads correctly.
+    const cached = row(at(TODAY, 14), at(TODAY, 16));
+    __setDisplayCacheForTests(createDisplayCache({ store: storeHolding({ rows: [cached], failed: false }) }));
+
+    const read = await listDiaryAvailabilitySafe({
+      siteId: "site-cc",
+      practitionerIds: ["1"],
+      fromDayKey: TODAY,
+      toDayKey: TODAY,
+    });
+
+    expect(state.calls).toHaveLength(0);
+    expect(read.answerableFromMin).toEqual({ [TODAY]: 12 * 60 + 2 });
   });
 });

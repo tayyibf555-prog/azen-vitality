@@ -138,6 +138,7 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
       unconfirmed: payload.unconfirmed,
       availabilityFailed: payload.availabilityFailed,
       unanswerableDayKeys: payload.unanswerableDayKeys,
+      answerableFromMin: payload.answerableFromMin,
       fundingFailed: payload.fundingFailed,
       entriesFailed: payload.entriesFailed,
     };

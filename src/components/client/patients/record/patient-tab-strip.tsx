@@ -1,10 +1,11 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { IntentLink } from "@/components/platform/intent-link";
 import { NavProgressBar } from "@/components/platform/nav-progress";
-import { isActiveWithPending, isPlainNavigationClick, pendingHrefFor } from "@/lib/nav-intent";
+import { usePendingNav } from "@/components/platform/use-pending-nav";
+import { isActiveWithPending } from "@/lib/nav-intent";
 import { PATIENT_TABS, patientTabHref } from "@/lib/patient/tabs";
 import { cn } from "@/lib/utils";
 
@@ -47,11 +48,10 @@ export function PatientTabStrip({ basePath }: { basePath: string }) {
   const pathname = usePathname();
   const activeRef = useRef<HTMLAnchorElement | null>(null);
 
-  // The tab a click is currently in flight to, with the pathname it was clicked
-  // from, so staleness is DERIVED during render rather than cleared by an effect a
-  // frame later. See pendingHrefFor.
-  const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
-  const pendingHref = pendingHrefFor(pending, pathname);
+  // The tab a click is currently in flight to. The hook records the pathname it
+  // was clicked from, so staleness is DERIVED during render rather than cleared by
+  // an effect a frame later, and it ignores modified clicks. See usePendingNav.
+  const { pendingHref, markPending } = usePendingNav();
 
   // On a narrow viewport the strip scrolls; bring the active tab into view so the
   // reader is never looking at a strip whose selected item is off-screen. Keyed on
@@ -81,13 +81,11 @@ export function PatientTabStrip({ basePath }: { basePath: string }) {
                   ref={active ? activeRef : undefined}
                   href={href}
                   aria-current={active ? "page" : undefined}
-                  onClick={(e) => {
-                    // Modified clicks open elsewhere and leave this page where it
-                    // is; marking a tab active for one would move the highlight to
-                    // a tab nobody navigated to, with nothing to move it back.
-                    if (!isPlainNavigationClick(e)) return;
-                    if (href !== pathname) setPending({ href, from: pathname });
-                  }}
+                  // Modified clicks open elsewhere and leave this page where it is;
+                  // the hook's guard drops them, because marking a tab active for
+                  // one would move the highlight to a tab nobody navigated to, with
+                  // nothing to move it back.
+                  onClick={markPending(href)}
                   className={cn(
                     "inline-block border-b-2 px-3.5 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
                     active

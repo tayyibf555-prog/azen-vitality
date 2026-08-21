@@ -128,6 +128,20 @@ export interface TakingsStripInput {
    */
   windowTotals?: TakingsWindowTotals | null;
   /**
+   * TRUE when the PLATFORM declined to make the reads at all — the shared Dentally
+   * budget guard refused the assembly (see refusedDashboardView in
+   * src/lib/dashboard/read.ts).
+   *
+   * It exists because a refusal arrives here looking exactly like a site outage: an
+   * empty `windowTotals` with sites in scope, which the branch below reads as "one of
+   * your practices could not be read". That sentence sends a practice manager to ring
+   * a surgery about a fault that is ours and is already over — nothing is wrong with
+   * her practices, the platform paused its own reads for a moment. Checked BEFORE the
+   * exact and row paths, because when it is set there is nothing to check them
+   * against: no read was made.
+   */
+  refused?: boolean;
+  /**
    * Every site the current scope covers. REQUIRED alongside windowTotals for the
    * all-sites scope, and it is what makes a missing site detectable: without the
    * list, "site-rv's read failed" and "site-rv took nothing" are the same empty
@@ -144,8 +158,20 @@ const NO_APPOINTMENT_DATA = "Appointment count unavailable for this period.";
  * practice. Named for the SITE, not for the period, because that is the fact the
  * practice manager needs: the figure is not late or partial, one of her practices
  * is missing from it.
+ *
+ * TWO SENTENCES, BECAUSE THE SCOPE HAS TWO SHAPES. "One of the sites in this view"
+ * is plainly wrong on a single-site scope, where there is only ever one site and it
+ * is the one she is looking at; read on that screen it implies some other practice
+ * is at fault and hers is fine.
  */
 const SITE_UNREAD = "Takings unavailable: one of the sites in this view could not be read.";
+const ONLY_SITE_UNREAD = "Takings unavailable: this site could not be read.";
+/**
+ * The PLATFORM refused to make the read — see `refused` on TakingsStripInput. Worded
+ * as what it is: temporary, ours, and about to fix itself.
+ */
+const READS_PAUSED =
+  "Takings unavailable: live reads were paused for a moment; this will refresh shortly.";
 
 /**
  * Build the five-cell strip from a live payment scan.
@@ -198,7 +224,12 @@ export function computeTakingsStrip(input: TakingsStripInput): TakingsStrip {
     let paymentCount: number | null = null;
     let unavailableReason: string | null = null;
 
-    if (windowTotals !== null) {
+    if (input.refused === true) {
+      // BEFORE EVERYTHING ELSE. No read was attempted, so neither the exact path nor
+      // the row path has anything to say about this cell — and both of them would
+      // blame the practice's own data for the platform's decision.
+      unavailableReason = READS_PAUSED;
+    } else if (windowTotals !== null) {
       // THE EXACT PATH. Dentally's own aggregate for this exact window, summed over
       // the sites in scope. Every site must be present: a partial sum is the bug.
       let sum = 0;
@@ -217,7 +248,12 @@ export function computeTakingsStrip(input: TakingsStripInput): TakingsStrip {
         totalPence = sum;
         paymentCount = count;
       } else {
-        unavailableReason = sitesInScope.length === 0 ? NO_PAYMENT_DATA : SITE_UNREAD;
+        unavailableReason =
+          sitesInScope.length === 0
+            ? NO_PAYMENT_DATA
+            : sitesInScope.length === 1
+              ? ONLY_SITE_UNREAD
+              : SITE_UNREAD;
       }
     } else if (!input.paymentsCoverage) {
       unavailableReason = NO_PAYMENT_DATA;

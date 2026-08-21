@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import { MOCK_TREATMENTS } from "@/app/api/mock-dentally/_fixtures";
 
 export const dynamic = "force-dynamic";
@@ -20,11 +21,8 @@ export async function GET(request: Request): Promise<Response> {
   if (unauthorized) return unauthorized;
 
   const url = new URL(request.url);
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(
-    1,
-    Number(url.searchParams.get("per_page") ?? String(DEFAULT_PER_PAGE)) || DEFAULT_PER_PAGE,
-  );
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"), DEFAULT_PER_PAGE);
 
   const total = MOCK_TREATMENTS.length;
   const start = (page - 1) * perPage;

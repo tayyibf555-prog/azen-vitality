@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
     unconfirmed: [],
     availabilityFailed: false,
     unanswerableDayKeys: [] as string[],
+    answerableFromMin: {} as Record<string, number>,
     fundingFailed: false,
     entriesFailed: false,
   })),
@@ -143,6 +144,7 @@ describe("the days Dentally cannot answer for", () => {
       unconfirmed: [],
       availabilityFailed: false,
       unanswerableDayKeys: ["2026-07-27"],
+      answerableFromMin: {} as Record<string, number>,
       fundingFailed: false,
       entriesFailed: false,
     });
@@ -150,6 +152,30 @@ describe("the days Dentally cannot answer for", () => {
       expect(res.status).toBe(200);
       expect(json.availabilityFailed).toBe(false);
       expect(json.unanswerableDayKeys).toEqual(["2026-07-27"]);
+    });
+  });
+
+  it("carries the minute TODAY's answer begins at, so the morning is not claimed as 'off'", () => {
+    // Server-computed for exactly the same reason, and needed far more often:
+    // every day is a partly-elapsed today at some point in the afternoon. Drop it
+    // here and a clinician who worked all morning with nothing booked reads as
+    // "Not working" from lunchtime.
+    h.loadDiaryDay.mockResolvedValueOnce({
+      siteId: "site-cc",
+      dayKeys: ["2026-07-31"],
+      windows: [],
+      funding: {},
+      entries: [],
+      unconfirmed: [],
+      availabilityFailed: false,
+      unanswerableDayKeys: [] as string[],
+      answerableFromMin: { "2026-07-31": 902 },
+      fundingFailed: false,
+      entriesFailed: false,
+    });
+    return call("2026-07-31").then(({ res, json }) => {
+      expect(res.status).toBe(200);
+      expect(json.answerableFromMin).toEqual({ "2026-07-31": 902 });
     });
   });
 });

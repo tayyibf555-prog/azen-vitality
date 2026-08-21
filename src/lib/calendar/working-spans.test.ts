@@ -171,6 +171,81 @@ describe("columnWorkState and the day that has already gone", () => {
   });
 });
 
+// ===========================================================================
+// THE MORNING NOBODY COULD ASK ABOUT.
+//
+// THE LIVE BUG THIS EXISTS TO STOP COMING BACK. Dentally answers availability
+// only from a start time in the future, so the diary's request for TODAY is
+// clamped to now+2min -- and a window that had already CLOSED by then is simply
+// not in the answer. A clinician rostered 09:00-13:00 with nothing booked
+// therefore returned NOTHING from lunchtime onwards, every single day, and an
+// empty answer collapsed to "off": the column printed "Not working" over
+// somebody who had been in all morning. A receptionist reading that column stops
+// offering their next available slot, and nobody ever finds out why.
+// ===========================================================================
+describe("columnWorkState and the part of today nobody could ask about", () => {
+  const AFTERNOON = 15 * 60 + 2; // the clamped start, 15:02 London
+  const base = { availabilityFailed: false, appointmentsFailed: false, windows: [], apptSpans: [] };
+
+  it("is 'unreportable', NOT 'off', for a morning clinician viewed in the afternoon", () => {
+    // Zero windows and zero bookings, at 15:02, for somebody whose only session
+    // ended at 13:00. The answer is empty because the question could not be put.
+    expect(columnWorkState({ ...base, answerableFromMin: AFTERNOON })).toBe("unreportable");
+  });
+
+  it("is rescued to 'working' by a single booked appointment that morning", () => {
+    // THE UNION IS THE EVIDENCE. A booking is proof the clinician was in at that
+    // time, so a day with anything booked is unaffected by all of this and reads
+    // exactly as it always did.
+    expect(
+      columnWorkState({ ...base, apptSpans: [s(600, 630)], answerableFromMin: AFTERNOON }),
+    ).toBe("working");
+  });
+
+  it("is 'working' when the afternoon session did come back", () => {
+    expect(
+      columnWorkState({ ...base, windows: [w(840, 1080)], answerableFromMin: AFTERNOON }),
+    ).toBe("working");
+  });
+
+  it("is still 'off' when the WHOLE day was answerable and nothing came back", () => {
+    // A future day is asked about from its own midnight, so silence really does
+    // mean nobody is in, and grey is the honest paint. Both the default and an
+    // explicit zero.
+    expect(columnWorkState(base)).toBe("off");
+    expect(columnWorkState({ ...base, answerableFromMin: 0 })).toBe("off");
+  });
+
+  it("still prefers 'past' when the day had ended entirely", () => {
+    // "Date has passed" is the right sentence about last Monday. This one is
+    // about TODAY, and the two must not be told with the same words.
+    expect(
+      columnWorkState({ ...base, availabilityUnanswerable: true, answerableFromMin: AFTERNOON }),
+    ).toBe("past");
+  });
+
+  it("still prefers 'unknown' when a read FAILED", () => {
+    // An outage we do not understand must not be explained away by the clock.
+    expect(
+      columnWorkState({ ...base, availabilityFailed: true, answerableFromMin: AFTERNOON }),
+    ).toBe("unknown");
+    expect(
+      columnWorkState({ ...base, appointmentsFailed: true, answerableFromMin: AFTERNOON }),
+    ).toBe("unknown");
+  });
+
+  it("still prefers 'unconfirmed' when the clinician cannot be placed at this practice", () => {
+    expect(
+      columnWorkState({ ...base, presenceConfirmed: false, answerableFromMin: AFTERNOON }),
+    ).toBe("unconfirmed");
+  });
+
+  it("is unchanged for every caller that does not pass the minute at all", () => {
+    expect(columnWorkState({ ...base, windows: [w(540, 1020)] })).toBe("working");
+    expect(columnWorkState(base)).toBe("off");
+  });
+});
+
 describe("columnIsHatched", () => {
   it("hatches every state that is not a claim about the clinician", () => {
     expect(columnIsHatched("unknown")).toBe(true);
@@ -179,6 +254,7 @@ describe("columnIsHatched", () => {
     // union and not to the paint rule renders GREY, which is a positive claim
     // that somebody was off, made by an omission.
     expect(columnIsHatched("past")).toBe(true);
+    expect(columnIsHatched("unreportable")).toBe(true);
   });
 
   it("does NOT hatch the two states we can stand behind", () => {
@@ -187,7 +263,19 @@ describe("columnIsHatched", () => {
   });
 
   it("covers every member of ColumnWorkState, so a new one cannot slip past", () => {
-    const all: ColumnWorkState[] = ["working", "off", "unknown", "unconfirmed", "past"];
-    expect(all.filter(columnIsHatched)).toEqual(["unknown", "unconfirmed", "past"]);
+    const all: ColumnWorkState[] = [
+      "working",
+      "off",
+      "unknown",
+      "unconfirmed",
+      "past",
+      "unreportable",
+    ];
+    expect(all.filter(columnIsHatched)).toEqual([
+      "unknown",
+      "unconfirmed",
+      "past",
+      "unreportable",
+    ]);
   });
 });

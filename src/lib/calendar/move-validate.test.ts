@@ -347,3 +347,37 @@ describe("a move onto a day that has already gone", () => {
     expect(res.ok === false && res.code).toBe("hours_past");
   });
 });
+
+describe("a move onto today, when the hours we can ask about are gone", () => {
+  it("is refused with its own code, so the write path agrees with the hatched column", () => {
+    // The grid hatches this column rather than greying it, and a refusal is the
+    // same statement on the write side: a drop checked against no working hours
+    // at all is not checked.
+    const res = validateMove(move(), ctx({ workState: "unreportable", workingSpans: [] }));
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.code).toBe("hours_unreportable");
+  });
+
+  it("does NOT tell the reader the date has passed, because today has not", () => {
+    // The whole reason this is not "past": "Date has passed" said about today is
+    // plainly wrong, and a wrong sentence here teaches staff to distrust the
+    // right ones.
+    const res = validateMove(move(), ctx({ workState: "unreportable", workingSpans: [] }));
+    expect(res.ok === false && res.message).not.toContain("passed");
+    expect(res.ok === false && res.message).toContain("Femi Osei");
+  });
+
+  it("is refused even where the day's own bookings would have contained the drop", () => {
+    const res = validateMove(
+      move(),
+      ctx({ workState: "unreportable", workingSpans: [{ startMin: 0, endMin: 1440 }] }),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.code).toBe("hours_unreportable");
+  });
+
+  it("is settled AFTER a failed read, which is the more fundamental gap", () => {
+    const res = validateMove(move(), ctx({ workState: "unknown" }));
+    expect(res.ok === false && res.code).toBe("hours_unknown");
+  });
+});

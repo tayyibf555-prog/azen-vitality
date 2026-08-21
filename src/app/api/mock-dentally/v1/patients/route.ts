@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import {
   patientsForSite,
   MOCK_PATIENTS,
@@ -112,7 +113,21 @@ export async function GET(request: Request): Promise<Response> {
       return digitsOf.length >= 6 && phoneMatches(p.mobile_phone, digitsOf);
     });
   }
-  return Response.json({ patients: all.map(serialise) });
+
+  // PAGES FOR REAL, and applies live's per_page cap (see _paging.ts).
+  //
+  // This route used to ignore `page` and `per_page` outright and hand back every
+  // matching row on every page. That is looser than live in BOTH directions: live
+  // pages this resource (the 2026-08-17 probe recorded `mobile_phone=<mobile>`
+  // answering with "25 rows (an unfiltered default page)", which is live's page size
+  // showing through), and live silently drops to 25 rows for any per_page over 100.
+  // A caller that walks pages until a short one could therefore be handed the same
+  // rows forever here while receiving a correctly paged answer in production, and a
+  // caller that asked for 500 could never discover it was only ever going to get 25.
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"));
+  const start = (page - 1) * perPage;
+  return Response.json({ patients: all.slice(start, start + perPage).map(serialise) });
 }
 
 function randomPatientId(): string {

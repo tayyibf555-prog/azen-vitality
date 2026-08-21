@@ -641,6 +641,12 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
       windows: presenceConfirmed ? windows : [],
       apptSpans,
       presenceConfirmed,
+      // THE SAME INPUT THE GRID PAINTS FROM. Today's earlier hours are missing
+      // from the answer because nobody could ask for them, so an empty answer
+      // must not read as "off" here either: the write path and the paint have to
+      // agree, or a column the reader was told is unknowable silently accepts a
+      // drop -- or refuses one with the wrong sentence.
+      answerableFromMin: availability.answerableFromMin[targetDay] ?? 0,
     }),
     workingSpans: presenceConfirmed ? workingSpans(windows, apptSpans) : [],
     occupiedSpans,

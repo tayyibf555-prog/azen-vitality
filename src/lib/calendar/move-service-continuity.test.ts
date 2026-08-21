@@ -106,7 +106,11 @@ vi.mock("@/lib/dentally/read", () => ({
   // The real read also reports which requested days Dentally cannot answer for
   // (a day that has ended). Defaulted to none here so every existing case is
   // unchanged; a case that wants that path sets it on h.availability.
-  listDiaryAvailabilitySafe: async () => ({ unanswerableDayKeys: [] as string[], ...h.availability }),
+  listDiaryAvailabilitySafe: async () => ({
+    unanswerableDayKeys: [] as string[],
+    answerableFromMin: {} as Record<string, number>,
+    ...h.availability,
+  }),
   invalidateAppointmentsCache: vi.fn(),
 }));
 

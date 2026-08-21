@@ -41,7 +41,7 @@ interface LeadRow {
   // columns are: 0094 is written and not applied, so `select("*")` against today's
   // table simply does not return these six keys. Marking them required would be a
   // lie the compiler believes, and the first lead read would hand the worklist
-  // `funnel_total_steps: undefined`. See the defaulting in rowToLead.
+  // `funnel_total_steps: undefined`. See the defaulting in funnelProgressFromRow.
   funnel_last_step?: number | string | null;
   funnel_total_steps?: number | string | null;
   funnel_flow_version?: number | string | null;
@@ -72,6 +72,43 @@ function numOrNull(v: number | string | null | undefined): number | null {
 // Mappers.
 // ---------------------------------------------------------------------------
 
+/** The six 0094 columns, whichever query brought them back. */
+type FunnelColumns = Pick<
+  LeadRow,
+  | "funnel_last_step"
+  | "funnel_total_steps"
+  | "funnel_flow_version"
+  | "funnel_last_step_at"
+  | "funnel_completed_at"
+>;
+
+/**
+ * THE ONLY PLACE the funnel_* columns become a LeadFunnelProgress.
+ *
+ * Two reads want them and want them to agree: the whole-row lead read behind the
+ * worklist and the drawer (rowToLead), and the seven-column session lookup the
+ * public progress endpoint uses (findLeadFunnelSession). Written twice they would
+ * be free to drift — one of them fixed for a new column, or one of them "tidied"
+ * to a cast — and the drift would show up as a lead the practice sees at question
+ * 3 of 5 that the endpoint refuses to move. So the mapping is one function, and
+ * both call sites take it.
+ *
+ * The pre-0094 default, decided once, here: no funnel behind this lead, so neither
+ * the worklist nor the drawer says anything about one. An un-migrated row, an
+ * un-migrated database and a lead that never came through an authored funnel are
+ * three roads to the same (silent) rendering. `?? null` rather than a cast so
+ * `undefined` and a NULL column are indistinguishable to every reader downstream.
+ */
+function funnelProgressFromRow(r: FunnelColumns): LeadFunnelProgress {
+  return {
+    lastStep: numOrNull(r.funnel_last_step),
+    totalSteps: numOrNull(r.funnel_total_steps),
+    flowVersion: numOrNull(r.funnel_flow_version),
+    lastStepAt: r.funnel_last_step_at ?? null,
+    completedAt: r.funnel_completed_at ?? null,
+  };
+}
+
 function rowToLead(r: LeadRow): SpeedToLeadLead {
   return {
     id: r.id,
@@ -92,19 +129,7 @@ function rowToLead(r: LeadRow): SpeedToLeadLead {
     updatedAt: r.updated_at,
     nurtureStep: numOrNull(r.nurture_step) ?? 0,
     nurtureNextAt: r.nurture_next_at,
-    // The pre-0094 default, decided once, here: no funnel behind this lead, so
-    // neither the worklist nor the drawer says anything about one. An un-migrated
-    // row, an un-migrated database and a lead that never came through an authored
-    // funnel are three roads to the same (silent) rendering. `?? null` rather than
-    // a cast so `undefined` and a NULL column are indistinguishable to every
-    // reader downstream.
-    funnelProgress: {
-      lastStep: numOrNull(r.funnel_last_step),
-      totalSteps: numOrNull(r.funnel_total_steps),
-      flowVersion: numOrNull(r.funnel_flow_version),
-      lastStepAt: r.funnel_last_step_at ?? null,
-      completedAt: r.funnel_completed_at ?? null,
-    },
+    funnelProgress: funnelProgressFromRow(r),
   };
 }
 
@@ -423,13 +448,9 @@ export async function findLeadFunnelSession(nonce: string): Promise<LeadFunnelSe
   return {
     id: r.id,
     siteId: r.site_id,
-    progress: {
-      lastStep: numOrNull(r.funnel_last_step),
-      totalSteps: numOrNull(r.funnel_total_steps),
-      flowVersion: numOrNull(r.funnel_flow_version),
-      lastStepAt: r.funnel_last_step_at ?? null,
-      completedAt: r.funnel_completed_at ?? null,
-    },
+    // The same mapping the worklist's own read takes, so a lead the practice sees
+    // at "question 3 of 5" is a lead this endpoint agrees is at step 2.
+    progress: funnelProgressFromRow(r),
   };
 }
 
@@ -545,6 +566,48 @@ export async function countRecentByContact(phoneOrEmail: string, sinceIso: strin
     .eq("email", phoneOrEmail);
   if (byEmail.error) throw byEmail.error;
   return (byPhone.count ?? 0) + (byEmail.count ?? 0);
+}
+
+/**
+ * How many leads landed on these sites since `sinceIso` — the EXACT number, at any
+ * volume, optionally narrowed to a set of stages.
+ *
+ * WHY THIS EXISTS NEXT TO listLeads. The report snapshot used to answer "how many
+ * enquiries this month" by fetching the newest 500 leads in the window and taking
+ * `.length`. That is a floor rather than a total the moment a month is busier than
+ * the bound, which is why the snapshot has to declare the answer unusable — and it
+ * did so at the exact moment the practice was busiest, blanking the owner's whole
+ * reports page mid-campaign.
+ *
+ * A COUNT IS NOT A READ. This is our own Postgres, not Dentally: `count: "exact"`
+ * with `head: true` asks the database to count rows and return NO rows at all, so
+ * five hundred and fifty thousand cost the same one query as five. There is no bound
+ * to saturate and nothing to truncate, which is why the figure it returns can be
+ * stated as a total.
+ *
+ * It does not replace listLeads: anything computed from a lead's own fields (first
+ * response time, source mix) still needs the rows, and those stay honestly bounded.
+ *
+ * Refuses an empty site list rather than counting every site's leads — PostgREST's
+ * `in.()` with no values is not "match nothing" in every version, and "no scope"
+ * must never degrade into "the whole group" (the same refusal listLeadsByIds makes).
+ */
+export async function countLeadsInWindow(
+  siteIds: string[],
+  sinceIso: string,
+  stages?: LeadStage[],
+): Promise<number> {
+  if (siteIds.length === 0) return 0;
+  const db = serviceClient();
+  let q = db
+    .from("speed_to_lead_lead")
+    .select("id", { count: "exact", head: true })
+    .in("site_id", siteIds)
+    .gte("created_at", sinceIso);
+  if (stages && stages.length > 0) q = q.in("stage", stages);
+  const { count, error } = await q;
+  if (error) throw error;
+  return count ?? 0;
 }
 
 /**

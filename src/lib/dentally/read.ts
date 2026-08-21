@@ -996,6 +996,10 @@ export async function invalidateAppointmentsCache(siteIds: string[]): Promise<vo
  *    for it and it is named in `unanswerableDayKeys`, because "Dentally cannot
  *    tell us who worked last Monday" and "nobody worked last Monday" are
  *    different sentences and the grid paints them differently.
+ *  - TODAY IS PARTLY unanswerable for the same reason, every afternoon: the
+ *    clamped start eats the hours that had already gone by, so `answerableFromMin`
+ *    names the minute the answer actually begins. Without it a morning-only
+ *    clinician with nothing booked reads as "Not working" from lunchtime onwards.
  *  - NO `duration` is sent. It is a FILTER, not a shape: `duration=30` dropped
  *    the measured 10-minute gap entirely. The diary wants the raw WINDOW so it
  *    can shade a session; chunking it into bookable slots at the parse seam
@@ -1028,6 +1032,14 @@ export interface DiaryAvailabilityRead {
    * says so in its own words rather than claiming the practice was shut.
    */
   unanswerableDayKeys: string[];
+  /**
+   * Per requested day, the London wall-minute the answer BEGINS at. Absent means
+   * the whole day was asked about. Present means the request had to be clamped
+   * into the future and the earlier part of that day -- this morning, every
+   * afternoon -- is missing from `rows` because nobody could ask, not because
+   * nobody was working. See diaryAvailabilityRequest.
+   */
+  answerableFromMin: Record<string, number>;
 }
 
 export async function listDiaryAvailabilitySafe(
@@ -1040,7 +1052,7 @@ export async function listDiaryAvailabilitySafe(
   opts: ThroughClient = {},
 ): Promise<DiaryAvailabilityRead> {
   const ids = [...args.practitionerIds].filter((id) => id !== "");
-  if (ids.length === 0) return { rows: [], failed: false, unanswerableDayKeys: [] };
+  if (ids.length === 0) return { rows: [], failed: false, unanswerableDayKeys: [], answerableFromMin: {} };
 
   // THE WINDOW IS DECIDED BEFORE THE CACHE IS TOUCHED. A range that has entirely
   // ended can never be answered, so it costs nothing and is never stored: the
@@ -1055,6 +1067,9 @@ export async function listDiaryAvailabilitySafe(
       rows: [],
       failed: false,
       unanswerableDayKeys: dayKeysBetween(args.fromDayKey, args.toDayKey),
+      // Every requested day is unanswerable outright, so there is no day with a
+      // part-answer to report.
+      answerableFromMin: {},
     };
   }
 
@@ -1075,6 +1090,11 @@ export async function listDiaryAvailabilitySafe(
         rows: hit.rows,
         failed: hit.failed,
         unanswerableDayKeys: window.unanswerableDayKeys,
+        // RECOMPUTED FROM `now` for the same reason, and it can only ever move
+        // FORWARD as the entry ages: an hour-old entry really does hold rows for
+        // a window that has since closed, and reporting the fresher, later minute
+        // declines to claim hours we would rather not have to stand behind.
+        answerableFromMin: window.answerableFromMin,
       };
     }
   }
@@ -1146,6 +1166,9 @@ export async function listDiaryAvailabilitySafe(
   return {
     ...result,
     unanswerableDayKeys: result.failed ? [] : window.unanswerableDayKeys,
+    // Same rule: a failed read softens nothing. The column hatches as "we could
+    // not find out", which is already the most cautious thing it can say.
+    answerableFromMin: result.failed ? {} : window.answerableFromMin,
   };
 }
 

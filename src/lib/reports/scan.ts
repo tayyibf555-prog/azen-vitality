@@ -66,11 +66,11 @@ export interface PagedRead {
  * `meta.total` — how many rows Dentally says match the query — or null when the
  * envelope does not carry one.
  *
- * A DELIBERATE TWIN of the module-private `metaTotal` in src/lib/dashboard/read.ts.
- * That one is not exported, and importing the dashboard assembly into the reports
- * read path to borrow eight lines would drag its whole panel graph along with it.
- * The parsing that actually carries money — `parseAggregateAmountPence` in
- * src/lib/dashboard/money.ts — IS imported rather than copied; this is a row count.
+ * THE ONE HOME of this grammar: src/lib/dashboard/read.ts imports it from here
+ * (the twin it once carried is deleted), which works because this module imports
+ * nothing but "server-only" — no panel graph comes along. The parsing that
+ * actually carries money — `parseAggregateAmountPence` in
+ * src/lib/dashboard/money.ts — is likewise shared; this is a row count.
  *
  * Null is not an error: some endpoints omit it, and the caller then falls back to
  * the short-page heuristic and treats a budget-exhausting walk as incomplete.
@@ -96,6 +96,19 @@ export function metaTotal(meta: unknown): number | null {
  * A ZERO-ROW ANSWER IS AN ANSWER. An empty window returns `{ raw: [], complete:
  * true }` — "no claims this month" is a fact, and it must not be confused with a
  * failed read, which is the caller's own catch and a different reason on screen.
+ *
+ * A WALK THAT CANNOT FINISH IS ABANDONED ON PAGE ONE. `meta.total` arrives with the
+ * first page, so a window holding more rows than `maxPages` can carry is KNOWN to be
+ * unreadable before the second request is made. It used to walk all sixty pages
+ * anyway — six thousand rows fetched, parsed and thrown away, one live request at a
+ * time — to reach the same `complete: false` and the same "choose a shorter period"
+ * on screen. The verdict is unchanged; only the sixty seconds spent reaching it are
+ * gone. For the same reason the walk stops the moment it holds `expected` rows
+ * rather than spending one more request to see a short page confirm it.
+ *
+ * Both stops assume what every caller in this file already relies on: pages of
+ * REPORTS_PER_PAGE rows (it is also what the existing short-page stop measures
+ * against). A caller paging in some other size gets the old walk, not a wrong one.
  */
 export async function pageAll(
   fetchPage: (page: number) => Promise<ListPage>,
@@ -109,7 +122,18 @@ export async function pageAll(
     const { rows, meta } = await fetchPage(page);
     if (page === 1) expected = metaTotal(meta);
     raw.push(...rows);
+    // Dentally has already said the window is bigger than this budget: every
+    // remaining request would be spent proving a truncation we have been told about.
+    if (page === 1 && expected !== null && expected > maxPages * REPORTS_PER_PAGE) {
+      return { raw, complete: false, expected };
+    }
     if (rows.length < REPORTS_PER_PAGE) {
+      hitCap = false;
+      break;
+    }
+    // Everything Dentally says exists is in hand. The next page would be the empty
+    // or short one that today's stop waits for.
+    if (expected !== null && raw.length >= expected) {
       hitCap = false;
       break;
     }

@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import {
   MOCK_TREATMENT_PLAN_ITEMS,
   type MockTreatmentPlanItem,
@@ -41,11 +42,8 @@ export async function GET(request: Request): Promise<Response> {
   const planId = url.searchParams.get("treatment_plan_id");
   const practitionerId = url.searchParams.get("practitioner_id");
   const updatedSince = url.searchParams.get("updated_since");
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(
-    1,
-    Number(url.searchParams.get("per_page") ?? String(DEFAULT_PER_PAGE)) || DEFAULT_PER_PAGE,
-  );
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"), DEFAULT_PER_PAGE);
 
   let all: MockTreatmentPlanItem[] = [...MOCK_TREATMENT_PLAN_ITEMS, ...clinicalActivityItems()];
   if (patientId) all = all.filter((i) => i.patient_id === patientId);

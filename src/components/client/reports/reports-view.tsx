@@ -2,7 +2,7 @@ import { FileText } from "lucide-react";
 import { PageHeader, StatCard, EmptyState, SectionCard } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
-import { buildSnapshot } from "@/lib/reports/snapshot";
+import { buildSnapshot, reportsGate, snapshotUsable } from "@/lib/reports/snapshot";
 import { presetWindow } from "@/lib/reports/report-window";
 import { readNhsBandReport, readPaymentAllocation, readNhsClinicalReport } from "@/lib/reports/flagship-read";
 import { FlagshipReports, PAY_DEFAULT_PRESET } from "./flagship-reports";
@@ -51,8 +51,15 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
   // read that actually worked. A failed enquiry read (or a period too busy to count
   // in one read) previously arrived here as enquiries === 0 and was rendered as the
   // awaiting state — telling an owner mid-campaign that nobody had been in touch.
-  const snapshotUnavailable = month.readFailed || month.truncated;
-  const hasActivity = !snapshotUnavailable && month.enquiries > 0;
+  //
+  // AND ONE UNUSABLE PERIOD MAY NOT BLANK THE OTHER. This gate used to read the
+  // MONTH snapshot alone, so an unreadable month took the Week tab, the week's own
+  // figures and the Generate button down with it. `reportsGate` weighs both.
+  const gate = reportsGate({ week, month });
+  // The stat cards are explicitly the 30-day figures, so they follow the month's own
+  // usability rather than the page's: a readable week does not license printing a
+  // month total nobody could read.
+  const showMonthStats = snapshotUsable(month) && month.enquiries > 0;
 
   return (
     <>
@@ -60,7 +67,7 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
         title="Reports"
         description="Flagship NHS activity and payment-allocation reports, plus AI weekly and monthly business reviews written from your live enquiry and booking activity."
         stats={
-          hasActivity ? (
+          showMonthStats ? (
             <>
               <StatCard label="Enquiries (30 days)" value={month.enquiries} dot="bg-status-blue" />
               <StatCard label="Consultations booked" value={month.booked} dot="bg-status-green" />
@@ -84,18 +91,22 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
         <FlagshipReports clientSlug={clientSlug} nhs={nhs} pay={pay} clinical={clinical} />
       </SectionCard>
 
-      {hasActivity ? (
-        <ReportsWorkspace clientSlug={clientSlug} snapshots={{ week, month }} />
-      ) : snapshotUnavailable ? (
+      {gate.kind === "workspace" ? (
+        <ReportsWorkspace
+          clientSlug={clientSlug}
+          snapshots={{ week, month }}
+          defaultPeriod={gate.defaultPeriod}
+        />
+      ) : gate.kind === "unavailable" ? (
         <EmptyState
           icon={FileText}
           title={
-            month.readFailed
+            gate.readFailed
               ? "Your enquiry activity could not be read"
               : "This period is bigger than one read"
           }
           description={
-            month.readFailed
+            gate.readFailed
               ? "The live enquiry store did not answer, so the monthly figures and the AI review cannot be written from it. This is a read failing, not a quiet month — nothing here says your enquiries have stopped. Try again shortly."
               : "This month holds more enquiries than a single read carries, so the figures behind the review would be a floor rather than a total. They are not shown from a partial count."
           }

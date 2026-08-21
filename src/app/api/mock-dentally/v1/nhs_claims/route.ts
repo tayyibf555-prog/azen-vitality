@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import { allNhsClaims } from "@/app/api/mock-dentally/_finance-fixtures";
 import { resolveMockSiteId } from "@/app/api/mock-dentally/_fixtures";
 
@@ -27,6 +28,10 @@ export const dynamic = "force-dynamic";
 //     live publishes none, so a UDA total cannot be read from the envelope and the
 //     rows genuinely have to be paged.
 //   - `submitted_date_from`, `date_from`, `from` and `on` are ignored.
+//   - per_page is CAPPED AT 100, and 250 silently returns 25 — not 100. Reproduced
+//     here (see _paging.ts). It matters most on THIS endpoint: with no total_amount
+//     in the envelope a UDA total can only be reached by paging, so a walker handed
+//     a quarter-size page it never asked for stops early and calls it a whole year.
 //
 // site_id is honoured, on the same reasoning that it is honoured on payments.
 // practitioner_id is NOT honoured, because it was not verified either: a mock
@@ -44,8 +49,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   const siteId = resolveMockSiteId(url.searchParams.get("site_id"));
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(1, Number(url.searchParams.get("per_page") ?? "100") || 100);
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"));
 
   const startDate = url.searchParams.get("start_date");
   const endDate = url.searchParams.get("end_date");

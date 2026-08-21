@@ -44,8 +44,14 @@ const PERIODS: { key: ReportPeriod; label: string }[] = [
 function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
   // A COUNT WE CANNOT STAND BEHIND IS NOT SHOWN. A failed read would otherwise
   // render as four zeroes, which on this strip is indistinguishable from a quiet
-  // week and is acted on as one; a truncated window would render a floor as a total.
-  if (snapshot.readFailed || snapshot.truncated) {
+  // week and is acted on as one; counts that are a floor would render as totals.
+  //
+  // A BUSY PERIOD IS NO LONGER ONE OF THOSE CASES. `countsExact` means the enquiry
+  // and booking figures were counted in the store rather than measured off a bounded
+  // sample, so they are totals however busy the period was; only the two sampled
+  // figures below carry a caveat. The blank stays for the period whose count itself
+  // could not be made.
+  if (snapshot.readFailed || (snapshot.truncated && !snapshot.countsExact)) {
     return (
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
@@ -93,6 +99,19 @@ function SnapshotStrip({ snapshot }: { snapshot: ReportSnapshot }) {
       {snapshot.topSource ? (
         <p className="mt-3 text-xs text-muted">
           Most common source: {snapshot.topSource.source} ({snapshot.topSource.count})
+        </p>
+      ) : null}
+      {/* WHICH OF THESE FIGURES IS A TOTAL, SAID ON THE STRIP ITSELF. Enquiries and
+          bookings are counted; the response time and the source mix need the enquiry
+          records themselves and that read is bounded, so on a period past the bound
+          they describe its most recent enquiries. Shown here rather than left to the
+          AI review, because the numbers above are read long before anyone presses
+          generate. */}
+      {snapshot.truncated ? (
+        <p className="mt-3 text-xs text-muted">
+          Your enquiries and bookings are counted in full for this period. The average first
+          response and most common source are measured over the most recent enquiries in it,
+          not all of them.
         </p>
       ) : null}
     </div>
@@ -156,14 +175,22 @@ function ReportPanel({ report, period }: { report: Report; period: ReportPeriod 
 export function ReportsWorkspace({
   clientSlug,
   snapshots,
+  defaultPeriod = "month",
 }: {
   clientSlug: string;
   /** Real per-period snapshots, computed server-side from live activity. */
   snapshots: Record<ReportPeriod, ReportSnapshot>;
+  /**
+   * The tab to open on. The month is the headline window and stays the default, but
+   * the page hands over the WEEK when the month is the unusable one: landing an
+   * owner on a tab that can only explain itself is a worse first screen than landing
+   * her on the period we can actually show. Both tabs remain reachable either way.
+   */
+  defaultPeriod?: ReportPeriod;
 }) {
-  const [period, setPeriod] = useState<ReportPeriod>("month");
+  const [period, setPeriod] = useState<ReportPeriod>(defaultPeriod);
   const [report, setReport] = useState<Report | null>(null);
-  const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("month");
+  const [reportPeriod, setReportPeriod] = useState<ReportPeriod>(defaultPeriod);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

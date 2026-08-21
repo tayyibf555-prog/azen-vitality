@@ -25,7 +25,21 @@ import {
   type DashboardPeriod,
   type DayCoverage,
 } from "@/lib/dashboard/period";
-import { parseAggregateAmountPence } from "@/lib/dashboard/money";
+import { parseAggregateAmountPence, parseMoneyPence } from "@/lib/dashboard/money";
+// THE PAGER AND THE COUNT PARSER, SHARED RATHER THAN COPIED.
+//
+// `meta.total` — how many rows Dentally says match a filtered query — used to be
+// parsed by a private copy in this file PLUS a third hand-inlined copy of the same
+// grammar inside paymentsWindowTotal, so the one question every scan here turns on
+// ("did the walk finish?") had three answers that only happened to agree. `pageAll`
+// is the same story one level up: this file held two hand-rolled walks that page a
+// server-filtered list, compare what arrived against `meta.total`, and abandon a walk
+// the count has already declared unreachable — which is precisely, line for line,
+// what pageAll does for the reports.
+//
+// The import direction is clean: scan.ts imports nothing from this module graph, only
+// "server-only".
+import { metaTotal, pageAll, REPORTS_PER_PAGE } from "@/lib/reports/scan";
 import { takingsWindowKey, type TakingsWindowTotal } from "@/lib/dashboard/takings";
 import { nhsContractYear } from "@/lib/dashboard/uda";
 import { getPatientCounts } from "@/lib/patient-count/repository";
@@ -113,7 +127,20 @@ import {
 
 const PER_PAGE = 100;
 
-/** Page budget per site for the newest-first scans. 100 rows a page, so 40 pages
+/**
+ * The page size the two pageAll-driven scans REQUEST.
+ *
+ * It has to be REPORTS_PER_PAGE and not this file's own PER_PAGE, even though both
+ * are 100: pageAll decides "this page was short, so the walk is over" by measuring
+ * against REPORTS_PER_PAGE, whatever the caller actually asked for. Asking for a
+ * different size would make every full page look short and end the walk on page one
+ * — a truncated read reported as a complete one, which is the exact failure this
+ * whole file exists to stop. Requesting the size the pager measures makes that
+ * impossible by construction rather than by the two constants happening to match.
+ */
+const SCAN_PER_PAGE = REPORTS_PER_PAGE;
+
+/** Page budget per site for the paged scans. 100 rows a page, so 40 pages
  *  is 4,000 rows per site, the same bound the outstanding-invoice scan uses. */
 const SCAN_MAX_PAGES = 40;
 
@@ -239,14 +266,12 @@ async function readTakingsWindows(
 function paymentsWindowTotal(meta: unknown): TakingsWindowTotal | null {
   if (meta === null || typeof meta !== "object" || Array.isArray(meta)) return null;
   const m = meta as Record<string, unknown>;
-  const rawCount = m["total"];
-  const count =
-    typeof rawCount === "number"
-      ? rawCount
-      : typeof rawCount === "string" && /^\d+$/.test(rawCount.trim())
-        ? Number(rawCount.trim())
-        : null;
-  if (count === null || !Number.isSafeInteger(count) || count < 0) return null;
+  // The row count is `meta.total`, read by the SHARED parser rather than by a third
+  // hand-rolled copy of its grammar. The copy that stood here accepted exactly the
+  // same strings, which is precisely the problem: three grammars agreeing today is
+  // not the same as one grammar, and this one carries the count under a money total.
+  const count = metaTotal(m);
+  if (count === null) return null;
   const totalPence = parseAggregateAmountPence(m["total_amount"]);
   if (totalPence === null) return null;
   return { totalPence, paymentCount: count };
@@ -398,6 +423,14 @@ async function scanAppointments(
  * reporting itself unavailable rather than short. That is the correct behaviour for
  * a figure that cannot be read completely, and it is the seam where a stored claim
  * rollup belongs — not a reason to go back to printing a slice.
+ *
+ * AND WHEN THAT DAY COMES IT COSTS ONE REQUEST A SITE, NOT FORTY. `meta.total` is on
+ * page one, so a walk that cannot possibly finish is abandoned there rather than
+ * paged to its cap and then discarded. This scan used to learn the count on page one
+ * and walk all forty anyway — 120 requests an assembly to reach a blank panel,
+ * against the 3,600/hour ceiling an over-eager cron emptied for a whole working day
+ * on 2026-08-20. The panel says exactly what it said before; only the bill changes.
+ * The stop lives in pageAll, so it is the same stop the month reports get.
  */
 async function scanClaims(
   siteIds: readonly string[],
@@ -414,41 +447,35 @@ async function scanClaims(
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
       try {
-        const raw: unknown[] = [];
-        let expected: number | null = null;
-        for (let page = 1; page <= SCAN_MAX_PAGES; page += 1) {
-          const res = await client.listNhsClaims({
-            siteId: dentallySiteId(siteId),
-            after,
-            before,
-            page,
-            perPage: PER_PAGE,
-          });
-          if (page === 1) expected = metaTotal(res.meta);
-          const rows = res.nhs_claims ?? [];
-          raw.push(...rows);
-          if (rows.length < PER_PAGE) break;
-        }
-        // Dentally told us how many exist. Anything less is a truncated read, and a
-        // truncated read cannot state a contract-year total.
-        if (expected !== null && raw.length < expected) {
+        const read = await pageAll(
+          async (page) => {
+            const res = await client.listNhsClaims({
+              siteId: dentallySiteId(siteId),
+              after,
+              before,
+              page,
+              perPage: SCAN_PER_PAGE,
+            });
+            return { rows: res.nhs_claims ?? [], meta: res.meta };
+          },
+          SCAN_MAX_PAGES,
+        );
+        if (!read.complete) {
+          // A truncated read cannot state a contract-year total. The two ways of
+          // knowing it is truncated are kept apart in the log, because they are
+          // different facts about the source: it told us the count and we fell short,
+          // or it told us nothing and we ran out of budget.
           console.error(
-            `[dashboard] NHS claim scan read ${raw.length} of ${expected} contract-year claims ` +
-              `for site ${siteId} at ${SCAN_MAX_PAGES} pages; reporting the UDA figures ` +
-              `unavailable rather than totalling a slice`,
+            read.expected === null
+              ? `[dashboard] NHS claim scan hit the page cap for site ${siteId} with no meta.total ` +
+                  `to verify against; reporting the UDA figures unavailable`
+              : `[dashboard] NHS claim scan read ${read.raw.length} of ${read.expected} ` +
+                  `contract-year claims for site ${siteId}; reporting the UDA figures unavailable ` +
+                  `rather than totalling a slice`,
           );
           return { rows: null, dropped: 0, truncated: true };
         }
-        if (expected === null && raw.length >= SCAN_MAX_PAGES * PER_PAGE) {
-          // No count to check against AND the walk ran to its cap: it may or may not
-          // be whole, and "may" is not good enough for a money figure.
-          console.error(
-            `[dashboard] NHS claim scan hit the page cap for site ${siteId} with no meta.total ` +
-              `to verify against; reporting the UDA figures unavailable`,
-          );
-          return { rows: null, dropped: 0, truncated: true };
-        }
-        const { rows, dropped } = normaliseNhsClaims(raw);
+        const { rows, dropped } = normaliseNhsClaims(read.raw);
         return { rows: rows.map((c) => ({ ...c, siteId })), dropped, truncated: false };
       } catch (err) {
         rethrowIfBudgetRefused(err); // not a failed scan; see the header
@@ -470,27 +497,6 @@ async function scanClaims(
     dropped: perSite.reduce((n, s) => n + s.dropped, 0),
     truncated: false,
   };
-}
-
-/**
- * `meta.total` — how many rows Dentally says match the query — or null when the
- * envelope does not carry one.
- *
- * It is the difference between "the scan finished" and "the scan stopped", which no
- * amount of looking at the rows can tell you on an index that is not date-ordered.
- * Null is not an error: some endpoints omit it, and a caller then falls back to the
- * older short-page heuristic and says so.
- */
-function metaTotal(meta: unknown): number | null {
-  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) return null;
-  const raw = (meta as Record<string, unknown>)["total"];
-  const n =
-    typeof raw === "number"
-      ? raw
-      : typeof raw === "string" && /^\d+$/.test(raw.trim())
-        ? Number(raw.trim())
-        : null;
-  return n !== null && Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
 // --- Patients and treatment plans -------------------------------------------
@@ -631,6 +637,17 @@ async function scanPlans(
 interface InvoiceScan {
   invoices: DashboardInvoice[] | null;
   undated: number;
+  /**
+   * Invoices the row grammar REFUSED — no id, or an amount it will not parse.
+   *
+   * It exists so that tightening the grammar can never quietly shrink the INVOICED
+   * total. The rows used to be parsed by a private, looser `pence()` while the
+   * outstanding slice of the SAME field on the SAME endpoint went through the strict
+   * `parseMoneyPence` twenty lines away; unifying them is only safe if a row the
+   * strict grammar rejects is COUNTED and disclosed rather than skipped in silence,
+   * which is the difference between "we billed less" and "we read less".
+   */
+  dropped: number;
   balances: DashboardAccountBalance[] | null;
   droppedBalances: number;
   /** A null above is a scan that STOPPED SHORT, not one that failed. */
@@ -638,20 +655,35 @@ interface InvoiceScan {
   balancesTruncated: boolean;
 }
 
+/**
+ * The London day an invoice belongs to, for the INVOICED window.
+ *
+ * IT MUST BE THE SAME FIELD THE SERVER FILTERED ON. That is the invariant, and it is
+ * the only one: the windowed read narrows with `created_after`/`created_before`,
+ * which Dentally applies to `created_at`, so bucketing on anything else would let a
+ * row arrive inside the filter and land outside the bucket (or the reverse) — a
+ * period total silently short by whatever the two fields disagree about.
+ *
+ * WHAT THIS USED TO DO, AND WHY IT WAS RIGHT BY ACCIDENT. It preferred `date`, then
+ * `created_at`, then `issued_at`, and put `dated_on` last. NEITHER `date` NOR
+ * `issued_at` EXISTS on live /v1/invoices — probed 2026-08-21, 0 of 300 rows carried
+ * either — so every live row fell through to `created_at` anyway and the panel was
+ * correct for a reason nobody had checked. The phantom keys are gone; the real
+ * fields are stated in the order the invariant requires.
+ *
+ * `dated_on` IS a real field and is the billed date, and it is deliberately the
+ * FALLBACK rather than the preference. On live today the two agree — `dated_on`
+ * equalled created_at's London day on 300 of 300 rows — but promoting it would break
+ * the invariant above the moment they diverge, which is exactly what a back-dated
+ * invoice is. The honest consequence of this order, stated rather than hidden: a
+ * bill raised today for work done last month is counted in TODAY's INVOICED figure,
+ * because today is the day the server's own filter placed it in.
+ */
 function invoiceDay(r: Record<string, unknown>): string | null {
-  for (const key of ["date", "created_at", "issued_at", "dated_on"]) {
+  for (const key of ["created_at", "dated_on"]) {
     const value = r[key];
     const day = isDayKey(value) ? value : londonDayOfIso(value);
     if (day !== null) return day;
-  }
-  return null;
-}
-
-function pence(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value * 100);
-  if (typeof value === "string" && value.trim().length > 0) {
-    const n = Number(value.trim());
-    return Number.isFinite(n) ? Math.round(n * 100) : null;
   }
   return null;
 }
@@ -688,11 +720,33 @@ function pence(value: unknown): number | null {
  * publishes no `total_amount`, so unlike takings there is no one-request answer:
  * completeness has to be earned by paging, and where it cannot be, the panel says so.
  *
- * Neither read is site-scoped, deliberately: one group-wide read is cheaper than
- * three site reads of the same rows, and attribution runs through the patient
- * (`siteByPatientId`) exactly as before.
+ * AND THE ACCOUNTS READ IS NOW SITE-SCOPED, WHICH IS A REVERSAL. What stood here was
+ * "neither read is site-scoped, deliberately: one group-wide read is cheaper than
+ * three site reads of the same rows". Cheaper, and about to go permanently blank.
+ * `paid=false` measured 3,853 rows live on 2026-08-21 against a 4,000-row ceiling —
+ * roughly 147 unpaid invoices, weeks of ordinary billing, from an ACCOUNTS panel that
+ * blanks itself the moment it is crossed. Asking per site (`site_id` IS honoured
+ * here; live N15 alone -> 22,600 of 34,201) costs two extra requests and lifts the
+ * ceiling to 4,000 PER SITE — 12,000 across this practice.
+ *
+ * It also fixes a quieter wrong number. The key reads an UMBRELLA, not one practice,
+ * so the group-wide `paid=false` slice contains debtors of practices this client does
+ * not run, and the all-sites ACCOUNTS total counted every one of them (the per-site
+ * scopes did not: they filter through `siteByPatientId`). Scoped reads cannot see
+ * them at all.
+ *
+ * DE-DUPLICATED BY INVOICE ID ON THE WAY BACK, because "the filter is honoured" is an
+ * assumption about a remote system and this one is load-bearing: a source that
+ * ignored `site_id` would hand back the same rows three times and treble every
+ * balance on the screen. Live honours it, so the dedup is a no-op there and a floor
+ * everywhere else. (Our own mock does NOT honour it, so this is the code path dev
+ * actually exercises.)
+ *
+ * The INVOICED read stays group-wide: it is already narrowed to 90 days — 2,499 rows
+ * live for that span — so it is nowhere near the ceiling, and splitting it would buy
+ * two more requests for nothing.
  */
-async function scanInvoices(today: string): Promise<InvoiceScan> {
+async function scanInvoices(today: string, siteIds: readonly string[]): Promise<InvoiceScan> {
   const client = dentallyFromEnv();
   const from = shiftDayKey(today, -(HISTORY_DAYS - 1)) ?? today;
   // Padded a day at each edge: `created_at` is an ISO instant with an offset, so a
@@ -703,18 +757,31 @@ async function scanInvoices(today: string): Promise<InvoiceScan> {
 
   const [windowed, unpaid] = await Promise.all([
     pageInvoices(client, { createdAfter, createdBefore }, "invoiced-in-window"),
-    pageInvoices(client, { paid: false }, "outstanding-balances"),
+    pageUnpaidInvoices(client, siteIds),
   ]);
 
   const invoices: DashboardInvoice[] | null = windowed.rows === null ? null : [];
   let undated = 0;
+  let dropped = 0;
   for (const item of windowed.rows ?? []) {
-    if (item === null || typeof item !== "object") continue;
+    if (item === null || typeof item !== "object") {
+      dropped += 1;
+      continue;
+    }
     const r = item as Record<string, unknown>;
     const id = str(r["id"]);
-    const grossPence = pence(r["amount"] ?? r["total"] ?? r["gross"]);
-    const outstandingPence = pence(r["amount_outstanding"] ?? r["outstanding"]);
-    if (id === null || grossPence === null || outstandingPence === null) continue;
+    // THE SAME MONEY GRAMMAR AS EVERY OTHER ROW IN THIS PLATFORM. A private `pence()`
+    // used to stand here — Number(value) * 100 rounded — while the outstanding slice
+    // of the SAME field from the SAME endpoint went through parseMoneyPence twenty
+    // lines below. Two grammars over one field is a disagreement waiting for a row
+    // that reads one way here and another way there; parseMoneyPence refuses what it
+    // cannot read exactly, and `dropped` is what stops a refusal being silent.
+    const grossPence = parseMoneyPence(r["amount"] ?? r["total"] ?? r["gross"]);
+    const outstandingPence = parseMoneyPence(r["amount_outstanding"] ?? r["outstanding"]);
+    if (id === null || grossPence === null || outstandingPence === null) {
+      dropped += 1;
+      continue;
+    }
     const day = invoiceDay(r);
     if (day === null) {
       undated += 1;
@@ -722,11 +789,18 @@ async function scanInvoices(today: string): Promise<InvoiceScan> {
     }
     invoices?.push({ id, patientId: str(r["patient_id"]), day, grossPence, outstandingPence });
   }
+  if (dropped > 0) {
+    console.error(
+      `[dashboard] invoice scan (invoiced-in-window) could not read ${dropped} row(s); ` +
+        `they are in no period total and the panel discloses them`,
+    );
+  }
 
   if (unpaid.rows === null) {
     return {
       invoices,
       undated,
+      dropped,
       balances: null,
       droppedBalances: 0,
       invoicesTruncated: windowed.truncated,
@@ -737,11 +811,64 @@ async function scanInvoices(today: string): Promise<InvoiceScan> {
   return {
     invoices,
     undated,
+    dropped,
     balances: balances.rows,
     droppedBalances: balances.dropped,
     invoicesTruncated: windowed.truncated,
     balancesTruncated: false,
   };
+}
+
+/**
+ * The `paid=false` slice, read ONE SITE AT A TIME and merged.
+ *
+ * Whole or nothing, per site AND overall: one site that stopped short means the
+ * ACCOUNTS panel cannot state a group balance, so the whole read returns null with
+ * the truncation flag set, exactly as the single group-wide read did. A site that
+ * genuinely FAILED is not truncation and must not be dressed up as one — same
+ * distinction the claim scan makes, for the same reason.
+ */
+async function pageUnpaidInvoices(
+  client: ReturnType<typeof dentallyFromEnv>,
+  siteIds: readonly string[],
+): Promise<{ rows: unknown[] | null; truncated: boolean }> {
+  const perSite = await Promise.all(
+    siteIds.map((siteId) =>
+      pageInvoices(
+        client,
+        { siteId: dentallySiteId(siteId), paid: false },
+        `outstanding-balances ${siteId}`,
+      ),
+    ),
+  );
+  if (perSite.some((s) => s.rows === null)) {
+    return { rows: null, truncated: perSite.every((s) => s.rows !== null || s.truncated) };
+  }
+
+  // Dedup by invoice id. See scanInvoices: a source that ignored `site_id` would
+  // otherwise hand the same debt back once per site and treble the panel.
+  const byId = new Map<string, unknown>();
+  const unidentified: unknown[] = [];
+  for (const site of perSite) {
+    for (const row of site.rows ?? []) {
+      const id = row !== null && typeof row === "object" ? str((row as Record<string, unknown>)["id"]) : null;
+      // A row with no id cannot be de-duplicated. Keep it: the balance normaliser
+      // will judge it on its own terms, and dropping it here would be this file
+      // deciding a debt does not exist because it could not name it.
+      if (id === null) unidentified.push(row);
+      else if (!byId.has(id)) byId.set(id, row);
+    }
+  }
+  const rows = [...byId.values(), ...unidentified];
+  const total = perSite.reduce((n, s) => n + (s.rows?.length ?? 0), 0);
+  if (rows.length < total) {
+    console.error(
+      `[dashboard] outstanding-balance reads returned ${total} rows across ${siteIds.length} sites ` +
+        `but only ${rows.length} distinct invoices; the source is not honouring site_id, and the ` +
+        `duplicates have been dropped rather than counted`,
+    );
+  }
+  return { rows, truncated: false };
 }
 
 /**
@@ -753,36 +880,35 @@ async function scanInvoices(today: string): Promise<InvoiceScan> {
  * the envelope carries no meta, it falls back to the short-page heuristic and treats
  * a walk that ran to the page cap as truncated — the pessimistic reading, because
  * the cost of being wrong here is a wrong money figure.
+ *
+ * A WALK THAT CANNOT FINISH IS NOT TAKEN AT ALL. `meta.total` is on page one, so a
+ * slice bigger than the page budget is known to be unreadable after ONE request; the
+ * other 39 were being spent to reach the identical blank panel. Both that stop and
+ * the completeness test now come from pageAll, which this file used to hand-roll
+ * twice.
  */
 async function pageInvoices(
   client: ReturnType<typeof dentallyFromEnv>,
-  filter: { createdAfter?: string; createdBefore?: string; paid?: boolean },
+  filter: { siteId?: string; createdAfter?: string; createdBefore?: string; paid?: boolean },
   label: string,
 ): Promise<{ rows: unknown[] | null; truncated: boolean }> {
   try {
-    const raw: unknown[] = [];
-    let expected: number | null = null;
-    let shortPage = false;
-    for (let page = 1; page <= SCAN_MAX_PAGES; page += 1) {
-      const res = await client.listInvoices({ ...filter, page, perPage: PER_PAGE });
-      if (page === 1) expected = metaTotal(res.meta);
-      const rows = res.invoices ?? [];
-      raw.push(...rows);
-      if (rows.length < PER_PAGE) {
-        shortPage = true;
-        break;
-      }
-    }
-    const complete = expected !== null ? raw.length >= expected : shortPage;
-    if (!complete) {
+    const read = await pageAll(
+      async (page) => {
+        const res = await client.listInvoices({ ...filter, page, perPage: SCAN_PER_PAGE });
+        return { rows: res.invoices ?? [], meta: res.meta };
+      },
+      SCAN_MAX_PAGES,
+    );
+    if (!read.complete) {
       console.error(
-        `[dashboard] invoice scan (${label}) read ${raw.length}` +
-          `${expected === null ? "" : ` of ${expected}`} rows at ${SCAN_MAX_PAGES} pages; ` +
-          `reporting the panel unavailable rather than totalling a slice of the index`,
+        `[dashboard] invoice scan (${label}) read ${read.raw.length}` +
+          `${read.expected === null ? "" : ` of ${read.expected}`} rows within ${SCAN_MAX_PAGES} ` +
+          `pages; reporting the panel unavailable rather than totalling a slice of the index`,
       );
       return { rows: null, truncated: true };
     }
-    return { rows: raw, truncated: false };
+    return { rows: read.raw, truncated: false };
   } catch (err) {
     rethrowIfBudgetRefused(err); // not a failed scan; see the header
     console.error(`[dashboard] invoice scan (${label}) failed`, err);
@@ -940,9 +1066,14 @@ function refusedDashboardView(args: ReadDashboardArgs): PracticeDashboardView {
     payments: [],
     paymentsCoverage: null,
     // An EMPTY map, not null: null would fall back to the row path and report the
-    // same unavailable cell for a different reason. Empty means "no site answered",
-    // which is exactly what a refused assembly is.
+    // same unavailable cell for a different reason. Empty means "no site answered".
     takingsWindowTotals: new Map(),
+    // AND SAY WHY, IN SO MANY WORDS. An empty map alone routed the strip into "one
+    // of the sites in this view could not be read", which sends the practice manager
+    // to ring a practice about a fault that is entirely ours: the platform declined
+    // to spend the hourly quota for a moment. Naming the refusal is the difference
+    // between a phone call and a refresh.
+    takingsRefused: true,
     rollups: null,
     appointments: null,
     appointmentsCoverage: null,
@@ -1051,7 +1182,7 @@ async function buildPracticeDashboard(args: ReadDashboardArgs): Promise<Practice
     scanClaims(siteIds, today, contractStart),
     scanPatients(siteIds, today),
     scanPlans(siteIds, today),
-    scanInvoices(today),
+    scanInvoices(today, siteIds),
     readActiveCounts(siteIds),
   ]);
   const practitioners = await practitionersP;
@@ -1089,6 +1220,13 @@ async function buildPracticeDashboard(args: ReadDashboardArgs): Promise<Practice
     payments: [],
     paymentsCoverage: null,
     takingsWindowTotals: takings.totals,
+    // THE NAMES, NOT JUST THE BLANK. readTakingsWindows has always known WHICH sites
+    // failed to answer and the caller has always thrown the list away, so the screen
+    // could say "one of the sites in this view could not be read" and nothing more —
+    // leaving a manager of three practices to work out which one. It changes no
+    // figure and blanks no cell: the missing-key test in computeTakingsStrip remains
+    // the only thing that decides whether a total may be stated.
+    takingsFailedSites: takings.failedSites,
     droppedPayments: 0,
     rollups: null,
     appointments: appointments.normalised,
@@ -1102,6 +1240,10 @@ async function buildPracticeDashboard(args: ReadDashboardArgs): Promise<Practice
     plansWindowed: true,
     invoices: invoiceScan.invoices,
     undatedInvoices: invoiceScan.undated,
+    // Beside `undated`, and for the same reason: a bill left out of every period has
+    // to be visible on the screen that totals them. Undated means we read it and
+    // could not place it; dropped means we could not read it at all.
+    droppedInvoices: invoiceScan.dropped,
     invoicesTruncated: invoiceScan.invoicesTruncated,
     balances,
     droppedBalances: invoiceScan.droppedBalances,

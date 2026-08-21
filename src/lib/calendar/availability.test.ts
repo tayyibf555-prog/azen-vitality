@@ -245,6 +245,99 @@ describe("diaryAvailabilityRequest", () => {
   });
 });
 
+// ===========================================================================
+// THE HALF OF TODAY NOBODY CAN ASK ABOUT.
+//
+// The clamp above is load-bearing and correct, and it has a cost that nothing
+// used to report: a window that had already CLOSED when the question was put
+// never comes back. So a clinician with a 09:00-13:00 session and nothing booked
+// returns an empty answer from lunchtime onwards -- and an empty answer used to
+// collapse to grey, which is the sentence "not working" printed over somebody who
+// was in all morning.
+//
+// answerableFromMin is the fact that makes that distinguishable: the minute the
+// answer BEGINS. Before it, silence means nothing at all.
+// ===========================================================================
+describe("diaryAvailabilityRequest and the part of today that went unasked", () => {
+  const NOON = Date.parse("2026-07-31T11:00:00Z"); // 12:00 London, BST
+
+  it("names the minute TODAY's answer begins at when the clamp ate the morning", () => {
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-07-31",
+      nowMs: NOON,
+    });
+    // 12:00 London plus the two minute skew buffer.
+    expect(req!.answerableFromMin).toEqual({ "2026-07-31": 12 * 60 + 2 });
+    // And it is exactly the wall clock of the start actually sent, so the two can
+    // never drift apart.
+    expect(req!.answerableFromMin["2026-07-31"]).toBe(
+      londonWallMinutes(Date.parse(req!.startTime)),
+    );
+  });
+
+  it("names NOTHING when the whole range is still to come", () => {
+    // A future Monday is asked about from its own midnight, so every minute of it
+    // is answered and an empty answer really does mean nobody is in.
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-08-03",
+      toDayKey: "2026-08-04",
+      nowMs: NOON,
+    });
+    expect(req!.answerableFromMin).toEqual({});
+  });
+
+  it("names ONLY the day the clamp landed in, never the days after it", () => {
+    // Wednesday lunchtime, looking at Mon-Sun. Monday and Tuesday are gone
+    // entirely, Wednesday is half gone, and Thursday onwards are answered whole.
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-27",
+      toDayKey: "2026-08-02",
+      nowMs: Date.parse("2026-07-29T11:00:00Z"),
+    });
+    expect(Object.keys(req!.answerableFromMin)).toEqual(["2026-07-29"]);
+    expect(req!.answerableFromMin["2026-07-29"]).toBe(12 * 60 + 2);
+  });
+
+  it("does not name a day it has ALREADY called unanswerable", () => {
+    // 23:57:59.999 London on the 31st, so the two minute buffer puts the start on
+    // the 31st's very last millisecond: the day is unanswerable outright AND the
+    // clamp lands inside it. Naming it here as well would give a caller two
+    // answers about one day and let it honour the weaker one.
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-08-01",
+      nowMs: Date.parse("2026-07-31T22:57:59.999Z"),
+    });
+    expect(req!.unanswerableDayKeys).toEqual(["2026-07-31"]);
+    expect(req!.answerableFromMin).toEqual({});
+  });
+
+  it("names the FIRST minute of tomorrow when the buffer pushes the start over midnight", () => {
+    // 23:59 London: today is over and the start lands at 00:01 tomorrow, so the
+    // first minute of tomorrow genuinely went unasked and is reported as such.
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-08-01",
+      nowMs: Date.parse("2026-07-31T22:59:00Z"),
+    });
+    expect(req!.unanswerableDayKeys).toEqual(["2026-07-31"]);
+    expect(req!.answerableFromMin).toEqual({ "2026-08-01": 1 });
+  });
+
+  it("keeps the two rules Dentally enforces, whatever it reports about the minute", () => {
+    const req = diaryAvailabilityRequest({
+      fromDayKey: "2026-07-31",
+      toDayKey: "2026-07-31",
+      nowMs: NOON,
+    });
+    expect(Date.parse(req!.startTime)).toBeGreaterThan(NOON);
+    expect(Date.parse(req!.finishTime) - Date.parse(req!.startTime)).toBeGreaterThan(
+      24 * 3_600_000,
+    );
+  });
+});
+
 describe("availabilityRowsWithinDays", () => {
   const row = (start: string, finish: string) => ({
     practitioner_id: 1,

@@ -44,6 +44,8 @@ export interface DayColumnDayInput {
   /** The now-line's offset inside this day's column, when it is today. */
   nowTop: number | null;
   workState: ColumnWorkState;
+  /** The London wall-minute this day's hours could be asked about from. See GridColumn. */
+  answerableFromMin?: number;
   workingSpans: Span[];
   entries: DiaryEntryRecord[];
 }
@@ -110,9 +112,15 @@ export function DiaryDays({
                 ? // NOT "Hours not loaded": nothing failed and nothing will load.
                   // Dentally will not answer for a date that has gone by.
                   "Date has passed"
-                : d.workState === "off"
-                  ? "Not working"
-                  : columnCounts(d.appointments);
+                : d.workState === "unreportable"
+                  ? // TODAY, seen after lunch. NOT "Date has passed" -- it has not
+                    // -- and NOT "Not working": the morning is missing from the
+                    // answer because nobody could ask about it, not because
+                    // nobody was in. Same words as the day view, deliberately.
+                    "Hours not reportable"
+                  : d.workState === "off"
+                    ? "Not working"
+                    : columnCounts(d.appointments);
         // A date in the past is as quiet as a pending read: there is nothing for
         // the reader to do about either.
         const loud =
@@ -226,6 +234,7 @@ export function DiaryDays({
           clinicianName,
           nowTop: d.nowTop,
           workState: d.workState,
+          answerableFromMin: d.answerableFromMin,
           workingSpans: d.workingSpans,
           entries: d.entries,
           funding,

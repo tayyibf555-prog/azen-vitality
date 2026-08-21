@@ -5,6 +5,7 @@
 // live figures (enquiries, bookings, response time), so the prompt cannot narrate
 // spend, revenue, return on spend or compliance: those have no live source yet.
 
+import { SNAPSHOT_LEAD_LIMIT } from "./snapshot";
 import type { ReportPeriod, ReportSnapshot } from "./snapshot";
 
 /** Strip dash characters and tidy whitespace (house style: no em/en-dash). */
@@ -53,6 +54,20 @@ export function buildReportPrompt(
   if (snapshot.topSource) {
     lines.push(
       `Most common enquiry source: ${snapshot.topSource.source} (${snapshot.topSource.count} enquiries).`,
+    );
+  }
+  // A BUSY PERIOD IS REVIEWED, BUT NOT ALL OF ITS FIGURES ARE TOTALS.
+  //
+  // The enquiry and booking counts are counted in the database and exact however
+  // busy the period was. The response time and the source mix need the rows, and the
+  // rows are bounded, so on a period past that bound they describe its most recent
+  // enquiries only. The model is told which is which in the same breath it is given
+  // them, because a sampled average narrated as the period's average is precisely
+  // the kind of confident wrong number this snapshot exists to prevent.
+  if (snapshot.truncated) {
+    lines.push(
+      `Note on these figures: the enquiry and booking counts are exact totals for the whole period.`,
+      `The average first response time and the most common source are measured over the ${SNAPSHOT_LEAD_LIMIT} most recent enquiries in the period, not all of them. If you use either, say plainly that it is measured over the most recent enquiries, and never state it as the figure for every enquiry in the period.`,
     );
   }
 

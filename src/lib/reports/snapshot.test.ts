@@ -5,8 +5,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { LeadStage } from "@/lib/types";
 import type { SpeedToLeadLead } from "@/lib/speed-to-lead/types";
 
-const { listLeadsMock } = vi.hoisted(() => ({ listLeadsMock: vi.fn() }));
-vi.mock("@/lib/speed-to-lead/repository", () => ({ listLeads: listLeadsMock }));
+const { listLeadsMock, countLeadsMock } = vi.hoisted(() => ({
+  listLeadsMock: vi.fn(),
+  countLeadsMock: vi.fn(),
+}));
+vi.mock("@/lib/speed-to-lead/repository", () => ({
+  listLeads: listLeadsMock,
+  countLeadsInWindow: countLeadsMock,
+}));
 
 import { buildSnapshot } from "./snapshot";
 
@@ -32,6 +38,13 @@ function lead(p: {
 
 beforeEach(() => {
   listLeadsMock.mockReset();
+  countLeadsMock.mockReset();
+  // THE DEFAULT IS "NO COUNT AVAILABLE", so every test written before the store was
+  // asked to count exercises the fallback it was written against: the figures come
+  // off the bounded sample, and a saturated sample is a floor. The counted path is
+  // opted into per test in the last block, which is where it belongs — the point of
+  // that block is that the two paths behave differently.
+  countLeadsMock.mockRejectedValue(new Error("no exact count in this fixture"));
 });
 
 describe("buildSnapshot computes real activity only", () => {
@@ -157,6 +170,131 @@ describe("the snapshot states only counts it can stand behind", () => {
     const m = await buildSnapshot("month", ["site-cc"]);
 
     expect(m.readFailed).toBe(false);
+    expect(m.truncated).toBe(false);
+    expect(m.hasEnoughData).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A COUNT IS NOT A READ.
+//
+// Everything above is about a BOUNDED read being honest about its bound. This block
+// is about the half of the snapshot that never needed a bound at all.
+//
+// The enquiry store is OUR OWN Postgres, not Dentally. "How many enquiries landed in
+// the last 30 days" is a count there — `count: "exact"` with `head: true` returns no
+// rows — so it is exact whether the month held five leads or fifty thousand, and it
+// costs the same one query either way. The snapshot used to answer that question by
+// fetching the newest 500 leads in the window and taking `.length`, which is a floor
+// the moment the practice is busy, and it then had to declare its own headline
+// figures unusable to avoid publishing that floor as a total. On the page, that
+// blanked the owner's reports at her busiest.
+//
+// So the counts are counted and the DETAIL stays sampled, and the difference is
+// carried in the open: `countsExact` for the first, `truncated` for the second.
+// ---------------------------------------------------------------------------
+describe("the headline counts are counted, not sampled", () => {
+  /** The store's own answer for the window: `total` enquiries, `booked` of them booked. */
+  function counting(total: number, booked: number) {
+    countLeadsMock.mockImplementation(
+      async (_siteIds: string[], _sinceIso: string, stages?: string[]) =>
+        stages && stages.includes("booked") ? booked : total,
+    );
+  }
+
+  /** A saturated detail read: 500 rows back, which is the bound exactly. */
+  function saturatedSample() {
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 500 }, () => lead({ createdAt: daysAgo(1), stage: "new" })),
+    );
+  }
+
+  it("states the exact total for a month busier than the detail read carries", async () => {
+    saturatedSample();
+    counting(912, 240);
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.enquiries, "912 were counted; 500 is only what the sample stopped at").toBe(912);
+    expect(m.booked).toBe(240);
+    expect(m.countsExact).toBe(true);
+    expect(m.truncated, "the SAMPLE is still bounded, and still says so").toBe(true);
+    expect(m.enquiryToBookedRate).toBeCloseTo(0.26, 5);
+    expect(m.hasEnoughData, "a counted window is not a floor, so the review unlocks").toBe(true);
+  });
+
+  it("counts the window the sample asks for, and asks for booked as its own count", async () => {
+    saturatedSample();
+    counting(912, 240);
+    await buildSnapshot("month", ["site-cc", "site-rv"]);
+
+    expect(countLeadsMock).toHaveBeenCalledTimes(2);
+    const [enquiryCall, bookedCall] = countLeadsMock.mock.calls as [
+      [string[], string, string[]?],
+      [string[], string, string[]?],
+    ];
+    expect(enquiryCall[0]).toEqual(["site-cc", "site-rv"]);
+    expect(enquiryCall[2], "the enquiry count is every stage").toBeUndefined();
+    expect(bookedCall[2]).toEqual(["booked"]);
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    expect(Math.abs(Date.parse(enquiryCall[1]) - thirtyDaysAgo)).toBeLessThan(60_000);
+    expect(enquiryCall[1], "both reads must mean the same window").toBe(bookedCall[1]);
+  });
+
+  it("leaves the sampled figures sampled: the average is over the rows it holds", async () => {
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 500 }, () =>
+        lead({
+          createdAt: daysAgo(1),
+          firstResponseAt: new Date(Date.parse(daysAgo(1)) + 60_000).toISOString(),
+        }),
+      ),
+    );
+    counting(912, 240);
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.enquiries).toBe(912);
+    expect(m.contacted, "the denominator of the average describes the same 500 rows").toBe(500);
+    expect(m.avgFirstResponseSeconds).toBe(60);
+  });
+
+  it("falls back to the sample, and back to the floor, when the count itself fails", async () => {
+    saturatedSample(); // countLeadsMock rejects by default here
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.countsExact).toBe(false);
+    expect(m.enquiries).toBe(500);
+    expect(m.truncated).toBe(true);
+    expect(m.hasEnoughData, "an uncounted floor is exactly what must not be narrated").toBe(false);
+  });
+
+  it("a failed detail read is still a failed read, whatever the count says", async () => {
+    listLeadsMock.mockRejectedValue(new Error("db down"));
+    counting(900, 300);
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.readFailed).toBe(true);
+    // "900 enquiries, nobody contacted, no source" is a worse lie than showing
+    // nothing, so the count does not rescue a snapshot with no rows behind it.
+    expect(m.enquiries).toBe(0);
+    expect(m.countsExact).toBe(false);
+    expect(m.avgFirstResponseSeconds).toBeNull();
+    expect(m.hasEnoughData).toBe(false);
+  });
+
+  it("a quiet window is counted too, and the two agree", async () => {
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => lead({ createdAt: daysAgo(i + 1), stage: i < 4 ? "booked" : "new" })),
+    );
+    counting(12, 4);
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.enquiries).toBe(12);
+    expect(m.booked).toBe(4);
+    expect(m.countsExact).toBe(true);
     expect(m.truncated).toBe(false);
     expect(m.hasEnoughData).toBe(true);
   });

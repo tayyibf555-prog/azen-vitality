@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import {
   MOCK_TREATMENT_APPOINTMENTS,
   treatmentAppointmentsForPatient,
@@ -34,11 +35,8 @@ export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const patientId = url.searchParams.get("patient_id");
   const planId = url.searchParams.get("treatment_plan_id");
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(
-    1,
-    Number(url.searchParams.get("per_page") ?? String(DEFAULT_PER_PAGE)) || DEFAULT_PER_PAGE,
-  );
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"), DEFAULT_PER_PAGE);
 
   // Both filters COMPOSE, as on treatment_plan_items. A mock that returned more than
   // it was asked for hides a missing filter upstream.

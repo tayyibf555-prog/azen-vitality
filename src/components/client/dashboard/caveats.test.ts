@@ -166,6 +166,7 @@ describe("invoicedCaveats", () => {
     unpaidPence: { value: 40, reason: null },
     invoiceCount: { value: 2, reason: null },
     undatedInvoices: 0,
+    droppedInvoices: 0,
   };
 
   it("says nothing when every invoice carries a date", () => {

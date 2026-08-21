@@ -114,6 +114,35 @@ describe("one cold dashboard assembly, at mock volume", () => {
     // per period, whatever the book. It cannot drift back into a walk without this
     // number moving, which is the whole point of pinning it.
     expect(counter.byPath.get("/v1/payments")).toBe(SITES * 5);
+
+    // THE INVOICE READS: ONE WINDOWED, AND ONE OUTSTANDING SLICE PER SITE.
+    //
+    // The measured mock figure moved 75 -> 90 requests on 2026-08-21, and both halves
+    // of the move are deliberate:
+    //
+    //   +11  the windowed read now actually READS SOMETHING here. The generated mock
+    //        invoices carried only `date`, and this mock route filters on `created_at`
+    //        and drops rows without one — so the windowed scan used to fetch one empty
+    //        page, call it a complete read of an empty window, and render INVOICED as
+    //        a confident £0.00 in dev. Live invoices have always carried created_at,
+    //        so live was always paying this (2,499 rows over 90 days, ~25 pages); it
+    //        is the mock that was cheap by being wrong.
+    //
+    //   +4   the outstanding slice is now asked for PER SITE, to lift a 4,000-row
+    //        ceiling that live was 147 rows away from hitting. On live that costs
+    //        nothing extra worth counting — the same 3,853 unpaid rows are read either
+    //        way, just partitioned, so it is 39 pages against 39 plus at most one
+    //        part-page per site. Here it is +4 only because this mock IGNORES site_id
+    //        and hands every site the whole set, which the read then de-duplicates.
+    //
+    // Pinned as a ceiling rather than an equality because the generated fixtures are
+    // calendar-derived: the count of non-Sunday days in a 90-day window moves by one
+    // or two across the year.
+    const invoiceCalls = counter.byPath.get("/v1/invoices") ?? 0;
+    expect(invoiceCalls, "the windowed invoice read is fetching nothing again").toBeGreaterThan(
+      1 + SITES,
+    );
+    expect(invoiceCalls, "the invoice reads have grown a walk").toBeLessThanOrEqual(24);
   }, 120_000);
 });
 
@@ -187,6 +216,11 @@ describe("one cold dashboard assembly, at live volume", () => {
     // stops itself.
     expect(counter.byPath.get("/v1/patients")).toBe(SITES * 3);
     expect(counter.byPath.get("/v1/treatment_plans")).toBe(SITES * 3);
+
+    // The invoice reads on an empty upstream: one windowed, one per site for the
+    // outstanding slice, each ending on its first short page. Pinned so the per-site
+    // split cannot silently become a per-site WALK.
+    expect(counter.byPath.get("/v1/invoices")).toBe(1 + SITES);
 
     const saved = 2 * controlPerScan - (SITES * 3) * 2;
     process.stderr.write(

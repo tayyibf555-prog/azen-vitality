@@ -21,9 +21,10 @@
 // ============================================================================
 //
 // BROWSER-ONLY, with no server imports at all: it guards on `typeof window` and
-// imports nothing but the pure rules module, so it is safe to pull into a
-// "use client" component. Every path is wrapped, so telemetry can never throw into
-// a render or a click handler.
+// imports nothing but the pure rules module and the shared beacon transport (which
+// itself imports nothing), so it is safe to pull into a "use client" component.
+// Every path is wrapped, so telemetry can never throw into a render or a click
+// handler.
 //
 // PII: NONE, and it is not a matter of care at the call site. The only things this
 // module can send are a client slug, a campaign slug, a version number, an opaque
@@ -31,6 +32,7 @@
 // the server's parser would refuse it anyway (step-events.ts), but the point is
 // that the call signature offers nowhere to type it.
 
+import { postJsonBeacon } from "./beacon-transport";
 import {
   MAX_EVENTS_PER_BATCH,
   isValidFlowVersion,
@@ -106,33 +108,19 @@ export function createStepBeacon(opts: {
 
   function send(steps: number[]): void {
     if (steps.length === 0) return;
-    const payload = JSON.stringify({
-      clientSlug: opts.clientSlug,
-      campaignSlug: opts.campaignSlug,
-      flowVersion: opts.flowVersion,
-      nonce,
-      steps,
-    });
-    try {
-      if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-        // sendBeacon survives the page being navigated away, which is exactly when
-        // the LAST step — the one that matters most to a drop-off chart — happens.
-        const blob = new Blob([payload], { type: "application/json" });
-        if (navigator.sendBeacon(ENDPOINT, blob)) return;
-      }
-    } catch {
-      // fall through to fetch
-    }
-    try {
-      void fetch(ENDPOINT, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload,
-        keepalive: true,
-      }).catch(() => {});
-    } catch {
-      // Give up silently: telemetry must never surface an error.
-    }
+    // WHAT is sent is this module's business; HOW it leaves the page is not, and
+    // is shared with the lead progress beacon (beacon-transport.ts). Only the
+    // mechanics are shared: this nonce is minted here and goes nowhere else.
+    postJsonBeacon(
+      ENDPOINT,
+      JSON.stringify({
+        clientSlug: opts.clientSlug,
+        campaignSlug: opts.campaignSlug,
+        flowVersion: opts.flowVersion,
+        nonce,
+        steps,
+      }),
+    );
   }
 
   function flush(): void {

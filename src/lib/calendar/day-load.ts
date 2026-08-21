@@ -71,6 +71,16 @@ export interface DiaryDayPayload {
    * question we were never able to ask.
    */
   unanswerableDayKeys: string[];
+  /**
+   * Per day in `dayKeys`, the London wall-minute Dentally's answer BEGINS at.
+   * Absent (and so zero) for every day asked about in full.
+   *
+   * A FIFTH state, and the one that bites daily rather than historically: today
+   * is asked about from `now`, so by mid-afternoon the morning's windows are
+   * simply not in the answer. Without this the grid reads that silence as "not
+   * working" and prints it over a clinician who was in all morning.
+   */
+  answerableFromMin: Record<string, number>;
   fundingFailed: boolean;
   entriesFailed: boolean;
 }
@@ -96,6 +106,7 @@ export async function loadDiaryDay(args: LoadDiaryDayArgs): Promise<DiaryDayPayl
     unconfirmed: [],
     availabilityFailed: true,
     unanswerableDayKeys: [],
+    answerableFromMin: {},
     fundingFailed: true,
     entriesFailed: true,
   };
@@ -119,6 +130,7 @@ export async function loadDiaryDay(args: LoadDiaryDayArgs): Promise<DiaryDayPayl
     unconfirmed: availability.unconfirmed,
     availabilityFailed: availability.failed,
     unanswerableDayKeys: availability.unanswerableDayKeys,
+    answerableFromMin: availability.answerableFromMin,
     fundingFailed: funding.failed,
     entriesFailed: entries.failed,
   };
@@ -138,13 +150,15 @@ async function readAvailability(
   unconfirmed: UnconfirmedPresence[];
   failed: boolean;
   unanswerableDayKeys: string[];
+  answerableFromMin: Record<string, number>;
 }> {
   // PRACTITIONERS FAILED IMPLIES AVAILABILITY FAILED, set EXPLICITLY here at the
   // source rather than inferred at each use site. Availability takes no site
   // parameter: the practitioner id set is the only thing scoping it to this site,
   // so a partial or wrong set could return another practice's windows with nothing
   // in the response to catch it. No call is issued at all.
-  if (args.practitionersFailed) return { windows: [], unconfirmed: [], failed: true, unanswerableDayKeys: [] };
+  if (args.practitionersFailed)
+    return { windows: [], unconfirmed: [], failed: true, unanswerableDayKeys: [], answerableFromMin: {} };
 
   // The practitioner id set is NOT on its own enough to scope availability to a
   // site: a clinician on two of this client's lists is asked about by both, and
@@ -159,7 +173,8 @@ async function readAvailability(
     }),
     readSharedPractitionerIds(args.clientId, args.siteId),
   ]);
-  if (read.failed) return { windows: [], unconfirmed: [], failed: true, unanswerableDayKeys: [] };
+  if (read.failed)
+    return { windows: [], unconfirmed: [], failed: true, unanswerableDayKeys: [], answerableFromMin: {} };
 
   const parsed = parseAvailabilityWindows(read.rows);
 
@@ -171,7 +186,7 @@ async function readAvailability(
     console.error(
       `[diary] ${parsed.untagged} of ${parsed.total} availability rows carried no practitioner id at site ${args.siteId}; treating the read as failed`,
     );
-    return { windows: [], unconfirmed: [], failed: true, unanswerableDayKeys: [] };
+    return { windows: [], unconfirmed: [], failed: true, unanswerableDayKeys: [], answerableFromMin: {} };
   }
   if (parsed.untagged > 0) {
     console.warn(
@@ -213,7 +228,13 @@ async function readAvailability(
       ? parsed.windows
       : parsed.windows.filter((w) => !blocked.has(`${w.practitionerId}|${w.dayKey}`));
 
-  return { windows, unconfirmed, failed: false, unanswerableDayKeys: read.unanswerableDayKeys };
+  return {
+    windows,
+    unconfirmed,
+    failed: false,
+    unanswerableDayKeys: read.unanswerableDayKeys,
+    answerableFromMin: read.answerableFromMin,
+  };
 }
 
 async function readFunding(

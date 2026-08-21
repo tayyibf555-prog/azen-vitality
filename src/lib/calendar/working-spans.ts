@@ -99,26 +99,48 @@ export function workingSpans(
  *                  refuses every question about a time that is not in the
  *                  future. -> the hatch, with its own words again. Nothing
  *                  failed and nothing will change by retrying.
+ *   "unreportable" PART of the day -- the part that had already gone by when we
+ *                  asked -- could not be asked about, and nothing came back for
+ *                  the rest of it. -> the hatch, with words of its own. This is
+ *                  today, seen after lunch, for a clinician who worked the
+ *                  morning and has nothing booked.
  *
- * These five must never collapse. A failed read painted grey is a positive claim
+ * These six must never collapse. A failed read painted grey is a positive claim
  * that the practice is closed, which on a busy Monday sends a receptionist
  * ringing patients to cancel. "unconfirmed" painted white is another practice's
  * free time offered as this one's capacity, which is how a patient ends up booked
  * with a clinician who is not in the building. And "past" told as a failure
  * ("could not be read ... try again shortly") is an alarm about a date nobody can
  * do anything about, which is how staff learn to ignore the alarms that matter.
+ *
+ * "unreportable" IS NOT "past" WITH KINDER WORDING, and that was the tempting
+ * shortcut. "Date has passed" is exactly right about last Monday and flatly wrong
+ * about today: today is the day the practice is working, the day a receptionist
+ * is filling, and a column telling them today has passed teaches them to distrust
+ * the other five states too. The elapsed HOURS are unreportable; the DAY is not.
  */
-export type ColumnWorkState = "working" | "off" | "unknown" | "unconfirmed" | "past";
+export type ColumnWorkState =
+  | "working"
+  | "off"
+  | "unknown"
+  | "unconfirmed"
+  | "past"
+  | "unreportable";
 
 /**
- * The three states that get the HATCH rather than a colour.
+ * The four states that get the HATCH rather than a colour.
  *
  * One predicate, in the module that owns the states, because the two grids draw
  * this independently and a state added to one and forgotten in the other paints
  * grey: a positive claim that somebody was off, made by an omission.
  */
 export function columnIsHatched(state: ColumnWorkState): boolean {
-  return state === "unknown" || state === "unconfirmed" || state === "past";
+  return (
+    state === "unknown" ||
+    state === "unconfirmed" ||
+    state === "past" ||
+    state === "unreportable"
+  );
 }
 
 export function columnWorkState(args: {
@@ -138,6 +160,13 @@ export function columnWorkState(args: {
    * could not be asked about it at all. See day-load's unanswerableDayKeys.
    */
   availabilityUnanswerable?: boolean;
+  /**
+   * The London wall-minute this day's availability answer BEGINS at. 0 (the
+   * default) means the whole day was asked about; anything higher means the
+   * request had to be clamped into the future and the hours before it were never
+   * asked about at all. See diaryAvailabilityRequest's answerableFromMin.
+   */
+  answerableFromMin?: number;
 }): ColumnWorkState {
   // A failed APPOINTMENT read matters as much as a failed availability read here,
   // because the union includes appointments: a missing appointment set would
@@ -155,7 +184,19 @@ export function columnWorkState(args: {
   // "Not working": that is a claim about them, and the truth is a gap in what we
   // can see.
   if (args.presenceConfirmed === false) return "unconfirmed";
-  if (workingSpans(args.windows, args.apptSpans).length === 0) return "off";
+  if (workingSpans(args.windows, args.apptSpans).length === 0) {
+    // NOTHING CAME BACK -- but for part of this day nothing was ASKED. Dentally
+    // omits a window that had already closed when the question was put, so a
+    // clinician who worked 09:00-13:00 and has nothing booked returns an empty
+    // answer from lunchtime onwards, every single day. "Off" is a claim about the
+    // WHOLE day, and it may only be made when the whole day was answerable.
+    if ((args.answerableFromMin ?? 0) > 0) return "unreportable";
+    return "off";
+  }
+  // A single booked appointment is enough to rescue the column: it is positive
+  // evidence the clinician was in, so the union is non-empty and this reads as
+  // "working" exactly as it did before. The hours we could not ask about are then
+  // a matter for the paint, not for the state.
   return "working";
 }
 

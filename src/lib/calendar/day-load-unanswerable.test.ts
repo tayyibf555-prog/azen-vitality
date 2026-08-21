@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
     rows: [] as unknown[],
     failed: false,
     unanswerableDayKeys: [] as string[],
+    answerableFromMin: {} as Record<string, number>,
   },
 }));
 
@@ -49,18 +50,28 @@ const args = (dayKeys: string[]) => ({
 });
 
 beforeEach(() => {
-  h.availability = { rows: [], failed: false, unanswerableDayKeys: [] };
+  h.availability = { rows: [], failed: false, unanswerableDayKeys: [], answerableFromMin: {} };
 });
 
 describe("loadDiaryDay and the days Dentally cannot answer for", () => {
   it("carries the unanswerable days through to the payload", async () => {
-    h.availability = { rows: [], failed: false, unanswerableDayKeys: ["2026-07-27"] };
+    h.availability = {
+      rows: [],
+      failed: false,
+      unanswerableDayKeys: ["2026-07-27"],
+      answerableFromMin: {},
+    };
     const payload = await loadDiaryDay(args(["2026-07-27", "2026-07-28"]));
     expect(payload.unanswerableDayKeys).toEqual(["2026-07-27"]);
   });
 
   it("does NOT raise the failure flag for them: nothing failed and no retry helps", async () => {
-    h.availability = { rows: [], failed: false, unanswerableDayKeys: ["2026-07-27"] };
+    h.availability = {
+      rows: [],
+      failed: false,
+      unanswerableDayKeys: ["2026-07-27"],
+      answerableFromMin: {},
+    };
     const payload = await loadDiaryDay(args(["2026-07-27"]));
     expect(payload.availabilityFailed).toBe(false);
   });
@@ -69,7 +80,7 @@ describe("loadDiaryDay and the days Dentally cannot answer for", () => {
     // An outage must not be dressed up as a calendar fact: "that date has passed"
     // is a calm sentence, and a column that says it while Dentally is down is
     // lying about why it is empty.
-    h.availability = { rows: [], failed: true, unanswerableDayKeys: [] };
+    h.availability = { rows: [], failed: true, unanswerableDayKeys: [], answerableFromMin: {} };
     const payload = await loadDiaryDay(args(["2026-07-27"]));
     expect(payload.availabilityFailed).toBe(true);
     expect(payload.unanswerableDayKeys).toEqual([]);
@@ -85,5 +96,50 @@ describe("loadDiaryDay and the days Dentally cannot answer for", () => {
     const payload = await loadDiaryDay(args(["2026-07-31"]));
     expect(payload.unanswerableDayKeys).toEqual([]);
     expect(payload.availabilityFailed).toBe(false);
+  });
+});
+
+// ===========================================================================
+// THE FIFTH STATE, CARRIED THE SAME WAY, AND IT BITES DAILY RATHER THAN
+// HISTORICALLY.
+//
+// Today is asked about from `now`, so by mid-afternoon this morning's windows are
+// not in the answer at all. Drop that fact here and the grid reads the silence as
+// "not working" and prints it over a clinician who was in all morning.
+// ===========================================================================
+describe("loadDiaryDay and the part of today Dentally could not be asked about", () => {
+  it("carries the minute the answer begins at through to the payload", async () => {
+    h.availability = {
+      rows: [],
+      failed: false,
+      unanswerableDayKeys: [],
+      answerableFromMin: { "2026-07-31": 902 },
+    };
+    const payload = await loadDiaryDay(args(["2026-07-31"]));
+    expect(payload.answerableFromMin).toEqual({ "2026-07-31": 902 });
+    expect(payload.availabilityFailed).toBe(false);
+  });
+
+  it("reports nothing of the sort when the read actually failed", async () => {
+    h.availability = {
+      rows: [],
+      failed: true,
+      unanswerableDayKeys: [],
+      answerableFromMin: { "2026-07-31": 902 },
+    };
+    const payload = await loadDiaryDay(args(["2026-07-31"]));
+    expect(payload.availabilityFailed).toBe(true);
+    expect(payload.answerableFromMin).toEqual({});
+  });
+
+  it("reports nothing of the sort when the practitioner read failed and nothing was asked", async () => {
+    const payload = await loadDiaryDay({ ...args(["2026-07-31"]), practitionersFailed: true });
+    expect(payload.availabilityFailed).toBe(true);
+    expect(payload.answerableFromMin).toEqual({});
+  });
+
+  it("is empty on an ordinary day answered in full", async () => {
+    const payload = await loadDiaryDay(args(["2026-07-31"]));
+    expect(payload.answerableFromMin).toEqual({});
   });
 });

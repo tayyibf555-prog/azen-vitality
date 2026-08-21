@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import { dentallySmsForPatient } from "@/app/api/mock-dentally/_fixtures";
 
 export const dynamic = "force-dynamic";
@@ -26,8 +27,8 @@ export async function GET(request: Request): Promise<Response> {
     // the filter fails here rather than in production.
     return Response.json({ error: { message: "patient_id is required" } }, { status: 422 });
   }
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(1, Number(url.searchParams.get("per_page") ?? "100") || 100);
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"));
   const start = (page - 1) * perPage;
   const rows = dentallySmsForPatient(patientId);
   return Response.json({

@@ -19,15 +19,17 @@
 // person (see supabase/migrations/0094).
 //
 // BROWSER-ONLY, with no server imports at all: it guards on `typeof window` and
-// imports nothing but the pure rules module, so it is safe to pull into a
-// "use client" component. Every path is wrapped, so telemetry can never throw into
-// a render or a click handler.
+// imports nothing but the pure rules module and the shared beacon transport (which
+// itself imports nothing), so it is safe to pull into a "use client" component.
+// Every path is wrapped, so telemetry can never throw into a render or a click
+// handler.
 //
 // PII: NONE. The only things this module can send are an opaque token, a version
 // number and one small integer. The call signature offers nowhere to type anything
 // else, and the server's parser constructs its result rather than spreading the
 // body, so an invented key could not survive the trip either.
 
+import { postJsonBeacon } from "./beacon-transport";
 import { isValidStepIndex } from "./step-events";
 
 const ENDPOINT = "/api/smile-assessment/funnel-progress";
@@ -69,28 +71,19 @@ export function createFunnelProgressReporter(opts: {
       if (!isValidStepIndex(step)) return;
       if (step <= highest) return;
       highest = step;
-      const payload = JSON.stringify({
-        token: opts.token,
-        flowVersion: opts.flowVersion,
-        step,
-      });
-      try {
-        if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-          // sendBeacon survives the page being navigated away, which is exactly
-          // when the LAST screen — the one that decides "completed" against
-          // "abandoned" — is reached.
-          const blob = new Blob([payload], { type: "application/json" });
-          if (navigator.sendBeacon(ENDPOINT, blob)) return;
-        }
-      } catch {
-        // fall through to fetch
-      }
-      void fetch(ENDPOINT, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload,
-        keepalive: true,
-      }).catch(() => {});
+      // WHAT is sent is this module's business; HOW it leaves the page is not, and
+      // is shared with the anonymous step beacon (beacon-transport.ts). ONLY the
+      // mechanics are shared — the transport holds no state and mints nothing, so
+      // this server-minted token still cannot meet that beacon's browser-minted
+      // nonce anywhere.
+      postJsonBeacon(
+        ENDPOINT,
+        JSON.stringify({
+          token: opts.token,
+          flowVersion: opts.flowVersion,
+          step,
+        }),
+      );
     } catch {
       // Never let progress reporting throw into a render or a handler.
     }

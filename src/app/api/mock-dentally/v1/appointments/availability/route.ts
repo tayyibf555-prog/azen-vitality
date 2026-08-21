@@ -38,6 +38,70 @@ export const dynamic = "force-dynamic";
 // `available_duration` is NOT emitted: it was a mock invention with no live
 // provenance and no reader anywhere in src/.
 
+// ===========================================================================
+// THE WINDOW LIVE WILL ACTUALLY ANSWER — the 400s this mock used to skip.
+//
+// Live VALIDATES the window before it looks at a single diary, and refuses two
+// shapes outright with 400 "The appointment could not be processed":
+//
+//     start_time   "must be in the future"           -- a start at or before now
+//     finish_time  "must be greater than 24 hours"   -- a span of 24h or less
+//
+// MEASURED against live on 2026-08-21 with a read-only key:
+//     today 00:00 -> today 23:59    400, BOTH params
+//     now+1min    -> now+23h        400, finish_time only
+//     now+1min    -> now+25h        200
+//
+// WHY THIS IS HERE NOW. This mock answered 200 for any window it could parse,
+// including windows live refuses outright — so the ONLY way to discover a caller
+// that builds a non-compliant one was to watch it fail in the practice. It cost two
+// real outages already. The diary hit it first, and the booking picker hit it again:
+// `?from=X&to=X`, which is what the picker sends the instant a patient asks about ONE
+// day, spans at most 24 hours, so live 400d, the route's catch turned that into "we
+// could not load available times", and a patient was told nothing was free on a day
+// the practice was fully open. Both callers were then fixed to build a compliant
+// window (AVAILABILITY_START_BUFFER_MS / AVAILABILITY_MIN_SPAN_MS in
+// src/lib/calendar/availability.ts) — but the fix could not be PINNED, because a mock
+// that accepts everything cannot tell a compliant window from a non-compliant one.
+// A third caller sending a bad window would look identical locally.
+//
+// A mock that models an API's limitation has to be right about the limitation. One
+// looser than live lets tests pass on behaviour live will refuse, which is the whole
+// failure mode above, twice.
+//
+// The clock is read HERE rather than passed in because "in the future" is a fact
+// about the request's arrival, exactly as it is on live.
+// ===========================================================================
+
+/** Live's minimum span: strictly GREATER than 24 hours, so 24h exactly is refused. */
+const AVAILABILITY_MIN_SPAN_MS = 24 * 3_600_000;
+
+/**
+ * Live's 400 for this window, or null when live would answer it.
+ *
+ * Only the rules actually violated appear in `params`, matching live: a window that
+ * starts in the past AND spans under a day carries both entries, one that merely
+ * starts too late carries only `finish_time`.
+ */
+function liveWindowRefusal(startMs: number, finishMs: number, nowMs: number): Response | null {
+  const params: Record<string, string[]> = {};
+  if (startMs <= nowMs) params.start_time = ["must be in the future"];
+  if (finishMs - startMs <= AVAILABILITY_MIN_SPAN_MS) {
+    params.finish_time = ["must be greater than 24 hours"];
+  }
+  if (Object.keys(params).length === 0) return null;
+  return Response.json(
+    {
+      error: {
+        type: "invalid_request_error",
+        message: "The appointment could not be processed",
+        params,
+      },
+    },
+    { status: 400 },
+  );
+}
+
 /** Bookings that consume a clinician's time. Cancelled and DNA rows do not. */
 function occupiesTime(state: string | undefined): boolean {
   const s = (state ?? "").toLowerCase().replace(/[\s-]+/g, "_");
@@ -114,6 +178,9 @@ export async function GET(request: Request): Promise<Response> {
       { status: 400 },
     );
   }
+
+  const windowRefusal = liveWindowRefusal(startMs, finishMs, Date.now());
+  if (windowRefusal) return windowRefusal;
 
   // No practitioner_ids[] means no scoping at all, which is exactly how a caller
   // would end up reading another practice's windows. Answer for nobody rather

@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import { allInvoices } from "@/app/api/mock-dentally/_fixtures";
 import { generatedInvoices } from "@/app/api/mock-dentally/_dashboard-fixtures";
 
@@ -29,12 +30,15 @@ function invoiceIndex() {
 //     payments, nhs_claims and invoices, so this mock drops the wrong names on the
 //     floor exactly as live does.
 //   - `meta` carries `total` and `total_pages` but NO `total_amount`.
+//   - per_page is CAPPED AT 100, and asking for more silently returns 25 rather
+//     than 100 (see _paging.ts). `total_pages` is reported against the page size
+//     live would ACTUALLY have served, not the one that was asked for.
 export async function GET(request: Request): Promise<Response> {
   const unauthorized = unauthorizedIfMissingBearer(request);
   if (unauthorized) return unauthorized;
   const url = new URL(request.url);
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(1, Number(url.searchParams.get("per_page") ?? "100") || 100);
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"));
   const start = (page - 1) * perPage;
   const patientId = url.searchParams.get("patient_id");
   // The per-patient branch pages too. It used to return every matching row on every

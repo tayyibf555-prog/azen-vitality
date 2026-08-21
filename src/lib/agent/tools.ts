@@ -6,11 +6,15 @@ import {
   fetchAvailabilityDays,
   findExactSlot,
   chunkWindowIntoSlots,
-  ceilToSlotGrid,
+  bookingAvailabilityWindow,
   BOOKING_SLOT_DURATION_MIN,
   type BookingDay,
   type BookingSlot,
 } from "@/lib/booking/slots";
+// The SAME trim the diary uses, deliberately: the window Dentally will answer is
+// wider than the days anyone asks for, and there must be one rule for taking that
+// widening back off rather than a second one invented here.
+import { availabilityRowsWithinDays } from "@/lib/calendar/availability";
 import { londonDayKey } from "@/lib/time/london";
 import { isDentallyWriteEnabled } from "@/lib/dentally/write";
 // The ONE live-calibrated derivation of a new Dentally patient, shared with the
@@ -277,6 +281,55 @@ function shiftYmd(ymd: string, days: number): string {
   return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** How far ahead find_slots searches when the model names no end date. */
+const AGENT_SEARCH_WINDOW_DAYS = 14;
+
+/** A London day key, `YYYY-MM-DD`, as every day boundary in this app is spelled. */
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The LONDON day the model asked about, or null when it named no usable date.
+ *
+ * A day key is taken as written; anything else parseable (the model sometimes
+ * echoes a whole datetime back from a slot) is resolved to the London day it
+ * falls on.
+ *
+ * This replaces `${input.fromDate}T00:00:00.000Z`, which named a UTC day. For the
+ * eight months the UK is on BST a London day begins at 23:00Z the day BEFORE, so
+ * that spelling put both boundaries an hour out: the first hour of the requested
+ * day fell outside the query, and the last hour of the day before fell inside it.
+ */
+function requestedDayKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const s = value.trim();
+  if (DAY_KEY.test(s)) return s;
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : londonDayKey(new Date(ms));
+}
+
+/**
+ * Chunked slots whose own London day falls inside the requested range.
+ *
+ * The row trim above cannot be the last word, because CHUNKING is what can put a
+ * slot on a day nobody asked for: a window running through London midnight starts
+ * inside the range, so the row is rightly kept, and comes out the other side as
+ * units on both days. A slot's day is decided by the slot's own start.
+ *
+ * A range that cannot be read (a reversed pair) is NOT trimmed, and neither is a
+ * slot whose start is unparseable — both mirror availabilityRowsWithinDays, which
+ * only ever drops what is PROVEN to lie outside.
+ */
+function slotsWithinDays(units: unknown[], fromDayKey: string, toDayKey: string): unknown[] {
+  if (!DAY_KEY.test(fromDayKey) || !DAY_KEY.test(toDayKey) || toDayKey < fromDayKey) return units;
+  return units.filter((u) => {
+    const row = u && typeof u === "object" ? (u as Record<string, unknown>) : {};
+    const ms = Date.parse(typeof row.start_time === "string" ? row.start_time : "");
+    if (Number.isNaN(ms)) return true;
+    const key = londonDayKey(new Date(ms));
+    return key >= fromDayKey && key <= toDayKey;
+  });
+}
+
 export interface ToolDeps {
   dentally: Pick<
     DentallyClient,
@@ -414,6 +467,39 @@ export function makeDispatch(deps: ToolDeps) {
     switch (name) {
       case "find_slots": {
         const treatment = typeof input.treatment === "string" ? findTreatment(input.treatment) : null;
+        const now = new Date();
+        // THE WINDOW IS SETTLED BEFORE A SINGLE REQUEST IS ISSUED — and it is the
+        // booking module's window, not one this file builds for itself.
+        //
+        // Live Dentally VALIDATES the availability window before it looks at anything
+        // and refuses two shapes outright (400, measured 2026-08-21): a start_time
+        // that is not STRICTLY in the future, and a finish_time 24 hours or less
+        // after it. This was the third caller of that endpoint and the last one
+        // still doing its own arithmetic, so "what have you got tomorrow?" — one
+        // London day, exactly 24 hours — 400d every single time, and the agent told
+        // the patient nothing was free on a day the practice was fully open.
+        //
+        // bookingAvailabilityWindow keeps the grid clamp this path has always had (a
+        // same-day start still lands on the absolute 30 minute grid, so the times
+        // offered cannot move under the patient between the offer and the write) and
+        // widens the finish to the 25 hours Dentally insists on. The widening is
+        // taken back off the ANSWER below; it is never left in it.
+        const fromDayKey = requestedDayKey(input.fromDate) ?? londonDayKey(now);
+        const requestedToDayKey = requestedDayKey(input.toDate);
+        const toDayKey = requestedToDayKey ?? shiftYmd(fromDayKey, AGENT_SEARCH_WINDOW_DAYS);
+        const queryWindow = bookingAvailabilityWindow(fromDayKey, toDayKey, now.getTime());
+        // Every requested day has already ended. Dentally can never answer for it, so
+        // nothing is asked — not the availability read, not even the practitioner
+        // list — and the model is told the plain truth rather than handed an empty
+        // list it would report to the patient as "nothing free". Mirrors
+        // fetchAvailabilityDays, which answers a null window with no request at all.
+        if (queryWindow === null) {
+          return JSON.stringify({
+            slots: [],
+            error:
+              "That date has already passed, so there are no times to offer for it. Ask the patient which upcoming date suits them, then call find_slots again.",
+          });
+        }
         // Live Dentally availability is PER PRACTITIONER (start_time/finish_time ISO
         // datetimes + practitioner_ids[]; each row carries its practitioner_id) —
         // calibrated against the live API 2026-07-11. So: the site's active
@@ -429,27 +515,22 @@ export function makeDispatch(deps: ToolDeps) {
           if (typeof row.id === "string" || typeof row.id === "number") practitionerIds.push(String(row.id));
         }
         if (practitionerIds.length === 0) return JSON.stringify({ slots: [] });
-        const now = new Date();
-        const fromMs =
-          typeof input.fromDate === "string" ? Date.parse(`${input.fromDate}T00:00:00.000Z`) : Number.NaN;
-        // Clamp to now rounded UP onto the booking grid, never to the raw instant:
-        // both the mock and live clip the window they return to the requested
-        // start, so a raw `now` had the agent offering the patient times like
-        // "13:02" and, worse, offering a different set on every read. See
-        // ceilToSlotGrid for the full account.
-        const nowFloor = ceilToSlotGrid(now.getTime());
-        const startTime = new Date(Math.max(Number.isNaN(fromMs) ? nowFloor : fromMs, nowFloor)).toISOString();
-        const finishTime =
-          typeof input.toDate === "string" && !Number.isNaN(Date.parse(`${input.toDate}T23:59:59.999Z`))
-            ? new Date(`${input.toDate}T23:59:59.999Z`).toISOString()
-            : new Date(now.getTime() + 14 * 86_400_000).toISOString();
         const res = await deps.dentally.getAvailability({
           practitionerIds,
-          startTime,
-          finishTime,
+          startTime: queryWindow.startTime,
+          finishTime: queryWindow.finishTime,
           duration: treatment?.durationMinutes,
         });
-        const allSlots = Array.isArray(res.availability) ? res.availability : [];
+        const rows = Array.isArray(res.availability) ? res.availability : [];
+        // Take the widening back off. The window SENT runs past the days asked about
+        // — it has to, or Dentally refuses it — so without this a patient who asked
+        // about tomorrow would be offered the day after's times as well, and the
+        // practitioner preference below would be decided on rows nobody asked for.
+        //
+        // Only when the model named an END date: with none, the range IS this tool's
+        // own fourteen day search, nothing was widened past it, and trimming would
+        // only throw away rows Dentally chose to answer with.
+        const allSlots = requestedToDayKey ? availabilityRowsWithinDays(rows, fromDayKey, toDayKey) : rows;
         // Practitioner targeting. A segment-outreach invite primes a preferred clinician
         // (context.outreachInvite.practitionerId): offer THAT clinician's diary first, but
         // SOFT-prefer rather than hard-filter, so if they have no slots in the window the
@@ -472,9 +553,13 @@ export function makeDispatch(deps: ToolDeps) {
         } else {
           slots = allSlots; // no targeting at all
         }
-        // Never offer a raw availability window: cut it to what this booking needs.
+        // Never offer a raw availability window: cut it to what this booking needs,
+        // then have the last word on which day each unit belongs to (see
+        // slotsWithinDays — chunking a window through London midnight is the one way
+        // a slot can still land on a day nobody asked about).
+        const units = chunkAvailabilityRows(slots, treatment?.durationMinutes ?? BOOKING_SLOT_DURATION_MIN);
         return JSON.stringify({
-          slots: chunkAvailabilityRows(slots, treatment?.durationMinutes ?? BOOKING_SLOT_DURATION_MIN),
+          slots: requestedToDayKey ? slotsWithinDays(units, fromDayKey, toDayKey) : units,
         });
       }
       case "treatment_info": {

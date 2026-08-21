@@ -1,4 +1,5 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import {
   addAppointment,
   findPatient,
@@ -91,8 +92,8 @@ export async function GET(request: Request): Promise<Response> {
   // callers that page a large window are exercised honestly against the mock and
   // never receive an unbounded array. Patient-scoped lookups stay unpaged (small).
   if (siteId && !patientId) {
-    const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-    const perPage = Math.max(1, Number(url.searchParams.get("per_page") ?? "100") || 100);
+    const page = mockPage(url.searchParams.get("page"));
+    const perPage = mockPerPage(url.searchParams.get("per_page"));
     const start = (page - 1) * perPage;
     rows = rows.slice(start, start + perPage);
   }

@@ -481,12 +481,28 @@ export function updateGeneratedAppointment(
 // --- Dated invoices ---------------------------------------------------------
 
 /**
- * Invoices carrying a `date`, so the INVOICED panel can total a window.
+ * Invoices carrying a DATE THE ROUTE ACTUALLY FILTERS ON, so the INVOICED panel can
+ * total a window.
  *
  * The hand-written invoices in _fixtures.ts have no date at all: they exist to
  * give a handful of patients a balance for the Payments page. A gross-invoiced
  * figure for "last 30 days" cannot be built from undated rows, and the dashboard
  * would (correctly) report it unavailable, so a dated set is generated here.
+ *
+ * THESE ROWS CARRIED ONLY `date`, AND THAT MADE THE PANEL LIE IN DEV. Live
+ * /v1/invoices filters on `created_at` (created_after / created_before) and has no
+ * `date` field at all, and the mock route matches it — dropping every row without a
+ * `created_at` from a date-filtered request. So the dashboard's windowed invoice scan
+ * asked for the last 90 days, got ZERO rows back, read that as a COMPLETE read of an
+ * empty window, and rendered INVOICED as a confident £0.00 for every period. A blank
+ * would have been questioned; a zero on a billing panel reads as a fact about the
+ * practice. Every generated row now carries `created_at` on its own day, so dev
+ * exercises the same filter, the same paging and the same bucketing that live does.
+ *
+ * `dated_on` is set too, because live index rows carry it (it is the billed date, and
+ * on live it agreed with created_at's London day on all 300 rows probed), and `date`
+ * is KEPT only because the mock's own /v1/invoices/[id] route reads it to answer
+ * `dated_on` on the detail shape. Nothing in the platform buckets on `date` any more.
  *
  * Roughly one invoice in seven is left part paid or unpaid, which is what feeds
  * the ACCOUNTS ranking of the ten patients who owe most.
@@ -502,12 +518,25 @@ function invoiceGrossPence(rand: () => number): number {
   return 100_000 + Math.floor(rand() * 250_000);
 }
 
-function invoicesForSiteDay(siteId: string, day: string): MockInvoice[] {
+/**
+ * A generated invoice, with the two date fields live actually publishes. Declared
+ * here rather than on MockInvoice so the hand-written rows stay deliberately undated
+ * — they are what keeps the dashboard's "undated invoices" disclosure exercised.
+ */
+type DatedMockInvoice = MockInvoice & { created_at: string; dated_on: string };
+
+/** Mid-morning on the invoice's own day. Far enough inside it that neither the BST
+ *  offset nor a day-boundary pad can move the row into a neighbouring day. */
+function invoiceCreatedAt(day: string): string {
+  return `${day}T10:00:00+01:00`;
+}
+
+function invoicesForSiteDay(siteId: string, day: string): DatedMockInvoice[] {
   const dow = weekday(day);
   if (dow === 0) return [];
   const rand = seeded(`invoices|${siteId}|${day}`);
   const patients = patientsForSiteId(siteId);
-  const rows: MockInvoice[] = [];
+  const rows: DatedMockInvoice[] = [];
   for (let i = 0; i < INVOICES_PER_SITE_DAY; i += 1) {
     const grossPence = invoiceGrossPence(rand);
     const roll = rand();
@@ -523,13 +552,15 @@ function invoicesForSiteDay(siteId: string, day: string): MockInvoice[] {
       paid: outstanding === 0,
       status: outstanding === 0 ? "paid" : "new",
       date: day,
+      created_at: invoiceCreatedAt(day),
+      dated_on: day,
     });
   }
   return rows;
 }
 
-function buildInvoices(today: string): MockInvoice[] {
-  const rows: MockInvoice[] = [];
+function buildInvoices(today: string): DatedMockInvoice[] {
+  const rows: DatedMockInvoice[] = [];
   for (let back = 0; back < INVOICE_HISTORY_DAYS; back += 1) {
     const day = shift(today, -back);
     for (const siteId of MOCK_SITE_IDS) rows.push(...invoicesForSiteDay(siteId, day));
@@ -537,10 +568,10 @@ function buildInvoices(today: string): MockInvoice[] {
   return rows;
 }
 
-let invoiceCache: { day: string; rows: MockInvoice[] } | null = null;
+let invoiceCache: { day: string; rows: DatedMockInvoice[] } | null = null;
 
 /** The generated dated invoices, rebuilt once per London day. */
-export function generatedInvoices(): MockInvoice[] {
+export function generatedInvoices(): DatedMockInvoice[] {
   const day = todayKey();
   if (invoiceCache?.day !== day) invoiceCache = { day, rows: buildInvoices(day) };
   return invoiceCache.rows;

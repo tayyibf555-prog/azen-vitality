@@ -39,6 +39,13 @@ export interface DiaryDayState {
    * say the date has passed. See day-load.ts.
    */
   unanswerableDayKeys: string[];
+  /**
+   * Per day on screen, the London wall-minute Dentally's answer BEGINS at. Absent
+   * means the whole day was asked about; present means the hours before it were
+   * never asked about at all, which is TODAY every afternoon. A column may not
+   * say "Not working" about a stretch nobody asked about. See day-load.ts.
+   */
+  answerableFromMin: Record<string, number>;
   fundingFailed: boolean;
   entriesFailed: boolean;
   /** True while a fetch for the current key is in flight. */
@@ -63,6 +70,9 @@ const UNKNOWN: Omit<DiaryDayState, "loading"> = {
   // and claiming it was unanswerable would explain away an outage as a calendar
   // fact.
   unanswerableDayKeys: [],
+  // EMPTY for the same reason: this only ever softens what a column claims, and
+  // an unread day is already saying the most cautious thing it can.
+  answerableFromMin: {},
   fundingFailed: true,
   entriesFailed: true,
 };
@@ -80,8 +90,19 @@ interface DayResponse {
   unconfirmed?: UnconfirmedPresence[];
   availabilityFailed?: boolean;
   unanswerableDayKeys?: string[];
+  answerableFromMin?: Record<string, number>;
   fundingFailed?: boolean;
   entriesFailed?: boolean;
+}
+
+/** Finite, positive minutes only. Anything else is dropped, not coerced. */
+function cleanAnswerableFromMin(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, number> = {};
+  for (const [dayKey, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) out[dayKey] = value;
+  }
+  return out;
 }
 
 function keyOf(siteId: string, dayKeys: readonly string[]): string {
@@ -159,6 +180,10 @@ export function useDiaryDay(
           // A missing list is EMPTY, never assumed: this one only ever softens
           // what a column claims, so the safe default is not to soften it.
           unanswerableDayKeys: Array.isArray(body.unanswerableDayKeys) ? body.unanswerableDayKeys : [],
+          // Same default and same reason, and every value is re-checked: a
+          // non-finite or negative minute would flow straight into a comparison
+          // that decides whether the word "Off" may be printed.
+          answerableFromMin: cleanAnswerableFromMin(body.answerableFromMin),
           fundingFailed: body.fundingFailed !== false,
           entriesFailed: body.entriesFailed !== false,
           loading: false,

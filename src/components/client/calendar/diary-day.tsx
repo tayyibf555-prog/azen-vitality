@@ -95,6 +95,12 @@ export interface GridColumn {
   nowTop?: number | null;
   /** What this column may honestly claim about the clinician's day. */
   workState: ColumnWorkState;
+  /**
+   * The London wall-minute this day's availability answer begins at, 0 for a day
+   * asked about in full. On today's column it is roughly `now`, and the hours
+   * ABOVE it were never asked about: they are hatched rather than labelled "Off".
+   */
+  answerableFromMin?: number;
   /** The white sessions: availability windows UNION this clinician's own bookings. */
   workingSpans: readonly Span[];
   /** Breaks and notes, drawn BENEATH the appointments in their own list. */
@@ -396,21 +402,47 @@ export function DiaryGrid({
                 : null}
 
               {/* A large grey field must never be mistaken for a rendering
-                  failure, so it says the word. Only spans tall enough to carry it. */}
+                  failure, so it says the word. Only spans tall enough to carry it.
+
+                  BUT "OFF" IS A CLAIM, and it may only be made about hours that
+                  were actually asked about. Dentally answers availability from
+                  `now` forward, so on TODAY'S column everything above
+                  answerableFromMin went unasked: that stretch takes the same
+                  hatch a wholly unanswerable column takes, and no word at all.
+                  On every other day the cut is 0, this is the single span it has
+                  always been, and nothing changes. */}
               {col.workState === "off" || col.workState === "working"
-                ? offSpans(col.workingSpans, bounds).map((s) => {
-                    const edges = blockEdges(s.startMin, s.endMin, bounds.startMin, zoom);
-                    if (edges.height < OFF_LABEL_MIN_PX) return null;
-                    return (
-                      <span
-                        key={`off-${s.startMin}-${s.endMin}`}
-                        aria-hidden
-                        className="pointer-events-none absolute inset-x-0 flex items-center justify-center text-[9px] font-medium text-muted"
-                        style={{ top: edges.top, height: edges.height }}
-                      >
-                        Off
-                      </span>
+                ? offSpans(col.workingSpans, bounds).flatMap((s) => {
+                    const cut = Math.min(
+                      Math.max(col.answerableFromMin ?? 0, s.startMin),
+                      s.endMin,
                     );
+                    const unasked = blockEdges(s.startMin, cut, bounds.startMin, zoom);
+                    const asked = blockEdges(cut, s.endMin, bounds.startMin, zoom);
+                    return [
+                      unasked.height > 0 ? (
+                        <span
+                          key={`unasked-${s.startMin}-${cut}`}
+                          aria-hidden
+                          className="pointer-events-none absolute inset-x-0"
+                          style={{
+                            top: unasked.top,
+                            height: unasked.height,
+                            backgroundImage: HOURS_UNKNOWN_HATCH,
+                          }}
+                        />
+                      ) : null,
+                      asked.height >= OFF_LABEL_MIN_PX ? (
+                        <span
+                          key={`off-${cut}-${s.endMin}`}
+                          aria-hidden
+                          className="pointer-events-none absolute inset-x-0 flex items-center justify-center text-[9px] font-medium text-muted"
+                          style={{ top: asked.top, height: asked.height }}
+                        >
+                          Off
+                        </span>
+                      ) : null,
+                    ];
                   })
                 : null}
 
@@ -581,6 +613,8 @@ export interface DayColumnInput {
   appointments: DiaryAppointment[];
   /** From columnWorkState: what this column may honestly claim. */
   workState: ColumnWorkState;
+  /** The London wall-minute this day's hours could be asked about from. See GridColumn. */
+  answerableFromMin?: number;
   /** The white sessions: availability UNION this clinician's own bookings. */
   workingSpans: Span[];
   entries: DiaryEntryRecord[];
@@ -659,9 +693,15 @@ export function DiaryDay({
                 ? // NOT "Hours not loaded" either: nothing failed and nothing will
                   // load. Dentally will not answer for a date that has gone by.
                   "Date has passed"
-                : col.workState === "off"
-                  ? "Not working"
-                  : columnCounts(col.appointments);
+                : col.workState === "unreportable"
+                  ? // NOT "Date has passed": the date is TODAY, and today has not
+                    // passed. NOT "Not working" either: their morning is missing
+                    // from the answer because Dentally only reports hours from now
+                    // onwards, and silence about the morning is not evidence.
+                    "Hours not reportable"
+                  : col.workState === "off"
+                    ? "Not working"
+                    : columnCounts(col.appointments);
         // A pending read is quiet, and so is a date in the past: neither is a
         // problem the reader has to do anything about. Only a failure and a
         // clinician we cannot place are loud.
@@ -781,6 +821,7 @@ export function DiaryDay({
                 ),
           clinicianName: col.name,
           workState: col.workState,
+          answerableFromMin: col.answerableFromMin,
           workingSpans: col.workingSpans,
           entries: col.entries,
           funding,

@@ -1,6 +1,8 @@
 import { unauthorizedIfMissingBearer } from "@/app/api/mock-dentally/_auth";
+import { mockPage, mockPerPage } from "@/app/api/mock-dentally/_paging";
 import { allPayments } from "@/app/api/mock-dentally/_finance-fixtures";
 import { resolveMockSiteId } from "@/app/api/mock-dentally/_fixtures";
+import { penceToDentallyAmount, sumAmountsPence } from "@/app/api/mock-dentally/_money";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +25,9 @@ export const dynamic = "force-dynamic";
 //   - site_id IS honoured. Results come back NEWEST FIRST — but callers must not
 //     depend on that, because live orders by id and a backdated payment lands
 //     wherever its id falls.
-//   - per_page is capped at 100 on live.
+//   - per_page is capped at 100 on live, and asking for MORE silently returns 25
+//     rather than 100. Reproduced here; see _paging.ts for why the 25 is the part
+//     worth modelling.
 //
 // Amounts are STRINGS ("27.9"), dates are bare YYYY-MM-DD, and `deleted` is a
 // boolean. One fixture row carries a malformed amount so callers must prove they
@@ -38,8 +42,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   const siteId = resolveMockSiteId(url.searchParams.get("site_id"));
-  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const perPage = Math.max(1, Number(url.searchParams.get("per_page") ?? "100") || 100);
+  const page = mockPage(url.searchParams.get("page"));
+  const perPage = mockPerPage(url.searchParams.get("per_page"));
   const startDate = url.searchParams.get("start_date");
   const endDate = url.searchParams.get("end_date");
 
@@ -53,28 +57,8 @@ export async function GET(request: Request): Promise<Response> {
     meta: {
       total: rows.length,
       current_page: page,
-      total_amount: sumAmounts(rows.map((p) => p.amount)),
+      // The APP'S own money grammar, not a copy of it — see _money.ts.
+      total_amount: penceToDentallyAmount(sumAmountsPence(rows.map((p) => p.amount))),
     },
   });
-}
-
-/**
- * Sum decimal money strings EXACTLY and render the total the way Dentally does.
- *
- * In whole pence, never floats: a mock that answered 2724089.9999999995 would let a
- * caller's own rounding bug pass locally and fail on the practice's real takings.
- * A value the grammar does not recognise contributes nothing — the one deliberately
- * malformed fixture row is dropped from the aggregate exactly as a caller drops it
- * from a row-by-row total.
- */
-function sumAmounts(amounts: readonly string[]): string {
-  let pence = 0;
-  for (const raw of amounts) {
-    const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(raw.trim());
-    if (!match) continue;
-    const magnitude = Number(match[2]) * 100 + Number((match[3] ?? "").padEnd(2, "0"));
-    pence += match[1] === "-" ? -magnitude : magnitude;
-  }
-  const fixed = (pence / 100).toFixed(2);
-  return fixed.endsWith("0") ? fixed.slice(0, -1) : fixed;
 }

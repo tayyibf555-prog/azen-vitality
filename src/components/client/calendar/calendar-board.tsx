@@ -560,6 +560,13 @@ export function CalendarBoard({
   const allDaysUnanswerable =
     viewDayKeys.length > 0 && viewDayKeys.every((k) => unanswerableDays.has(k));
 
+  // THE PART OF TODAY NOBODY COULD ASK ABOUT. Dentally answers availability only
+  // from `now` forward, so this morning's windows are missing from this
+  // afternoon's answer -- and an empty answer is not evidence of an empty diary.
+  // Server-computed from the request that was actually sent, so the client never
+  // decides from its own clock which hours went unasked.
+  const answerableFrom = diaryDay.answerableFromMin;
+
   const columnWork = useCallback(
     (practitionerId: string | null, dayKey: string, appts: readonly DiaryAppointment[]) => {
       const windows = windowsFor(diaryDay.windows, practitionerId, dayKey);
@@ -571,7 +578,10 @@ export function CalendarBoard({
       const apptSpans = spansOf(appts.filter((a) => a.state !== "cancelled" && a.state !== "did_not_attend"));
       const presenceConfirmed =
         practitionerId === null || !unconfirmedKeys.has(`${practitionerId}|${dayKey}`);
+      // 0 for every day answered in full, which is every day but today.
+      const answerableFromMin = answerableFrom[dayKey] ?? 0;
       return {
+        answerableFromMin,
         workState: columnWorkState({
           availabilityFailed,
           // A failed APPOINTMENT read hatches the column too: the union includes
@@ -582,12 +592,23 @@ export function CalendarBoard({
           apptSpans,
           presenceConfirmed,
           availabilityUnanswerable: unanswerableDays.has(dayKey),
+          // Without this an empty answer collapses to "off", and a clinician who
+          // worked all morning reads as "Not working" from lunchtime.
+          answerableFromMin,
         }),
         workingSpans: presenceConfirmed ? workingSpans(windows, apptSpans) : [],
         entries: entriesForColumn(entries, practitionerId, dayKey),
       };
     },
-    [diaryDay.windows, availabilityFailed, readFailed, entries, unconfirmedKeys, unanswerableDays],
+    [
+      diaryDay.windows,
+      availabilityFailed,
+      readFailed,
+      entries,
+      unconfirmedKeys,
+      unanswerableDays,
+      answerableFrom,
+    ],
   );
 
   const dayGridColumns: DayColumnInput[] = useMemo(
