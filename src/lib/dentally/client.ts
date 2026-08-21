@@ -683,6 +683,34 @@ export class DentallyClient {
   }
 
   /**
+   * ONE patient's SMS history AS DENTALLY HOLDS IT, paged.
+   *
+   * `/v1/sms` is Dentally's own correspondence feed: every reminder, confirmation,
+   * recall and portal message Dentally sent, plus the patient's replies. The
+   * platform's Correspondence tab used to state in writing that Dentally "does not
+   * expose its correspondence through the connection we have", which is false — the
+   * key has carried an undocumented `correspondence` scope the whole time.
+   *
+   * READ ONLY, AND THAT IS NOT A STYLE CHOICE. Dentally sends its SMS through
+   * Twilio (rows carry a `twilio_error_response` message_type), so a POST to this
+   * path is far more likely to TRANSMIT A REAL TEXT to a real patient than to file a
+   * log entry. Nothing in this codebase may ever send a non-GET here, and nothing may
+   * probe it to find out: the cost of being wrong is a duplicate text to a live
+   * patient, on the practice's Twilio spend. The client-wide readOnly latch already
+   * refuses it; this comment is why it must stay refused.
+   *
+   * `patient_id` is MANDATORY — there is no practice-wide index on this resource,
+   * and there is no SMS webhook, so this is a per-patient poll or nothing. The
+   * envelope is returned RAW like every other read here; smsFromEnvelope in
+   * ./sms-shape unwraps it and refuses a shape it does not recognise.
+   */
+  getPatientSms(patientId: string, page = 1, perPage = 100) {
+    return this.get<Record<string, unknown>>("/v1/sms", {
+      patient_id: patientId, page, per_page: perPage,
+    });
+  }
+
+  /**
    * Payments, for the dashboard takings strip. CALIBRATED against live Dentally on 2026-07-30 by the project owner's own read-only probe, NOT by the code below.
    *
    * Dentally IGNORES every date filter on this endpoint: filter[from], from and

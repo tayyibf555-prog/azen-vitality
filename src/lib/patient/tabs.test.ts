@@ -3,16 +3,19 @@ import {
   ACCOUNT_COPY,
   CANNOT_READ_COPY,
   CHART_COPY,
+  CORRESPONDENCE_COPY,
   EMPTY_COPY,
   FAILED_COPY,
   PATIENT_TABS,
   PATIENT_TAB_SLUGS,
   defaultPatientTabForRole,
   isPatientTab,
+  partialCorrespondenceCopy,
   patientTab,
   patientTabHref,
 } from "./tabs";
 import { PATIENT_ADMIN_ROLES } from "./roles";
+import { PATIENT_SEND_SITES } from "@/lib/inbox/send-sites";
 
 describe("the eleven tabs", () => {
   it("are in Dentally's exact order", () => {
@@ -104,6 +107,26 @@ describe("the honesty copy", () => {
     expect(EMPTY_COPY.audit).toContain("through this platform");
   });
 
+  it("sends the reader to the inbox from the correspondence EMPTY state, not only the failed one", () => {
+    // THE HOLD. This panel can be empty for a patient texted minutes ago: a message
+    // sent to a number identifyByPhone could not match is filed under lead:<number>,
+    // and the record read (loadAgentMessagesForPatient) only ever looks under the
+    // Dentally id. Identification matches on mobile_phone alone, so a landline, a
+    // work number or a shared family number misses, and the missed-call lookup is
+    // capped at 3 seconds. Without this pointer the emptiest screen made the widest
+    // claim, in writing, on a clinical record.
+    for (const empty of [EMPTY_COPY.correspondence, EMPTY_COPY.correspondenceWithDentally]) {
+      expect(empty).toContain("Conversations inbox");
+      expect(empty).toContain("could not be matched to this record");
+      expect(empty.toLowerCase()).toContain("before assuming this patient has not been contacted");
+    }
+    // The same instruction the FAILED sentence gives, for the same reason.
+    expect(FAILED_COPY.correspondence).toContain("Conversations inbox");
+    // Still a DIFFERENT sentence from the failed one: an outage and an empty read
+    // are not the same claim, which is the older rule this must not undo.
+    expect(EMPTY_COPY.correspondence).not.toBe(FAILED_COPY.correspondence);
+  });
+
   it("phrases the Dentally clinical-notes empty as a fact about the CONNECTION", () => {
     // "No clinical notes in Dentally" is a claim about the patient's record in
     // another system, made on the strength of one endpoint (/v1/notes) that we
@@ -163,6 +186,10 @@ describe("the honesty copy", () => {
       ...Object.values(CHART_COPY),
       // The Account tab's reconciliation sentence, swept for the same house rules.
       ...Object.values(ACCOUNT_COPY),
+      // The Correspondence tab's scope + status sentences, added in the same edit
+      // as CORRESPONDENCE_COPY itself, or the new sentences go entirely unswept.
+      ...Object.values(CORRESPONDENCE_COPY),
+      partialCorrespondenceCopy(["Recall", "Campaign"]),
     ];
     for (const s of all) {
       expect(s).not.toContain("—");
@@ -264,5 +291,192 @@ describe("the chart copy", () => {
     expect(defaultPatientTabForRole(null)).toBe("details");
     // DENTALLY.md:114's behaviour, named and tested, waiting on the role.
     expect(defaultPatientTabForRole("client_practitioner")).toBe("chart");
+  });
+});
+
+describe("the correspondence copy", () => {
+  /**
+   * A SENTENCE HERE WAS FALSE FOR MONTHS. The tab stated "Dentally does not expose
+   * its correspondence through the connection we have." Dentally does: /v1/sms
+   * returns a patient's message history on a scope the practice's key already
+   * carries. The sentence was true-sounding, written in good faith as the honest
+   * answer to a real question, and never re-checked - the same shape of defect as
+   * the invented /v1/patient_notes path.
+   *
+   * These tests hold the replacement to the property that makes it durable: it
+   * describes THIS SCREEN, never what Dentally can or cannot do.
+   */
+  it("no longer claims Dentally cannot expose its correspondence", () => {
+    const all = Object.values(CANNOT_READ_COPY).join(" ").toLowerCase();
+    expect(all).not.toContain("dentally does not expose its correspondence");
+    expect(CANNOT_READ_COPY).not.toHaveProperty("dentallyCorrespondence");
+  });
+
+  it("states in both scope sentences that nothing is written back to Dentally", () => {
+    // THE operationally load-bearing sentence. Without it a colleague working in
+    // Dentally sees an empty correspondence page and concludes the patient was
+    // never contacted.
+    for (const scope of [CORRESPONDENCE_COPY.scopePlatformOnly, CORRESPONDENCE_COPY.scopeWithDentally]) {
+      expect(scope.toLowerCase()).toContain("written back");
+      expect(scope.toLowerCase()).toContain("dentally");
+    }
+  });
+
+  it("names the modules it covers, so 'from this platform' is not a vague claim", () => {
+    const scope = CORRESPONDENCE_COPY.scopePlatformOnly.toLowerCase();
+    for (const named of ["recall", "reactivation", "aftercare", "balance", "review", "campaign"]) {
+      expect(scope, `scope sentence omits ${named}`).toContain(named);
+    }
+  });
+
+  it("names the four senders that used to be missing from it entirely", () => {
+    // The sentence said "every message this platform has sent" while the missed-call
+    // callback, the no-show reply, the aftercare acknowledgement and the co-pilot's
+    // own send appeared nowhere on the screen. Naming them is what makes the claim
+    // checkable by the person reading it rather than only by a test.
+    for (const scope of [CORRESPONDENCE_COPY.scopePlatformOnly, CORRESPONDENCE_COPY.scopeWithDentally]) {
+      const lower = scope.toLowerCase();
+      expect(lower, "the missed-call callback is unnamed").toContain("missed call");
+      expect(lower, "a colleague's own send is unnamed").toContain("co-pilot");
+      expect(lower, "the confirmation reply is unnamed").toContain("appointment confirmations");
+      expect(lower, "the aftercare acknowledgement is unnamed").toContain("aftercare");
+    }
+  });
+
+  it("is only ALLOWED to say 'every message this platform has sent' because every send site is recorded", () => {
+    // The claim and its evidence, pinned together. SEND_SITES is derived from a crawl
+    // of every sendMessage call in the tree (src/lib/inbox/send-sites.test.ts), so if a
+    // new patient-facing sender ships with nowhere to land, this sentence stops being
+    // true and this test says so — rather than the screen going on asserting it.
+    const unrecorded = PATIENT_SEND_SITES.filter((s) => !s.recordedIn?.length).map((s) => s.file);
+    expect(
+      unrecorded,
+      `the scope sentence claims completeness, but these sends reach no source it reads: ${unrecorded.join(", ")}`,
+    ).toEqual([]);
+    for (const scope of [CORRESPONDENCE_COPY.scopePlatformOnly, CORRESPONDENCE_COPY.scopeWithDentally]) {
+      expect(scope).toContain("Every message this platform has sent to this patient");
+    }
+  });
+
+  it("does NOT let 'recorded' pass for 'on this patient's record', and names the exception", () => {
+    // The registry proves each send lands in the agent store. It does NOT prove the
+    // row lands under THIS patient: the four out-of-band senders key theirs from
+    // identifyByPhone, and a miss files it under lead:<number>, which the record read
+    // never looks at. Every trigger is routine (mobile_phone-only matching, a 3s
+    // lookup cap), and nothing re-keys it afterwards, so the scope sentence has to
+    // carry the exception rather than let the reader infer completeness.
+    for (const scope of [CORRESPONDENCE_COPY.scopePlatformOnly, CORRESPONDENCE_COPY.scopeWithDentally]) {
+      expect(scope, "the scope sentence still claims an unqualified completeness").toContain(
+        "The one exception is a message sent to a number that could not be matched to this record",
+      );
+      expect(scope).toContain("Conversations inbox");
+    }
+  });
+
+  it("explains the outbound exception where a reader is scanning the list", () => {
+    const note = CORRESPONDENCE_COPY.unmatchedNumbers.toLowerCase();
+    // The three routine triggers, so this reads as a thing that happens rather than
+    // a disclaimer: two number shapes identification cannot match, and the timeout.
+    expect(note).toContain("landline");
+    expect(note).toContain("shared family number");
+    expect(note).toContain("lookup is slow");
+    // Where to go instead, and the fact the runbook got wrong.
+    expect(note).toContain("conversations inbox");
+    expect(note, "the note implies it migrates onto the record later; it does not").toContain(
+      "does not move onto this record later",
+    );
+  });
+
+  it("does NOT extend the same completeness claim to what the patient sent back", () => {
+    // The received half has two structural exceptions. The old sentence covered both
+    // halves in one breath ("sent to this patient or received from them"), which made
+    // the screen assert something untrue about a reply nobody could see.
+    for (const scope of [CORRESPONDENCE_COPY.scopePlatformOnly, CORRESPONDENCE_COPY.scopeWithDentally]) {
+      expect(scope.toLowerCase()).not.toContain("or received from them");
+      expect(scope.toLowerCase()).toContain("two exceptions");
+    }
+  });
+
+  it("names those two exceptions on the screen, in words a receptionist can act on", () => {
+    const gaps = CORRESPONDENCE_COPY.inboundGaps.toLowerCase();
+    expect(gaps).toContain("waitlist");
+    expect(gaps).toContain("stop");
+    // Actionable, not merely honest: where to look instead.
+    expect(gaps).toContain("no-show list");
+    expect(gaps).toContain("opt-out list");
+  });
+
+  it("states the 400-row ceiling as tested copy, not as a bare string in the JSX", () => {
+    expect(CORRESPONDENCE_COPY.boundedRows).toContain("400");
+    expect(CORRESPONDENCE_COPY.boundedRows.toLowerCase()).toContain("oldest");
+  });
+
+  it("only claims Dentally's SMS is included in the WITH-Dentally sentence", () => {
+    expect(CORRESPONDENCE_COPY.scopePlatformOnly.toLowerCase()).toContain("not shown on this screen");
+    expect(CORRESPONDENCE_COPY.scopeWithDentally.toLowerCase()).toContain("also included");
+  });
+
+  it("keeps 'Dentally could not be read' distinct from 'Dentally has none'", () => {
+    expect(CORRESPONDENCE_COPY.dentallyFailed).not.toBe(EMPTY_COPY.correspondenceWithDentally);
+    expect(CORRESPONDENCE_COPY.dentallyFailed.toLowerCase()).toContain("could not be read");
+    expect(CORRESPONDENCE_COPY.dentallyFailed.toLowerCase()).not.toContain("no messages");
+  });
+
+  it("makes the wider empty claim ONLY in the Dentally-read variant", () => {
+    expect(EMPTY_COPY.correspondence).not.toContain("Dentally");
+    expect(EMPTY_COPY.correspondenceWithDentally).toContain("Dentally");
+    expect(EMPTY_COPY.correspondence).not.toBe(EMPTY_COPY.correspondenceWithDentally);
+  });
+
+  it("does not contradict a visible list when only the PLATFORM half failed", () => {
+    // The all-failed sentence says "we could not read this patient's message
+    // history". Printed above a visible list of Dentally's messages that reads as a
+    // contradiction, and a reader resolves a contradiction by believing the list.
+    expect(CORRESPONDENCE_COPY.platformFailedDentallyOk).not.toBe(FAILED_COPY.correspondence);
+    expect(CORRESPONDENCE_COPY.platformFailedDentallyOk).toContain("This platform's own message history");
+    expect(CORRESPONDENCE_COPY.platformFailedDentallyOk).toContain("Only Dentally's messages are shown");
+    // Still carries the instruction that makes a failed read actionable.
+    expect(CORRESPONDENCE_COPY.platformFailedDentallyOk).toContain("Conversations inbox");
+  });
+
+  it("says what Sent does and does not mean", () => {
+    // A green "Sent" beside a message is read as "the patient knows". It means the
+    // network accepted it, which is a materially weaker fact.
+    expect(CORRESPONDENCE_COPY.sentMeaning.toLowerCase()).toContain("not that the patient read it");
+    expect(CORRESPONDENCE_COPY.sentMeaning.toLowerCase()).toContain("not delivered");
+  });
+
+  it("explains why an approved-but-unsent or rejected draft is absent", () => {
+    expect(CORRESPONDENCE_COPY.draftsExcluded.toLowerCase()).toContain("not shown");
+    expect(CORRESPONDENCE_COPY.draftsExcluded.toLowerCase()).toContain("worklist");
+  });
+});
+
+describe("partialCorrespondenceCopy", () => {
+  it("NAMES the source that failed, so the reader knows where to look", () => {
+    const s = partialCorrespondenceCopy(["Recall"]);
+    expect(s).toContain("Recall");
+    expect(s).toContain("could not be read");
+  });
+
+  it("joins several with an 'and' rather than dumping a comma list", () => {
+    expect(partialCorrespondenceCopy(["Recall", "Campaign", "Balance reminder"])).toContain(
+      "Recall, Campaign and Balance reminder",
+    );
+  });
+
+  it("agrees its pronoun with the count", () => {
+    expect(partialCorrespondenceCopy(["Recall"])).toContain("from it");
+    expect(partialCorrespondenceCopy(["Recall", "Campaign"])).toContain("from them");
+  });
+
+  it("warns the list is not complete, which is the whole reason it is shown", () => {
+    expect(partialCorrespondenceCopy(["Recall"]).toLowerCase()).toContain(
+      "do not read this as a complete history",
+    );
+  });
+
+  it("falls back to the generic sentence rather than an empty one", () => {
+    expect(partialCorrespondenceCopy([])).toBe(FAILED_COPY.partialCorrespondence);
   });
 });

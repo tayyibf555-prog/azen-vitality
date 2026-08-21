@@ -4,7 +4,7 @@ import { getViewScope } from "@/lib/site-view";
 import { getPatientRecordInScope } from "@/lib/patient/record";
 import { getOverride } from "@/lib/patient-status/repository";
 import { numberHealthFor, type NumberHealth } from "@/lib/messaging/number-health";
-import { getThreadForPatient } from "@/lib/inbox/repository";
+import { getPatientCorrespondence } from "@/lib/inbox/correspondence";
 import { listPatientAudit, type PatientAuditEntry } from "@/lib/patient/profile-audit";
 import { listTargets as listRecallTargets, listTouches as listRecallTouches } from "@/lib/recall/repository";
 import { generateTasksWithHealth } from "@/lib/task-queue/generate";
@@ -205,20 +205,24 @@ export async function RecordTabContent({
   }
 
   if (slug === "correspondence") {
-    // getThreadForPatient reports how many of its seven stores threw, so the tab can
-    // tell "none were sent" from "some sources are down" from "we know nothing".
-    // A total failure returning null used to render as "no messages have been sent to
-    // this patient from this platform", in writing, on a clinical record.
-    const read = await getThreadForPatient([siteId], patient.id).catch(() => ({
-      thread: null,
-      failedSources: 1,
+    // getPatientCorrespondence reads all twelve platform message stores plus, when it
+    // is switched on, Dentally's own SMS log, and reports WHICH of them threw. The tab
+    // needs that to tell "none were sent" from "some sources are down" from "we know
+    // nothing" from "Dentally's own history is not switched on". A total failure
+    // returning null used to render as "no messages have been sent to this patient
+    // from this platform", in writing, on a clinical record.
+    const read = await getPatientCorrespondence([siteId], patient.id, patient.name).catch(() => ({
+      messages: [],
+      failedSources: ["Message history"],
       totalSources: 1,
+      dentally: "failed" as const,
     }));
     return (
       <TabCorrespondence
-        thread={read.thread}
+        messages={read.messages}
         failedSources={read.failedSources}
         totalSources={read.totalSources}
+        dentally={read.dentally}
       />
     );
   }

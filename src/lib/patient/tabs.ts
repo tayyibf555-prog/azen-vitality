@@ -189,6 +189,19 @@ export function patientTabHref(basePath: string, slug: PatientTabSlug): string {
 // The reusable empty and failed sentences, so no panel invents its own wording.
 // ---------------------------------------------------------------------------
 
+/**
+ * THE SENTENCE BOTH CORRESPONDENCE EMPTIES CARRY, so the two cannot drift apart.
+ *
+ * It is the same instruction FAILED_COPY.correspondence gives a reader when the
+ * read threw, and it is needed here for a different reason: not that the list could
+ * not be built, but that the list is built from the wrong side of an identification
+ * that can fail. "Nothing here" and "nothing was sent" are not the same statement,
+ * and only one of them is safe to print on a patient's record.
+ */
+const UNMATCHED_NUMBER_POINTER =
+  "A message we sent to a number that could not be matched to this record is held in the Conversations inbox " +
+  "under that number instead, so check there before assuming this patient has not been contacted.";
+
 /** Category A: a real read returned nothing. */
 export const EMPTY_COPY = {
   appointments: "No appointments on record.",
@@ -201,8 +214,26 @@ export const EMPTY_COPY = {
   dentallyNotes: "No clinical notes have come through from Dentally for this patient.",
   plans: "No treatment plans on record.",
   invoices: "No invoices on record.",
-  // Worded so it cannot be read as "this patient has never been contacted".
-  correspondence: "No messages have been sent to this patient from this platform.",
+  // Worded so it cannot be read as "this patient has never been contacted", and
+  // POINTED, because on this screen it can be wrong about a patient who was texted
+  // minutes ago. The record read finds a conversation only under the patient's
+  // Dentally id (loadAgentMessagesForPatient in src/lib/inbox/repository.ts); a
+  // message we sent to a number identifyByPhone could not match is filed under
+  // `lead:<number>` and never moves. That is not exotic: identification matches on
+  // mobile_phone ONLY, so a landline, a work number or a shared family number
+  // misses, and the lookup is capped at 3 seconds, so a slow Dentally demotes a
+  // patient we could have named. An empty panel with no pointer tells the reader
+  // the opposite of the truth, which is the one thing this tab exists to prevent.
+  correspondence:
+    "No messages to this patient have been recorded from this platform. " +
+    UNMATCHED_NUMBER_POINTER,
+  // The same claim when Dentally's own SMS log HAS been read and is also empty. It
+  // is a wider claim than the one above, so it may only be shown when the Dentally
+  // read actually succeeded — never when it is switched off or failed.
+  correspondenceWithDentally:
+    "No messages to this patient have been recorded from this platform, and Dentally holds no SMS for them " +
+    "either. " +
+    UNMATCHED_NUMBER_POINTER,
   tasks: "No open tasks for this patient.",
   // Worded so it cannot be read as "every tooth is present and sound". The
   // chart draws treatment ITEMS; it does not draw the dentition.
@@ -235,6 +266,9 @@ export const FAILED_COPY = {
     "Check the Conversations inbox before assuming this patient has not been contacted.",
   partialCorrespondence:
     "Part of this patient's message history could not be read just now, so messages may be missing from this list.",
+  // A count told the reader something was missing but not WHAT, which on a record
+  // leaves them nowhere to go and look. partialCorrespondenceCopy() below names the
+  // sources instead; this constant remains the wording when there are none to name.
   tasks: "We could not read this patient's tasks just now, so this is not a complete list of open work.",
   audit: "We could not read this patient's change history just now.",
   recalls: "We could not read the recall worklist just now, so we cannot say whether this patient is on it.",
@@ -293,9 +327,6 @@ export const CANNOT_READ_COPY = {
     "Payment and allocation history is not shown here yet. Dentally does return this patient's payments, and each " +
     "payment carries the invoices it was allocated against, so this is work still to do on this record rather than " +
     "a limit of the connection.",
-  dentallyCorrespondence:
-    "Letters, and any SMS or email sent from Dentally itself, are not shown. Dentally does not expose its " +
-    "correspondence through the connection we have.",
   dentallyTasks: "Dentally's own task list is not readable.",
   dentallyAudit:
     "This is a record of changes made through this platform. Anything done inside Dentally itself, including " +
@@ -364,6 +395,164 @@ export const CANNOT_READ_COPY = {
     "history, which also holds base chart changes, clinical notes and periodontal assessments, so this list is " +
     "narrower than the one on Dentally's own chart.",
 } as const;
+
+/**
+ * What the Correspondence tab says it covers, in the states it can actually be in.
+ *
+ * A SENTENCE HERE WAS FALSE, and that is why this block exists. The tab used to say
+ * "Dentally does not expose its correspondence through the connection we have."
+ * Dentally does. Its SMS feed is readable on a route the practice's key already holds
+ * scope for, and it was never being read. The old sentence was written as an honest
+ * answer to a real question from the practice manager, and it quietly became untrue —
+ * the same failure as the invented /v1/patient_notes path: a permanent claim about
+ * the connection, made once, never re-checked.
+ *
+ * The replacement never states what Dentally can or cannot do. It states what is on
+ * THIS SCREEN, which is a fact this code actually knows in every state.
+ *
+ * THE SECOND SENTENCE IS THE ONE THAT MATTERS OPERATIONALLY. Nothing this platform
+ * sends is written back into Dentally, so a member of staff working in Dentally sees
+ * none of it. Saying so on the tab is the difference between a colleague knowing to
+ * look here and a colleague concluding the patient was never contacted. The same
+ * statement, at length, is in docs/runbooks/correspondence-visibility.md.
+ *
+ * AND THE FIRST SENTENCE WAS FALSE TOO, IN THE OTHER DIRECTION. "Every message this
+ * platform has sent to this patient or received from them" was written when the
+ * record read eleven module tables, and four live send paths went through none of
+ * them: the missed-call callback, the no-show confirmation reply, the aftercare
+ * acknowledgement, and a message a colleague sent by hand from the co-pilot. All
+ * four now record into the agent conversation store (src/lib/inbox/record-outbound.ts),
+ * and a structural test (src/lib/inbox/send-sites.test.ts) enumerates every
+ * sendMessage call site in the tree so a new one cannot silently reopen the hole.
+ *
+ * AND "THE SENT HALF IS NOW COMPLETE" WAS THE NEXT VERSION OF THE SAME MISTAKE.
+ * Every send site now records, which is not the same fact as every send reaching the
+ * patient it went to. The four out-of-band senders key their record row by whatever
+ * `identifyByPhone` returned, and when that returns nothing the row is filed under
+ * `lead:<number>` — a conversation this patient's record read never looks at
+ * (loadAgentMessagesForPatient filters on the Dentally id alone). Identification
+ * matches on `mobile_phone` ONLY, so a landline, a work number or a shared family
+ * number misses; and the missed-call lookup is capped at 3 seconds, so a Dentally
+ * slowdown demotes a patient we could otherwise have named. Nothing re-keys it
+ * afterwards: `adoptConversationPatientId` fires only when the agent REGISTERS a
+ * brand-new patient mid-thread, never on identifying an existing one. So the scope
+ * sentence names that exception, and the empty state points at the inbox.
+ *
+ * THE RECEIVED HALF HAS TWO MORE, named on the screen rather than rounded away: a
+ * reply to a waitlist offer of a cancelled slot, and an opt-out from a number that
+ * was in no campaign. Both genuinely have nothing on this platform to attach them
+ * to. Writing "every message" over a screen missing any of these three is the same
+ * defect as the sentence above, and the whole reason this block carries its own tests.
+ */
+export const CORRESPONDENCE_COPY = {
+  scopePlatformOnly:
+    "Every message this platform has sent to this patient: " +
+    "recall, reactivation, appointment confirmations and changes, treatment follow-ups, aftercare " +
+    "check-ins, review requests, balance reminders, campaigns, first replies to an enquiry, callbacks " +
+    "after a missed call, and anything a colleague sent by hand from the inbox or the co-pilot. " +
+    "The one exception is a message sent to a number that could not be matched to this record, which " +
+    "stays in the Conversations inbox under that number. Their " +
+    "own replies are here too, with the two exceptions noted below this list. " +
+    "This history is held HERE, not in Dentally, and none of it is written back, so Dentally's own record " +
+    "of this patient does not show it. Messages sent from Dentally itself are not shown on this screen.",
+  scopeWithDentally:
+    "Every message this platform has sent to this patient: " +
+    "recall, reactivation, appointment confirmations and changes, treatment follow-ups, aftercare " +
+    "check-ins, review requests, balance reminders, campaigns, first replies to an enquiry, callbacks " +
+    "after a missed call, and anything a colleague sent by hand from the inbox or the co-pilot. " +
+    "The one exception is a message sent to a number that could not be matched to this record, which " +
+    "stays in the Conversations inbox under that number. Their " +
+    "own replies are here too, with the two exceptions noted below this list. " +
+    "SMS sent or received through Dentally is also included, marked Dentally; its letters, email and " +
+    "scanned documents are not, because Dentally does not return them. Nothing on this screen is written " +
+    "back into Dentally, so a colleague working in Dentally sees only Dentally's own messages.",
+  /**
+   * THE ONE MESSAGE WE SENT THAT CAN STILL BE MISSING, named beside the list.
+   *
+   * Not a rare edge. A record read finds a conversation only under the patient's
+   * Dentally id, and the four out-of-band senders key theirs from whatever
+   * `identifyByPhone` returned. It matches on `mobile_phone` alone, so a landline,
+   * a work number or a shared family number never resolves; and the missed-call
+   * lookup is bounded at 3 seconds so the caller hears no application error, which
+   * means a slow Dentally silently demotes a patient we could have named.
+   *
+   * Stated as "does not move onto this record later" because the opposite was
+   * written down as fact in the runbook and is not true: nothing re-keys these.
+   * `adoptConversationPatientId` only fires when the agent registers a BRAND-NEW
+   * patient mid-thread.
+   */
+  unmatchedNumbers:
+    "One kind of message we sent can be missing from this list: one sent to a number this platform could not " +
+    "match to this record, which happens with a landline, a work number, a shared family number, or any " +
+    "number while the Dentally lookup is slow. It is held in the Conversations inbox under the number itself " +
+    "and does not move onto this record later, so check there before concluding what was said to this patient.",
+  /**
+   * THE TWO REPLIES FROM THE PATIENT THAT ARE NOT HERE, named rather than rounded away.
+   *
+   * Both are structural, not bugs waiting to be fixed: a waitlist slot offer is not
+   * tied to a defended appointment, so a reply to one has no target to hang off; and
+   * an opt-out is answered by the suppression list before any conversation exists, so
+   * a STOP from a number in no campaign correlates to nothing. Each is held somewhere
+   * (the No-show list, the opt-out list) and neither can be tied to this timeline
+   * without a schema change. Both are in the runbook's gap table.
+   *
+   * Shown beside the list rather than buried in the scope paragraph, because the
+   * reader who needs it is the one already scanning the messages for a reply.
+   */
+  inboundGaps:
+    "Two kinds of reply from the patient are not on this list: an answer to an offer of a cancelled slot " +
+    "from the waitlist, and a STOP from a number that was not in any campaign. Neither can be tied to a " +
+    "patient record. Check the No-show list and the opt-out list before concluding a patient never replied.",
+  /** The per-source read ceiling, stated on the screen it bounds. */
+  boundedRows:
+    "Bounded at the 400 most recent messages from each source, so a patient with a very long history may " +
+    "not see the oldest of them here.",
+  /** Category D for the Dentally half specifically: a read we have, that failed. */
+  dentallyFailed:
+    "Dentally's own SMS history could not be read just now, so anything sent from Dentally itself is missing " +
+    "from this list.",
+  /**
+   * The mirror image: every PLATFORM source failed but Dentally's read succeeded.
+   *
+   * FAILED_COPY.correspondence cannot be used here. It says "we could not read this
+   * patient's message history", which on a screen that is visibly listing Dentally's
+   * messages reads as a contradiction, and a reader resolves a contradiction by
+   * believing the list. Found by rendering the tab in this exact state rather than
+   * by reasoning about it.
+   */
+  platformFailedDentallyOk:
+    "This platform's own message history could not be read just now, so anything IT sent is missing below. " +
+    "Only Dentally's messages are shown. Check the Conversations inbox before assuming this patient has not " +
+    "been contacted.",
+  /** Why an approved-but-unsent or rejected draft is absent. */
+  draftsExcluded:
+    "Drafts waiting for approval and drafts that were rejected are not shown here, because neither was said to " +
+    "the patient. They sit in the worklist of the module that wrote them.",
+  /** What "Sent" does and does not claim. */
+  sentMeaning:
+    "Sent means the message was accepted by the network, not that the patient read it. Not delivered means it " +
+    "did not reach them and they have not been told.",
+} as const;
+
+/**
+ * The partial-failure sentence, NAMING the sources that could not be read.
+ *
+ * Pure and exported so the sentence is testable rather than assembled inside JSX,
+ * which is the rule the rest of this file exists to enforce. The list is joined with
+ * "and" before the last item because a reader scanning a record should not have to
+ * parse a comma-separated slug dump to work out what to go and check.
+ */
+export function partialCorrespondenceCopy(failedSourceLabels: string[]): string {
+  if (failedSourceLabels.length === 0) return FAILED_COPY.partialCorrespondence;
+  const names =
+    failedSourceLabels.length === 1
+      ? failedSourceLabels[0]
+      : `${failedSourceLabels.slice(0, -1).join(", ")} and ${failedSourceLabels[failedSourceLabels.length - 1]}`;
+  return (
+    `${names} could not be read just now, so messages from ${failedSourceLabels.length === 1 ? "it" : "them"} ` +
+    `are missing from this list. Do not read this as a complete history.`
+  );
+}
 
 /**
  * Everything else the chart screen says, so no sentence on it lives untested

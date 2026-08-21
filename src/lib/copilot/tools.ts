@@ -90,6 +90,7 @@ import { listOpportunities } from "@/lib/coordinator/repository";
 import { getAgentAnalytics } from "@/lib/agent/repository";
 import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { sendMessage } from "@/lib/messaging/send";
+import { recordOutbound } from "@/lib/inbox/record-outbound";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { wasContactedToday, recordContacted } from "@/lib/messaging/frequency";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
@@ -865,6 +866,36 @@ export function makeCopilotDispatch(
           });
           const dryRun = result.provider === "dry-run";
           await logCopilotAction({ ...audit, status: dryRun ? "dry_run" : result.status });
+          // PUT IT ON THE PATIENT'S RECORD. The co-pilot dispatches directly (no outbox,
+          // no *_touch row), so without this a practice manager deliberately texting a
+          // patient produced an audit row nobody opens and NOTHING on the record the
+          // next person reads. That was the worst of the four holes in the tab's "every
+          // message this platform has sent" claim: a human chose to send it.
+          //
+          // Recorded in dry-run too, matching logCopilotAction and the daily ledger
+          // above: during the supervised phase the practice must still be able to see
+          // what the co-pilot would have said, and a record that starts existing only
+          // when a flag flips is a record nobody learns to trust.
+          //
+          // Fail-soft by construction (recordOutbound never throws): the message has
+          // already gone out, so nothing here may unsend, re-send or fail the tool.
+          const recorded = await recordOutbound({
+            siteId: p.siteId,
+            dentallyPatientId: p.id,
+            patientName: p.name,
+            channel,
+            // The record shows what the patient received. On email that includes the
+            // subject line, exactly as the audit row above captures it.
+            body: channel === "email" ? `Subject: ${subject}\n\n${message}` : message,
+            source: "copilot",
+          })
+            // BELT AND BRACES, matching the voice webhook and the two inbound
+            // branches. "Never throws" is a contract, not a guarantee, and an
+            // unguarded await here would turn a logging failure into a thrown tool
+            // call: the manager would be told the send failed, after the patient
+            // had already received it, and would send it again. Reported as
+            // recorded:false instead, which is what the note below already explains.
+            .catch(() => false);
           // Stamp the cross-module daily ledger so the automated systems (recall,
           // reactivation, no-show, outreach, nurture, all draining through the shared
           // drain) treat this patient as contacted today and do not add a second message.
@@ -879,13 +910,20 @@ export function makeCopilotDispatch(
             dryRun,
             ...(alreadyContactedToday ? { overrode: true } : {}),
             status: result.status,
+            recorded,
             note:
               (alreadyContactedToday
                 ? "This is a deliberate second message today (you asked me to override the one-a-day limit). "
                 : "") +
               (dryRun
                 ? "Recorded in test mode (dry run); it was not delivered to the patient. It will go out for real once the practice switches messaging live."
-                : "Sent."),
+                : "Sent.") +
+              // Surfaced, not swallowed: the send succeeded and the patient's own
+              // record does not show it, so the owner should not rely on the record
+              // being complete for this patient until someone has looked.
+              (recorded
+                ? ""
+                : " Note: it could not be added to the patient's Correspondence record, so it will not appear there."),
           });
         }
 

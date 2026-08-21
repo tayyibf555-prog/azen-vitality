@@ -4,6 +4,7 @@ import {
   groupThreads,
   toInboxChannel,
 } from "./normalise";
+import { belongsOnRecord, normaliseDeliveryStatus } from "./delivery";
 import type { InboxDirection, InboxMessage, Thread } from "./types";
 
 // The Conversations inbox aggregates read-only across the stores that already
@@ -86,6 +87,12 @@ async function loadAgentMessages(siteIds: string[]): Promise<InboxMessage[]> {
       body: m.body,
       at: m.created_at,
       source: "agent",
+      // A conversation turn is a message that HAPPENED: the patient's own words, or
+      // a reply the agent already put on the wire. There is no draft state and no
+      // approver here, and inventing a "queued" for it would be inventing a state
+      // this store does not have.
+      status: "sent",
+      actionedBy: null,
     });
   }
   return out;
@@ -95,89 +102,342 @@ async function loadAgentMessages(siteIds: string[]): Promise<InboxMessage[]> {
 // Per-module touch sources (the lifecycle agents).
 // ---------------------------------------------------------------------------
 
-interface TouchRow {
-  id: string;
-  site_id: string;
-  parent_id: string;
-  channel: string;
-  direction: string | null;
-  body: string;
-  created_at: string;
-}
+/** A parent row, normalised: whichever columns the module happens to name them. */
 interface ParentRow {
   id: string;
-  dentally_patient_id: string;
-  patient_name: string;
+  patientId: string;
+  patientName: string;
 }
+
+/** Where a touch row's patient identity lives. */
+type PatientLink =
+  | {
+      via: "parent";
+      parentTable: string;
+      /** FK column on the touch row pointing at its parent. */
+      parentKey: string;
+      /** Column on the parent carrying the Dentally patient id. */
+      idCol: string;
+      /** Column on the parent carrying the patient's name, or null when it has none. */
+      nameCol: string | null;
+    }
+  /** The touch row itself carries the patient id; there is no parent table. */
+  | { via: "row"; idCol: string };
 
 interface TouchSource {
-  /** Source label surfaced on each message. */
+  /** Source label surfaced on each message; also the key into SOURCE_LABEL. */
   name: string;
-  touchTable: string;
-  /** FK column on the touch row pointing at its parent. */
-  parentKey: string;
-  /** Parent table carrying the patient identity. */
-  parentTable: string;
+  table: string;
+  /** Site column on the touch row, or null when only the PARENT is site-scoped. */
+  siteCol: string | null;
+  /** Direction column, or null when the table only ever holds outbound rows. */
+  directionCol: string | null;
+  /** Delivery-status column, or null when the table has none. */
+  statusCol: string | null;
+  /** Column naming the human who approved or actioned the send, or null. */
+  actorCol: string | null;
+  /** Column holding when the message actually LEFT, or null when the table has none. */
+  sentAtCol: string | null;
+  patient: PatientLink;
 }
 
+/**
+ * Every MODULE STORE this platform can put words in front of a patient from.
+ *
+ * NOT, on its own, every message: the two registries below it are the other half.
+ * See the note under ADDING A SENDER at the foot of this comment.
+ *
+ * This list used to hold five of them. The drain has eleven outbox sources and the
+ * speed-to-lead agent sends outside the drain entirely, so the Correspondence tab —
+ * the screen a coordinator opens to answer "what have we already said to her?" —
+ * was missing the treatment-plan closer, the balance reminder, the aftercare
+ * check-in, segment campaigns, appointment-change notifications and every
+ * first-contact reply to a new enquiry. Six whole modules of real messages, absent
+ * from the record, under a heading that says "Messages sent from this platform".
+ *
+ * That is worse than an incomplete screen. The tab's empty state reads "No messages
+ * have been sent to this patient from this platform", which was printed as a fact
+ * about patients the balance agent had texted three times.
+ *
+ * THE SHAPE VARIES because these tables were written months apart, and the config
+ * below is the honest way to say so rather than pretending they are uniform:
+ *   - the closer hangs off treatment_opportunity, the SAME parent as the coordinator;
+ *   - the balance reminder carries `patient_id` on the touch row and has no parent;
+ *   - segment outreach names its columns `patient_id` / `name`, not the
+ *     `dentally_patient_id` / `patient_name` the older modules use;
+ *   - diary notifications hang off a move that may carry no patient at all;
+ *   - the aftercare check-in records `actioned_by` where the others record
+ *     `approved_by`;
+ *   - speed-to-lead's attempt log has no site column, no direction column and no
+ *     sent_at at all, and is site-scoped only through its lead.
+ *
+ * ADDING A MODULE: add it here AND to SOURCE_LABEL in ./delivery. A coverage test
+ * pins the two together, so a new messaging module cannot ship half-registered.
+ *
+ * ADDING A SENDER THAT IS NOT A MODULE — and this is the half that was missing.
+ * Registering every touch table proved that no DRAIN module was absent, and said
+ * nothing at all about the four senders that never touch the drain: the missed-call
+ * callback, the no-show confirmation reply, the aftercare acknowledgement and the
+ * co-pilot's own send. All four texted real patients and wrote to none of the tables
+ * below, so this list was complete and the record still was not.
+ *
+ * They now append to the agent conversation store — the `agent` source, read by
+ * loadAgentMessagesForPatient — via src/lib/inbox/record-outbound.ts. And the claim
+ * itself is now checkable: ./send-sites.ts enumerates EVERY sendMessage call site in
+ * the codebase with its audience, and ./send-sites.test.ts derives that list from the
+ * source tree and fails if the two disagree in either direction.
+ *
+ * So: a new sender goes in ./send-sites.ts, and if it is patient-facing it must land
+ * in one of the sources here or in the agent store. There is no third option that
+ * leaves the tab's wording true.
+ *
+ * AND THE KEY MATTERS AS MUCH AS THE TABLE. Landing in the agent store is not the
+ * same as landing on the PATIENT: loadAgentMessagesForPatient below filters
+ * dentally_patient_id to [id, `patient:<id>`], so a row keyed `lead:<number>` — what
+ * outboundPatientKey produces whenever identifyByPhone returned nothing — is on a
+ * conversation this read never opens. That is not confined to strangers.
+ * identifyByPhone matches on mobile_phone ALONE, so a real patient ringing from a
+ * landline, a work number or a shared family number lands there, as does anyone whose
+ * Dentally lookup outran the voice route's 3s cap. Nothing re-keys it afterwards. The
+ * screen therefore names the exception instead of claiming completeness, and the
+ * correspondence empty state sends the reader to the Conversations inbox.
+ */
 const TOUCH_SOURCES: TouchSource[] = [
-  { name: "reactivation", touchTable: "reactivation_touch", parentKey: "target_id", parentTable: "reactivation_target" },
-  { name: "recall", touchTable: "recall_touch", parentKey: "target_id", parentTable: "recall_target" },
-  { name: "noshow", touchTable: "noshow_touch", parentKey: "target_id", parentTable: "noshow_target" },
-  { name: "coordinator", touchTable: "coordinator_touch", parentKey: "opportunity_id", parentTable: "treatment_opportunity" },
-  { name: "reviews", touchTable: "review_touch", parentKey: "request_id", parentTable: "review_request" },
+  {
+    name: "reactivation", table: "reactivation_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "reactivation_target", parentKey: "target_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    name: "recall", table: "recall_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "recall_target", parentKey: "target_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    // NOTE a real limit, recorded in docs/runbooks/correspondence-visibility.md:
+    // noshow_touch.target_id is NULLABLE because waitlist slot-offer texts are not
+    // tied to a defended target. Those rows carry no patient identity of any kind,
+    // so they cannot appear on anybody's record. They are visible in the no-show
+    // module's own view; nothing here can fix that without a schema change.
+    name: "noshow", table: "noshow_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "noshow_target", parentKey: "target_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    name: "coordinator", table: "coordinator_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "treatment_opportunity", parentKey: "opportunity_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    name: "closer", table: "closer_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "treatment_opportunity", parentKey: "opportunity_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    name: "postop", table: "postop_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "actioned_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "postop_target", parentKey: "target_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    name: "reviews", table: "review_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "review_request", parentKey: "request_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
+    // The only source with no parent table: collection_touch carries the Dentally
+    // patient id itself. It therefore also carries no patient NAME, which is fine
+    // on a record (the page knows whose it is) and is why groupThreads takes the
+    // most recent NON-EMPTY name across a thread rather than the newest row's.
+    name: "collection", table: "collection_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "row", idCol: "patient_id" },
+  },
+  {
+    name: "outreach", table: "outreach_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "outreach_target", parentKey: "target_id", idCol: "patient_id", nameCol: "name" },
+  },
+  {
+    // diary_move.patient_id is nullable and diary_touch.move_id is nullable, so a
+    // notification whose move was deleted resolves to no patient and is dropped.
+    // Recorded in the runbook rather than papered over.
+    name: "diary", table: "diary_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "diary_move", parentKey: "move_id", idCol: "patient_id", nameCol: null },
+  },
+  {
+    // The first reply to a new enquiry. It does NOT double up with the agent spine:
+    // speed_to_lead_attempt logs the OUTBOUND first contact, and agent_conversation
+    // only starts once the lead replies. Before this it appeared nowhere on a record.
+    // A lead who never resolved to a Dentally patient has no record to appear on.
+    name: "speed-to-lead", table: "speed_to_lead_attempt", siteCol: null, directionCol: null,
+    statusCol: "status", actorCol: null, sentAtCol: null,
+    patient: { via: "parent", parentTable: "speed_to_lead_lead", parentKey: "lead_id", idCol: "dentally_patient_id", nameCol: "name" },
+  },
 ];
+
+/** The registered source names, for the coverage test and for callers reporting health. */
+export const CORRESPONDENCE_SOURCE_NAMES: string[] = ["agent", ...TOUCH_SOURCES.map((s) => s.name)];
+
+/** The columns one source needs, built per-source because no two tables agree. */
+function touchSelect(source: TouchSource): string {
+  const cols = new Set<string>(["id", "channel", "body", "created_at"]);
+  if (source.siteCol) cols.add(source.siteCol);
+  if (source.directionCol) cols.add(source.directionCol);
+  if (source.statusCol) cols.add(source.statusCol);
+  if (source.actorCol) cols.add(source.actorCol);
+  if (source.sentAtCol) cols.add(source.sentAtCol);
+  cols.add(source.patient.via === "parent" ? source.patient.parentKey : source.patient.idCol);
+  return Array.from(cols).join(", ");
+}
+
+/** Read one parent table's identity columns under whatever names it gave them. */
+function parentSelect(link: Extract<PatientLink, { via: "parent" }>): string {
+  const cols = new Set<string>(["id", link.idCol]);
+  if (link.nameCol) cols.add(link.nameCol);
+  return Array.from(cols).join(", ");
+}
+
+function toParentRow(link: Extract<PatientLink, { via: "parent" }>, raw: Record<string, unknown>): ParentRow | null {
+  const patientId = raw[link.idCol];
+  // A parent with no patient id (a diary move on an unassigned slot, a lead that
+  // never became a record) cannot be attributed to anyone. Dropped, not guessed.
+  if (typeof patientId !== "string" || patientId === "") return null;
+  return {
+    id: String(raw.id),
+    patientId,
+    patientName: link.nameCol ? String(raw[link.nameCol] ?? "") : "",
+  };
+}
+
+/**
+ * One touch row → one inbox message, or null when it does not belong on a record.
+ *
+ * Drafts and discarded drafts are filtered HERE rather than in the query, because
+ * `status` is a per-source column name and a filter written eleven times is a filter
+ * that will eventually be forgotten once.
+ */
+function toTouchMessage(
+  source: TouchSource,
+  raw: Record<string, unknown>,
+  patientId: string,
+  patientName: string,
+): InboxMessage | null {
+  const status = source.statusCol ? normaliseDeliveryStatus(raw[source.statusCol] as string | null) : "unknown";
+  if (!belongsOnRecord(status)) return null;
+  const direction: InboxDirection =
+    source.directionCol && raw[source.directionCol] === "inbound" ? "inbound" : "outbound";
+  const sentAt = source.sentAtCol ? (raw[source.sentAtCol] as string | null) : null;
+  return {
+    id: `${source.name}:${String(raw.id)}`,
+    contactRef: `patient:${patientId}`,
+    contactName: patientName,
+    channel: toInboxChannel(String(raw.channel ?? "sms")),
+    direction,
+    body: String(raw.body ?? ""),
+    // When it LEFT, falling back to when it was written. A draft approved on Monday
+    // and sent on Wednesday belongs on Wednesday in a record of what was said.
+    at: sentAt && sentAt !== "" ? sentAt : String(raw.created_at),
+    source: source.name,
+    status,
+    actionedBy: source.actorCol ? ((raw[source.actorCol] as string | null) ?? null) : null,
+  };
+}
 
 async function loadTouchSource(source: TouchSource, siteIds: string[]): Promise<InboxMessage[]> {
   const db = serviceClient();
-  // The select column list is built per-source (different FK column per module),
-  // so the typed-string parser can't infer it: query through a loosely typed
-  // builder and validate the shape ourselves below.
-  const { data: touches, error: tErr } = await db
-    .from(source.touchTable)
-    .select(`id, site_id, ${source.parentKey}, channel, direction, body, created_at`)
-    .in("site_id", siteIds)
-    .order("created_at", { ascending: false })
-    .limit(PER_SOURCE_LIMIT)
-    .overrideTypes<Array<Record<string, unknown>>>();
-  if (tErr) throw tErr;
-  const rows = ((touches as Array<Record<string, unknown>> | null) ?? []).map((r) => ({
-    id: String(r.id),
-    site_id: String(r.site_id),
-    parent_id: String(r[source.parentKey] ?? ""),
-    channel: String(r.channel ?? "sms"),
-    direction: (r.direction as string | null) ?? null,
-    body: String(r.body ?? ""),
-    created_at: String(r.created_at),
-  })) as TouchRow[];
-  if (rows.length === 0) return [];
+  const link = source.patient;
 
-  const parentIds = Array.from(new Set(rows.map((r) => r.parent_id).filter(Boolean)));
-  const { data: parents, error: pErr } = await db
-    .from(source.parentTable)
-    .select("id, dentally_patient_id, patient_name")
-    .in("id", parentIds);
-  if (pErr) throw pErr;
-  const byParent = new Map<string, ParentRow>();
-  for (const p of (parents as ParentRow[]) ?? []) byParent.set(p.id, p);
+  // No parent table: the touch row carries the patient id itself.
+  if (link.via === "row") {
+    const { data, error } = await db
+      .from(source.table)
+      .select(touchSelect(source))
+      .in("site_id", siteIds)
+      .order("created_at", { ascending: false })
+      .limit(PER_SOURCE_LIMIT)
+      .overrideTypes<Array<Record<string, unknown>>>();
+    if (error) throw error;
+    const out: InboxMessage[] = [];
+    for (const raw of (data as Array<Record<string, unknown>> | null) ?? []) {
+      const patientId = raw[link.idCol];
+      if (typeof patientId !== "string" || patientId === "") continue;
+      const msg = toTouchMessage(source, raw, patientId, "");
+      if (msg) out.push(msg);
+    }
+    return out;
+  }
+
+  // A touch table with no site column of its own (speed-to-lead's attempt log) is
+  // site-scoped only through its parent, so the parent has to be read FIRST and the
+  // touches fetched by parent id. Bounded exactly as the agent spine is, rather than
+  // reading the newest attempts across every client and filtering afterwards.
+  let byParent = new Map<string, ParentRow>();
+  let rows: Array<Record<string, unknown>> = [];
+
+  if (source.siteCol === null) {
+    const { data: parents, error: pErr } = await db
+      .from(link.parentTable)
+      .select(parentSelect(link))
+      .in("site_id", siteIds)
+      .limit(PER_SOURCE_LIMIT)
+      .overrideTypes<Array<Record<string, unknown>>>();
+    if (pErr) throw pErr;
+    byParent = parentMap(link, (parents as Array<Record<string, unknown>> | null) ?? []);
+    if (byParent.size === 0) return [];
+    const { data, error } = await db
+      .from(source.table)
+      .select(touchSelect(source))
+      .in(link.parentKey, Array.from(byParent.keys()))
+      .order("created_at", { ascending: false })
+      .limit(PER_SOURCE_LIMIT)
+      .overrideTypes<Array<Record<string, unknown>>>();
+    if (error) throw error;
+    rows = (data as Array<Record<string, unknown>> | null) ?? [];
+  } else {
+    const { data, error } = await db
+      .from(source.table)
+      .select(touchSelect(source))
+      .in(source.siteCol, siteIds)
+      .order("created_at", { ascending: false })
+      .limit(PER_SOURCE_LIMIT)
+      .overrideTypes<Array<Record<string, unknown>>>();
+    if (error) throw error;
+    rows = (data as Array<Record<string, unknown>> | null) ?? [];
+    if (rows.length === 0) return [];
+    const parentIds = Array.from(
+      new Set(rows.map((r) => String(r[link.parentKey] ?? "")).filter((v) => v !== "")),
+    );
+    if (parentIds.length === 0) return [];
+    const { data: parents, error: pErr } = await db
+      .from(link.parentTable)
+      .select(parentSelect(link))
+      .in("id", parentIds)
+      .overrideTypes<Array<Record<string, unknown>>>();
+    if (pErr) throw pErr;
+    byParent = parentMap(link, (parents as Array<Record<string, unknown>> | null) ?? []);
+  }
 
   const out: InboxMessage[] = [];
-  for (const r of rows) {
-    const parent = byParent.get(r.parent_id);
+  for (const raw of rows) {
+    const parent = byParent.get(String(raw[link.parentKey] ?? ""));
     if (!parent) continue;
-    const direction: InboxDirection = r.direction === "inbound" ? "inbound" : "outbound";
-    out.push({
-      id: `${source.name}:${r.id}`,
-      contactRef: `patient:${parent.dentally_patient_id}`,
-      contactName: parent.patient_name,
-      channel: toInboxChannel(r.channel),
-      direction,
-      body: r.body,
-      at: r.created_at,
-      source: source.name,
-    });
+    const msg = toTouchMessage(source, raw, parent.patientId, parent.patientName);
+    if (msg) out.push(msg);
   }
   return out;
+}
+
+function parentMap(
+  link: Extract<PatientLink, { via: "parent" }>,
+  raws: Array<Record<string, unknown>>,
+): Map<string, ParentRow> {
+  const map = new Map<string, ParentRow>();
+  for (const raw of raws) {
+    const p = toParentRow(link, raw);
+    if (p) map.set(p.id, p);
+  }
+  return map;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,35 +502,47 @@ export interface PatientThreadRead {
   failedSources: number;
   /** How many were attempted, so the caller can tell "some" from "all". */
   totalSources: number;
+  /**
+   * WHICH sources threw, by name.
+   *
+   * A count alone told the reader that something was missing but not what, which on
+   * a record leaves them no way to go and look. "The balance reminder history could
+   * not be read" sends someone to the collection module; "1 of 12 sources failed"
+   * sends them nowhere.
+   */
+  failedSourceNames: string[];
 }
 
 export async function getThreadForPatient(siteIds: string[], patientId: string): Promise<PatientThreadRead> {
   const totalSources = 1 + TOUCH_SOURCES.length;
-  if (siteIds.length === 0 || !patientId) return { thread: null, failedSources: 0, totalSources };
-  let failedSources = 0;
-  const fail = () => {
-    failedSources += 1;
+  if (siteIds.length === 0 || !patientId) {
+    return { thread: null, failedSources: 0, totalSources, failedSourceNames: [] };
+  }
+  const failedSourceNames: string[] = [];
+  const fail = (name: string) => {
+    failedSourceNames.push(name);
     return [] as InboxMessage[];
   };
   const results = await Promise.all([
     loadAgentMessagesForPatient(siteIds, patientId).catch((err) => {
       console.warn("inbox: failed to load agent messages for one patient", err);
-      return fail();
+      return fail("agent");
     }),
     ...TOUCH_SOURCES.map((s) =>
       loadTouchSourceForPatient(s, siteIds, patientId).catch((err) => {
         console.warn(`inbox: failed to load touch source "${s.name}" for one patient`, err);
-        return fail();
+        return fail(s.name);
       }),
     ),
   ]);
+  const failedSources = failedSourceNames.length;
   const messages = results.flat();
-  if (messages.length === 0) return { thread: null, failedSources, totalSources };
+  if (messages.length === 0) return { thread: null, failedSources, totalSources, failedSourceNames };
   const threads = groupThreads(messages);
   // groupThreads keys on contactRef; a patient can appear as `patient:<id>` from every
   // source, so there is normally exactly one thread here. Pick the patient's own.
   const thread = threads.find((t) => t.contactRef === `patient:${patientId}`) ?? threads[0] ?? null;
-  return { thread, failedSources, totalSources };
+  return { thread, failedSources, totalSources, failedSourceNames };
 }
 
 async function loadAgentMessagesForPatient(siteIds: string[], patientId: string): Promise<InboxMessage[]> {
@@ -314,6 +586,12 @@ async function loadAgentMessagesForPatient(siteIds: string[], patientId: string)
       body: m.body,
       at: m.created_at,
       source: "agent",
+      // A conversation turn is a message that HAPPENED: the patient's own words, or
+      // a reply the agent already put on the wire. There is no draft state and no
+      // approver here, and inventing a "queued" for it would be inventing a state
+      // this store does not have.
+      status: "sent",
+      actionedBy: null,
     });
   }
   return out;
@@ -325,45 +603,64 @@ async function loadTouchSourceForPatient(
   patientId: string,
 ): Promise<InboxMessage[]> {
   const db = serviceClient();
-  // Parents first: the patient id lives on the parent (target/opportunity/request),
-  // not on the touch, so the filter has to start there. That is what makes this a
-  // query-level filter rather than a scan-and-discard.
-  const { data: parents, error: pErr } = await db
-    .from(source.parentTable)
-    .select("id, dentally_patient_id, patient_name")
-    .in("site_id", siteIds)
-    .eq("dentally_patient_id", patientId);
-  if (pErr) throw pErr;
-  const parentRows = (parents as ParentRow[]) ?? [];
-  if (parentRows.length === 0) return [];
-  const byParent = new Map<string, ParentRow>();
-  for (const p of parentRows) byParent.set(p.id, p);
+  const link = source.patient;
 
-  const { data: touches, error: tErr } = await db
-    .from(source.touchTable)
-    .select(`id, site_id, ${source.parentKey}, channel, direction, body, created_at`)
+  // No parent table: filter the touch rows on the patient id directly.
+  if (link.via === "row") {
+    const { data, error } = await db
+      .from(source.table)
+      .select(touchSelect(source))
+      .in("site_id", siteIds)
+      .eq(link.idCol, patientId)
+      .order("created_at", { ascending: false })
+      .limit(PER_SOURCE_LIMIT)
+      .overrideTypes<Array<Record<string, unknown>>>();
+    if (error) throw error;
+    const out: InboxMessage[] = [];
+    for (const raw of (data as Array<Record<string, unknown>> | null) ?? []) {
+      const msg = toTouchMessage(source, raw, patientId, "");
+      if (msg) out.push(msg);
+    }
+    return out;
+  }
+
+  // Parents first: the patient id lives on the parent (target/opportunity/request/
+  // move/lead), not on the touch, so the filter has to start there. That is what
+  // makes this a query-level filter rather than a scan-and-discard.
+  const parentQuery = db
+    .from(link.parentTable)
+    .select(parentSelect(link))
+    .eq(link.idCol, patientId);
+  // Every parent table but one is site-scoped. speed_to_lead_lead is too; the
+  // exception is that its TOUCH table is not, which is handled below.
+  const { data: parents, error: pErr } = await parentQuery
     .in("site_id", siteIds)
-    .in(source.parentKey, Array.from(byParent.keys()))
+    .limit(PER_SOURCE_LIMIT)
+    .overrideTypes<Array<Record<string, unknown>>>();
+  if (pErr) throw pErr;
+  const byParent = parentMap(link, (parents as Array<Record<string, unknown>> | null) ?? []);
+  if (byParent.size === 0) return [];
+
+  let touchQuery = db
+    .from(source.table)
+    .select(touchSelect(source))
+    .in(link.parentKey, Array.from(byParent.keys()));
+  // The parent ids were just established inside the site boundary, so a touch table
+  // WITHOUT a site column is still correctly scoped; adding a filter on a column
+  // that does not exist would fail the whole read.
+  if (source.siteCol) touchQuery = touchQuery.in(source.siteCol, siteIds);
+  const { data: touches, error: tErr } = await touchQuery
     .order("created_at", { ascending: false })
     .limit(PER_SOURCE_LIMIT)
     .overrideTypes<Array<Record<string, unknown>>>();
   if (tErr) throw tErr;
 
   const out: InboxMessage[] = [];
-  for (const raw of ((touches as Array<Record<string, unknown>> | null) ?? [])) {
-    const parent = byParent.get(String(raw[source.parentKey] ?? ""));
+  for (const raw of (touches as Array<Record<string, unknown>> | null) ?? []) {
+    const parent = byParent.get(String(raw[link.parentKey] ?? ""));
     if (!parent) continue;
-    const direction: InboxDirection = raw.direction === "inbound" ? "inbound" : "outbound";
-    out.push({
-      id: `${source.name}:${String(raw.id)}`,
-      contactRef: `patient:${parent.dentally_patient_id}`,
-      contactName: parent.patient_name,
-      channel: toInboxChannel(String(raw.channel ?? "sms")),
-      direction,
-      body: String(raw.body ?? ""),
-      at: String(raw.created_at),
-      source: source.name,
-    });
+    const msg = toTouchMessage(source, raw, parent.patientId, parent.patientName);
+    if (msg) out.push(msg);
   }
   return out;
 }

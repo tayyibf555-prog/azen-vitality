@@ -1056,6 +1056,74 @@ export const MOCK_PATIENT_NOTES: MockPatientNote[] = [
   { id: "note-005a", patient_id: "pat-005", body: "RCT on LL6 complete, crown to follow. Sensitive to cold.", author: "Dr Priya Adeyemi", created_at: "2026-06-08T15:30:00Z" },
 ];
 
+/**
+ * Dentally's OWN SMS log (`GET /v1/sms`), which the platform reads but never writes.
+ *
+ * The field names and the `message_type` vocabulary below are the ones a live
+ * read-only probe returned on 2026-08-21 (patients 56194 / 40000 / 30000). They are
+ * reproduced exactly, including `direction`, `sent_at` vs `created_at`, and the
+ * `pms_*` / `portal_*` / `twilio_error_response` classifications, because a mock that
+ * is looser than the API it stands in for is how the /v1/patient_notes 404 stayed
+ * invisible for months: dev and the whole suite were green against a shape production
+ * never returned.
+ *
+ * These rows are deliberately Dentally-ORIGIN messages (an appointment reminder, a
+ * recall, a patient's reply), i.e. exactly the traffic the platform does not send
+ * itself. That is what makes the merged timeline testable end to end.
+ */
+export interface MockDentallySms {
+  id: string;
+  patient_id: string;
+  body: string;
+  direction: "inbound" | "outbound";
+  from: string;
+  to: string;
+  sent_at: string | null;
+  created_at: string;
+  read: boolean;
+  read_at: string | null;
+  archived: boolean;
+  user_id: number | null;
+  message_type: string | null;
+}
+
+export const MOCK_DENTALLY_SMS: MockDentallySms[] = [
+  {
+    id: "sms-001a", patient_id: "pat-001",
+    body: "Reminder: you have an appointment with Dr Adeyemi on Thu 18 Jun at 10:20am. Reply CANCEL if you cannot make it.",
+    direction: "outbound", from: "VitalityDental", to: "+447700900001",
+    sent_at: "2026-06-16T09:00:00Z", created_at: "2026-06-16T08:59:58Z",
+    read: true, read_at: null, archived: false, user_id: 4021, message_type: "pms_appointment_reminder",
+  },
+  {
+    id: "sms-001b", patient_id: "pat-001",
+    body: "Yes that's fine, see you then.",
+    direction: "inbound", from: "+447700900001", to: "VitalityDental",
+    sent_at: null, created_at: "2026-06-16T09:14:22Z",
+    read: true, read_at: "2026-06-16T09:20:00Z", archived: false, user_id: null, message_type: null,
+  },
+  {
+    id: "sms-002a", patient_id: "pat-002",
+    body: "It is time for your check-up at Vitality Dental. Call us on 020 8888 1234 to book.",
+    direction: "outbound", from: "VitalityDental", to: "+447700900002",
+    sent_at: "2026-05-02T10:30:00Z", created_at: "2026-05-02T10:29:55Z",
+    read: true, read_at: null, archived: false, user_id: 4021, message_type: "recall",
+  },
+  {
+    id: "sms-002b", patient_id: "pat-002",
+    body: "Your appointment on Wed 17 Jun at 2:45pm is confirmed.",
+    direction: "outbound", from: "VitalityDental", to: "+447700900002",
+    sent_at: "2026-06-15T11:02:00Z", created_at: "2026-06-15T11:01:58Z",
+    read: true, read_at: null, archived: false, user_id: 4021, message_type: "pms_appointment_confirmation",
+  },
+];
+
+export function dentallySmsForPatient(patientId: string): MockDentallySms[] {
+  return MOCK_DENTALLY_SMS.filter((s) => s.patient_id === patientId).sort((a, b) =>
+    (a.sent_at ?? a.created_at) < (b.sent_at ?? b.created_at) ? 1 : -1,
+  );
+}
+
 // Date of birth, so the record can show age.
 export const PATIENT_DOB: Record<string, string> = {
   "pat-001": "1958-03-12", "pat-002": "1979-11-02", "pat-003": "1992-08-19",

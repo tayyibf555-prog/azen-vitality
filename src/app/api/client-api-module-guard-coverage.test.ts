@@ -271,6 +271,9 @@ const EXEMPT: Record<string, Exemption> = {
   "mock-dentally/v1/nhs_claims": { kind: "mock", reason: "mock upstream Dentally API" },
   "mock-dentally/v1/notes": { kind: "mock", reason: "mock upstream Dentally API" },
   "mock-dentally/v1/patients": { kind: "mock", reason: "mock upstream Dentally API" },
+  // GET only, deliberately: /v1/sms is Dentally's own SMS log, and a POST to the
+  // live path would most likely transmit a real text rather than file a record.
+  "mock-dentally/v1/sms": { kind: "mock", reason: "mock upstream Dentally API" },
   "mock-dentally/v1/patients/[id]": { kind: "mock", reason: "mock upstream Dentally API" },
   "mock-dentally/v1/payment_plans": { kind: "mock", reason: "mock upstream Dentally API" },
   "mock-dentally/v1/payments": { kind: "mock", reason: "mock upstream Dentally API" },

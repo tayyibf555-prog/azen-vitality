@@ -1,6 +1,7 @@
 import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { verifyTwilioSignature } from "@/lib/messaging/signature";
 import { sendMessage } from "@/lib/messaging/send";
+import { recordOutbound, outboundPatientKey } from "@/lib/inbox/record-outbound";
 import { toE164 } from "@/lib/messaging/phone";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { identifyByPhone } from "@/lib/agent/identify";
@@ -75,15 +76,44 @@ function twiml(say: string): Response {
  * upstream by `decideCallOutcome`, which returns action "none" instead.
  *
  * Bounded so a slow provider cannot push the TwiML past Twilio's voice timeout.
+ *
+ * IT ALSO PUTS THE TEXT ON THE CALLER'S RECORD, and being the single send path is
+ * what makes that reliable: both callers inherit it, so a third branch added later
+ * cannot text a caller off the record by forgetting a line. Until this existed, a
+ * missed call produced a text the patient received and no screen showed.
+ *
+ * THE RECORD IS OUTSIDE THE TIMEOUT RACE, in both directions and on purpose:
+ *   - the write is never part of the promise the 6s bound is racing, so a slow
+ *     database can never downgrade a genuinely sent text to "timeout" and make the
+ *     caller hear a line that no longer promises the message;
+ *   - and it hangs off the SEND, so a send that resolves after the bound is still
+ *     recorded on a best-effort basis rather than being lost by definition.
+ * `recordOutbound` never throws and never sends, so neither path can affect what
+ * the caller is told or put a second text on the wire.
  */
-async function sendCallbackSms(to: string, body: string): Promise<"sent" | "failed" | "timeout"> {
-  return withTimeout(
-    sendMessage({ channel: "sms", to, body })
-      .then(() => "sent" as const)
-      .catch(() => "failed" as const),
-    6000,
-    "timeout" as const,
-  );
+async function sendCallbackSms(
+  to: string,
+  body: string,
+  patient: { siteId: string; dentallyPatientId: string; patientName: string },
+): Promise<"sent" | "failed" | "timeout"> {
+  const send = sendMessage({ channel: "sms", to, body })
+    .then(() => "sent" as const)
+    .catch(() => "failed" as const);
+  const recorded = send
+    .then((outcome) =>
+      outcome === "sent"
+        ? recordOutbound({ ...patient, channel: "sms", body, source: "missed-call-callback" })
+        : false,
+    )
+    // recordOutbound already swallows everything; this is belt and braces so a
+    // rejected promise can never surface as an unhandled rejection on the timeout
+    // path, where nothing awaits it.
+    .catch(() => false);
+  const outcome = await withTimeout(send, 6000, "timeout" as const);
+  // Inside the window, finish the write before returning: the record is then a
+  // deterministic consequence of a successful send rather than a race.
+  if (outcome === "sent") await recorded;
+  return outcome;
 }
 
 async function handleWithDentallyPriority(request: Request): Promise<Response> {
@@ -222,6 +252,18 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     }
   }
 
+  // Where a callback text lands on the record. A caller we recognised threads under
+  // their Dentally id; one we could not threads under `lead:<number>`, which is the
+  // SAME key the inbound SMS webhook uses for an unknown number — so if they text
+  // back, the reply joins this text in one thread instead of forking a second one.
+  // A withheld caller ID is not dialable and never reaches a send, so it never
+  // reaches this either.
+  const callbackRecord = {
+    siteId,
+    dentallyPatientId: outboundPatientKey(patientId, from),
+    patientName,
+  };
+
   // What the caller hears. The decision's own line promises nothing; it is only
   // upgraded to a "we've just sent you a text" line once a send has ACTUALLY
   // happened, so a suppressed number, a failed send or a dry timeout is never
@@ -316,7 +358,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         // before reaching its send). Tell it to stand down and fall back to the
         // bare fixed SMS so the missed call is never silently dropped.
         bridgeState.timedOut = true;
-        const sendResult = await sendCallbackSms(from, afterHoursFallbackSms(practiceName));
+        const sendResult = await sendCallbackSms(from, afterHoursFallbackSms(practiceName), callbackRecord);
         if (sendResult === "sent") {
           spoken = spokenClosedTextSent(practiceName);
           if (captureId) await markFollowUpSent(captureId);
@@ -341,7 +383,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     // about to ring this person back, so an AI opener asking to book by text
     // would talk across the call the worklist is queuing.
     try {
-      const sendResult = await sendCallbackSms(from, inHoursCallbackSms(practiceName));
+      const sendResult = await sendCallbackSms(from, inHoursCallbackSms(practiceName), callbackRecord);
       if (sendResult === "sent") {
         spoken = spokenOpenTextSent(practiceName);
         if (captureId) await markFollowUpSent(captureId);

@@ -62,6 +62,21 @@ import type { PostopStatus, PostopTarget, TouchChannel } from "./types";
  *  was retired without a live conversation. */
 const REPLYABLE: PostopStatus[] = ["in_flight", "sent", "escalated", "closed"];
 
+/**
+ * Who the acknowledgement is FOR, when this handler correlated one.
+ *
+ * Returned so the webhook can put the sentence it sends on that patient's own
+ * record (`recordOutbound`). The webhook cannot resolve this itself where it sends:
+ * the post-op branch deliberately runs BEFORE identity resolution, and the whole
+ * point of the correlation step above is that THIS module already knows which
+ * check-in — and therefore which patient — the reply belongs to.
+ */
+export interface PostopReplyPatient {
+  siteId: string;
+  dentallyPatientId: string;
+  patientName: string;
+}
+
 export interface PostopInboundResult {
   /** True when this module owns the message. The webhook must then NOT run the
    *  booking agent on it, even if `reply` is null. */
@@ -71,6 +86,8 @@ export interface PostopInboundResult {
   /** For the webhook's log line and for tests. Never shown to a patient. */
   outcome?: "escalated" | "all_clear";
   triageReason?: string | null;
+  /** Present whenever `reply` is, so the acknowledgement can reach the record. */
+  patient?: PostopReplyPatient | null;
 }
 
 const NOT_HANDLED: PostopInboundResult = { handled: false };
@@ -173,6 +190,15 @@ async function triageAndRespond(input: {
     practiceName: getSite(target.siteId)?.name ?? "",
   });
 
+  // Identity for the record. Taken from the correlated target, which is the same row
+  // the escalation and the inbound touch are written against, so an acknowledgement
+  // can never land on a different patient's record than the reply it answers.
+  const replyPatient: PostopReplyPatient = {
+    siteId: target.siteId,
+    dentallyPatientId: target.dentallyPatientId,
+    patientName: target.patientName,
+  };
+
   // 3c. Whether we may say anything at all. Three independent gates, and a failure
   //    of any of them silences the acknowledgement WITHOUT silencing the escalation:
   //      - the owner's kill switch;
@@ -210,6 +236,7 @@ async function triageAndRespond(input: {
       outcome: "escalated",
       triageReason: verdict.reason,
       reply: mayReply && facts.ok ? postopEscalationAck(facts.facts) : null,
+      patient: replyPatient,
     };
   }
 
@@ -221,5 +248,6 @@ async function triageAndRespond(input: {
     outcome: "all_clear",
     triageReason: null,
     reply: mayReply && facts.ok ? postopAllClearAck(facts.facts) : null,
+    patient: replyPatient,
   };
 }

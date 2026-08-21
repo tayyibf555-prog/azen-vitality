@@ -52,6 +52,7 @@ import { insertCapture, hasOpenCaptureFrom } from "@/lib/after-hours/repository"
 import Anthropic from "@anthropic-ai/sdk";
 import { DentallyClient } from "@/lib/dentally/client";
 import { sendMessage } from "@/lib/messaging/send";
+import { recordOutbound } from "@/lib/inbox/record-outbound";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
 import { getSite, getSites, getClient } from "@/lib/mock/clients";
 import { findLeadByConversation, setLeadStage } from "@/lib/speed-to-lead/repository";
@@ -267,10 +268,38 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
   }
   if (noshow.handled) {
     if (noshow.reply) {
+      let sent = false;
       try {
         await sendMessage({ channel, to: from, body: noshow.reply });
+        sent = true;
       } catch {
         // Reply logged intent only; swallow delivery errors so Twilio does not retry.
+      }
+      // ON THE RECORD. This branch answers and returns before the conversation store
+      // is ever touched below, so until this call the platform texted a patient
+      // "Thanks for confirming" / "That is cancelled for you" and their Correspondence
+      // tab showed only their own inbound word. Recorded ONLY when the send actually
+      // succeeded, and recordOutbound cannot throw, retry or send — the patient
+      // already has the text, so nothing here may put a second one on the wire.
+      if (sent && noshow.patient) {
+        await recordOutbound({
+          siteId: noshow.patient.siteId,
+          dentallyPatientId: noshow.patient.dentallyPatientId,
+          // A waitlist slot offer carries an id but no name; fall back to the same
+          // masked label the rest of this webhook uses rather than an empty thread.
+          patientName: noshow.patient.patientName || `Unknown ${from.slice(-4)}`,
+          channel,
+          body: noshow.reply,
+          source: "noshow-reply",
+        })
+          // BELT AND BRACES, like the voice webhook's own call. recordOutbound's
+          // contract is that it never throws, but a contract is not a guarantee: if
+          // a future edit ever lets one escape, an unguarded await here becomes a
+          // 500 on a Twilio webhook, and Twilio retries a non-2xx. That would
+          // re-run this whole turn and could confirm or cancel the appointment
+          // twice and text the patient again. A missing record row must never be
+          // able to buy a duplicate.
+          .catch(() => false);
       }
     }
     return twiml();
@@ -305,11 +334,33 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     });
     if (postop.handled) {
       if (postop.reply) {
+        let sent = false;
         try {
           await sendMessage({ channel, to: from, body: postop.reply });
+          sent = true;
         } catch {
           // The escalation is already recorded; a failed acknowledgement must not
           // make Twilio retry the whole webhook and escalate the same reply twice.
+        }
+        // ON THE RECORD, for the same reason as the no-show branch above: this branch
+        // returns before the conversation store is written, so the aftercare
+        // acknowledgement was reaching the patient and no screen at all. Only on a
+        // successful send, and never able to throw or re-send.
+        if (sent && postop.patient) {
+          await recordOutbound({
+            siteId: postop.patient.siteId,
+            dentallyPatientId: postop.patient.dentallyPatientId,
+            patientName: postop.patient.patientName || `Unknown ${from.slice(-4)}`,
+            channel,
+            body: postop.reply,
+            source: "postop-ack",
+          })
+            // Guarded for the same reason as the no-show branch, and for one more
+            // that is specific here: an escaped throw would be swallowed by the
+            // post-op try/catch below, which logs "post-op triage failed; not
+            // answering this message" — a false statement, since the triage
+            // succeeded and the patient has already been answered.
+            .catch(() => false);
         }
       }
       console.warn(

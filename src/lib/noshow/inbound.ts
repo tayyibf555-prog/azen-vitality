@@ -38,9 +38,30 @@ function isCancel(body: string): boolean {
   );
 }
 
+/**
+ * Who the reply is FOR, when this handler resolved them.
+ *
+ * Returned so the webhook can put the reply it sends on that patient's own record
+ * (`recordOutbound`). The webhook cannot work this out for itself at the point it
+ * sends: the structured-reply branch runs BEFORE identity resolution and before the
+ * site is settled, deliberately, so a YES/CANCEL is answered without waiting on a
+ * Dentally lookup. This handler has already done the lookup — it had to, to know
+ * which appointment or offer the reply belongs to — so it hands the answer back
+ * rather than making the webhook repeat it against a different source of truth.
+ *
+ * Null when nothing was resolved, which is only the `handled: false` paths.
+ */
+export interface NoshowReplyPatient {
+  siteId: string;
+  dentallyPatientId: string;
+  patientName: string;
+}
+
 export interface NoshowInboundResult {
   handled: boolean;
   reply?: string;
+  /** Present whenever `reply` is, so the reply can be recorded on the record. */
+  patient?: NoshowReplyPatient | null;
 }
 
 export async function handleNoshowInbound(input: {
@@ -70,6 +91,16 @@ export async function handleNoshowInbound(input: {
   // reply cannot resolve an offer on a different site sharing this number.
   const offer = await findOpenOfferByAddress(input.from, input.siteId);
   if (offer) {
+    // Identity for the record. A slot offer carries the patient's Dentally id but no
+    // NAME (the name lives on the waitlist entry), and re-reading the waitlist purely
+    // to label a conversation would put another database round trip on the reply path
+    // for a field the patient record already knows. The caller supplies its own
+    // masked-label fallback, exactly as it does for any unidentified number.
+    const offerPatient: NoshowReplyPatient = {
+      siteId: offer.siteId,
+      dentallyPatientId: offer.dentallyPatientId,
+      patientName: "",
+    };
     const taken = "Sorry, that slot has just been taken. We will keep you on the list for the next opening.";
     if (isYes(input.body)) {
       // If the freed slot has already started (the patient replied YES after the
@@ -81,6 +112,7 @@ export async function handleNoshowInbound(input: {
         await setWaitlistStatus(offer.waitlistId, "waiting");
         return {
           handled: true,
+          patient: offerPatient,
           reply: "Sorry, that slot has now passed. We will keep you on the list and let you know the moment another opening comes up.",
         };
       }
@@ -88,7 +120,7 @@ export async function handleNoshowInbound(input: {
       // filled, stop here so two patients can never both book the same time.
       const claimed = await claimOffer(offer.id);
       if (!claimed || (await slotIsFilled(offer.freedAppointmentId))) {
-        return { handled: true, reply: taken };
+        return { handled: true, reply: taken, patient: offerPatient };
       }
       // The slot is theirs on OUR side; reception makes the Dentally booking.
       // We deliberately do NOT createAppointment here: the offer only carries a
@@ -99,6 +131,7 @@ export async function handleNoshowInbound(input: {
       await setWaitlistStatus(offer.waitlistId, "booked");
       return {
         handled: true,
+        patient: offerPatient,
         reply: "Lovely, that time is yours. Reception will confirm your booking shortly.",
       };
     }
@@ -115,7 +148,11 @@ export async function handleNoshowInbound(input: {
         },
         now,
       );
-      return { handled: true, reply: "No problem, we will keep you on the list for the next opening." };
+      return {
+        handled: true,
+        patient: offerPatient,
+        reply: "No problem, we will keep you on the list for the next opening.",
+      };
     }
     // Ambiguous reply to an offer: let the agent help rather than guess.
     return { handled: false };
@@ -126,6 +163,16 @@ export async function handleNoshowInbound(input: {
   if (t) {
     const target = await getTarget(t.targetId);
     const cadence = await getCadenceByTarget(t.targetId);
+    // Identity for the record, resolved from the target row when it loads and from
+    // the target KEY when it does not. The key is `<siteId>:<dentallyPatientId>:<appointmentId>`
+    // and the inbound webhook already reads a patient id out of it the same way, so a
+    // transient getTarget failure costs us the display name, never the patient link —
+    // which is the half that decides whose record the reply lands on.
+    const targetPatient: NoshowReplyPatient = {
+      siteId: t.siteId,
+      dentallyPatientId: target?.dentallyPatientId ?? t.targetId.split(":")[1] ?? "",
+      patientName: target?.patientName ?? "",
+    };
     await insertInboundTouch({
       targetId: t.targetId,
       cadenceId: cadence?.id ?? null,
@@ -151,7 +198,7 @@ export async function handleNoshowInbound(input: {
     if (isYes(input.body)) {
       await setTargetStatus(t.targetId, "confirmed");
       if (cadence) await updateCadence(cadence.id, { status: "confirmed", endedAt: now.toISOString() });
-      return { handled: true, reply: "Thanks for confirming, we look forward to seeing you." };
+      return { handled: true, reply: "Thanks for confirming, we look forward to seeing you.", patient: targetPatient };
     }
     if (isCancel(input.body)) {
       // Stop reminders either way: the patient has told us they are not coming.
@@ -184,11 +231,13 @@ export async function handleNoshowInbound(input: {
         );
         return {
           handled: true,
+          patient: targetPatient,
           reply: "That is cancelled for you. If you would like to rebook, just let me know a day that suits and I will find a time.",
         };
       }
       return {
         handled: true,
+        patient: targetPatient,
         reply: "Thanks for letting us know. I have passed your cancellation to reception and they will confirm it shortly. If you would like to rebook, just let me know a day that suits.",
       };
     }
