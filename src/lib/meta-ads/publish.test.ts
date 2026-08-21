@@ -47,6 +47,7 @@ function draft(overrides: Partial<MetaCampaignDraft> = {}): MetaCampaignDraft {
       cta: "Learn more",
       complianceNote: "Treatment is subject to a consultation.",
     },
+    creativeImageUrl: null,
     createdBy: "owner",
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",

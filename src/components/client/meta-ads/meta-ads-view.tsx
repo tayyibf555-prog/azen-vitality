@@ -2,6 +2,7 @@ import { Plug } from "lucide-react";
 import { PageHeader } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { isMetaConnected } from "@/lib/meta-ads/connection";
+import { listWinningAds, type StoredWinningAd } from "@/lib/meta-ads/winning-repository";
 import { MetaAdsWorkspace } from "./meta-ads-workspace";
 
 // Meta Ads section: plan, build and track Facebook and Instagram campaigns, with
@@ -11,13 +12,24 @@ import { MetaAdsWorkspace } from "./meta-ads-workspace";
 // the account figures show an honest not-connected state, while the builder, the ad
 // copy generator, the landing pages, the reference library and the launch guide all
 // work now so the practice can be ready to launch the day Meta connects.
-export function MetaAdsView({ clientSlug }: { clientSlug: string }) {
+export async function MetaAdsView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
   if (!client) {
     return <PageHeader title="Meta Ads" description="This client could not be found." />;
   }
 
   const connected = isMetaConnected(client.id);
+
+  // The winning-ads library is a niche-level store shared by every practice, read
+  // here on the server (same seam as metaConnected). A read failure or an empty
+  // store is not an error worth crashing the page over: the Ad library tab then
+  // shows its honest "not ingested yet" empty state and never fabricates ads.
+  let winningAds: StoredWinningAd[] = [];
+  try {
+    winningAds = await listWinningAds({ niche: "uk-dental", limit: 60 });
+  } catch {
+    winningAds = [];
+  }
 
   return (
     <>
@@ -37,7 +49,12 @@ export function MetaAdsView({ clientSlug }: { clientSlug: string }) {
         </div>
       )}
 
-      <MetaAdsWorkspace clientSlug={clientSlug} practiceName={client.name} metaConnected={connected} />
+      <MetaAdsWorkspace
+        clientSlug={clientSlug}
+        practiceName={client.name}
+        metaConnected={connected}
+        winningAds={winningAds}
+      />
     </>
   );
 }

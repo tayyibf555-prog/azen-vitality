@@ -36,6 +36,10 @@ export interface MetaCampaignDraft {
   negativeKeywords: string[];
   landingSlug: string | null;
   copy: MetaCampaignCopy;
+  // The generated creative for a "recreate this ad" draft (a hosted URL, or a
+  // data: URI for a base64 image). Null for hand-built drafts and for a recreate
+  // whose image key is not configured. See migration 0089.
+  creativeImageUrl: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -65,6 +69,7 @@ interface CampaignRow {
   negative_keywords: unknown;
   landing_slug: string | null;
   copy: unknown;
+  creative_image_url: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -121,6 +126,7 @@ function rowToCampaign(r: CampaignRow): MetaCampaignDraft {
       : [],
     landingSlug: r.landing_slug,
     copy: toCopy(r.copy),
+    creativeImageUrl: r.creative_image_url ?? null,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -147,6 +153,13 @@ export interface CreateMetaCampaignInput {
   negativeKeywords: string[];
   landingSlug: string | null;
   copy: MetaCampaignCopy;
+  /**
+   * The generated creative for a recreated-ad draft. OPTIONAL and only ever set by
+   * the recreate flow: the co-pilot's create tool omits it, so its insert is
+   * unchanged and works whether or not migration 0089 has been applied. When set,
+   * the column must exist (0089).
+   */
+  creativeImageUrl?: string | null;
   createdBy: string | null;
 }
 
@@ -170,6 +183,9 @@ export async function createMetaCampaign(input: CreateMetaCampaignInput): Promis
       negative_keywords: input.negativeKeywords,
       landing_slug: input.landingSlug,
       copy: input.copy,
+      // Included only when the caller sets it, so a caller that never mentions a
+      // creative (the co-pilot) produces the exact same insert as before 0089.
+      ...(input.creativeImageUrl !== undefined ? { creative_image_url: input.creativeImageUrl } : {}),
       created_by: input.createdBy,
     })
     .select("*")

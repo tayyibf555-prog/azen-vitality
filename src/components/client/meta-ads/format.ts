@@ -93,3 +93,74 @@ export function formatLabel(format: AdFormat): string {
 export function formatShort(format: AdFormat): string {
   return FORMAT_SHORT[format] ?? format;
 }
+
+// ---------------------------------------------------------------------------
+// WINNING-ADS LIBRARY display helpers. The library shows REAL competitor ads
+// scraped from the public Meta Ad Library, so its signals are the two things the
+// Ad Library reports honestly - how long an ad has run and how many variants are
+// live - never invented spend/CTR/leads. These turn the stored numbers into the
+// human line a strategist reads. Pure, so the card renders the same on server
+// and client and the strings are unit-testable.
+// ---------------------------------------------------------------------------
+
+/** A human, deliberately non-precise duration for how long an ad has run: "6 months", "3 weeks". */
+export function runtimeDuration(days: number): string {
+  const d = Math.max(0, Math.round(days));
+  if (d < 1) return "less than a day";
+  if (d < 14) return `${d} day${d === 1 ? "" : "s"}`;
+  if (d < 60) return `${Math.round(d / 7)} weeks`;
+  if (d < 365) return `${Math.round(d / 30)} months`;
+  if (d < 730) return "over a year";
+  return `${Math.floor(d / 365)} years`;
+}
+
+/**
+ * The winning SIGNAL line for one library ad: how long it has run and how many
+ * variants are live. This is the whole basis of the ranking, stated in words -
+ * "Running 6 months, 4 variants" - and it is intentionally NOT a performance
+ * figure, because we do not have (and must never invent) a competitor's spend or
+ * results.
+ */
+export function winningSignal(input: { runtimeDays: number; variantCount: number; isActive: boolean }): string {
+  const verb = input.isActive ? "Running" : "Ran";
+  const duration = runtimeDuration(input.runtimeDays);
+  const variants = input.variantCount > 1 ? `, ${input.variantCount} variants` : "";
+  return `${verb} ${duration}${variants}`;
+}
+
+const KEYWORD_LABELS: Record<string, string> = {
+  "dental-implants": "Dental implants",
+  "clear-aligners": "Clear aligners",
+  veneers: "Veneers & bonding",
+  "teeth-whitening": "Teeth whitening",
+  dentures: "Dentures",
+  "crowns-bridges": "Crowns & bridges",
+  orthodontics: "Orthodontics",
+  "root-canal": "Root canal",
+  hygiene: "Hygiene",
+  checkup: "Check-up",
+  "general-dentistry": "General dentistry",
+};
+
+/** Human label for a derived treatment keyword ("dental-implants" -> "Dental implants"). */
+export function keywordLabel(keyword: string): string {
+  const known = KEYWORD_LABELS[keyword];
+  if (known) return known;
+  return keyword.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+}
+
+/**
+ * The label for an ad's call to action, preferring the ad's own button text and
+ * falling back to a humanised CTA type ("BOOK_TRAVEL" -> "Book travel"). Null when
+ * the ad carries neither, so the card can omit the pill rather than show a blank.
+ */
+export function ctaLabel(text: string | null, type: string | null): string | null {
+  const t = (text ?? "").trim();
+  if (t) return t;
+  const ty = (type ?? "").trim();
+  if (!ty) return null;
+  return ty
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/^\w/, (c) => c.toUpperCase());
+}

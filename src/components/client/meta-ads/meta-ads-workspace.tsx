@@ -4,9 +4,8 @@ import { useState } from "react";
 import { LayoutGrid, PlusCircle, Images, BookOpen, ListChecks, LayoutTemplate, Radar } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Campaign, AdLibraryItem } from "@/lib/meta-ads/types";
-import { findTreatment } from "@/lib/treatments/catalog";
-import { LANDING_TREATMENT_KEYS } from "./landing-pages";
+import type { Campaign } from "@/lib/meta-ads/types";
+import type { StoredWinningAd } from "@/lib/meta-ads/winning-repository";
 import { CampaignsTable, type CampaignPublishState } from "./campaigns-table";
 import { CampaignBuilder } from "./campaign-builder";
 import { AdLibrary } from "./ad-library";
@@ -34,6 +33,7 @@ export function MetaAdsWorkspace({
   practiceName,
   metaConnected = false,
   publishStates,
+  winningAds = [],
 }: {
   clientSlug: string;
   practiceName: string;
@@ -44,15 +44,15 @@ export function MetaAdsWorkspace({
    *  until the Meta account connects and something publishes; drives the honest publish
    *  status and the insight numbers on each campaign row. */
   publishStates?: Record<string, CampaignPublishState>;
+  /** The ranked winning-ads library, read server-side from the real store. Empty when
+   *  ingest has not run; the Ad library tab then shows an honest empty state, never
+   *  fabricated samples. */
+  winningAds?: StoredWinningAd[];
 }) {
   const [tab, setTab] = useState<TabKey>("campaigns");
   // Drafts the owner saves from the Create tab, newest first. Kept here so they
   // survive tab switches.
   const [drafts, setDrafts] = useState<Campaign[]>([]);
-  // Treatment key seeded by "Recreate this" from the ad library, pre-selecting the
-  // Landing pages generator. Cleared on any MANUAL tab click (see selectTab), so it
-  // is only ever consumed by the one recreate navigation that set it.
-  const [recreateTreatment, setRecreateTreatment] = useState<string | null>(null);
 
   // The owner's own drafts, plus live campaigns once the Meta account is connected.
   // No fabricated campaigns: when Meta is not connected there is nothing live to add,
@@ -65,20 +65,8 @@ export function MetaAdsWorkspace({
     setTab("campaigns");
   }
 
-  // Manual navigation: clears any pending recreate seed so a hand-picked tab switch
-  // never carries a stale pre-selection.
   function selectTab(next: TabKey) {
-    setRecreateTreatment(null);
     setTab(next);
-  }
-
-  // "Recreate this" from a library creative: map its treatment to a supported
-  // landing-page treatment key (when possible), seed it, and open the Landing tab.
-  function handleRecreate(item: AdLibraryItem) {
-    const matched = findTreatment(item.treatment);
-    const key = matched && LANDING_TREATMENT_KEYS.includes(matched.key) ? matched.key : null;
-    setRecreateTreatment(key);
-    setTab("landing");
   }
 
   return (
@@ -143,16 +131,10 @@ export function MetaAdsWorkspace({
         ) : null}
 
         {tab === "landing" ? (
-          <LandingPagesTab
-            clientSlug={clientSlug}
-            practiceName={practiceName}
-            initialTreatment={recreateTreatment ?? undefined}
-          />
+          <LandingPagesTab clientSlug={clientSlug} practiceName={practiceName} />
         ) : null}
 
-        {tab === "library" ? (
-          <AdLibrary clientSlug={clientSlug} onRecreate={handleRecreate} />
-        ) : null}
+        {tab === "library" ? <AdLibrary winningAds={winningAds} /> : null}
 
         {tab === "tracking" ? <TrackingPanel clientSlug={clientSlug} /> : null}
 

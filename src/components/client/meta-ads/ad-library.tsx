@@ -2,271 +2,193 @@
 
 import { useState } from "react";
 import {
-  Sparkles,
-  Loader2,
   Image as ImageIcon,
   Film,
-  Video,
   GalleryHorizontalEnd,
-  AlertTriangle,
-  Lightbulb,
-  ShieldAlert,
   Clock,
-  ArrowRight,
+  ExternalLink,
+  Images,
+  Info,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { SectionCard, StatusPill, type Tone } from "@/components/primitives";
-import type { AdFormat, AdLibraryItem } from "@/lib/meta-ads/types";
-import { MOCK_AD_LIBRARY } from "@/lib/meta-ads/mock";
-import { formatShort } from "./format";
-import { CreativeDetail } from "./creative-detail";
+import { SectionCard, StatusPill } from "@/components/primitives";
+import type { StoredWinningAd } from "@/lib/meta-ads/winning-repository";
+import { winningSignal, keywordLabel, ctaLabel } from "./format";
 
-// The winning-ads library is a curated SAMPLE until the client's Meta account is
-// connected. Kept explicit so the detail view can stay honest about that.
-const LIBRARY_IS_SAMPLE = true;
+// THE WINNING-ADS LIBRARY, now reading the REAL store (migration 0088), not the
+// curated mock. Every card is a real ad another UK dental advertiser is running on
+// Facebook / Instagram right now, pulled from the PUBLIC Meta Ad Library and ranked
+// by two honest signals: how long it has run and how many variants are live.
+//
+// HONESTY, kept visible in two places:
+//   * This is competitor REFERENCE data, not the practice's own performance. The
+//     practice's spend / leads / cost-per-lead need the client's Meta login and
+//     appear elsewhere once connected; the sourcing note says so.
+//   * When the store is empty (ingest has not run yet) we say exactly that and show
+//     NO ads. We never fall back to fabricated samples in the real library's place.
+//
+// COMPLIANCE: the copy shown is stored verbatim as public competitor reference.
+// It is for pattern-matching only; recreating an ad for Vitality is a separate,
+// compliance-gated flow that produces ORIGINAL copy and never reproduces any of
+// these advertisers' claims, figures, reviews or images.
 
-const FORMAT_ICON: Record<AdFormat, typeof ImageIcon> = {
-  reel: Film,
-  image: ImageIcon,
-  carousel: GalleryHorizontalEnd,
-  video: Video,
-};
-
-const PERFORMANCE: Record<AdLibraryItem["estPerformance"], { label: string; tone: Tone }> = {
-  strong: { label: "Strong performer", tone: "success" },
-  steady: { label: "Steady", tone: "info" },
-  new: { label: "Newer", tone: "neutral" },
-};
-
-interface Overview {
-  patterns: { title: string; insight: string }[];
-  whatToTry: string[];
-  cautions: string[];
+/** A placeholder icon for an ad whose creative thumbnail is missing or expired. */
+function ThumbFallbackIcon({ displayFormat }: { displayFormat: string | null }) {
+  const f = (displayFormat ?? "").toUpperCase();
+  if (f.includes("VIDEO")) return <Film size={26} aria-hidden />;
+  if (f.includes("CAROUSEL") || f.includes("DCO")) return <GalleryHorizontalEnd size={26} aria-hidden />;
+  return <ImageIcon size={26} aria-hidden />;
 }
 
-interface OverviewResponse {
-  ok?: boolean;
-  overview?: Overview;
-  error?: string;
-}
-
-function AdCard({ item, onOpen }: { item: AdLibraryItem; onOpen: () => void }) {
-  const FormatIcon = FORMAT_ICON[item.format];
-  const perf = PERFORMANCE[item.estPerformance];
+/**
+ * The creative thumbnail. Meta CDN URLs are signed and EXPIRE, so a seeded URL can
+ * 404; a missing or broken image falls back to a format-icon tile rather than a
+ * broken-image glyph. The onError swap is the only reason this is a client leaf.
+ */
+function AdThumb({ ad }: { ad: StoredWinningAd }) {
+  const [broken, setBroken] = useState(false);
+  const showImage = Boolean(ad.imageUrl) && !broken;
 
   return (
-    <li className="flex">
-      {/* The whole card is the click target for the analysis detail view. */}
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={`Open AI analysis for ${item.advertiser}: ${item.headline}`}
-        className="group flex flex-1 flex-col overflow-hidden rounded-[10px] border border-line bg-card text-left transition-colors hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40"
+    <div className="relative flex h-32 items-center justify-center overflow-hidden bg-card-muted text-muted">
+      {showImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={ad.imageUrl ?? ""}
+          alt={ad.pageName ? `Ad by ${ad.pageName}` : "Meta ad creative"}
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <ThumbFallbackIcon displayFormat={ad.displayFormat} />
+      )}
+      <StatusPill
+        tone={ad.isActive ? "success" : "neutral"}
+        className="absolute right-2.5 top-2.5 bg-card/90 backdrop-blur"
       >
-      {/* Creative thumbnail placeholder, by format */}
-      <div className="relative flex h-28 items-center justify-center bg-card-muted text-muted">
-        <FormatIcon size={24} />
-        <StatusPill tone={perf.tone} className="absolute right-2.5 top-2.5">
-          {perf.label}
-        </StatusPill>
-      </div>
+        {ad.isActive ? "Live" : "Ended"}
+      </StatusPill>
+    </div>
+  );
+}
+
+function AdCard({ ad }: { ad: StoredWinningAd }) {
+  const cta = ctaLabel(ad.ctaText, ad.ctaType);
+  const signal = winningSignal({
+    runtimeDays: ad.runtimeDays,
+    variantCount: ad.variantCount,
+    isActive: ad.isActive,
+  });
+  const hasLink = Boolean(ad.adLibraryUrl);
+
+  // The whole card links out to the real Ad Library entry when we have its URL;
+  // otherwise it is a plain, non-interactive card (still fully readable).
+  const inner = (
+    <>
+      <AdThumb ad={ad} />
 
       <div className="flex flex-1 flex-col gap-2.5 p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-navy">{item.advertiser}</p>
-            <p className="text-xs text-muted">{item.location}</p>
+            <p className="truncate text-sm font-semibold text-navy">
+              {ad.pageName ?? "Unknown advertiser"}
+            </p>
+            <p className="mt-0.5 inline-flex items-center gap-1 text-xs tabular-nums text-ink">
+              <Clock size={12} className="shrink-0 text-muted" /> {signal}
+            </p>
           </div>
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-line-strong bg-card-muted px-2 py-0.5 text-[11px] font-medium text-ink">
-            <FormatIcon size={11} /> {formatShort(item.format)}
+          <span
+            className="inline-flex shrink-0 items-center rounded-full border border-line-strong bg-card-muted px-2 py-0.5 text-[11px] font-medium text-ink"
+            title="Derived treatment tag"
+          >
+            {keywordLabel(ad.keyword)}
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-          <span className="text-ink">{item.treatment}</span>
-          <span className="inline-flex items-center gap-1 tabular-nums">
-            <Clock size={11} /> Running {item.daysRunning} days
-          </span>
-        </div>
-
-        <p className="text-sm font-semibold leading-snug text-navy">{item.headline}</p>
-        <p className="line-clamp-3 text-xs leading-relaxed text-muted">{item.primaryText}</p>
-
-        <dl className="mt-0.5 space-y-1 text-xs">
-          <div className="flex gap-1.5">
-            <dt className="shrink-0 font-semibold text-ink">Offer:</dt>
-            <dd className="text-muted">{item.offer}</dd>
-          </div>
-          <div className="flex gap-1.5">
-            <dt className="shrink-0 font-semibold text-ink">Hook:</dt>
-            <dd className="text-muted">{item.hookType}</dd>
-          </div>
-        </dl>
-
-        {/* AI analysis panel */}
-        <div className="mt-auto rounded-lg border border-tint-blue-line bg-tint-blue p-2.5">
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
-            <Sparkles size={12} /> Why it works
-          </p>
-          <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-ink">{item.aiAnalysis}</p>
-        </div>
-
-        {/* Compliance flag, if any */}
-        {item.complianceFlag ? (
-          <div className="flex gap-2 rounded-lg border border-tint-amber-line bg-tint-amber px-2.5 py-2">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-status-amber" />
-            <p className="line-clamp-2 text-xs leading-relaxed text-status-amber">{item.complianceFlag}</p>
-          </div>
+        {ad.title ? (
+          <p className="line-clamp-2 text-sm font-semibold leading-snug text-navy">{ad.title}</p>
+        ) : null}
+        {ad.bodyText ? (
+          <p className="line-clamp-4 text-xs leading-relaxed text-muted">{ad.bodyText}</p>
         ) : null}
 
-        {/* Affordance: the whole card opens the scored analysis detail view. */}
-        <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-blue-deep transition-colors group-hover:text-blue-dark">
-          <Sparkles size={12} /> View AI analysis and cost per lead
-          <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" />
-        </span>
+        <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-1">
+          {cta ? (
+            <StatusPill tone="info">{cta}</StatusPill>
+          ) : (
+            <span className="text-[11px] text-muted">No button</span>
+          )}
+          {hasLink ? (
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-deep transition-colors group-hover:text-blue-dark">
+              View on Meta Ad Library
+              <ExternalLink size={12} className="transition-transform group-hover:translate-x-0.5" />
+            </span>
+          ) : null}
+        </div>
       </div>
-      </button>
+    </>
+  );
+
+  const shell =
+    "group flex flex-1 flex-col overflow-hidden rounded-[10px] border border-line bg-card text-left transition-colors";
+
+  return (
+    <li className="flex">
+      {hasLink ? (
+        <a
+          href={ad.adLibraryUrl ?? "#"}
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label={`Open ${ad.pageName ?? "this ad"} on the Meta Ad Library`}
+          className={`${shell} hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-dark/40`}
+        >
+          {inner}
+        </a>
+      ) : (
+        <div className={shell}>{inner}</div>
+      )}
     </li>
   );
 }
 
-function OverviewPanel({ overview }: { overview: Overview }) {
-  return (
-    <section className="space-y-4">
-      <h4 className="flex items-center gap-2 border-b border-line pb-2.5 text-title text-navy">
-        <Sparkles size={14} className="text-blue-royal" />
-        AI overview of the library
-      </h4>
-
-      {overview.patterns.length > 0 ? (
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            Patterns that are working
-          </p>
-          <ul className="mt-1 grid gap-x-8 sm:grid-cols-2">
-            {overview.patterns.map((p, i) => (
-              <li key={i} className="border-b border-line py-2.5 sm:[&:nth-last-child(-n+2)]:border-0 [&:last-child]:border-0">
-                <p className="text-sm font-semibold text-navy">{p.title}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-ink">{p.insight}</p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        {overview.whatToTry.length > 0 ? (
-          <div>
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-deep">
-              <Lightbulb size={13} /> What to try
-            </p>
-            <ul className="mt-2 space-y-1.5">
-              {overview.whatToTry.map((t, i) => (
-                <li key={i} className="flex gap-2 text-xs leading-relaxed text-ink">
-                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-blue-dark" />
-                  {t}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {overview.cautions.length > 0 ? (
-          <div className="rounded-lg border border-tint-amber-line bg-tint-amber p-3">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-status-amber">
-              <ShieldAlert size={13} /> Cautions
-            </p>
-            <ul className="mt-2 space-y-1.5">
-              {overview.cautions.map((c, i) => (
-                <li key={i} className="flex gap-2 text-xs leading-relaxed text-status-amber">
-                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-status-amber" />
-                  {c}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-export function AdLibrary({
-  clientSlug,
-  onRecreate,
-}: {
-  clientSlug: string;
-  /** Recreate a creative via the landing-page generate flow (owner picks it up). */
-  onRecreate?: (item: AdLibraryItem) => void;
-}) {
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<AdLibraryItem | null>(null);
-
-  async function generateOverview() {
-    if (loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/meta-ads/creative-overview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientSlug }),
-      });
-      const data = (await res.json().catch(() => ({}))) as OverviewResponse;
-      if (!res.ok || !data.ok || !data.overview) {
-        throw new Error(data.error || "Could not generate the overview just now.");
-      }
-      setOverview(data.overview);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not generate the overview just now. Please try again.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
+export function AdLibrary({ winningAds }: { winningAds: StoredWinningAd[] }) {
   return (
     <SectionCard
       title="Winning ads library"
-      description="Winning dental ads from the Meta Ad Library. Pattern-match, do not copy: take the structure and the angle, then write your own compliant version."
-      actions={
-        <Button variant="primary" size="sm" onClick={generateOverview} disabled={loading}>
-          {loading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-          {loading ? "Analysing..." : "Generate AI overview"}
-        </Button>
-      }
+      description="Real dental ads from the public Meta Ad Library, ranked by how long each has been running and how many variants are live. Pattern-match, do not copy: take the structure and the angle, then write your own compliant version."
     >
-      <div className="space-y-5">
-        {error ? (
-          <p className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-sm text-[#9a6700]">
-            {error}
+      <div className="space-y-4">
+        {/* The honesty seam: reference data, not the practice's own performance. */}
+        <div className="flex items-start gap-2.5 rounded-[10px] border border-tint-blue-line bg-tint-blue px-3.5 py-2.5">
+          <Info size={15} className="mt-0.5 shrink-0 text-blue-deep" />
+          <p className="text-xs leading-relaxed text-ink">
+            These are public Meta Ad Library results from other advertisers, ranked by how long each
+            ad has been running and how many variants are live. This is competitor reference, not your
+            own account performance: your campaign spend, leads and cost per lead appear once your Meta
+            account is connected.
           </p>
-        ) : null}
+        </div>
 
-        {overview ? <OverviewPanel overview={overview} /> : null}
-
-        <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {MOCK_AD_LIBRARY.map((item) => (
-            <AdCard key={item.id} item={item} onOpen={() => setSelected(item)} />
-          ))}
-        </ul>
+        {winningAds.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-[10px] border border-dashed border-line-strong px-6 py-12 text-center">
+            <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-[10px] bg-tile text-side-ink">
+              <Images size={20} />
+            </span>
+            <h3 className="text-sm font-semibold text-navy">The winning-ads library is empty</h3>
+            <p className="mt-1 max-w-md text-[13px] font-normal text-muted">
+              This library fills from the public Meta Ad Library and has not been ingested yet. Once
+              the weekly refresh runs, the best-performing dental ads appear here, ranked by runtime
+              and variants. No sample ads are shown in their place.
+            </p>
+          </div>
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {winningAds.map((ad) => (
+              <AdCard key={ad.id} ad={ad} />
+            ))}
+          </ul>
+        )}
       </div>
-
-      {selected ? (
-        <CreativeDetail
-          ad={selected}
-          clientSlug={clientSlug}
-          sample={LIBRARY_IS_SAMPLE}
-          onClose={() => setSelected(null)}
-          onRecreate={(item) => {
-            setSelected(null);
-            onRecreate?.(item);
-          }}
-        />
-      ) : null}
     </SectionCard>
   );
 }
