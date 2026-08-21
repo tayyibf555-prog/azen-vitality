@@ -34,6 +34,7 @@ export function MetaAdsWorkspace({
   metaConnected = false,
   publishStates,
   winningAds = [],
+  imageGenConfigured = false,
 }: {
   clientSlug: string;
   practiceName: string;
@@ -48,6 +49,9 @@ export function MetaAdsWorkspace({
    *  ingest has not run; the Ad library tab then shows an honest empty state, never
    *  fabricated samples. */
   winningAds?: StoredWinningAd[];
+  /** True only when the SERVER holds an image key (resolved in MetaAdsView). Drives
+   *  the honest "copy only, no creative" note on the recreate button. */
+  imageGenConfigured?: boolean;
 }) {
   const [tab, setTab] = useState<TabKey>("campaigns");
   // Drafts the owner saves from the Create tab, newest first. Kept here so they
@@ -134,7 +138,17 @@ export function MetaAdsWorkspace({
           <LandingPagesTab clientSlug={clientSlug} practiceName={practiceName} />
         ) : null}
 
-        {tab === "library" ? <AdLibrary winningAds={winningAds} /> : null}
+        {tab === "library" ? (
+          <AdLibrary
+            winningAds={winningAds}
+            clientSlug={clientSlug}
+            imageGenConfigured={imageGenConfigured}
+            // A recreate lands a DRAFT server-side; adding it here is only so the
+            // Campaigns tab reflects it without a reload. It stays a draft.
+            onRecreated={(draft) => setDrafts((prev) => [draft, ...prev])}
+            onOpenDrafts={() => selectTab("campaigns")}
+          />
+        ) : null}
 
         {tab === "tracking" ? <TrackingPanel clientSlug={clientSlug} /> : null}
 

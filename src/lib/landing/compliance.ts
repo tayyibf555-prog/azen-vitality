@@ -83,6 +83,13 @@ const PAIN_PATTERNS: RegExp[] = [
   /\bpainless\b/i,
   /\bno pain\b/i,
   /\bwithout any pain\b/i,
+  // THE SEPARATED FORM. Every pattern above needs the words adjacent ("pain free",
+  // "no pain"). The claim the market actually runs is spread across a clause, and a
+  // real, live ad in the winning-ads library says exactly this: "Never feel any pain
+  // during your dental treatment with General Anesthesia!". It is the same absolute
+  // promise about pain, and it was walking straight through this scan.
+  /\b(?:never|not|won'?t|will not|will never) (?:feel|experience)s? (?:any |no )?(?:pain|discomfort)\b/i,
+  /\byou (?:will not|won'?t) feel a thing\b/i,
 ];
 
 // --- Superlatives, "best", "No 1" style claims. ------------------------------
@@ -99,6 +106,14 @@ const SUPERLATIVE_PATTERNS: RegExp[] = [
   /\bcheapest\b/i,
   /\blowest price(?:s)?\b/i,
   /\bthe most (?:trusted|advanced|experienced)\b/i,
+  // A PERCENTILE RANKING is a superlative wearing a number. "Top 1% of Invisalign
+  // providers in Europe" is a live competitor ad in the winning-ads library, and it
+  // matched nothing above: "top rated" needs the word "rated", and "#1" needs the
+  // hash. An unsubstantiated ranking is exactly what this category exists to stop.
+  /\btop \d+(?:\.\d+)?\s?%/i,
+  // "...guaranteed to be the lowest in the UK" - the price superlative with the word
+  // "price" left out, which is how it is written in practice.
+  /\bthe lowest in the (?:uk|country|area|region)\b/i,
 ];
 
 // --- NHS / private / plan / band / funding wording. --------------------------

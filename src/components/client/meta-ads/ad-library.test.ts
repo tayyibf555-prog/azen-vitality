@@ -48,8 +48,10 @@ function ad(over: Partial<StoredWinningAd> = {}): StoredWinningAd {
   };
 }
 
-function render(ads: StoredWinningAd[]): string {
-  return renderToStaticMarkup(createElement(AdLibrary, { winningAds: ads }));
+function render(ads: StoredWinningAd[], imageGenConfigured = true): string {
+  return renderToStaticMarkup(
+    createElement(AdLibrary, { winningAds: ads, clientSlug: "vitality", imageGenConfigured }),
+  );
 }
 
 describe("AdLibrary — populated", () => {
@@ -167,5 +169,78 @@ describe("winning-ads display helpers", () => {
     expect(ctaLabel("Book Now", "BOOK_TRAVEL")).toBe("Book Now");
     expect(ctaLabel(null, "GET_QUOTE")).toBe("Get quote");
     expect(ctaLabel("", "")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// THE RECREATE TRIGGER.
+//
+// vitest renders this component statically, so what is pinned here is the MARKUP
+// the owner lands on: the button exists on every card, it is honest about what it
+// does before it is pressed, and the missing-key case narrows the promise without
+// removing the button. The outcome states (working / refused / saved) live behind
+// a fetch and are covered by the route's own test file.
+// ===========================================================================
+
+describe("AdLibrary — the recreate trigger", () => {
+  it("puts a Recreate for Vitality button on every card", () => {
+    const html = render([ad(), ad({ id: "wa-2", pageName: "Bright Smile Dental" })]);
+    // Counted on the per-card aria-label, so the section explainer above the grid
+    // (which also says "Recreate for Vitality") cannot inflate the number.
+    expect(html.split("aria-label=\"Recreate this ad for Vitality").length - 1).toBe(2);
+    expect(html).toContain("Recreate for Vitality");
+    // It is a real, enabled button, not a link and not a disabled placeholder.
+    expect(html).toContain('type="button"');
+    expect(html).not.toContain("disabled=\"\"");
+  });
+
+  it("says, before it is pressed, that it writes original copy and never publishes", () => {
+    const html = render([ad()]);
+    expect(html).toContain("completely original ad");
+    expect(html).toContain("Nothing is ever published");
+    expect(html).toContain("UK advertising rules for dentists");
+    // And that it borrows the structure, not the words.
+    expect(html).toContain("never reuses an advertiser");
+  });
+
+  it("with no image key: the button stays live, and the note says what is missing", () => {
+    const html = render([ad()], false);
+    // Counted on the per-card aria-label, not the section explainer, so a button
+    // that quietly stopped rendering could not hide behind the copy above the grid.
+    expect(html.split(`aria-label="Recreate this ad for Vitality`).length - 1).toBe(1);
+    // And it is live: not hidden, not disabled. A missing key narrows what you get,
+    // it never takes the button away.
+    expect(html).not.toContain("hidden=\"\"");
+    expect(html).not.toContain("disabled=\"\"");
+    expect(html).toContain("OPENAI_API_KEY");
+    expect(html).toContain("writes your own compliant ad copy only");
+  });
+
+  it("with an image key: the same live button, and no missing-key note", () => {
+    const html = render([ad()], true);
+    expect(html.split(`aria-label="Recreate this ad for Vitality`).length - 1).toBe(1);
+    expect(html).not.toContain("hidden=\"\"");
+    expect(html).not.toContain("disabled=\"\"");
+    expect(html).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("shows no recreate button, and no explainer, when the library is empty", () => {
+    const html = render([]);
+    expect(html).not.toContain("Recreate for Vitality");
+    expect(html).not.toContain("Nothing is ever published");
+  });
+
+  it("keeps the Ad Library link reachable now that the card is not one big link", () => {
+    const html = render([ad()]);
+    expect(html).toContain('href="https://www.facebook.com/ads/library/?id=999"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noreferrer noopener"');
+    // A button inside an anchor is invalid markup, so the card itself must not be one.
+    // A button inside an anchor is invalid markup, so the card itself must not be
+    // one big link any more: no anchor in this page may contain a button.
+    for (const anchor of html.split("<a ").slice(1)) {
+      const body = anchor.slice(0, anchor.indexOf("</a>"));
+      expect(body).not.toContain("<button");
+    }
   });
 });

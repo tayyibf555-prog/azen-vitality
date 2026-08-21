@@ -2,6 +2,7 @@ import { Plug } from "lucide-react";
 import { PageHeader } from "@/components/primitives";
 import { getClient } from "@/lib/mock";
 import { isMetaConnected } from "@/lib/meta-ads/connection";
+import { isImageGenConfigured } from "@/lib/meta-ads/image-gen";
 import { listWinningAds, type StoredWinningAd } from "@/lib/meta-ads/winning-repository";
 import { MetaAdsWorkspace } from "./meta-ads-workspace";
 
@@ -19,6 +20,10 @@ export async function MetaAdsView({ clientSlug }: { clientSlug: string }) {
   }
 
   const connected = isMetaConnected(client.id);
+  // Whether an IMAGE key exists is a server fact, resolved here and passed down as a
+  // boolean. The key itself never crosses to the browser, and the recreate button is
+  // shown either way: without a key it writes the compliant copy and says so.
+  const imageGen = isImageGenConfigured();
 
   // The winning-ads library is a niche-level store shared by every practice, read
   // here on the server (same seam as metaConnected). A read failure or an empty
@@ -54,6 +59,7 @@ export async function MetaAdsView({ clientSlug }: { clientSlug: string }) {
         practiceName={client.name}
         metaConnected={connected}
         winningAds={winningAds}
+        imageGenConfigured={imageGen}
       />
     </>
   );
