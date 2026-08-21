@@ -29,16 +29,16 @@ export interface SystemDef {
   halts: string;
   /**
    * What the ABSENCE of a system_toggle row means for this system. Omitted (the
-   * case for every system but one) keeps the platform's default-ON contract: no
-   * row means enabled, which is what makes the kill switch dormant until an owner
-   * uses it.
+   * case for most systems) keeps the platform's default-ON contract: no row means
+   * enabled, which is what makes the kill switch dormant until an owner uses it.
    *
-   * `false` inverts that for a single slug: no row means DISABLED, for every
-   * client, in every environment, including one where the seeding migration has
-   * not run. A brand new SEND surface has to be default-off — a system nobody has
-   * ever switched on must not start messaging patients because a row is missing —
-   * and a seeded row alone cannot deliver that, because a seed only covers the
-   * clients and the databases it was applied to.
+   * `false` inverts that: no row means DISABLED, for every client, in every
+   * environment, including one where the seeding migration has not run. A brand
+   * new SEND surface has to be default-off — a system nobody has ever switched on
+   * must not start messaging patients because a row is missing — and a seeded row
+   * alone cannot deliver that, because a seed only covers the clients and the
+   * databases it was applied to. The same reasoning covers a system that does not
+   * send but does make an ASSERTION to the practice about its own numbers.
    */
   defaultEnabled?: boolean;
 }
@@ -67,11 +67,14 @@ export const SYSTEMS: SystemDef[] = [
     // Headless system: the closer's engine ships before its worklist UI, so it has
     // no CLIENT_NAV page yet and its switch lives in the systems control panel.
     //
-    // THE ONLY DEFAULT-OFF SYSTEM. It is a new outbound surface aimed at patients
-    // the practice has already messaged through the Treatment Coordinator, so the
-    // absence of a toggle row must mean OFF rather than ON. Migration 0085 also
-    // seeds an explicit disabled row for 'vitality'; the two are deliberately
-    // independent, because the seed only covers one client and one database.
+    // THE FIRST DEFAULT-OFF SYSTEM. There are several now; DEFAULT_OFF_SLUGS at
+    // the foot of this file is the live list, derived from the catalog itself,
+    // so the count is never restated in prose and cannot go stale. This one is a
+    // new outbound surface aimed at patients the practice has already messaged
+    // through the Treatment Coordinator, so the absence of a toggle row must
+    // mean OFF rather than ON. Migration 0085 also seeds an explicit disabled
+    // row for 'vitality'; the two are deliberately independent, because the seed
+    // only covers one client and one database.
     slug: "treatment-closer",
     label: "Treatment-plan closer",
     group: "Patient lifecycle",
@@ -207,6 +210,26 @@ export const SYSTEMS: SystemDef[] = [
     halts: "Outgoing messages stop going out over WhatsApp and use SMS instead.",
   },
   {
+    // Headless system: this is a behaviour of the booking agent rather than a
+    // module, so it has no CLIENT_NAV page and its switch lives in the systems
+    // control panel.
+    //
+    // DEFAULT-OFF. It does not send anything by itself, but it changes what the
+    // agent SAYS to a patient, and the absence of a toggle row must never be the
+    // reason the practice's 24/7 agent starts opening conversations differently
+    // from the way it opened them yesterday. Switching it off is also the exact
+    // revert: with no context resolved the agent is byte-for-byte its old self.
+    // Migration 0092 seeds an explicit disabled row for 'vitality'; the two are
+    // deliberately independent, because a seed only covers the clients and the
+    // databases it was applied to.
+    slug: "booking-reply-context",
+    label: "Booking reply context",
+    group: "Conversational agents",
+    halts:
+      "The booking agent stops recognising which invite a reply answers, and treats every reply as a brand new conversation.",
+    defaultEnabled: false,
+  },
+  {
     // Headless system: the inbound WhatsApp agent has no page of its own (the
     // 'whatsapp' nav module is the shared WhatsApp workspace), so its switch
     // lives in the systems control panel, which renders from SYSTEMS directly.
@@ -247,6 +270,30 @@ export const SYSTEMS: SystemDef[] = [
     label: "Daily brief",
     group: "Operations",
     halts: "The morning brief is no longer generated.",
+  },
+  {
+    // Headless system: the alerts appear inside Notifications rather than on a
+    // page of their own, so the switch lives here in the control panel.
+    //
+    // DEFAULT-OFF, and for a different reason from the sending systems. This one
+    // never messages a patient — it never messages anyone, it writes a row that
+    // the in-app feed reads — but it does tell a practice owner that their
+    // takings are down, and an alert that turns out to be an artefact of a
+    // truncated scan costs more trust than the feature earns. It ships off so a
+    // week of its output can be read by a person before anybody relies on it.
+    // Migration 0093 also seeds an explicit disabled row for 'vitality'; the two
+    // are deliberately independent, because a seed only covers the clients and
+    // the databases it was applied to.
+    //
+    // Switching it OFF halts the pass AND hides the alerts already raised: the
+    // notifications source consults this same switch, so a flip is a complete
+    // and immediate revert rather than a stop with residue on the screen.
+    slug: "anomaly-alerts",
+    label: "Proactive alerts",
+    group: "Operations",
+    halts:
+      "Nothing is watched for takings dips, no-show clusters, uncontacted enquiries or stuck queues, and any alerts already raised stop showing in Notifications.",
+    defaultEnabled: false,
   },
   {
     slug: "meta-ads",

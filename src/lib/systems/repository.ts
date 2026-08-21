@@ -25,8 +25,10 @@ import { DEFAULT_OFF_SLUGS, SYSTEMS, SYSTEM_SLUGS, defaultEnabledFor } from "./c
 // Seeding a disabled row cannot deliver this on its own: a seed covers only the
 // clients and the databases it was applied to, while defaultEnabledFor covers
 // every client and every environment, including one where the migration has not
-// run. Today exactly one slug uses it ('treatment-closer'); for every other slug
-// defaultEnabledFor returns true and the behaviour is unchanged, byte for byte.
+// run. Several slugs use it now — DEFAULT_OFF_SLUGS in src/lib/systems/catalog.ts
+// is the live list, derived from the catalog itself, so it is never restated here
+// and cannot go stale. For every OTHER slug defaultEnabledFor returns true and the
+// behaviour is unchanged, byte for byte.
 
 const TABLE = "system_toggle";
 

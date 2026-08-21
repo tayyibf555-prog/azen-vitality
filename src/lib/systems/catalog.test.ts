@@ -36,6 +36,11 @@ import { CLIENT_NAV } from "@/lib/nav";
 // engine and its approval API ship before the panel, and it is DEFAULT-OFF too —
 // a surface that tells patients they owe money must never be armed by the absence
 // of a row.
+// "booking-reply-context" is headless because it is a BEHAVIOUR of the booking
+// agent rather than a module: it gives the agent the invite a reply is answering,
+// so a "yes please" to a recall text offers the right appointment instead of
+// starting a fresh interrogation. It is DEFAULT-OFF, and switching it off is the
+// exact revert to the agent's previous behaviour.
 const HEADLESS_SYSTEM_SLUGS = new Set([
   "online-booking",
   "outreach",
@@ -45,6 +50,10 @@ const HEADLESS_SYSTEM_SLUGS = new Set([
   "treatment-closer",
   "postop-checkin",
   "balance-reminders",
+  "booking-reply-context",
+  // The alerts render inside Notifications, which is a passive surface with no
+  // switch of its own, so the alerting system has no nav slug either.
+  "anomaly-alerts",
 ]);
 
 /**

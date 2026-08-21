@@ -6,6 +6,7 @@ import {
   CalendarX,
   UserPlus,
   Sparkles,
+  TrendingDown,
   Bell,
   ExternalLink,
   X,
@@ -31,6 +32,7 @@ const TYPE_ICON: Record<NotificationType, LucideIcon> = {
   no_show: CalendarX,
   onboarding: UserPlus,
   lead: Sparkles,
+  anomaly: TrendingDown,
   system: Bell,
 };
 

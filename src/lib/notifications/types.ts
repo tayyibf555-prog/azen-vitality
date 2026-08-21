@@ -11,6 +11,11 @@ export type NotificationType =
   | "no_show"
   | "onboarding"
   | "lead"
+  // Raised by the proactive anomaly pass (src/lib/anomaly). Unlike every other
+  // type here, these are NOT recomputed on read: the pass stores the sentence it
+  // was able to prove at the time, and this feed renders it verbatim. See
+  // supabase/migrations/0093 for why.
+  | "anomaly"
   | "system";
 
 export type NotificationUrgency = "high" | "medium" | "low";

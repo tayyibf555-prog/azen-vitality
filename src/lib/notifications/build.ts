@@ -1,8 +1,10 @@
 import "server-only";
 
+import { listOpenAlerts } from "@/lib/anomaly/repository";
 import { listTargets as listNoshowTargets } from "@/lib/noshow/repository";
 import { countNewSubmissions } from "@/lib/onboarding/repository";
 import { listResponses } from "@/lib/smile-assessment/repository";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import { londonDateTimeLabel } from "@/lib/time/london";
 
 import { orderNotifications, type NotificationContext } from "./logic";
@@ -111,6 +113,53 @@ async function leadNotifications(ctx: BuildNotificationsContext): Promise<Notifi
     }));
 }
 
+/**
+ * Proactive anomaly alerts. The ONE source here that is not recomputed on read:
+ * the hourly pass (src/app/api/anomaly/sweep) already decided what it could
+ * prove, wrote one row per condition, and this renders those rows verbatim.
+ *
+ * Rendering the stored sentence rather than recomposing it is the point. The
+ * readings behind an alert are gone by the time anybody opens this page, and a
+ * sentence rebuilt from whatever the tables say now would quietly change what
+ * the practice was told without anybody deciding to change it.
+ *
+ * GATED ON THE SAME SWITCH THE PASS IS. 'anomaly-alerts' is default-off, so with
+ * no toggle row this returns nothing — and switching the system off hides the
+ * alerts it already raised rather than leaving residue on the screen, which
+ * makes the flip a complete revert. isSystemEnabled fails CLOSED for a
+ * default-off slug, so an unreadable toggle table also shows nothing.
+ *
+ * Stable ids `anomaly:<dedupe key>`, so the list's localStorage dismiss sticks
+ * to the CONDITION: dismissing "takings are down" hides that condition, and it
+ * comes back if the pass resolves it and later raises it again.
+ */
+async function anomalyNotifications(ctx: BuildNotificationsContext): Promise<NotificationItem[]> {
+  if (!(await isSystemEnabled(ctx.clientId, "anomaly-alerts"))) return [];
+
+  const alerts = await listOpenAlerts(ctx.clientId);
+  return alerts.map((a) => ({
+    id: `anomaly:${a.dedupeKey}`,
+    type: "anomaly" as const,
+    urgency: a.severity,
+    // The feed's row is a title plus a detail; the alert is one sentence by
+    // design. The severity word is the title so the row scans, and the sentence
+    // itself is never split, truncated or reworded on its way to the screen.
+    title: ALERT_TITLE[a.severity],
+    detail: a.sentence,
+    at: a.at,
+    // Absent for a system with no worklist page yet, in which case the row
+    // renders without a link rather than linking somewhere that proves nothing.
+    ...(a.href ? { href: `/c/${ctx.clientSlug}/${a.href}` } : {}),
+  }));
+}
+
+/** The row title. The sentence carries the substance; this is the scan line. */
+const ALERT_TITLE: Record<"high" | "medium" | "low", string> = {
+  high: "Needs a look now",
+  medium: "Worth a look today",
+  low: "Worth knowing",
+};
+
 // ---------------------------------------------------------------------------
 // Entry point.
 // ---------------------------------------------------------------------------
@@ -124,6 +173,7 @@ export async function buildNotifications(
   ctx: BuildNotificationsContext,
 ): Promise<NotificationItem[]> {
   const groups = await Promise.all([
+    safe(() => anomalyNotifications(ctx)),
     safe(() => noshowNotifications(ctx)),
     safe(() => onboardingNotifications(ctx)),
     safe(() => leadNotifications(ctx)),

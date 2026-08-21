@@ -239,6 +239,7 @@ const EXEMPT: Record<string, Exemption> = {
   "webhooks/twilio/voice": { kind: "webhook", reason: "Twilio voice webhook" },
 
   // --- scheduler: CRON_SECRET, never a browser session --------------------
+  "anomaly/sweep": { kind: "cron", reason: "proactive anomaly pass (reads only; writes anomaly_alert, never a patient record or an outbox)" },
   "closer/sweep": { kind: "cron", reason: "treatment-plan closer sweep (drafts only, never queues)" },
   "coordinator/sweep": { kind: "cron", reason: "treatment-coordinator sweep" },
   "noshow/sweep": { kind: "cron", reason: "no-show defence sweep" },
