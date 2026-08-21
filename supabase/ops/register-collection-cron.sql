@@ -1,0 +1,99 @@
+-- register-collection-cron.sql  —  register the OUTSTANDING-BALANCE sweep on pg_cron
+-- ---------------------------------------------------------------------------
+-- STATUS: NOT APPLIED, AND DELIBERATELY SO. Do not run this until (a) the
+-- approval panel exists, (b) the live money unit has been reconciled once (see
+-- COLLECTION_QUOTE_AMOUNT below) and (c) the practice has agreed to switch it on.
+--
+-- Fable applies cron SQL; the app's Supabase role is read-only on the cron.job
+-- TABLE ("permission denied for table job"), so use the cron.* FUNCTIONS, which
+-- are SECURITY DEFINER. Same method as supabase/ops/enable-24-7-cron.sql.
+--
+-- WHAT THIS JOB DOES, AND WHAT IT CANNOT DO
+-- The sweep verifies balances and DRAFTS reminders, storing them in
+-- collection_touch with status 'draft'. It writes NOTHING to collection_outbox.
+-- The shared messaging drain lists only collection_outbox rows with status
+-- 'queued', so registering this job cannot, on its own, cause a single message to
+-- reach a single patient. The only path from a draft to a send is a human
+-- approving it, and unlike the treatment-plan closer there is no plan, and no
+-- configuration, to ever make it otherwise.
+--
+-- IT IS ALSO GATED TWICE BEFORE IT DOES ANYTHING AT ALL
+--   1. Code: 'balance-reminders' is declared defaultEnabled:false in
+--      src/lib/systems/catalog.ts, so the ABSENCE of a system_toggle row means
+--      DISABLED, for every client, in every environment.
+--   2. Data: migration 0090 seeds an explicit `enabled = false` row for
+--      'vitality'.
+-- With either gate closed the route returns {"ok":true,"skipped":"system off"}
+-- immediately, having read nothing and drafted nothing. That is the expected and
+-- correct result of running this job today.
+--
+-- AND A THIRD GATE THAT IS NOT A TOGGLE. COLLECTION_QUOTE_AMOUNT defaults to
+-- false, and while it is false no drafted message carries a money figure at all:
+-- it says there is an unpaid invoice on the account and offers to check it. That
+-- is because nothing in this repo settles whether live Dentally's invoice
+-- `amount_outstanding` is denominated in the same unit as `amount`. Reconcile ONE
+-- real invoice against Dentally's own account screen before switching it on. If
+-- the sweep starts reporting most patients under balanceRefusals.above_ceiling,
+-- the unit is wrong and nothing should be quoted until it is right.
+--
+-- CADENCE: DAILY, not hourly. The cadence is measured in days (a first message
+-- only once the newest unpaid invoice is 21 days old, then 10 and 21 days between
+-- steps), so nothing an hourly tick would find is anything a daily tick misses.
+-- The reason it matters more here than for the closer is COST: unlike the closer,
+-- this sweep really does read Dentally, one narrow per-patient invoice read per
+-- candidate, and the practice's whole quota is 3,600 calls an hour shared with the
+-- front desk. Daily, capped at COLLECTION_MAX_VERIFY_READS_PER_RUN (default 40),
+-- is a known and small bill.
+--
+-- WHY 06:40. Before the practice opens, so the verification reads land while the
+-- diary is quiet, and offset from the top of the hour so the sweep does not
+-- contend with the hourly Dentally syncs. Drafts are then waiting in the worklist
+-- when reception sits down, which is the whole point of an approval queue.
+--
+-- CRON_SECRET is NOT written here; it lives inside public.trigger_app_cron(),
+-- exactly as the other jobs rely on.
+-- ---------------------------------------------------------------------------
+
+select cron.schedule(
+  'app-sweep-collection',
+  '40 6 * * *',
+  $$select public.trigger_app_cron('/api/collection/sweep')$$
+);
+
+-- cron.schedule() on an existing job named 'app-sweep-collection' updates its
+-- schedule/command but KEEPS the current active flag. To create it PAUSED (the
+-- safer option while the approval panel is still being built), run the schedule
+-- above and then immediately deactivate it:
+--   select cron.alter_job(job_id := (select jobid from cron.job
+--                                    where jobname = 'app-sweep-collection'),
+--                         active := false);
+-- and activate it the same way when the practice is ready.
+
+-- Verify after applying:
+--   select jobname, schedule, active from cron.job where jobname = 'app-sweep-collection';
+--   select jobname, status, return_message, start_time
+--     from cron.job_run_details
+--     where jobname = 'app-sweep-collection'
+--     order by start_time desc limit 5;
+--
+-- A healthy run with the switch OFF returns HTTP 200 and
+--   {"ok":true,"skipped":"system off"}
+-- A healthy run with the switch ON returns HTTP 200 and a summary of the form
+--   {"ok":true,"examined":N,"verifyReads":N,"verified":N,"drafted":N,"stopped":N,
+--    "skipped":N,"refused":N,"escalated":N,"queued":0,"balanceRefusals":{...}, ...}
+--
+-- "queued" is always 0 by construction. If it is ever anything else, the sweep has
+-- grown a send path it must not have.
+--
+-- READ balanceRefusals ON THE FIRST FEW RUNS. It is the calibration instrument:
+--   snapshot_disagrees dominating -> the practice-wide scan and the per-patient
+--     read disagree systematically; do not switch anything on, investigate first.
+--   unreadable_invoice dominating -> live invoices are not carrying
+--     amount_outstanding the way this module requires; the agent is correctly
+--     refusing to speak and the field needs re-probing.
+--   above_ceiling dominating      -> the money unit is wrong. See the third gate.
+--   invoice_date_unknown dominating -> live invoices are not carrying dated_on;
+--     the age gate cannot run and nothing will ever be drafted.
+
+-- TO UNREGISTER:
+--   select cron.unschedule('app-sweep-collection');
