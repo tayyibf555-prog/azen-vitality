@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import type { DiaryEntryRecord } from "@/lib/calendar/entries";
-import type { ColumnWorkState, Span } from "@/lib/calendar/working-spans";
+import { columnWorkSummary, type ColumnWorkState, type Span } from "@/lib/calendar/working-spans";
 import { capacityLine, capacitySentence, columnCapacity } from "@/lib/calendar/capacity";
 import { layoutColumn } from "./diary-grid";
 import { dow, dnum, mondayOf, shiftDay } from "./calendar-logic";
@@ -98,29 +98,15 @@ export function DiaryDays({
         // A day outside the loaded window is drawn and MARKED, never shown as
         // empty: an unfetched day renders as zero appointments, which is
         // indistinguishable from a free day on a fully booked diary.
+        //
+        // Same words as the day view -- not by copying them, which is how the two
+        // drifted apart before, but by both reading COLUMN_WORK_PRESENTATION, the
+        // one exhaustive mapping beside the union itself. A state added there and
+        // nowhere else is worded correctly in both grids; a state added to the
+        // union and NOT to the mapping does not compile.
         const summary = unavailable
           ? "Not loaded"
-          : d.workState === "unknown"
-            ? hoursPending
-              ? "Reading hours"
-              : "Hours not loaded"
-            : d.workState === "unconfirmed"
-              ? // NOT "Not working": they may be working at another of these
-                // practices, and availability carries no site to tell us which.
-                "Not confirmed here"
-              : d.workState === "past"
-                ? // NOT "Hours not loaded": nothing failed and nothing will load.
-                  // Dentally will not answer for a date that has gone by.
-                  "Date has passed"
-                : d.workState === "unreportable"
-                  ? // TODAY, seen after lunch. NOT "Date has passed" -- it has not
-                    // -- and NOT "Not working": the morning is missing from the
-                    // answer because nobody could ask about it, not because
-                    // nobody was in. Same words as the day view, deliberately.
-                    "Hours not reportable"
-                  : d.workState === "off"
-                    ? "Not working"
-                    : columnCounts(d.appointments);
+          : (columnWorkSummary(d.workState, { hoursPending }) ?? columnCounts(d.appointments));
         // A date in the past is as quiet as a pending read: there is nothing for
         // the reader to do about either.
         const loud =

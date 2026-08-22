@@ -138,11 +138,15 @@ describe("one cold dashboard assembly, at mock volume", () => {
     // Pinned as a ceiling rather than an equality because the generated fixtures are
     // calendar-derived: the count of non-Sunday days in a 90-day window moves by one
     // or two across the year.
+    //   +1   the reconciliation probe (2026-08-22): paid=false, per_page=1, no
+    //        site_id. It fetches no rows and reads meta.total, so the ACCOUNTS panel
+    //        can state how many unpaid invoices the three site-scoped reads never saw
+    //        rather than being quietly short by them.
     const invoiceCalls = counter.byPath.get("/v1/invoices") ?? 0;
     expect(invoiceCalls, "the windowed invoice read is fetching nothing again").toBeGreaterThan(
-      1 + SITES,
+      1 + SITES + 1,
     );
-    expect(invoiceCalls, "the invoice reads have grown a walk").toBeLessThanOrEqual(24);
+    expect(invoiceCalls, "the invoice reads have grown a walk").toBeLessThanOrEqual(25);
   }, 120_000);
 });
 
@@ -218,9 +222,17 @@ describe("one cold dashboard assembly, at live volume", () => {
     expect(counter.byPath.get("/v1/treatment_plans")).toBe(SITES * 3);
 
     // The invoice reads on an empty upstream: one windowed, one per site for the
-    // outstanding slice, each ending on its first short page. Pinned so the per-site
-    // split cannot silently become a per-site WALK.
-    expect(counter.byPath.get("/v1/invoices")).toBe(1 + SITES);
+    // outstanding slice, each ending on its first short page, and ONE reconciliation
+    // probe. Pinned so the per-site split cannot silently become a per-site WALK.
+    //
+    // The probe (paid=false, per_page=1, no site_id) is the +1, added 2026-08-22. It
+    // reads `meta.total` and no rows, and it is what lets the ACCOUNTS panel say how
+    // many unpaid invoices the three site-scoped reads could not see — an invoice
+    // filed under no site never reaches them, and one may belong to a patient of this
+    // practice. One request to stop a balance being quietly short is the cheapest
+    // disclosure on this screen; the alternative measurement, a group-wide paid=false
+    // walk, is ~39 pages on live.
+    expect(counter.byPath.get("/v1/invoices")).toBe(1 + SITES + 1);
 
     const saved = 2 * controlPerScan - (SITES * 3) * 2;
     process.stderr.write(

@@ -151,16 +151,17 @@ async function readWindowClaims(
   const after = shiftDayKey(window.from, -1) ?? window.from;
   const before = shiftDayKey(window.to, 1) ?? window.to;
   return pageAll(
-    (page) =>
+    (page, perPage) =>
       client
         .listNhsClaims({
           siteId: dentallySiteId(siteId),
           after,
           before,
           page,
-          perPage: REPORTS_PER_PAGE,
+          perPage,
         })
         .then((res) => ({ rows: res.nhs_claims ?? [], meta: res.meta })),
+    REPORTS_PER_PAGE,
     REPORTS_SCAN_MAX_PAGES,
   );
 }
@@ -291,7 +292,7 @@ export async function readPaymentAllocation(args: {
       siteIds.map(async (site) => {
         try {
           const { raw, complete } = await pageAll(
-            (page) =>
+            (page, perPage) =>
               client
                 .listPayments({
                   siteId: dentallySiteId(site),
@@ -302,9 +303,10 @@ export async function readPaymentAllocation(args: {
                   from: window.from,
                   to: window.to,
                   page,
-                  perPage: REPORTS_PER_PAGE,
+                  perPage,
                 })
                 .then((res) => ({ rows: res.payments ?? [], meta: res.meta })),
+            REPORTS_PER_PAGE,
             REPORTS_SCAN_MAX_PAGES,
           );
           if (!complete) {
@@ -436,7 +438,7 @@ async function mapWithConcurrency<T, R>(
 /** One treatment_plan_items page, retried exactly once on a transient failure. */
 async function itemsPageOnce(
   client: ReturnType<typeof dentallyFromEnv>,
-  args: { practitionerId?: string; updatedSince: string; page: number },
+  args: { practitionerId?: string; updatedSince: string; page: number; perPage: number },
 ): Promise<{ rows: unknown[]; meta: unknown }> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -444,7 +446,7 @@ async function itemsPageOnce(
         practitionerId: args.practitionerId,
         updatedSince: args.updatedSince,
         page: args.page,
-        perPage: REPORTS_PER_PAGE,
+        perPage: args.perPage,
       });
       return { rows: res.treatment_plan_items ?? [], meta: res.meta };
     } catch (err) {
@@ -466,7 +468,8 @@ async function pagePractitioner(
   updatedSince: string,
 ): Promise<{ raw: unknown[]; incomplete: boolean }> {
   const read = await pageAll(
-    (page) => itemsPageOnce(client, { practitionerId, updatedSince, page }),
+    (page, perPage) => itemsPageOnce(client, { practitionerId, updatedSince, page, perPage }),
+    REPORTS_PER_PAGE,
     CLINICAL_PER_PRACTITIONER_MAX_PAGES,
   );
   return { raw: read.raw, incomplete: !read.complete };
@@ -580,7 +583,8 @@ export async function readNhsClinicalReport(args: {
   try {
     const rosterIds = new Set(practitioners.map((p) => p.id));
     const slice = await pageAll(
-      (page) => itemsPageOnce(client, { updatedSince: window.from, page }),
+      (page, perPage) => itemsPageOnce(client, { updatedSince: window.from, page, perPage }),
+      REPORTS_PER_PAGE,
       CLINICAL_GROUP_SLICE_MAX_PAGES,
     );
     if (!slice.complete) return empty(CLINICAL_WINDOW_TOO_LARGE, "group-slice");

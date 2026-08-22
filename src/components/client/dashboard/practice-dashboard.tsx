@@ -110,13 +110,21 @@ export function PracticeDashboard({
   // Ids to names, so the takings caveat can NAME the practice that did not answer
   // instead of saying one of them did not. The read layer sends ids (it has no
   // display names); `view.sites` is the only place they are paired.
-  const failedSiteNames = useMemo(
-    () =>
-      view.takingsFailedSites.map(
-        (id) => view.sites.find((s) => s.id === id)?.name ?? id,
-      ),
-    [view.takingsFailedSites, view.sites],
-  );
+  //
+  // AND SCOPED TO WHAT THIS STRIP IS SHOWING. `view.takingsFailedSites` is assembled
+  // once for the whole group and was appended verbatim to every scope's caveat, so a
+  // manager looking at N15 alone could be told "the site that did not answer: N17" —
+  // about a practice not on her screen, whose failure blanks nothing she can see, in
+  // a sentence that follows a blank she now has no explanation for. Worse in the
+  // plural: a single-site scope could be followed by a list of two other practices.
+  // A scope names only failures inside itself; a scope with none appends nothing.
+  const failedSiteNames = useMemo(() => {
+    const inScope =
+      scope.siteId === null
+        ? view.takingsFailedSites
+        : view.takingsFailedSites.filter((id) => id === scope.siteId);
+    return inScope.map((id) => view.sites.find((s) => s.id === id)?.name ?? id);
+  }, [view.takingsFailedSites, view.sites, scope.siteId]);
   const takings = useMemo(
     () =>
       takingsCaveats({

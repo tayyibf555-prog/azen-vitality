@@ -66,11 +66,12 @@ export interface PagedRead {
  * `meta.total` — how many rows Dentally says match the query — or null when the
  * envelope does not carry one.
  *
- * THE ONE HOME of this grammar: src/lib/dashboard/read.ts imports it from here
- * (the twin it once carried is deleted), which works because this module imports
- * nothing but "server-only" — no panel graph comes along. The parsing that
- * actually carries money — `parseAggregateAmountPence` in
- * src/lib/dashboard/money.ts — is likewise shared; this is a row count.
+ * THE SINGLE SHARED PARSER of this grammar: the reports read path uses it in
+ * this file, and the dashboard assembly (src/lib/dashboard/read.ts) imports it
+ * from here. The import direction is clean because this module imports nothing
+ * but "server-only" — no panel graph comes along. The parsing that actually
+ * carries money — `parseAggregateAmountPence` in src/lib/dashboard/money.ts —
+ * is likewise shared; this is a row count.
  *
  * Null is not an error: some endpoints omit it, and the caller then falls back to
  * the short-page heuristic and treats a budget-exhausting walk as incomplete.
@@ -106,12 +107,20 @@ export function metaTotal(meta: unknown): number | null {
  * gone. For the same reason the walk stops the moment it holds `expected` rows
  * rather than spending one more request to see a short page confirm it.
  *
- * Both stops assume what every caller in this file already relies on: pages of
- * REPORTS_PER_PAGE rows (it is also what the existing short-page stop measures
- * against). A caller paging in some other size gets the old walk, not a wrong one.
+ * THE PAGE SIZE IS AN ARGUMENT, NOT A MODULE CONSTANT, AND THAT IS A BUG FIX.
+ * Both stops measure against `perPage`, and `perPage` is HANDED TO `fetchPage` so
+ * the size requested and the size measured against cannot drift apart. They used to:
+ * this measured every short page against REPORTS_PER_PAGE while each caller chose
+ * per_page inside its own closure, so a caller paging at, say, 50 against an endpoint
+ * that publishes no `meta.total` saw its first full page (50 rows) read as SHORT,
+ * ended the walk on page one, and got `complete: true` over a truncated set — a
+ * partial read rendered as a whole one, which is the exact failure this module exists
+ * to stop. The two constants happening to agree is not a guarantee; passing one value
+ * to both is.
  */
 export async function pageAll(
-  fetchPage: (page: number) => Promise<ListPage>,
+  fetchPage: (page: number, perPage: number) => Promise<ListPage>,
+  perPage: number,
   maxPages: number = REPORTS_SCAN_MAX_PAGES,
 ): Promise<PagedRead> {
   const raw: unknown[] = [];
@@ -119,15 +128,15 @@ export async function pageAll(
   let hitCap = true;
 
   for (let page = 1; page <= maxPages; page += 1) {
-    const { rows, meta } = await fetchPage(page);
+    const { rows, meta } = await fetchPage(page, perPage);
     if (page === 1) expected = metaTotal(meta);
     raw.push(...rows);
     // Dentally has already said the window is bigger than this budget: every
     // remaining request would be spent proving a truncation we have been told about.
-    if (page === 1 && expected !== null && expected > maxPages * REPORTS_PER_PAGE) {
+    if (page === 1 && expected !== null && expected > maxPages * perPage) {
       return { raw, complete: false, expected };
     }
-    if (rows.length < REPORTS_PER_PAGE) {
+    if (rows.length < perPage) {
       hitCap = false;
       break;
     }

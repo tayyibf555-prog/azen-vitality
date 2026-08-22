@@ -105,7 +105,16 @@ const ITEMS_MAX_PAGES = 25;
 /** The catalogue, its categories and this patient's plans are all small. */
 const SMALL_MAX_PAGES = 5;
 
-async function pageAll<T>(
+/**
+ * Page a chart read to a short page or to `maxPages`, AND SAY WHICH.
+ *
+ * A THIRD FUNCTION ONCE CALLED `pageAll`, and the third different contract under that
+ * one name: reports/scan.ts's measures completeness against Dentally's `meta.total`,
+ * dentally/read.ts's truncates in silence, and this one reports hitting the ceiling
+ * through a `truncated` flag the chart puts on screen. Named for what it does, so a
+ * reader can tell which guarantee they are holding.
+ */
+async function pageToCeiling<T>(
   fetchPage: (page: number) => Promise<T[]>,
   maxPages: number,
 ): Promise<{ rows: T[]; truncated: boolean }> {
@@ -303,7 +312,7 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
   let truncated = false; // the PATIENT'S chart
   let truncatedCatalogue = false; // the treatment list, its categories, the plans
 
-  const itemsP = pageAll(
+  const itemsP = pageToCeiling(
     (page) =>
       client
         .listTreatmentPlanItems({ patientId, page, perPage: PER_PAGE })
@@ -320,7 +329,7 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
       return [] as Record<string, unknown>[];
     });
 
-  const treatmentsP = pageAll(
+  const treatmentsP = pageToCeiling(
     (page) =>
       client
         .listTreatments({ page, perPage: PER_PAGE })
@@ -337,7 +346,7 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
       return [] as TreatmentRow[];
     });
 
-  const categoriesP = pageAll(
+  const categoriesP = pageToCeiling(
     (page) =>
       client
         .listTreatmentCategories({ page, perPage: PER_PAGE })
@@ -359,7 +368,7 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
   // the status, and read.ts's PlanRecord carries no id at all. Without a flag of its
   // own, a failed plans read would render as "this patient has no treatment plans",
   // which is a different clinical statement from "we could not read them".
-  const plansP = pageAll(
+  const plansP = pageToCeiling(
     (page) =>
       client
         .listTreatmentPlansById({ siteId: dentallySiteId(siteId), patientId, page, perPage: PER_PAGE })
@@ -818,7 +827,7 @@ export async function getPlanPanelReadUncached(
   let truncated = false; // THIS PATIENT'S plan: items and cards
   let truncatedSupporting = false; // the plan list, the diary and the practitioners
 
-  const itemsP = pageAll(
+  const itemsP = pageToCeiling(
     (page) =>
       client
         .listTreatmentPlanItems({ patientId, page, perPage: PER_PAGE })
@@ -835,7 +844,7 @@ export async function getPlanPanelReadUncached(
       return [] as Record<string, unknown>[];
     });
 
-  const apptsP = pageAll(
+  const apptsP = pageToCeiling(
     (page) =>
       client
         .listTreatmentAppointments({ patientId, page, perPage: PER_PAGE })
@@ -854,7 +863,7 @@ export async function getPlanPanelReadUncached(
       return [] as Record<string, unknown>[];
     });
 
-  const plansP = pageAll(
+  const plansP = pageToCeiling(
     (page) =>
       client
         .listTreatmentPlansById({ siteId: dentallySiteId(siteId), patientId, page, perPage: PER_PAGE })
@@ -878,7 +887,7 @@ export async function getPlanPanelReadUncached(
   // date and a clinician, and the default excludes exactly those rows — a card
   // would then report "not in this patient's appointment list" for an appointment
   // that plainly exists in Dentally.
-  const diaryP = pageAll(
+  const diaryP = pageToCeiling(
     (page) =>
       client
         .getPatientAppointments(patientId, page, PER_PAGE, true)
@@ -915,7 +924,7 @@ export async function getPlanPanelReadUncached(
   // placed in 2019 by a clinician who has since left the practice still has to
   // carry their initials, and dropping them here would put the unresolved mark
   // against exactly the oldest entries.
-  const practitionersP = pageAll(
+  const practitionersP = pageToCeiling(
     (page) =>
       client
         .listPractitioners(dentallySiteId(siteId), { page, perPage: PER_PAGE })

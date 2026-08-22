@@ -49,6 +49,7 @@ vi.mock("@/lib/supabase/server", () => ({ serviceClient: h.serviceClient }));
 
 import { OPEN_LEAD_STAGES } from "@/lib/copilot/lead-sight";
 import {
+  countLeadsInWindow,
   findOpenLeadByAddress,
   listAttemptsForLeads,
   listLeads,
@@ -86,6 +87,64 @@ describe("listLeads: the optional window", () => {
     expect(issued("in", "site_id", ["site-cc"])).toBe(true);
     expect(issued("in", "stage", ["new"])).toBe(true);
     expect(issued("limit", 25)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OPTIONAL UPPER BOUND.
+//
+// A caller that asks the store SEVERAL questions about one window — the report
+// snapshot counts the enquiries, counts the booked ones, and reads the newest of
+// them, all at once — gets three answers taken at three different instants. With
+// only a floor on the window, a lead created while they are in flight is inside
+// whichever queries reached the database after it, and the answers no longer
+// describe the same set of leads: a contacted figure larger than the enquiry total,
+// or more bookings than enquiries.
+//
+// So both reads take the same optional ceiling, and it has to reach the QUERY: a
+// filter applied after the rows come back cannot fix a count that returned a number
+// and no rows at all.
+// ---------------------------------------------------------------------------
+describe("the optional upper bound both window reads share", () => {
+  it("listLeads issues NO created_at ceiling when none was asked for", async () => {
+    // Every pre-existing caller passes none, and their behaviour is unchanged.
+    await listLeads({ siteIds: ["site-cc"], sinceIso: "2026-08-17T00:00:00.000Z" });
+    expect(h.calls.some((c) => c[0] === "lte")).toBe(false);
+  });
+
+  it("listLeads puts the ceiling in the query beside the floor", async () => {
+    await listLeads({
+      siteIds: ["site-cc"],
+      sinceIso: "2026-08-17T00:00:00.000Z",
+      untilIso: "2026-08-24T09:30:00.000Z",
+    });
+    expect(issued("gte", "created_at", "2026-08-17T00:00:00.000Z")).toBe(true);
+    expect(issued("lte", "created_at", "2026-08-24T09:30:00.000Z")).toBe(true);
+  });
+
+  it("countLeadsInWindow takes the same ceiling, and counts without it when none is given", async () => {
+    await countLeadsInWindow(["site-cc"], "2026-08-17T00:00:00.000Z", ["booked"]);
+    expect(issued("in", "site_id", ["site-cc"])).toBe(true);
+    expect(issued("gte", "created_at", "2026-08-17T00:00:00.000Z")).toBe(true);
+    expect(issued("in", "stage", ["booked"])).toBe(true);
+    expect(h.calls.some((c) => c[0] === "lte"), "unchanged for callers that ask for none").toBe(
+      false,
+    );
+
+    h.reset();
+    await countLeadsInWindow(
+      ["site-cc"],
+      "2026-08-17T00:00:00.000Z",
+      ["booked"],
+      "2026-08-24T09:30:00.000Z",
+    );
+    expect(issued("lte", "created_at", "2026-08-24T09:30:00.000Z")).toBe(true);
+  });
+
+  it("still refuses an empty site scope, ceiling or no ceiling", async () => {
+    // "No scope" must never degrade into "the whole group".
+    expect(await countLeadsInWindow([], "2026-08-17T00:00:00.000Z", undefined, "2026-08-24T09:30:00.000Z")).toBe(0);
+    expect(h.calls.length).toBe(0);
   });
 });
 

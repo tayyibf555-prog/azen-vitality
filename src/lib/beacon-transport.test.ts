@@ -1,56 +1,77 @@
 // THE ONE TRANSPORT, held at the seam that made it worth extracting.
 //
 // WHAT THIS FILE IS ACTUALLY FOR. The sendBeacon-then-keepalive-fetch block used to
-// exist TWICE, line for line: once inside step-beacon.ts's private send(), once
-// inside funnel-progress-beacon.ts's report(). Two copies means a fix to one is a
-// fix to half the telemetry — the drop-off chart keeps its last screen and the
-// lead's funnel position quietly loses hers, or the other way round. So the first
-// describe below reads both beacons as TEXT and asserts they route through the
-// shared function and hold no transport of their own. It is a structural pin in
-// the same spirit as the importer pins next to it: the property is about the SHAPE
-// of the source, and there is no runtime observation that would notice a copy
-// reappearing.
+// exist FOUR TIMES, line for line and comment for comment: inside step-beacon.ts's
+// private send(), inside funnel-progress-beacon.ts's report(), inside
+// funnel/client.ts's send(), and inside the usage beacon's effect. Four copies means
+// a fix to delivery is a fix to a QUARTER of the telemetry — the drop-off chart
+// keeps its last screen while the lead's funnel position, the public funnel's last
+// step and the owner's usage picture quietly lose theirs. So the first describe
+// below reads every call site as TEXT and asserts each routes through the shared
+// function and holds no transport of its own.
 //
-// NOTE WHAT IS DELIBERATELY NOT SHARED. Only the mechanics. The two beacons keep
-// their own endpoints, their own payloads, their own validity rules and — the part
-// that matters — their own identity: one carries a nonce the BROWSER minted for an
-// anonymous session, the other a token the SERVER minted for a named lead. The
-// transport holds no state and mints nothing, so it cannot become the place those
-// two values meet (supabase/migrations/0094).
+// AND THE SWEEP, which is the part that makes a FIFTH copy impossible. Enumerating
+// call sites only pins the files someone thought to list — the third and fourth
+// copies above sat in the tree for months precisely because this list named two.
+// So the second describe walks all of src/ instead and asserts the mechanics appear
+// in no non-test file but this one. Both are structural pins in the spirit of the
+// importer pins elsewhere: the property is about the SHAPE of the source, and there
+// is no runtime observation that would notice a copy reappearing.
+//
+// NOTE WHAT IS DELIBERATELY NOT SHARED. Only the mechanics. Every caller keeps its
+// own endpoint, its own payload, its own validity rules and — the part that matters
+// — its own identity: a nonce the BROWSER minted for an anonymous session, a token
+// the SERVER minted for a named lead, a session id for an unauthenticated visitor,
+// and an AUTHED staff session the server reads from a cookie. The transport holds no
+// state and mints nothing, so it cannot become the place any two of those values
+// meet (supabase/migrations/0094).
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
 import { postJsonBeacon } from "./beacon-transport";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+/** src/, through import.meta.url rather than process.cwd(), so a worktree copy of
+ *  the repo sweeps ITS OWN tree and not the one the runner happens to sit in. */
+const SRC_ROOT = join(HERE, "..");
 
 const TRANSPORT_SOURCE = readFileSync(join(HERE, "beacon-transport.ts"), "utf8");
+
+/** This module's own path under src/: the one file the sweep below must exempt. */
+const TRANSPORT_FILE = "lib/beacon-transport.ts";
 
 /** Source with comments stripped: what a file DOES, not what it explains. */
 function codeOnly(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
-/** The two modules that must not grow a transport of their own again. */
-const BEACONS = [
-  ["the anonymous step beacon", "step-beacon.ts"],
-  ["the lead progress beacon", "funnel-progress-beacon.ts"],
+/**
+ * Every module that must not grow a transport of its own again, as a path under
+ * src/. Two are smile-assessment's; the other two are why this file no longer
+ * lives in that feature's folder — a public funnel tracker shared with the booking
+ * page, and the authed shell's product-usage beacon.
+ */
+const CALL_SITES = [
+  ["the anonymous step beacon", "lib/smile-assessment/step-beacon.ts"],
+  ["the lead progress beacon", "lib/smile-assessment/funnel-progress-beacon.ts"],
+  ["the public funnel tracker", "lib/funnel/client.ts"],
+  ["the product-usage beacon", "components/platform/usage-beacon.tsx"],
 ] as const;
 
 /* ---------------------------------------------------------------------------
- * 1. Both beacons go through it. The pin that keeps the copy from coming back.
+ * 1. Every beacon goes through it. The pin that keeps the copies from coming back.
  * ------------------------------------------------------------------------- */
 
-describe("both browser beacons deliver through the one shared transport", () => {
-  // MUTATION: inline the sendBeacon/fetch block back into either beacon "so the
+describe("every browser beacon delivers through the one shared transport", () => {
+  // MUTATION: inline the sendBeacon/fetch block back into any call site "so the
   // file reads on its own". That is exactly the state this dedup ended, and the
-  // next fix to delivery would then land in one half of the telemetry only.
-  it.each(BEACONS)("%s posts through postJsonBeacon", (_name, file) => {
-    const code = codeOnly(readFileSync(join(HERE, file), "utf8"));
+  // next fix to delivery would then land in part of the telemetry only.
+  it.each(CALL_SITES)("%s posts through postJsonBeacon", (_name, file) => {
+    const code = codeOnly(readFileSync(join(SRC_ROOT, file), "utf8"));
     expect(code, `${file} no longer imports the shared transport`).toMatch(
-      /import\s*\{\s*postJsonBeacon\s*\}\s*from\s*["']\.\/beacon-transport["']/,
+      /import\s*\{\s*postJsonBeacon\s*\}\s*from\s*["']@\/lib\/beacon-transport["']/,
     );
     expect(code, `${file} imports the shared transport but does not call it`).toContain(
       "postJsonBeacon(",
@@ -59,8 +80,8 @@ describe("both browser beacons deliver through the one shared transport", () => 
 
   // MUTATION: keep the import AND a "just this once" direct sendBeacon next to it.
   // A second delivery path in a beacon is the duplication wearing a hat.
-  it.each(BEACONS)("%s holds no transport of its own", (_name, file) => {
-    const code = codeOnly(readFileSync(join(HERE, file), "utf8"));
+  it.each(CALL_SITES)("%s holds no transport of its own", (_name, file) => {
+    const code = codeOnly(readFileSync(join(SRC_ROOT, file), "utf8"));
     for (const mechanic of ["sendBeacon", "new Blob(", "keepalive", "fetch("]) {
       expect(code, `${file} still does its own delivery: found ${mechanic}`).not.toContain(
         mechanic,
@@ -76,15 +97,88 @@ describe("both browser beacons deliver through the one shared transport", () => 
 });
 
 /* ---------------------------------------------------------------------------
- * 2. Sharing a module must not widen either beacon's import graph.
+ * 2. And nowhere else in the tree. The sweep, not a list someone maintains.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Every .ts/.tsx under src/, as a path relative to src/.
+ *
+ * TESTS ARE SKIPPED, and that is not a loophole: standing a fake browser up around
+ * these mechanics is what a test of them has to do, and the biggest offender would
+ * be this very file.
+ */
+function sourceFiles(): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(join(dir, entry.name), rel);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) continue;
+      found.push(rel);
+    }
+  };
+  walk(SRC_ROOT, "");
+  return found;
+}
+
+/**
+ * NAMED ON PURPOSE, not overlooked: the landing tracker posts with a keepalive
+ * fetch and NO sendBeacon at all — a smaller, one-path shape rather than a copy of
+ * this one. Folding it in would change what that public page does, so it is listed
+ * here instead. A file that appears in this set without that being true, or a NEW
+ * name added to it, is the thing to argue with.
+ */
+const KEEPALIVE_ELSEWHERE = new Set(["lib/landing/track.ts"]);
+
+describe("no other file in the tree grows a transport of its own", () => {
+  // MUTATION: paste the block into a fifth feature's beacon. The list above only
+  // pins files someone thought to name — the funnel tracker and the usage beacon
+  // held byte-identical copies for months while it named two. This is the pin that
+  // does not depend on anyone noticing.
+  it("is the only place in src/ that calls navigator.sendBeacon", () => {
+    const offenders = sourceFiles().filter(
+      (file) =>
+        file !== TRANSPORT_FILE &&
+        codeOnly(readFileSync(join(SRC_ROOT, file), "utf8")).includes("navigator.sendBeacon"),
+    );
+    expect(offenders, "a new copy of the beacon transport: route it through postJsonBeacon").toEqual(
+      [],
+    );
+  });
+
+  it("is the only place a keepalive fetch is written, bar the one named exception", () => {
+    const offenders = sourceFiles().filter(
+      (file) =>
+        file !== TRANSPORT_FILE &&
+        !KEEPALIVE_ELSEWHERE.has(file) &&
+        codeOnly(readFileSync(join(SRC_ROOT, file), "utf8")).includes("keepalive"),
+    );
+    expect(offenders, "a new keepalive sender: route it through postJsonBeacon").toEqual([]);
+  });
+
+  // MUTATION: break the walk (a wrong SRC_ROOT, a filter that matches nothing) and
+  // the two sweeps above pass by finding no files at all. This is what notices.
+  it("actually walks the tree it claims to", () => {
+    const files = sourceFiles();
+    expect(files.length).toBeGreaterThan(200);
+    expect(files).toContain(TRANSPORT_FILE);
+    for (const [, file] of CALL_SITES) expect(files).toContain(file);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * 3. Sharing a module must not widen any caller's import graph.
  * ------------------------------------------------------------------------- */
 
 describe("the shared transport is safe to pull into a client component", () => {
   // MUTATION: import the step-event rules here "to validate the payload", or the
-  // repository "for one insert helper". Both beacons are destined for a
-  // "use client" quiz and both pin their own import lists; a widening here would
-  // widen BOTH graphs at once, behind pins that only read the beacons themselves.
-  it("imports nothing at all, so neither beacon's graph can widen through it", () => {
+  // repository "for one insert helper". Every caller is destined for a "use client"
+  // component and they pin their own import lists; a widening here would widen ALL
+  // of those graphs at once, behind pins that only read the callers themselves.
+  it("imports nothing at all, so no caller's graph can widen through it", () => {
     const imports = [...TRANSPORT_SOURCE.matchAll(/^\s*import\b[\s\S]*?from\s+["']([^"']+)["']/gm)];
     expect(imports.map((m) => m[1])).toEqual([]);
   });
@@ -96,9 +190,10 @@ describe("the shared transport is safe to pull into a client component", () => {
     }
   });
 
-  // MUTATION: mint an id, remember the last endpoint, cache anything. The two
-  // callers are an ANONYMOUS session and a NAMED lead, and the only reason they
-  // may share a module is that this one cannot hold anything belonging to either.
+  // MUTATION: mint an id, remember the last endpoint, cache anything. The callers
+  // are anonymous visitors, a NAMED lead and an AUTHED staff session, and the only
+  // reason they may share a module is that this one cannot hold anything belonging
+  // to any of them.
   it("keeps no state between calls", () => {
     const code = codeOnly(TRANSPORT_SOURCE);
     expect(code).not.toMatch(/^(let|var|const)\s/m);
@@ -107,7 +202,7 @@ describe("the shared transport is safe to pull into a client component", () => {
 });
 
 /* ---------------------------------------------------------------------------
- * 3. The mechanics themselves, which used to be tested only through a beacon.
+ * 4. The mechanics themselves, which used to be tested only through a beacon.
  * ------------------------------------------------------------------------- */
 
 interface Posted {

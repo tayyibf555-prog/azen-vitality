@@ -136,6 +136,7 @@ describe("accountsCaveats", () => {
     patientsInDebt: { value: 3, reason: null },
     top: [],
     dropped: 0,
+    unattributedUnpaid: null,
   };
 
   it("always explains that a balance ignores the selected period", () => {
@@ -224,6 +225,7 @@ describe("the mark beside a figure", () => {
       patientsInDebt: { value: 3, reason: null },
       top: [],
       dropped: 2,
+      unattributedUnpaid: null,
     });
     const summary = caveatSummary(caveats);
     for (const c of caveats) expect(summary).toContain(c.text);
@@ -236,6 +238,7 @@ describe("the mark beside a figure", () => {
       patientsInDebt: { value: 3, reason: null },
       top: [],
       dropped: 0,
+      unattributedUnpaid: null,
     });
     expect(leadCaveat(caveats)?.id).toBe("accounts-credit");
   });

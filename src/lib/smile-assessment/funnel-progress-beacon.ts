@@ -29,7 +29,7 @@
 // else, and the server's parser constructs its result rather than spreading the
 // body, so an invented key could not survive the trip either.
 
-import { postJsonBeacon } from "./beacon-transport";
+import { postJsonBeacon } from "@/lib/beacon-transport";
 import { isValidStepIndex } from "./step-events";
 
 const ENDPOINT = "/api/smile-assessment/funnel-progress";
@@ -72,10 +72,10 @@ export function createFunnelProgressReporter(opts: {
       if (step <= highest) return;
       highest = step;
       // WHAT is sent is this module's business; HOW it leaves the page is not, and
-      // is shared with the anonymous step beacon (beacon-transport.ts). ONLY the
-      // mechanics are shared — the transport holds no state and mints nothing, so
-      // this server-minted token still cannot meet that beacon's browser-minted
-      // nonce anywhere.
+      // is shared with every other browser beacon (@/lib/beacon-transport). ONLY
+      // the mechanics are shared — it holds no state and mints nothing, so this
+      // server-minted token still cannot meet the anonymous step beacon's
+      // browser-minted nonce anywhere.
       postJsonBeacon(
         ENDPOINT,
         JSON.stringify({

@@ -127,20 +127,95 @@ export type ColumnWorkState =
   | "past"
   | "unreportable";
 
+/** What a column made of one state looks like: the texture, and the words. */
+export interface ColumnWorkPresentation {
+  /**
+   * The HATCH rather than a colour. True for every state that is not a claim we
+   * can stand behind about the clinician.
+   */
+  hatched: boolean;
+  /**
+   * The column header's second line -- or null for the one state that has
+   * something better to say, "working" printing its appointment counts instead.
+   */
+  label: string | null;
+  /**
+   * Said INSTEAD of `label` while the availability read is still in flight. The
+   * TEXTURE does not change, because a pending read is still no answer; the
+   * WORDS do, because a failure sentence flashing on every day change is a false
+   * alarm, and an alarm a receptionist learns to ignore is worse than none.
+   */
+  pendingLabel?: string;
+}
+
 /**
- * The four states that get the HATCH rather than a colour.
+ * THE ONE MAPPING from a state to what a column shows. Both grids read it.
  *
- * One predicate, in the module that owns the states, because the two grids draw
- * this independently and a state added to one and forgotten in the other paints
- * grey: a positive claim that somebody was off, made by an omission.
+ * WHY A Record AND NOT AN OR-CHAIN. The hatch rule was `state === "unknown" ||
+ * ...` here and the words were two parallel ternary chains in the day grid and
+ * the week grid, kept in step by a comment. All three were NON-EXHAUSTIVE: a
+ * seventh member added to the union compiled clean in every one of them, fell
+ * out of the bottom of each chain, and painted a solid grey column headed "Not
+ * working" -- a positive claim that a clinician was off, made by an omission,
+ * which is the exact failure this module's header exists to refuse. A Record
+ * keyed by the union cannot be incomplete: leave a state out and it is a COMPILE
+ * error in this file, before anything reaches a receptionist's screen.
+ *
+ * WHY THE WORDS LIVE HERE and not beside the markup that prints them. The words
+ * ARE the distinction between the states -- "Hours not loaded" says we could not
+ * find out, "Not working" says we asked and they are off -- so a grid free to
+ * choose its own sentence can collapse two states the union spent six members
+ * keeping apart, and the day view and the week view can say different things
+ * about the same clinician on the same day.
+ */
+export const COLUMN_WORK_PRESENTATION: Record<ColumnWorkState, ColumnWorkPresentation> = {
+  // We asked, and they are in. The header carries the counts, not a sentence.
+  working: { hatched: false, label: null },
+  // We asked, and they are not. The ONLY state grey may be painted for: a claim
+  // about the whole day, made only when the whole day was answerable.
+  off: { hatched: false, label: "Not working" },
+  // "Hours not loaded" is a DIFFERENT sentence from "Not working": the first says
+  // we could not find out, the second says we asked and they are off. Collapsing
+  // them is the confident empty this whole design refuses.
+  unknown: { hatched: true, label: "Hours not loaded", pendingLabel: "Reading hours" },
+  // NOT "Not working". They may well be working, at another of these practices,
+  // and their availability carries no site to tell us.
+  unconfirmed: { hatched: true, label: "Not confirmed here" },
+  // NOT "Hours not loaded" either: nothing failed and nothing will load. Dentally
+  // will not answer for a date that has gone by.
+  past: { hatched: true, label: "Date has passed" },
+  // NOT "Date has passed": the date is TODAY, and today has not passed. NOT "Not
+  // working" either: their morning is missing from the answer because Dentally
+  // only reports hours from now onwards, and silence about the morning is not
+  // evidence.
+  unreportable: { hatched: true, label: "Hours not reportable" },
+};
+
+/**
+ * The states that get the HATCH rather than a colour.
+ *
+ * Derived from the mapping above, so the texture cannot disagree with the words
+ * and neither can be forgotten for a new state.
  */
 export function columnIsHatched(state: ColumnWorkState): boolean {
-  return (
-    state === "unknown" ||
-    state === "unconfirmed" ||
-    state === "past" ||
-    state === "unreportable"
-  );
+  return COLUMN_WORK_PRESENTATION[state].hatched;
+}
+
+/**
+ * The column header's second line for this state, or null when the column should
+ * print its appointment counts instead.
+ *
+ * Both grids call THIS rather than restating the words, so a state can only ever
+ * be worded once. `hoursPending` is the availability read still being in flight.
+ */
+export function columnWorkSummary(
+  state: ColumnWorkState,
+  opts: { hoursPending?: boolean } = {},
+): string | null {
+  const shown = COLUMN_WORK_PRESENTATION[state];
+  return opts.hoursPending === true && shown.pendingLabel !== undefined
+    ? shown.pendingLabel
+    : shown.label;
 }
 
 export function columnWorkState(args: {

@@ -32,7 +32,7 @@
 // the server's parser would refuse it anyway (step-events.ts), but the point is
 // that the call signature offers nowhere to type it.
 
-import { postJsonBeacon } from "./beacon-transport";
+import { postJsonBeacon } from "@/lib/beacon-transport";
 import {
   MAX_EVENTS_PER_BATCH,
   isValidFlowVersion,
@@ -109,7 +109,7 @@ export function createStepBeacon(opts: {
   function send(steps: number[]): void {
     if (steps.length === 0) return;
     // WHAT is sent is this module's business; HOW it leaves the page is not, and
-    // is shared with the lead progress beacon (beacon-transport.ts). Only the
+    // is shared with every other browser beacon (@/lib/beacon-transport). Only the
     // mechanics are shared: this nonce is minted here and goes nowhere else.
     postJsonBeacon(
       ENDPOINT,

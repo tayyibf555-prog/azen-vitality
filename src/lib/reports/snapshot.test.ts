@@ -299,3 +299,172 @@ describe("the headline counts are counted, not sampled", () => {
     expect(m.hasEnoughData).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE COUNTS AND THE DETAIL MUST DESCRIBE ONE WINDOW.
+//
+// The snapshot asks the store three questions CONCURRENTLY — how many enquiries,
+// how many of them booked, and what the newest of them look like — and each one
+// reaches the database at its own instant. The window they were given had a floor
+// and no ceiling, so a lead created while they were in flight fell inside whichever
+// queries resolved after it and outside the ones that resolved before, and the
+// answers stopped describing the same set of leads.
+//
+// The result is not a rounding error. `contacted` is measured off the detail rows
+// and `enquiries` is counted, so the pair could read "13 contacted out of 12
+// enquiries"; `booked` and `enquiries` are two separate counts divided by one
+// another, so the conversion could read 201%. Both are printed on the page as fact
+// and handed to the model that narrates the review.
+//
+// So one instant is captured at entry and given to every query, and the derived rate
+// is clamped as a second line of defence.
+// ---------------------------------------------------------------------------
+describe("the counts and the detail describe one window", () => {
+  /** What a store honouring these bounds would return. */
+  function windowOf(
+    rows: SpeedToLeadLead[],
+    sinceIso: string,
+    untilIso: string | undefined,
+    stages?: string[],
+  ): SpeedToLeadLead[] {
+    return rows.filter((l) => {
+      const t = Date.parse(l.createdAt);
+      if (t < Date.parse(sinceIso)) return false;
+      if (untilIso && t > Date.parse(untilIso)) return false;
+      if (stages && stages.length > 0 && !stages.includes(l.stage)) return false;
+      return true;
+    });
+  }
+
+  /** A lead contacted 60 seconds after it came in. */
+  function contactedLead(createdAt: string, stage: LeadStage = "new"): SpeedToLeadLead {
+    return lead({
+      createdAt,
+      stage,
+      firstResponseAt: new Date(Date.parse(createdAt) + 60_000).toISOString(),
+    });
+  }
+
+  /**
+   * An enquiry that lands WHILE the snapshot's queries are in flight, so its
+   * created_at is after the instant the snapshot captured. It is the only kind of row
+   * a shared ceiling can exclude, and the only kind that can otherwise be in one
+   * query's answer and not another's.
+   */
+  function midFlight(stage: LeadStage = "new"): SpeedToLeadLead {
+    return contactedLead(new Date(Date.now() + 5_000).toISOString(), stage);
+  }
+
+  it("gives every query the SAME upper instant, taken once at entry", async () => {
+    listLeadsMock.mockResolvedValue([contactedLead(daysAgo(1))]);
+    countLeadsMock.mockImplementation(async (_s: string[], _since: string, stages?: string[]) =>
+      stages?.includes("booked") ? 3 : 12,
+    );
+
+    const before = Date.now();
+    await buildSnapshot("month", ["site-cc"]);
+    const after = Date.now();
+
+    const detailArgs = listLeadsMock.mock.calls[0][0] as { untilIso?: string; sinceIso?: string };
+    const [enquiryCall, bookedCall] = countLeadsMock.mock.calls as [
+      [string[], string, string[]?, string?],
+      [string[], string, string[]?, string?],
+    ];
+
+    expect(detailArgs.untilIso, "an open-topped window is what lets the reads drift").toBeTruthy();
+    expect(enquiryCall[3], "the enquiry count shares the ceiling").toBe(detailArgs.untilIso);
+    expect(bookedCall[3], "and so does the booked count it is divided into").toBe(
+      detailArgs.untilIso,
+    );
+    expect(enquiryCall[1], "the floor was already shared").toBe(detailArgs.sinceIso);
+    expect(bookedCall[1]).toBe(detailArgs.sinceIso);
+
+    // Captured once, at entry: not one `new Date()` per query.
+    const at = Date.parse(detailArgs.untilIso!);
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeLessThanOrEqual(after);
+  });
+
+  it("a lead landing mid-flight cannot be contacted-but-never-enquired", async () => {
+    // Twelve settled enquiries, every one of them answered. The counts reach the
+    // store first and see it as it was; the detail read arrives a moment later, by
+    // which time a thirteenth enquiry has come in and been answered.
+    const settled = Array.from({ length: 12 }, (_, i) =>
+      contactedLead(daysAgo(i + 1), i < 4 ? "booked" : "new"),
+    );
+    const landed = [...settled, midFlight()];
+
+    countLeadsMock.mockImplementation(
+      async (_s: string[], sinceIso: string, stages?: string[], untilIso?: string) =>
+        windowOf(settled, sinceIso, untilIso, stages).length,
+    );
+    listLeadsMock.mockImplementation(
+      async (args: { sinceIso: string; untilIso?: string; limit: number }) =>
+        windowOf(landed, args.sinceIso, args.untilIso).slice(0, args.limit),
+    );
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.enquiries).toBe(12);
+    expect(m.contacted, "the sample was bounded to the same window the counts were").toBe(12);
+    expect(
+      m.contacted,
+      "more leads answered than ever enquired is not a thing that can be true",
+    ).toBeLessThanOrEqual(m.enquiries);
+  });
+
+  it("a booking landing between the two counts cannot outnumber the enquiries", async () => {
+    // Four enquiries in the window, all four booked. A fifth lands and is booked in
+    // the gap between the enquiry count and the booked count.
+    const settled = Array.from({ length: 4 }, (_, i) => contactedLead(daysAgo(i + 1), "booked"));
+    const landed = [...settled, midFlight("booked")];
+
+    countLeadsMock.mockImplementation(
+      async (_s: string[], sinceIso: string, stages?: string[], untilIso?: string) =>
+        windowOf(stages?.includes("booked") ? landed : settled, sinceIso, untilIso, stages).length,
+    );
+    listLeadsMock.mockImplementation(
+      async (args: { sinceIso: string; untilIso?: string; limit: number }) =>
+        windowOf(settled, args.sinceIso, args.untilIso).slice(0, args.limit),
+    );
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.enquiries).toBe(4);
+    expect(m.booked, "the later count answers about the same window as the earlier one").toBe(4);
+    expect(m.booked).toBeLessThanOrEqual(m.enquiries);
+    expect(m.enquiryToBookedRate).toBe(1);
+  });
+
+  it("never prints a conversion rate above 100%, whatever the two figures say", async () => {
+    // Defence in depth, and deliberately impossible input: the shared window above is
+    // what should prevent this, so this pins what happens if anything else ever lets
+    // the two figures disagree — a clock skew, a row committed out of order, a future
+    // caller. 201 booked out of 100 enquiries would render as "201%" on the page and
+    // be read aloud by the AI review as a fact about the practice.
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 100 }, (_, i) => contactedLead(daysAgo((i % 20) + 1), "booked")),
+    );
+    countLeadsMock.mockImplementation(async (_s: string[], _since: string, stages?: string[]) =>
+      stages?.includes("booked") ? 201 : 100,
+    );
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+
+    expect(m.enquiryToBookedRate, "clamped to [0,1], not 2.01").toBe(1);
+    expect(Math.round(m.enquiryToBookedRate * 100)).toBeLessThanOrEqual(100);
+  });
+
+  it("leaves an ordinary rate exactly where it was", async () => {
+    // The clamp must not round or shift a real figure: the control for the two above.
+    listLeadsMock.mockResolvedValue(
+      Array.from({ length: 20 }, (_, i) => contactedLead(daysAgo((i % 20) + 1))),
+    );
+    countLeadsMock.mockImplementation(async (_s: string[], _since: string, stages?: string[]) =>
+      stages?.includes("booked") ? 3 : 40,
+    );
+
+    const m = await buildSnapshot("month", ["site-cc"]);
+    expect(m.enquiryToBookedRate).toBeCloseTo(0.08, 5);
+  });
+});

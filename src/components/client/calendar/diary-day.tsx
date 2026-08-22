@@ -6,6 +6,7 @@ import type { FundingCode } from "@/lib/calendar/funding";
 import { occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
 import {
   columnIsHatched,
+  columnWorkSummary,
   offSpans,
   type ColumnWorkState,
   type Span,
@@ -675,33 +676,18 @@ export function DiaryDay({
     () =>
       columns.map((col) => {
         const placed = layoutColumn(col.appointments);
-        // The header's second line, and the three claims it may make.
-        // "Hours not loaded" is a DIFFERENT sentence from "Not working": the first
-        // says we could not find out, the second says we asked and they are off.
-        // Collapsing them is the confident empty this whole design refuses.
+        // The header's second line. The words for a WORK STATE are not chosen
+        // here: every one of them comes from COLUMN_WORK_PRESENTATION, the single
+        // exhaustive mapping in the module that owns the union, so this grid and
+        // the week grid cannot word the same state differently and a state added
+        // to the union cannot fall out of the bottom of a ternary chain and land
+        // silently on "Not working". null means the state has nothing to say and
+        // the counts are the better sentence. "Not loaded" stays here because it
+        // is not a work state at all: it is this screen's failed read.
         const summary = countsUnavailable
           ? "Not loaded"
-          : col.workState === "unknown"
-            ? hoursPending
-              ? "Reading hours"
-              : "Hours not loaded"
-            : col.workState === "unconfirmed"
-              ? // NOT "Not working". They may well be working, at another of these
-                // practices, and their availability carries no site to tell us.
-                "Not confirmed here"
-              : col.workState === "past"
-                ? // NOT "Hours not loaded" either: nothing failed and nothing will
-                  // load. Dentally will not answer for a date that has gone by.
-                  "Date has passed"
-                : col.workState === "unreportable"
-                  ? // NOT "Date has passed": the date is TODAY, and today has not
-                    // passed. NOT "Not working" either: their morning is missing
-                    // from the answer because Dentally only reports hours from now
-                    // onwards, and silence about the morning is not evidence.
-                    "Hours not reportable"
-                  : col.workState === "off"
-                    ? "Not working"
-                    : columnCounts(col.appointments);
+          : (columnWorkSummary(col.workState, { hoursPending }) ??
+            columnCounts(col.appointments));
         // A pending read is quiet, and so is a date in the past: neither is a
         // problem the reader has to do anything about. Only a failure and a
         // clinician we cannot place are loud.

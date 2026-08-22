@@ -1,13 +1,18 @@
 // Client-side funnel tracker for the public funnels (smile-assessment quiz +
 // booking page). Fire-and-forget by design: it batches PII-free step events and
-// flushes them to POST /api/funnel-event via navigator.sendBeacon (falling back
-// to a keepalive fetch), so a flush survives the page being navigated away and
+// flushes them to POST /api/funnel-event through the shared browser transport
+// (@/lib/beacon-transport), so a flush survives the page being navigated away and
 // NEVER blocks or breaks the UI. Every path is wrapped so telemetry can never
-// throw into a render or a click handler.
+// throw into a render or a click handler — this runs on an UNAUTHENTICATED page,
+// in front of a patient, where an exception is a broken quiz.
 //
-// This is a browser-only module (guards on typeof window) with NO server imports,
-// so it is safe to pull into a "use client" component. Emit only non-PII scalars
-// in meta (e.g. a question index) — never names, contact details or answers.
+// This is a browser-only module (guards on typeof window) with NO server imports:
+// the transport is its only import and imports nothing itself (pinned by
+// beacon-transport.test.ts), so it is safe to pull into a "use client" component.
+// Emit only non-PII scalars in meta (e.g. a question index) — never names, contact
+// details or answers.
+
+import { postJsonBeacon } from "@/lib/beacon-transport";
 
 type FunnelSurface = "assessment" | "booking";
 type FunnelMeta = Record<string, string | number | boolean>;
@@ -56,31 +61,21 @@ export function createFunnelTracker(opts: {
 
   function send(events: QueuedEvent[]): void {
     if (events.length === 0) return;
-    const payload = JSON.stringify({
-      clientSlug: opts.clientSlug,
-      surface: opts.surface,
-      sessionId,
-      campaignSlug: opts.campaignSlug,
-      events,
-    });
-    try {
-      if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-        const blob = new Blob([payload], { type: "application/json" });
-        if (navigator.sendBeacon(ENDPOINT, blob)) return;
-      }
-    } catch {
-      // fall through to fetch
-    }
-    try {
-      void fetch(ENDPOINT, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload,
-        keepalive: true,
-      }).catch(() => {});
-    } catch {
-      // Give up silently: telemetry must never surface an error.
-    }
+    // WHAT is sent is this module's business; HOW it leaves the page is not, and
+    // is shared with every other browser beacon (@/lib/beacon-transport). Only the
+    // mechanics are shared: this session id is minted here and goes nowhere else,
+    // and the transport keeps nothing between calls that could tie an anonymous
+    // visitor's batch to anyone else's.
+    postJsonBeacon(
+      ENDPOINT,
+      JSON.stringify({
+        clientSlug: opts.clientSlug,
+        surface: opts.surface,
+        sessionId,
+        campaignSlug: opts.campaignSlug,
+        events,
+      }),
+    );
   }
 
   function flush(): void {

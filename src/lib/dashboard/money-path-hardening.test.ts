@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
@@ -166,8 +166,11 @@ describe("F1: a scan Dentally has already said is too big does not walk anyway",
 
     const view = await readDashboard();
 
-    // One windowed read + one per site for the outstanding slice, each a single page.
-    expect(countPath(rec, "/v1/invoices")).toBe(1 + SITE_IDS.length);
+    // One windowed read + one per site for the outstanding slice, each a single page,
+    // + ONE reconciliation probe (paid=false, per_page=1) that reads meta.total and no
+    // rows: it is what lets the ACCOUNTS panel say how many unpaid invoices the
+    // site-scoped reads could not see. See pageUnpaidInvoices in read.ts.
+    expect(countPath(rec, "/v1/invoices")).toBe(1 + SITE_IDS.length + 1);
     expect(group(view).periods.last30.invoiced.totalPence.value).toBeNull();
     expect(group(view).periods.last30.invoiced.totalPence.reason).toContain(
       "more invoices in this period",
@@ -187,7 +190,7 @@ describe("F1: a scan Dentally has already said is too big does not walk anyway",
       return { invoices: [] };
     });
     await readDashboard();
-    expect(countPath(rec, "/v1/invoices")).toBe(1 + SITE_IDS.length);
+    expect(countPath(rec, "/v1/invoices")).toBe(1 + SITE_IDS.length + 1);
   }, 60_000);
 
   it("asks for the page size the shared pager measures short pages against", async () => {
@@ -219,8 +222,13 @@ describe("F1: a scan Dentally has already said is too big does not walk anyway",
     });
 
     const view = await readDashboard();
+    // The reconciliation probe also carries paid=false, and is excluded by its
+    // per_page=1: it fetches no rows and takes no part in the walk.
     const unpaid = rec.calls.filter(
-      (c) => c.path.endsWith("/v1/invoices") && c.q.get("paid") === "false",
+      (c) =>
+        c.path.endsWith("/v1/invoices") &&
+        c.q.get("paid") === "false" &&
+        c.q.get("site_id") !== null,
     );
     expect(unpaid.length, "the walk stopped early — a full page was read as short").toBe(
       SCAN_MAX_PAGES * SITE_IDS.length,
@@ -243,15 +251,24 @@ describe("F2: the outstanding-invoice read is scoped per site, and de-duplicated
     globalThis.fetch = harness(rec, () => undefined);
     await readDashboard();
 
-    const unpaid = rec.calls.filter(
+    const unpaidCalls = rec.calls.filter(
       (c) => c.path.endsWith("/v1/invoices") && c.q.get("paid") === "false",
     );
+    const unpaid = unpaidCalls.filter((c) => c.q.get("site_id") !== null);
     expect(unpaid.length).toBe(SITE_IDS.length);
     expect(unpaid.map((c) => c.q.get("site_id")).sort()).toEqual(
       SITE_IDS.map((id) => SITE_UUIDS[id]!).sort(),
     );
     // Still not a window question: an invoice raised three years ago is still owed.
     for (const c of unpaid) expect(c.q.get("created_after")).toBeNull();
+
+    // THE ONE GROUP-WIDE paid=false REQUEST IS THE RECONCILIATION PROBE, and it is a
+    // probe rather than a read: per_page=1, so it costs one request and brings back
+    // meta.total instead of the 3,853 rows a group-wide walk would. It is what tells
+    // the ACCOUNTS panel how many unpaid invoices the three scoped reads never saw.
+    const probe = unpaidCalls.filter((c) => c.q.get("site_id") === null);
+    expect(probe.length).toBe(1);
+    expect(probe[0]!.q.get("per_page")).toBe("1");
 
     // And the WINDOWED read is deliberately still group-wide — 90 days is nowhere
     // near the ceiling, so splitting it would buy two more requests for nothing.
@@ -623,7 +640,7 @@ describe("F7: an invoice is bucketed on created_at, the field the filter uses", 
 });
 
 // ---------------------------------------------------------------------------
-// F8 — one meta.total parser
+// F8 — one meta.total parser, and one function called pageAll
 // ---------------------------------------------------------------------------
 
 describe("F8: meta.total is parsed in exactly one place", () => {
@@ -638,6 +655,58 @@ describe("F8: meta.total is parsed in exactly one place", () => {
     expect(readSource, "a hand-rolled row-count grammar is back in read.ts").not.toContain(
       "/^\\d+$/",
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // AND THE SAME RULE ONE LEVEL UP: NO TWO FUNCTIONS MAY BE CALLED `pageAll`.
+  //
+  // The structural check above reads exactly one file, so it could not see what was
+  // sitting two directories away: THREE functions named `pageAll`, with three
+  // different contracts about the only question a pager is asked.
+  //
+  //   src/lib/reports/scan.ts        measures completeness against `meta.total` and
+  //                                  returns { raw, complete, expected } — a caller
+  //                                  cannot total a slice by accident.
+  //   src/lib/dentally/read.ts       no completeness signal at all; truncates in
+  //                                  silence at maxPages. Seven display reads on it.
+  //   src/lib/dentally/charting-read.ts  reports hitting its ceiling via a flag.
+  //
+  // A reader who knew one had no way to tell which was in front of them, and the
+  // difference between them is the difference between a total and a slice. The two
+  // weaker ones are now named for what they do (`pageBounded`, `pageToCeiling`); this
+  // pins that the name stays attached to the ONE pager that can prove a read is whole.
+  //
+  // It crawls the whole of src/ rather than a list of files, because a fourth copy
+  // will not be written where the last three were.
+  // -------------------------------------------------------------------------
+
+  it("declares `pageAll` exactly once in the whole of src/", () => {
+    const SRC = join(process.cwd(), "src");
+    const declarations: string[] = [];
+    const DECLARES_PAGE_ALL =
+      /(?:function\s+pageAll\s*[<(]|(?:const|let|var)\s+pageAll\s*[:=])/;
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        // .claude/worktrees and node_modules are full repo copies: they would match
+        // the same declaration again and report a divergence that does not exist.
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+          walk(full);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        if (DECLARES_PAGE_ALL.test(readFileSync(full, "utf8"))) declarations.push(full);
+      }
+    };
+    walk(SRC);
+
+    expect(
+      declarations.map((f) => f.slice(SRC.length + 1)),
+      "a second function named pageAll is back; two pagers under one name is how a " +
+        "truncated read gets totalled",
+    ).toEqual(["lib/reports/scan.ts"]);
   });
 
   it("uses it on BOTH the takings aggregate and the paging guard", async () => {
@@ -659,9 +728,16 @@ describe("F8: meta.total is parsed in exactly one place", () => {
     const today = group(view).strip.cells.find((c) => c.period === "today")!;
     expect(today.paymentCount).toBe(3 * SITE_IDS.length);
     expect(today.totalPence).toBe(1_234 * SITE_IDS.length);
-    // The paging guard read the same string and refused the walk.
+    // The paging guard read the same string and refused the walk. (The group-wide
+    // reconciliation probe carries paid=false too, and is excluded by its missing
+    // site_id: it fetches no rows and does no walking.)
     expect(
-      rec.calls.filter((c) => c.path.endsWith("/v1/invoices") && c.q.get("paid") === "false").length,
+      rec.calls.filter(
+        (c) =>
+          c.path.endsWith("/v1/invoices") &&
+          c.q.get("paid") === "false" &&
+          c.q.get("site_id") !== null,
+      ).length,
     ).toBe(SITE_IDS.length);
     expect(group(view).accounts.netBalancePence.value).toBeNull();
   }, 60_000);

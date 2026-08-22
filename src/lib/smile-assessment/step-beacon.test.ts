@@ -156,16 +156,18 @@ describe("the beacon is safe to pull into a client component", () => {
   // destined for a "use client" quiz; a serviceClient in its graph is a
   // service-role key in a public page's bundle.
   //
-  // ./beacon-transport joined the list when the sendBeacon-then-keepalive-fetch
-  // block stopped being copied between this file and funnel-progress-beacon.ts.
-  // It is still a CLOSED list of two, and the property this test is really about
-  // is unchanged, because beacon-transport.ts imports nothing at all —
+  // The transport joined the list when the sendBeacon-then-keepalive-fetch block
+  // stopped being copied between this file and funnel-progress-beacon.ts, and moved
+  // to @/lib/beacon-transport when two further copies outside smile-assessment (the
+  // public funnel tracker, the authed usage beacon) folded into it as well. It is
+  // still a CLOSED list of two, and the property this test is really about is
+  // unchanged, because the transport imports nothing at all —
   // beacon-transport.test.ts pins that, so the graph cannot widen through it.
   it("imports only the pure rules module and the shared transport", () => {
     const imports = [...SOURCE.matchAll(/^\s*import\b[\s\S]*?from\s+["']([^"']+)["']/gm)].map(
       (m) => m[1],
     );
-    expect(imports.sort()).toEqual(["./beacon-transport", "./step-events"]);
+    expect(imports.sort()).toEqual(["./step-events", "@/lib/beacon-transport"]);
   });
 
   it("names nothing server-only", () => {

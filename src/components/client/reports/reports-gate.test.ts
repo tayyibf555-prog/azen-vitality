@@ -37,7 +37,7 @@ vi.mock("@/lib/speed-to-lead/repository", () => ({
   countLeadsInWindow: vi.fn(),
 }));
 
-import { reportsGate, snapshotUsable, type ReportSnapshot } from "@/lib/reports/snapshot";
+import { reportsGate, snapshotUsable, type ReportSnapshot, type ReportsGate } from "@/lib/reports/snapshot";
 import { ReportsWorkspace } from "./reports-workspace";
 
 /** A snapshot with everything readable, overridden field by field per case. */
@@ -104,18 +104,18 @@ describe("the reports page is gated on both periods, not the month alone", () =>
     expect(gate.kind === "workspace" && gate.defaultPeriod).toBe("month");
   });
 
-  it("refuses the page only when NEITHER period can be read, and gives the month's reason", () => {
+  it("refuses the page when neither period can be read, and gives the month's reason", () => {
     const failedBoth = reportsGate({
       week: snap("week", { readFailed: true, hasEnoughData: false, enquiries: 0 }),
       month: snap("month", { readFailed: true, hasEnoughData: false, enquiries: 0 }),
     });
-    expect(failedBoth).toEqual({ kind: "unavailable", readFailed: true });
+    expect(failedBoth).toEqual({ kind: "unavailable", readFailed: true, period: "month" });
 
     const busyBoth = reportsGate({
       week: snap("week", { truncated: true, countsExact: false, hasEnoughData: false }),
       month: BUSY_UNCOUNTED_MONTH,
     });
-    expect(busyBoth).toEqual({ kind: "unavailable", readFailed: false });
+    expect(busyBoth).toEqual({ kind: "unavailable", readFailed: false, period: "month" });
   });
 
   it("a genuinely quiet practice still gets the awaiting state, not a workspace", () => {
@@ -124,6 +124,112 @@ describe("the reports page is gated on both periods, not the month alone", () =>
       month: snap("month", { enquiries: 0, booked: 0, contacted: 0, hasEnoughData: false }),
     });
     expect(gate.kind, "two readable, empty periods is a fact about the practice").toBe("awaiting");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AN OUTAGE MUST NEVER WEAR THE QUIET-PRACTICE MESSAGE.
+//
+// The gate above drew its `awaiting` decision from the USABLE periods alone:
+//
+//     const withActivity = usable.filter((p) => snapshots[p].enquiries > 0);
+//     if (withActivity.length === 0) return { kind: "awaiting" };
+//
+// Read that with a month whose read FAILED beside a quiet week. The month is not
+// usable, so it is not in `usable` and cannot be in `withActivity`; the week is
+// usable and empty, so `withActivity` is empty — and the page tells the owner
+// "Your first report unlocks with live activity". The store was down. The page
+// this replaced said, for exactly this input, "This is a read failing, not a quiet
+// month". Losing that is how an outage comes to be read as a quiet practice and
+// acted on as one — nobody chases the store, because nothing looked wrong.
+//
+// The rule, walked row by row below: the workspace still renders on activity in
+// EITHER period, but `awaiting` may only be claimed when EVERY period was read.
+// One unusable period and nothing to show means the page states that period's own
+// reason, and a read that failed is named ahead of a period merely too busy to
+// count.
+// ---------------------------------------------------------------------------
+describe("the gate's full truth table", () => {
+  /** Readable, with real enquiries: the ordinary period. */
+  const ACTIVE = (p: "week" | "month") => snap(p, { enquiries: 24, booked: 7 });
+  /** Readable and empty: a genuinely quiet period. */
+  const QUIET = (p: "week" | "month") =>
+    snap(p, { enquiries: 0, booked: 0, contacted: 0, hasEnoughData: false });
+  /** The store did not answer. NOT zero activity — no activity was learned at all. */
+  const FAILED = (p: "week" | "month") =>
+    snap(p, { readFailed: true, hasEnoughData: false, enquiries: 0, booked: 0, contacted: 0 });
+  /** Busier than one read and uncountable with it: its figures would be a floor. */
+  const FLOOR = (p: "week" | "month") =>
+    snap(p, { truncated: true, countsExact: false, hasEnoughData: false, enquiries: 500 });
+
+  const STATES = { ACTIVE, QUIET, FAILED, FLOOR };
+  type StateName = keyof typeof STATES;
+
+  const rows: [StateName, StateName, ReportsGate][] = [
+    // month           week            expected
+    ["ACTIVE", "ACTIVE", { kind: "workspace", defaultPeriod: "month" }],
+    ["ACTIVE", "QUIET", { kind: "workspace", defaultPeriod: "month" }],
+    ["ACTIVE", "FAILED", { kind: "workspace", defaultPeriod: "month" }],
+    ["ACTIVE", "FLOOR", { kind: "workspace", defaultPeriod: "month" }],
+    ["QUIET", "ACTIVE", { kind: "workspace", defaultPeriod: "week" }],
+    ["QUIET", "QUIET", { kind: "awaiting" }],
+    ["QUIET", "FAILED", { kind: "unavailable", readFailed: true, period: "week" }],
+    ["QUIET", "FLOOR", { kind: "unavailable", readFailed: false, period: "week" }],
+    ["FAILED", "ACTIVE", { kind: "workspace", defaultPeriod: "week" }],
+    ["FAILED", "QUIET", { kind: "unavailable", readFailed: true, period: "month" }],
+    ["FAILED", "FAILED", { kind: "unavailable", readFailed: true, period: "month" }],
+    ["FAILED", "FLOOR", { kind: "unavailable", readFailed: true, period: "month" }],
+    ["FLOOR", "ACTIVE", { kind: "workspace", defaultPeriod: "week" }],
+    ["FLOOR", "QUIET", { kind: "unavailable", readFailed: false, period: "month" }],
+    ["FLOOR", "FAILED", { kind: "unavailable", readFailed: true, period: "week" }],
+    ["FLOOR", "FLOOR", { kind: "unavailable", readFailed: false, period: "month" }],
+  ];
+
+  for (const [monthState, weekState, expected] of rows) {
+    const outcome =
+      expected.kind === "workspace"
+        ? `the workspace on the ${expected.defaultPeriod}`
+        : expected.kind === "awaiting"
+          ? "the quiet-practice awaiting state"
+          : `${expected.readFailed ? "a read failure" : "a period bigger than one read"}, the ${expected.period}'s`;
+    it(`month ${monthState} + week ${weekState} -> ${outcome}`, () => {
+      const gate = reportsGate({
+        month: STATES[monthState]("month"),
+        week: STATES[weekState]("week"),
+      });
+      expect(gate).toEqual(expected);
+    });
+  }
+
+  it("never shows the awaiting state while any period went unread", () => {
+    // The single rule the table above is an enumeration of. Stated once on its own
+    // so a future row cannot quietly re-open the hole by being written wrong.
+    for (const [monthState, weekState] of rows) {
+      if (monthState === "FAILED" || weekState === "FAILED" || monthState === "FLOOR" || weekState === "FLOOR") {
+        const gate = reportsGate({
+          month: STATES[monthState]("month"),
+          week: STATES[weekState]("week"),
+        });
+        expect(gate.kind, `month ${monthState} + week ${weekState} is not a quiet practice`).not.toBe(
+          "awaiting",
+        );
+      }
+    }
+  });
+
+  it("the regression itself: a failed month beside a quiet week is a read failure", () => {
+    // usable = [week], withActivity = [] — the input that returned `awaiting`.
+    const month = FAILED("month");
+    const week = QUIET("week");
+    expect(snapshotUsable(month), "the failed month is not usable").toBe(false);
+    expect(snapshotUsable(week), "the quiet week is perfectly usable").toBe(true);
+    expect(week.enquiries, "and it holds no activity to render a workspace from").toBe(0);
+
+    const gate = reportsGate({ week, month });
+    expect(gate.kind, "the store was down; nobody may be told their practice is quiet").not.toBe(
+      "awaiting",
+    );
+    expect(gate).toEqual({ kind: "unavailable", readFailed: true, period: "month" });
   });
 });
 
@@ -196,5 +302,12 @@ describe("the page's own gate", () => {
 
   it("hands the workspace the period to open on", () => {
     expect(viewSource).toMatch(/defaultPeriod=\{gate\.defaultPeriod\}/);
+  });
+
+  it("names the period the refusal is about instead of assuming the month", () => {
+    // The gate can now refuse the page because of the WEEK, so copy that says "this
+    // month holds more enquiries than a single read carries" would be describing the
+    // wrong window.
+    expect(viewSource).toMatch(/gate\.period/);
   });
 });

@@ -99,9 +99,10 @@ async function readDetail(
   period: ReportPeriod,
   siteIds: string[],
   sinceIso: string,
+  untilIso: string,
 ): Promise<{ leads: SpeedToLeadLead[]; failed: boolean }> {
   try {
-    const leads = await listLeads({ siteIds, limit: SNAPSHOT_LEAD_LIMIT, sinceIso });
+    const leads = await listLeads({ siteIds, limit: SNAPSHOT_LEAD_LIMIT, sinceIso, untilIso });
     return { leads, failed: false };
   } catch (err) {
     console.error(`[reports] snapshot enquiry read failed for ${period}`, err);
@@ -116,16 +117,21 @@ async function readDetail(
  *
  * Two counts, not one over-fetch: `head: true` returns no rows, so this is two
  * index counts rather than two reads.
+ *
+ * They are TWO QUERIES DIVIDED BY ONE ANOTHER, which is why both carry `untilIso`.
+ * A booking that lands between them would otherwise be counted as booked and not as
+ * an enquiry, and the conversion rate the page prints is booked ÷ enquiries.
  */
 async function readExactCounts(
   period: ReportPeriod,
   siteIds: string[],
   sinceIso: string,
+  untilIso: string,
 ): Promise<{ enquiries: number; booked: number } | null> {
   try {
     const [enquiries, booked] = await Promise.all([
-      countLeadsInWindow(siteIds, sinceIso),
-      countLeadsInWindow(siteIds, sinceIso, ["booked"]),
+      countLeadsInWindow(siteIds, sinceIso, undefined, untilIso),
+      countLeadsInWindow(siteIds, sinceIso, ["booked"], untilIso),
     ]);
     return { enquiries, booked };
   } catch (err) {
@@ -157,12 +163,26 @@ export async function buildSnapshot(
   period: ReportPeriod,
   siteIds: string[],
 ): Promise<ReportSnapshot> {
-  const cutoff = Date.now() - WINDOW_DAYS[period] * 24 * 60 * 60 * 1000;
+  // ONE INSTANT, TAKEN ONCE, FOR EVERY QUERY THIS SNAPSHOT MAKES.
+  //
+  // Three questions go to the store CONCURRENTLY — how many enquiries, how many of
+  // them booked, and what the newest of them look like — and they reach the database
+  // at three different moments. A window with only a floor is open at the top, so an
+  // enquiry created while they are in flight lands in whichever of them resolves
+  // after it and not in the ones that resolved before, and the answers no longer
+  // describe the same set of leads. That is not a rounding error on a busy practice:
+  // it is a snapshot saying more leads were contacted than ever enquired, or more
+  // were booked than came in, printed on the page as fact and handed to the model
+  // that narrates it. `untilIso` closes the top of the window, once, here, so all
+  // three queries answer about one window.
+  const now = Date.now();
+  const untilIso = new Date(now).toISOString();
+  const cutoff = now - WINDOW_DAYS[period] * 24 * 60 * 60 * 1000;
   const sinceIso = new Date(cutoff).toISOString();
 
   const [detail, counted] = await Promise.all([
-    readDetail(period, siteIds, sinceIso),
-    readExactCounts(period, siteIds, sinceIso),
+    readDetail(period, siteIds, sinceIso, untilIso),
+    readExactCounts(period, siteIds, sinceIso, untilIso),
   ]);
   const readFailed = detail.failed;
 
@@ -198,7 +218,18 @@ export async function buildSnapshot(
     if (!topSource || count > topSource.count) topSource = { source, count };
   }
 
-  const enquiryToBookedRate = enquiries > 0 ? Math.round((booked / enquiries) * 100) / 100 : 0;
+  // CLAMPED, AND NOT BECAUSE THE ARITHMETIC IS IN DOUBT. `booked` and `enquiries`
+  // come from two different queries (or, when the count failed, from one sample), and
+  // the shared `untilIso` above is what makes them describe one window. This is the
+  // second line of defence for the day something else lets them disagree — a clock
+  // skew between the store and this process, a row committed out of order, a future
+  // caller passing the two figures in from somewhere else. A rate above 1 renders as
+  // "201% of enquiries booked" and is read aloud by the AI review as a fact about the
+  // practice; a nonsense figure the page cannot stand behind must not be one it
+  // prints. The clamp is deliberately silent: it bounds what is shown, it does not
+  // invent the missing enquiries.
+  const rawRate = enquiries > 0 ? booked / enquiries : 0;
+  const enquiryToBookedRate = Math.round(Math.min(1, Math.max(0, rawRate)) * 100) / 100;
 
   return {
     period,
@@ -239,7 +270,12 @@ export function snapshotUsable(s: ReportSnapshot): boolean {
 export type ReportsGate =
   | { kind: "workspace"; defaultPeriod: ReportPeriod }
   | { kind: "awaiting" }
-  | { kind: "unavailable"; readFailed: boolean };
+  /**
+   * Nothing showable, and the reason belongs to a PERIOD: `period` is the one whose
+   * reason is being given, so the page can name the window it is talking about rather
+   * than describing a failed week in the month's words.
+   */
+  | { kind: "unavailable"; readFailed: boolean; period: ReportPeriod };
 
 /**
  * THE WHOLE PAGE MUST NOT HANG ON ONE PERIOD.
@@ -253,17 +289,38 @@ export type ReportsGate =
  * So the workspace renders when EITHER period is usable, and the tab the owner lands
  * on is a usable one. The unusable tab is not hidden or faked: its own strip states
  * why, per period, in its own words.
+ *
+ * AND "NOBODY HAS BEEN IN TOUCH YET" IS A CLAIM ABOUT THE PRACTICE. It may only be
+ * made when every period was actually read. The gate previously drew `awaiting` from
+ * the USABLE periods alone, so a failed month beside a quiet week — usable: [week],
+ * with activity: none — fell through to the quiet-practice empty state, and an outage
+ * was shown to the owner as "your first report unlocks with live activity". The
+ * pre-refactor page said "this is a read failing, not a quiet month" for that exact
+ * input. An unreadable period is a fact that OUTRANKS silence: whenever one exists
+ * and there is no activity to show, the page states it, and a read failure outranks a
+ * period merely too busy to count.
  */
 export function reportsGate(snapshots: Record<ReportPeriod, ReportSnapshot>): ReportsGate {
   // Month first: it is the headline window, and the one the page's stat cards read.
   const order: ReportPeriod[] = ["month", "week"];
   const usable = order.filter((p) => snapshotUsable(snapshots[p]));
-  if (usable.length === 0) {
-    // Both are unusable, so the month is too, and the month's own reason is the
-    // honest one to show for a page whose headline figures are the 30-day ones.
-    return { kind: "unavailable", readFailed: snapshots.month.readFailed };
-  }
+  const unusable = order.filter((p) => !snapshotUsable(snapshots[p]));
+
+  // Real activity we can stand behind, on either tab, is a workspace — including
+  // when the other period is the one that failed. Its own tab explains itself.
   const withActivity = usable.filter((p) => snapshots[p].enquiries > 0);
-  if (withActivity.length === 0) return { kind: "awaiting" };
-  return { kind: "workspace", defaultPeriod: withActivity[0] };
+  if (withActivity.length > 0) return { kind: "workspace", defaultPeriod: withActivity[0] };
+
+  // Nothing to show. Before the page can say the practice is quiet, EVERY period has
+  // to have been read: one unusable period means the quiet is unproven, and the
+  // unusable period's own reason is what the owner is owed. A read that failed is
+  // named ahead of a period too busy to count, because an outage must never be shown
+  // in the milder words of a busy month.
+  if (unusable.length > 0) {
+    const reason = unusable.find((p) => snapshots[p].readFailed) ?? unusable[0];
+    return { kind: "unavailable", readFailed: snapshots[reason].readFailed, period: reason };
+  }
+
+  // Every period read cleanly and every one of them is empty: the quiet is real.
+  return { kind: "awaiting" };
 }

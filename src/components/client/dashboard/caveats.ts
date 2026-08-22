@@ -173,6 +173,32 @@ export function accountsCaveats(panel: AccountsPanel): Caveat[] {
     });
   }
 
+  // WHAT SITE-SCOPING THE READ LEAVES OUT, SAID RATHER THAN SWALLOWED.
+  //
+  // The unpaid-invoice read asks Dentally for each of this client's sites in turn, so
+  // an unpaid invoice filed under no site never reaches this panel — even though a
+  // balance is attributed to a PATIENT, and that invoice may well be one of these
+  // patients'. Until this sentence existed, that patient's balance was simply short
+  // and nothing on the screen said so.
+  //
+  // TWO CAUSES, AND THE SENTENCE COMMITS TO NEITHER, because the read cannot tell them
+  // apart without fetching every row it deliberately did not fetch: the key sees an
+  // umbrella of practices, only some of which this client runs, so part of this gap is
+  // debt it is CORRECT to exclude. "N invoices carry no site" would be a number nobody
+  // can stand behind; this says what is missing and why it might be missing.
+  const missing = panel.unattributedUnpaid ?? 0;
+  if (missing > 0) {
+    out.push({
+      id: "accounts-unattributed",
+      label: `${missing} unpaid invoice${s(missing)} not shown`,
+      text:
+        `Dentally holds ${missing} unpaid invoice${s(missing)} that this balance does not ` +
+        `include: ${isAre(missing)} filed under no site, or under a practice outside this ` +
+        `group. Some may belong to patients here, so the balance may be understated.`,
+      material: true,
+    });
+  }
+
   return out;
 }
 

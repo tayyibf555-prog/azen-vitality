@@ -278,8 +278,14 @@ export class DentallyClient {
     return this.get<{ sites: unknown[] }>("/v1/sites", { page: 1, per_page: 100 });
   }
 
+  // The envelope is typed WITH `meta` because the dashboard's plan scan is paged by
+  // the shared pager, which measures completeness against `meta.total` when the
+  // endpoint publishes one. Whether live /v1/treatment_plans does is UNVERIFIED — the
+  // local mock publishes `{ total, page }`, and no read-only probe of live has
+  // recorded one here. `meta?: unknown` is therefore the honest type: absent is a
+  // supported answer, and the pager falls back to its short-page stop when it is.
   listTreatmentPlans(a: ListPlansArgs) {
-    return this.get<{ treatment_plans: unknown[] }>("/v1/treatment_plans", {
+    return this.get<{ treatment_plans: unknown[]; meta?: unknown }>("/v1/treatment_plans", {
       site_id: a.siteId, patient_id: a.patientId, updated_after: a.updatedAfter, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
@@ -553,10 +559,13 @@ export class DentallyClient {
     return this.get<{ payment_plans: unknown[] }>("/v1/payment_plans", { patient_id: patientId });
   }
 
+  // `meta` IS published here on live: countPatients above reads `meta.total` off this
+  // very endpoint to get a site's exact patient count from a one-row page. It is typed
+  // optional all the same because the local mock publishes none.
   listPatients(a: ListPatientsArgs) {
     // `query` is Dentally's name/contact search param. Existing callers omit it, so
     // it stays undefined and the request is unchanged (get() drops undefined params).
-    return this.get<{ patients: unknown[] }>("/v1/patients", {
+    return this.get<{ patients: unknown[]; meta?: unknown }>("/v1/patients", {
       site_id: a.siteId, updated_after: a.updatedAfter, query: a.query, page: a.page ?? 1, per_page: a.perPage ?? 100,
     });
   }
@@ -585,8 +594,12 @@ export class DentallyClient {
     // unstated, so pad each edge by a day and let callers' precise windows trim.
     // cancelled=true includes Cancelled / Did-not-attend rows (excluded by
     // default), which no-show reconciliation and the daily-brief gap count need.
+    //
+    // `meta` is typed optional and NOT relied on: no probe of live has recorded one on
+    // this endpoint and the local mock publishes none, so the dashboard's appointment
+    // scan reaches its verdict through the short-page stop exactly as it always has.
     const single = a.fromDate !== undefined && a.fromDate === a.toDate;
-    return this.get<{ appointments: unknown[] }>("/v1/appointments", {
+    return this.get<{ appointments: unknown[]; meta?: unknown }>("/v1/appointments", {
       site_id: a.siteId,
       on: single ? a.fromDate : undefined,
       after: single ? undefined : shiftDay(a.fromDate, -1),
@@ -896,7 +909,7 @@ export class DentallyClient {
    *
    * `page` IS NOW SENT, and defaults to 1 so every existing caller keeps exactly
    * the request it made before. It exists because the plan panel's read walks this
-   * endpoint with the same pageAll() every other list read on that path uses: a
+   * endpoint with the same pageToCeiling() every other list read on that path uses: a
    * caller that took the first response as the whole answer would, at a practice
    * with more than a page of practitioners, silently fail to name the clinician on
    * a clinical record and render an empty initials column instead. Sending the

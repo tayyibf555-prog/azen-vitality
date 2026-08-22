@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AvailabilityWindow } from "./availability";
 import {
+  COLUMN_WORK_PRESENTATION,
   columnIsHatched,
   columnWorkState,
+  columnWorkSummary,
   mergeSpans,
   offSpans,
   workingSpans,
@@ -246,6 +248,9 @@ describe("columnWorkState and the part of today nobody could ask about", () => {
   });
 });
 
+/** The union itself, at runtime: every key the Record type forces to exist. */
+const ALL_WORK_STATES = Object.keys(COLUMN_WORK_PRESENTATION) as ColumnWorkState[];
+
 describe("columnIsHatched", () => {
   it("hatches every state that is not a claim about the clinician", () => {
     expect(columnIsHatched("unknown")).toBe(true);
@@ -263,19 +268,86 @@ describe("columnIsHatched", () => {
   });
 
   it("covers every member of ColumnWorkState, so a new one cannot slip past", () => {
-    const all: ColumnWorkState[] = [
-      "working",
-      "off",
-      "unknown",
-      "unconfirmed",
-      "past",
-      "unreportable",
-    ];
+    // DERIVED FROM THE MAPPING, not hand-written. This test used to list the six
+    // members in an array of its own, and the sentence in its name was therefore
+    // a promise it could not keep: the compiler never checked that array against
+    // the union, so a seventh member could be added and this test stayed green
+    // while the or-chain it was guarding quietly painted the new state grey.
+    // Object.keys of a Record<ColumnWorkState, ...> IS the union, and the Record
+    // is the thing both grids read.
+    const all = ALL_WORK_STATES;
     expect(all.filter(columnIsHatched)).toEqual([
       "unknown",
       "unconfirmed",
       "past",
       "unreportable",
     ]);
+  });
+});
+
+
+describe("COLUMN_WORK_PRESENTATION, the one mapping both grids read", () => {
+  it("has a row for every member of the union, and nothing else", () => {
+    // The compiler is the real guard -- a missing state does not typecheck -- so
+    // this only pins the count a reader of the header is entitled to assume.
+    expect([...ALL_WORK_STATES].sort()).toEqual([
+      "off",
+      "past",
+      "unconfirmed",
+      "unknown",
+      "unreportable",
+      "working",
+    ]);
+  });
+
+  it("gives every state that cannot claim a number a sentence of its own", () => {
+    for (const state of ALL_WORK_STATES) {
+      const shown = COLUMN_WORK_PRESENTATION[state];
+      if (state === "working") continue;
+      expect(shown.label, `"${state}" has no words`).toBeTruthy();
+    }
+  });
+
+  it("prints the counts for exactly ONE state: the one we can stand behind", () => {
+    // A null label means the column prints its appointment counts. Any state but
+    // "working" doing that is a confident number about a day we could not read.
+    expect(ALL_WORK_STATES.filter((s) => COLUMN_WORK_PRESENTATION[s].label === null)).toEqual([
+      "working",
+    ]);
+  });
+
+  it("never lets two states say the same thing, which is how six collapse into four", () => {
+    const said = ALL_WORK_STATES.flatMap((s) => [
+      COLUMN_WORK_PRESENTATION[s].label,
+      COLUMN_WORK_PRESENTATION[s].pendingLabel,
+    ]).filter((w): w is string => typeof w === "string");
+    expect(new Set(said).size, `duplicated wording: ${said.join(" | ")}`).toBe(said.length);
+  });
+});
+
+describe("columnWorkSummary", () => {
+  it("says exactly what the two grids used to say for themselves", () => {
+    expect(columnWorkSummary("working")).toBeNull();
+    expect(columnWorkSummary("off")).toBe("Not working");
+    expect(columnWorkSummary("unknown")).toBe("Hours not loaded");
+    expect(columnWorkSummary("unconfirmed")).toBe("Not confirmed here");
+    expect(columnWorkSummary("past")).toBe("Date has passed");
+    expect(columnWorkSummary("unreportable")).toBe("Hours not reportable");
+  });
+
+  it("changes the WORDS for a read in flight, and only for 'unknown'", () => {
+    expect(columnWorkSummary("unknown", { hoursPending: true })).toBe("Reading hours");
+    // Nothing else moves: a pending read says nothing about a date that has gone
+    // by, or about a clinician we cannot place at this practice.
+    for (const state of ALL_WORK_STATES) {
+      if (state === "unknown") continue;
+      expect(columnWorkSummary(state, { hoursPending: true })).toBe(columnWorkSummary(state));
+    }
+  });
+
+  it("does not change the TEXTURE for a read in flight", () => {
+    // Different words, same hatch: we still have no answer, and grey would claim
+    // the clinician was off while the question was still being asked.
+    expect(columnIsHatched("unknown")).toBe(true);
   });
 });

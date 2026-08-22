@@ -54,10 +54,20 @@ export interface OutstandingAccountsInput {
   /** Rows dropped upstream by the normaliser. */
   dropped?: number;
   /**
-   * Optional patient id to site id map, for the per-site view. Balances live on
-   * invoices, which do not carry a site, so attribution comes from the patient.
-   * Patients missing from the map are excluded when a site filter is applied,
-   * never assigned to the selected site.
+   * Optional patient id to site id map, for the per-site view.
+   *
+   * ATTRIBUTION IS BY PATIENT, NOT BY THE INVOICE'S OWN SITE — and NOT because an
+   * invoice carries no site, which is what this said until 2026-08-22 and is untrue:
+   * /v1/invoices carries `site_id` and honours it as a filter (live-probed 22,600 of
+   * 34,201 rows for N15 alone; the read layer scopes the unpaid slice with it). It is
+   * by patient because that is the question the panel asks — "what does THIS
+   * practice's patient owe" — and because an invoice may carry no site while its
+   * patient plainly belongs to one. Rows in that state cannot reach a site-scoped
+   * read at all, which is why pageUnpaidInvoices reconciles the total and the panel
+   * discloses the gap instead of quietly shrinking a balance.
+   *
+   * Patients missing from the map are excluded when a site filter is applied, never
+   * assigned to the selected site.
    */
   siteByPatientId?: ReadonlyMap<string, string> | null;
   siteId?: string | null;

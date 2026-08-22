@@ -206,11 +206,27 @@ export async function listLeads(args: {
    * the moment a busy day is longer than the bound.
    */
   sinceIso?: string;
+  /**
+   * Optional UPPER bound on created_at, the twin of `sinceIso`, and absent for every
+   * existing caller, whose behaviour is unchanged: no filter is applied unless one is
+   * asked for.
+   *
+   * It exists for callers that ask the store MORE THAN ONE QUESTION about the same
+   * window — the report snapshot counts the enquiries and separately reads the newest
+   * of them — because those queries run concurrently and reach the database at
+   * different instants. Without a shared ceiling an enquiry created between them falls
+   * inside one query and outside the other, and the mismatched pair is then printed as
+   * fact: a contacted figure larger than the enquiry total it is measured against.
+   * Passing the SAME instant to every query in the set makes them describe one window
+   * rather than two adjacent ones.
+   */
+  untilIso?: string;
 }): Promise<SpeedToLeadLead[]> {
   const db = serviceClient();
   let q = db.from("speed_to_lead_lead").select("*").in("site_id", args.siteIds);
   if (args.stages && args.stages.length > 0) q = q.in("stage", args.stages);
   if (args.sinceIso) q = q.gte("created_at", args.sinceIso);
+  if (args.untilIso) q = q.lte("created_at", args.untilIso);
   const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(args.limit ?? 200);
@@ -587,6 +603,12 @@ export async function countRecentByContact(phoneOrEmail: string, sinceIso: strin
  *
  * It does not replace listLeads: anything computed from a lead's own fields (first
  * response time, source mix) still needs the rows, and those stay honestly bounded.
+ * `untilIso` is what keeps THIS count and THAT read describing the same window: it is
+ * optional in the same way and for the same reason as listLeads', and a caller asking
+ * two questions about one window (how many enquiries, how many of them booked) must
+ * pass the same instant to both, or a lead landing between the two counts is counted
+ * in one answer and not the other — which is how a booked total comes to exceed the
+ * enquiry total it is divided by.
  *
  * Refuses an empty site list rather than counting every site's leads — PostgREST's
  * `in.()` with no values is not "match nothing" in every version, and "no scope"
@@ -596,6 +618,7 @@ export async function countLeadsInWindow(
   siteIds: string[],
   sinceIso: string,
   stages?: LeadStage[],
+  untilIso?: string,
 ): Promise<number> {
   if (siteIds.length === 0) return 0;
   const db = serviceClient();
@@ -605,6 +628,7 @@ export async function countLeadsInWindow(
     .in("site_id", siteIds)
     .gte("created_at", sinceIso);
   if (stages && stages.length > 0) q = q.in("stage", stages);
+  if (untilIso) q = q.lte("created_at", untilIso);
   const { count, error } = await q;
   if (error) throw error;
   return count ?? 0;

@@ -308,6 +308,37 @@ function requestedDayKey(value: unknown): string | null {
 }
 
 /**
+ * The requested day pair, put in order — the ONE place a reversed pair is fixed.
+ *
+ * The model does not always say the days in the order it means them. "Anything
+ * between the 5th and the 10th?" comes back as often as fromDate="2026-09-10",
+ * toDate="2026-09-05" as the other way round, and every seam downstream reads
+ * from-then-to: the window is built off the FROM day, while both trims drop
+ * anything past the TO day. A reversed pair therefore asked Dentally a perfectly
+ * valid question about the 10th and then threw away every row it answered with,
+ * because each one started after the end of the 5th. The tool returned
+ * `{slots: []}` with no error at all, and the agent told a patient nothing was
+ * free on days the practice was open.
+ *
+ * SWAP, DO NOT REFUSE. The patient's intent in "between the 5th and the 10th" is
+ * not ambiguous — nobody means an empty range — so serving it beats handing the
+ * model an error to relay, which costs the patient a whole turn to correct a
+ * mistake they did not make. Erroring would also be indistinguishable, in the
+ * transcript, from the practice being shut.
+ *
+ * Both keys are `YYYY-MM-DD` by construction (see requestedDayKey), so the
+ * lexicographic compare IS a date compare. A null `to` — the model named no end
+ * date — is not a pair and is left exactly as it came.
+ */
+function orderedDayPair(
+  fromDayKey: string,
+  toDayKey: string | null,
+): { fromDayKey: string; toDayKey: string | null } {
+  if (toDayKey !== null && toDayKey < fromDayKey) return { fromDayKey: toDayKey, toDayKey: fromDayKey };
+  return { fromDayKey, toDayKey };
+}
+
+/**
  * Chunked slots whose own London day falls inside the requested range.
  *
  * The row trim above cannot be the last word, because CHUNKING is what can put a
@@ -318,6 +349,13 @@ function requestedDayKey(value: unknown): string | null {
  * A range that cannot be read (a reversed pair) is NOT trimmed, and neither is a
  * slot whose start is unparseable — both mirror availabilityRowsWithinDays, which
  * only ever drops what is PROVEN to lie outside.
+ *
+ * The reversed-pair arm is now defence in depth rather than the handling:
+ * orderedDayPair puts the pair in order before the window is even built, so no
+ * caller can reach here with one. It stays because its POLICY is the same policy
+ * — a range that reads backwards never silently empties an answer — and because a
+ * future caller that skips the normalisation should degrade to "trim nothing",
+ * not to "return nothing".
  */
 function slotsWithinDays(units: unknown[], fromDayKey: string, toDayKey: string): unknown[] {
   if (!DAY_KEY.test(fromDayKey) || !DAY_KEY.test(toDayKey) || toDayKey < fromDayKey) return units;
@@ -484,8 +522,15 @@ export function makeDispatch(deps: ToolDeps) {
         // offered cannot move under the patient between the offer and the write) and
         // widens the finish to the 25 hours Dentally insists on. The widening is
         // taken back off the ANSWER below; it is never left in it.
-        const fromDayKey = requestedDayKey(input.fromDate) ?? londonDayKey(now);
-        const requestedToDayKey = requestedDayKey(input.toDate);
+        //
+        // The pair is put in ORDER first (orderedDayPair), before the window, before
+        // the requests, before either trim — so every seam below reads a from that
+        // really does come before its to, and a model echoing "the 5th and the 10th"
+        // back the wrong way round cannot silently empty the answer.
+        const { fromDayKey, toDayKey: requestedToDayKey } = orderedDayPair(
+          requestedDayKey(input.fromDate) ?? londonDayKey(now),
+          requestedDayKey(input.toDate),
+        );
         const toDayKey = requestedToDayKey ?? shiftYmd(fromDayKey, AGENT_SEARCH_WINDOW_DAYS);
         const queryWindow = bookingAvailabilityWindow(fromDayKey, toDayKey, now.getTime());
         // Every requested day has already ended. Dentally can never answer for it, so

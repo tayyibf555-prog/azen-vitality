@@ -265,3 +265,75 @@ describe("find_slots refuses to ask about a day that has already ended", () => {
     expect(slots).toHaveLength(2);
   });
 });
+
+// A model that says the days in the wrong order is not a model that means an
+// empty range. "Anything between the 5th and the 10th?" comes back as
+// fromDate="2026-09-10", toDate="2026-09-05" often enough, and before
+// orderedDayPair that pair asked Dentally a perfectly good question about the
+// 10th and then discarded every row it answered with — each one started after the
+// end of the 5th — leaving {slots: []} with no error for the agent to relay. The
+// patient was told nothing was free on days the practice was open.
+describe("find_slots reads a reversed date pair the way the patient meant it", () => {
+  const EARLIER = "2026-09-05";
+  const LATER = "2026-09-10";
+
+  it("answers a reversed pair with EXACTLY the slots the ordered pair returns", async () => {
+    const rows = () => [
+      windowOn(EARLIER, "09:00", "11:00", "+01:00", "p1"),
+      windowOn("2026-09-07", "14:00", "15:00", "+01:00", "p2"),
+      windowOn(LATER, "09:00", "10:00", "+01:00", "p1"),
+    ];
+    const ordered = await findSlots(strictDentally(rows()), {
+      treatment: "hygiene",
+      fromDate: EARLIER,
+      toDate: LATER,
+    });
+    const reversed = await findSlots(strictDentally(rows()), {
+      treatment: "hygiene",
+      fromDate: LATER,
+      toDate: EARLIER,
+    });
+
+    expect(ordered.slots.length).toBeGreaterThan(0); // the comparison must have teeth
+    expect(reversed.slots).toEqual(ordered.slots); // and not two empty lists
+    expect(reversed.error).toBeUndefined();
+  });
+
+  it("sends the SAME window for a reversed pair, so the swap happens before the request", async () => {
+    const ordered = strictDentally([windowOn(EARLIER, "09:00", "11:00")]);
+    await findSlots(ordered, { treatment: "hygiene", fromDate: EARLIER, toDate: LATER });
+    const reversed = strictDentally([windowOn(EARLIER, "09:00", "11:00")]);
+    await findSlots(reversed, { treatment: "hygiene", fromDate: LATER, toDate: EARLIER });
+
+    // The window is built off the FROM day: a reversed pair left alone would have
+    // started on the 10th and never asked about the 5th at all.
+    expect(reversed.sent).toEqual(ordered.sent);
+    expect(Date.parse(reversed.sent[0]!.startTime)).toBe(Date.parse(`${EARLIER}T00:00:00.000+01:00`));
+  });
+
+  it("still trims a reversed pair to the days asked about, rather than trimming nothing", async () => {
+    // Swapping must not turn the trim off: the widened window reaches past the
+    // 10th, and the day after is still a day nobody asked about.
+    const dentally = strictDentally([
+      windowOn(LATER, "09:00", "10:00"),
+      windowOn("2026-09-11", "09:00", "10:00"),
+    ]);
+    const { slots } = await findSlots(dentally, { treatment: "hygiene", fromDate: LATER, toDate: EARLIER });
+
+    expect(slots).toHaveLength(2);
+    expect(slots.every((s) => londonDay(s.start_time) === LATER)).toBe(true);
+  });
+
+  it("still refuses, with ZERO Dentally calls, when a reversed pair is entirely in the past", async () => {
+    // Ordering the pair must not smuggle a past range back into a live question:
+    // both days ended before the frozen now, so there is nothing to ask about and
+    // the model is told so in words rather than handed an empty list.
+    const dentally = strictDentally([windowOn(TODAY, "09:00", "12:00")]);
+    const out = await findSlots(dentally, { treatment: "hygiene", fromDate: "2026-08-19", toDate: "2026-08-17" });
+
+    expect(dentally.getAvailability).not.toHaveBeenCalled();
+    expect(dentally.listPractitioners).not.toHaveBeenCalled();
+    expect(out.slots).toEqual([]);
+    expect(out.error).toMatch(/passed/i);
+  });
+});

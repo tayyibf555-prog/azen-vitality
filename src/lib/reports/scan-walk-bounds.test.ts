@@ -26,27 +26,30 @@ import { pageAll, REPORTS_PER_PAGE, REPORTS_SCAN_MAX_PAGES } from "./scan";
 // ---------------------------------------------------------------------------
 
 /** A full page of placeholder rows: enough to keep an unfixed walk going. */
-function fullPage(page: number): unknown[] {
-  return Array.from({ length: REPORTS_PER_PAGE }, (_, i) => ({ id: `${page}-${i}` }));
+function fullPage(page: number, size: number): unknown[] {
+  return Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}` }));
 }
 
 /**
- * A pager that records every page requested. `total` is what Dentally publishes in
- * the envelope (null publishes none); rows keep coming until `rowCount` is served.
+ * A pager that records every page requested AND the page size it was asked for.
+ * `total` is what Dentally publishes in the envelope (null publishes none); rows keep
+ * coming until `rowCount` is served, in pages of whatever size the pager hands down.
  */
 function recordingPager(opts: { rowCount: number; total: number | null }) {
   const requested: number[] = [];
-  const fetchPage = async (page: number) => {
+  const sizesAsked: number[] = [];
+  const fetchPage = async (page: number, perPage: number) => {
     requested.push(page);
-    const before = (page - 1) * REPORTS_PER_PAGE;
+    sizesAsked.push(perPage);
+    const before = (page - 1) * perPage;
     const left = Math.max(0, opts.rowCount - before);
-    const size = Math.min(REPORTS_PER_PAGE, left);
+    const size = Math.min(perPage, left);
     return {
-      rows: size === REPORTS_PER_PAGE ? fullPage(page) : fullPage(page).slice(0, size),
+      rows: fullPage(page, size),
       meta: opts.total === null ? {} : { total: opts.total },
     };
   };
-  return { requested, fetchPage };
+  return { requested, sizesAsked, fetchPage };
 }
 
 describe("pageAll stops as soon as the answer is known", () => {
@@ -56,7 +59,7 @@ describe("pageAll stops as soon as the answer is known", () => {
     const rowCount = maxPages * REPORTS_PER_PAGE + 1;
     const { requested, fetchPage } = recordingPager({ rowCount, total: rowCount });
 
-    const read = await pageAll(fetchPage, maxPages);
+    const read = await pageAll(fetchPage, REPORTS_PER_PAGE, maxPages);
 
     expect(requested, "meta.total settled this on page one; the rest is spent proving it").toEqual([1]);
     expect(read.complete).toBe(false);
@@ -70,7 +73,7 @@ describe("pageAll stops as soon as the answer is known", () => {
     const rowCount = 2 * REPORTS_PER_PAGE; // exactly two full pages
     const { requested, fetchPage } = recordingPager({ rowCount, total: rowCount });
 
-    const read = await pageAll(fetchPage, REPORTS_SCAN_MAX_PAGES);
+    const read = await pageAll(fetchPage, REPORTS_PER_PAGE, REPORTS_SCAN_MAX_PAGES);
 
     expect(requested, "page 3 exists only to watch a short page agree").toEqual([1, 2]);
     expect(read.complete).toBe(true);
@@ -88,7 +91,7 @@ describe("pageAll stops as soon as the answer is known", () => {
     const rowCount = maxPages * REPORTS_PER_PAGE; // readable, to the last row
     const { requested, fetchPage } = recordingPager({ rowCount, total: rowCount });
 
-    const read = await pageAll(fetchPage, maxPages);
+    const read = await pageAll(fetchPage, REPORTS_PER_PAGE, maxPages);
 
     expect(requested).toEqual([1, 2, 3]);
     expect(read.complete, "one row short of the bail, and it is a COMPLETE read").toBe(true);
@@ -99,7 +102,7 @@ describe("pageAll stops as soon as the answer is known", () => {
     const rowCount = 2 * REPORTS_PER_PAGE + 7;
     const { requested, fetchPage } = recordingPager({ rowCount, total: null });
 
-    const read = await pageAll(fetchPage, REPORTS_SCAN_MAX_PAGES);
+    const read = await pageAll(fetchPage, REPORTS_PER_PAGE, REPORTS_SCAN_MAX_PAGES);
 
     expect(requested).toEqual([1, 2, 3]);
     expect(read.expected).toBeNull();
@@ -111,7 +114,7 @@ describe("pageAll stops as soon as the answer is known", () => {
     const maxPages = 2;
     const { requested, fetchPage } = recordingPager({ rowCount: 10_000, total: null });
 
-    const read = await pageAll(fetchPage, maxPages);
+    const read = await pageAll(fetchPage, REPORTS_PER_PAGE, maxPages);
 
     expect(requested).toEqual([1, 2]);
     expect(read.complete, "no total to check against, and the walk hit the cap").toBe(false);
@@ -120,10 +123,73 @@ describe("pageAll stops as soon as the answer is known", () => {
   it("an empty window is a complete answer, not a failed read", async () => {
     const { requested, fetchPage } = recordingPager({ rowCount: 0, total: 0 });
 
-    const read = await pageAll(fetchPage, REPORTS_SCAN_MAX_PAGES);
+    const read = await pageAll(fetchPage, REPORTS_PER_PAGE, REPORTS_SCAN_MAX_PAGES);
 
     expect(requested).toEqual([1]);
     expect(read.raw).toHaveLength(0);
     expect(read.complete).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 — the page size the walk MEASURES against is the page size it ASKED for.
+//
+// `pageAll` used to compare every page against the module constant REPORTS_PER_PAGE
+// while each caller chose `per_page` inside its own closure. Nothing connected the
+// two, so a caller paging in any other size had its first FULL page read as SHORT:
+// the walk ended on page one and handed back `complete: true` over a truncated set —
+// a partial read rendered as a whole one, on a screen that prints money.
+//
+// The size is now an argument, and it is passed DOWN to fetchPage as well as
+// measured against, so the two cannot disagree by construction.
+// ---------------------------------------------------------------------------
+
+describe("F1: pageAll measures short pages against the size it was given", () => {
+  it("keeps walking a 50-row-per-page endpoint that publishes no total", async () => {
+    // The shape that exposed it: pages of 50, and no meta.total to fall back on, so
+    // the short-page test is the ONLY thing deciding whether the read is whole.
+    const perPage = 50;
+    const rowCount = 3 * perPage + 12;
+    const { requested, sizesAsked, fetchPage } = recordingPager({ rowCount, total: null });
+
+    const read = await pageAll(fetchPage, perPage, REPORTS_SCAN_MAX_PAGES);
+
+    expect(requested, "a full page was read as short and ended the walk").toEqual([1, 2, 3, 4]);
+    expect(read.raw, "the walk stopped one page in and called a slice complete").toHaveLength(
+      rowCount,
+    );
+    expect(read.complete).toBe(true);
+    // The size is handed to the fetcher, so a caller cannot request one size and be
+    // measured against another even by mistake.
+    expect(sizesAsked).toEqual([perPage, perPage, perPage, perPage]);
+  });
+
+  it("scales the doomed-walk bail to that size too", async () => {
+    // The early bail compares meta.total against maxPages * perPage. Measured against
+    // the module constant instead, a 50-row pager would think it had twice the budget
+    // it has and would walk a read it already knew could not finish.
+    const perPage = 50;
+    const maxPages = 4;
+    const rowCount = maxPages * perPage + 1; // one row past what this budget carries
+    const { requested, fetchPage } = recordingPager({ rowCount, total: rowCount });
+
+    const read = await pageAll(fetchPage, perPage, maxPages);
+
+    expect(requested).toEqual([1]);
+    expect(read.complete).toBe(false);
+    expect(read.expected).toBe(rowCount);
+  });
+
+  it("still calls a read complete when meta.total is reached at that size", async () => {
+    // The control: the fix must not make a whole read look truncated.
+    const perPage = 50;
+    const rowCount = 2 * perPage;
+    const { requested, fetchPage } = recordingPager({ rowCount, total: rowCount });
+
+    const read = await pageAll(fetchPage, perPage, REPORTS_SCAN_MAX_PAGES);
+
+    expect(requested).toEqual([1, 2]);
+    expect(read.complete).toBe(true);
+    expect(read.raw).toHaveLength(rowCount);
   });
 });

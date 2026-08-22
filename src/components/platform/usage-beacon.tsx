@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useParams, usePathname } from "next/navigation";
+import { postJsonBeacon } from "@/lib/beacon-transport";
 import { surfaceFromPath } from "@/lib/telemetry-surface";
 
 // Product-usage beacon, mounted ONCE in the authed client shell (c/[client]/layout,
@@ -14,10 +15,11 @@ import { surfaceFromPath } from "@/lib/telemetry-surface";
 // verified session and re-sanitises the surface against the nav allowlist. No
 // patient data is ever read or sent.
 //
-// Robustness: fire-and-forget via sendBeacon (keepalive-fetch fallback), and it
+// Robustness: fire-and-forget through the shared browser transport
+// (@/lib/beacon-transport — sendBeacon, with a keepalive-fetch fallback), and it
 // de-dupes repeat views of the same surface within a short window, so flicking a
 // tab back and forth is not double-counted. Telemetry must never break the app:
-// every failure is swallowed and it renders nothing.
+// every failure is swallowed there and it renders nothing.
 
 const ENDPOINT = "/api/telemetry";
 const DEDUPE_MS = 30_000;
@@ -40,25 +42,11 @@ export function UsageBeacon() {
     if (prev && now - prev < DEDUPE_MS) return; // same surface seen moments ago
     lastSent.current.set(key, now);
 
-    const payload = JSON.stringify({ clientSlug, surface });
-    try {
-      if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-        const blob = new Blob([payload], { type: "application/json" });
-        if (navigator.sendBeacon(ENDPOINT, blob)) return;
-      }
-    } catch {
-      // fall through to fetch
-    }
-    try {
-      void fetch(ENDPOINT, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload,
-        keepalive: true,
-      }).catch(() => {});
-    } catch {
-      // Give up silently: telemetry must never surface an error.
-    }
+    // WHAT is sent is this component's business; HOW it leaves the page is not,
+    // and is shared with the public funnel beacons (@/lib/beacon-transport). Only
+    // the mechanics are shared — the transport holds no state, so nothing about
+    // this AUTHED user can end up alongside an anonymous visitor's session there.
+    postJsonBeacon(ENDPOINT, JSON.stringify({ clientSlug, surface }));
   }, [clientSlug, pathname]);
 
   return null;

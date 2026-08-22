@@ -181,6 +181,16 @@ export interface AccountsPanel {
   top: RankedAccount[];
   /** Balance rows the normaliser could not read. */
   dropped: number;
+  /**
+   * Unpaid invoices that exist in this Dentally account but are NOT in this balance,
+   * because the read that produced it is scoped to this client's sites and they carry
+   * no site or another practice's. Null means the reconciliation was not made — see
+   * pageUnpaidInvoices in src/lib/dashboard/read.ts, which also explains why the
+   * caveat names both causes and commits to neither.
+   *
+   * Disclosure only. It never changes a figure; it says what a figure leaves out.
+   */
+  unattributedUnpaid: number | null;
 }
 
 /**
@@ -409,6 +419,12 @@ export interface BuildViewInput {
 
   balances: readonly DashboardAccountBalance[] | null;
   droppedBalances?: number;
+  /**
+   * Unpaid invoices the site-scoped balance read could not see. DISCLOSURE ONLY: it
+   * never blanks a panel and never moves a total. Absent or null means the read layer
+   * did not check, which is different from checking and finding none.
+   */
+  unattributedUnpaidInvoices?: number | null;
   /** Patient id to site id, so an invoice balance can be attributed to a site. */
   siteByPatientId?: ReadonlyMap<string, string> | null;
 
@@ -768,6 +784,7 @@ function buildAccountsPanel(
   siteByPatientId: ReadonlyMap<string, string> | null,
   siteId: string | null,
   unreadableReason: string,
+  unattributedUnpaid: number | null,
 ): AccountsPanel {
   if (balances === null) {
     const reason = unreadableReason;
@@ -777,6 +794,9 @@ function buildAccountsPanel(
       patientsInDebt: metric(null, reason),
       top: [],
       dropped,
+      // Nothing to qualify: there is no balance on the screen for rows to be missing
+      // from, and a count of omissions beside the word "Unavailable" says nothing.
+      unattributedUnpaid: null,
     };
   }
   const accounts = computeOutstandingAccounts({ balances, dropped, siteByPatientId, siteId });
@@ -787,6 +807,12 @@ function buildAccountsPanel(
     patientsInDebt: metric(accounts.patientsInDebt, reason),
     top: accounts.top,
     dropped: accounts.dropped,
+    // ON EVERY SCOPE, group and single-site alike, and that is deliberate. An unpaid
+    // invoice carrying no site could belong to a patient of ANY of these practices —
+    // balances are attributed by patient, not by the invoice's own site — so there is
+    // no scope it is safely irrelevant to. It cannot be apportioned between them
+    // either, so it is stated as what it is: a group-level omission.
+    unattributedUnpaid,
   };
 }
 
@@ -928,6 +954,7 @@ function buildScope(
       siteByPatientId,
       siteId,
       input.balancesTruncated === true ? UNAVAILABLE.balancesTruncated : UNAVAILABLE.balancesFailed,
+      input.unattributedUnpaidInvoices ?? null,
     ),
     udaProgress: buildUdaProgressPanel(
       input.claims,

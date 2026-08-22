@@ -54,7 +54,9 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
   //
   // AND ONE UNUSABLE PERIOD MAY NOT BLANK THE OTHER. This gate used to read the
   // MONTH snapshot alone, so an unreadable month took the Week tab, the week's own
-  // figures and the Generate button down with it. `reportsGate` weighs both.
+  // figures and the Generate button down with it. `reportsGate` weighs both — and
+  // will only reach the awaiting state below when BOTH periods were read, so a
+  // failure can never arrive here wearing the quiet-practice message.
   const gate = reportsGate({ week, month });
   // The stat cards are explicitly the 30-day figures, so they follow the month's own
   // usability rather than the page's: a readable week does not license printing a
@@ -98,6 +100,10 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
           defaultPeriod={gate.defaultPeriod}
         />
       ) : gate.kind === "unavailable" ? (
+        // THE WINDOW THE REASON BELONGS TO IS NAMED. The gate can now refuse the page
+        // because of EITHER period — a failed week beside a quiet month is a failed
+        // read, not a quiet practice — so this copy takes the period from the gate
+        // instead of assuming the month.
         <EmptyState
           icon={FileText}
           title={
@@ -107,8 +113,8 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
           }
           description={
             gate.readFailed
-              ? "The live enquiry store did not answer, so the monthly figures and the AI review cannot be written from it. This is a read failing, not a quiet month — nothing here says your enquiries have stopped. Try again shortly."
-              : "This month holds more enquiries than a single read carries, so the figures behind the review would be a floor rather than a total. They are not shown from a partial count."
+              ? `The live enquiry store did not answer, so the ${gate.period === "week" ? "weekly" : "monthly"} figures and the AI review cannot be written from it. This is a read failing, not a quiet ${gate.period} — nothing here says your enquiries have stopped. Try again shortly.`
+              : `This ${gate.period} holds more enquiries than a single read carries, so the figures behind the review would be a floor rather than a total. They are not shown from a partial count.`
           }
         />
       ) : (

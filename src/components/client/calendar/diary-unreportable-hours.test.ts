@@ -27,7 +27,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { Span } from "@/lib/calendar/working-spans";
+import {
+  COLUMN_WORK_PRESENTATION,
+  type ColumnWorkState,
+  type Span,
+} from "@/lib/calendar/working-spans";
 import { DiaryDay, type DayColumnInput } from "./diary-day";
 import { DiaryDays, type DayColumnDayInput } from "./diary-week";
 
@@ -149,6 +153,58 @@ describe("the column for a clinician whose whole answer went unasked", () => {
     expect(html).toContain("Not working");
     expect(html).not.toContain("Hours not reportable");
   });
+});
+
+// ===========================================================================
+// EVERY state's words, in BOTH grids, iterated from the mapping itself.
+//
+// The one above pins "unreportable" because that is the state this file was
+// written for. This pins all six, and it is derived rather than listed: the day
+// grid and the week grid each used to carry their own ternary chain of the same
+// six sentences, synchronised by a comment, so the pair could drift on any state
+// and a SEVENTH state would have fallen out of the bottom of both and printed
+// "Not working" -- grey, and a claim that a clinician was off, from a union
+// member nobody had taught the grids about. Both now read
+// COLUMN_WORK_PRESENTATION, and this walks it: add a state to the union and it
+// is a compile error in working-spans.ts; point one grid back at words of its
+// own and one of these goes red by name.
+// ===========================================================================
+describe("the words for a work state, in both grids at once", () => {
+  const STATES = Object.keys(COLUMN_WORK_PRESENTATION) as ColumnWorkState[];
+
+  for (const state of STATES) {
+    const shown = COLUMN_WORK_PRESENTATION[state];
+    // "working" has no sentence: it prints the counts, and an empty column's
+    // count line is the one this suite's fixtures produce.
+    const expected = shown.label ?? "Nothing booked";
+
+    it(`says "${expected}" for "${state}" in the day view and the day-per-column views alike`, () => {
+      const day = renderDay(column({ workState: state }));
+      const week = renderDays({ workState: state });
+      expect(day, `day view does not say "${expected}"`).toContain(expected);
+      expect(week, `week view does not say "${expected}"`).toContain(expected);
+
+      // And says NOTHING ELSE from the mapping. Two states sharing a screen is
+      // how six states collapse back into "we could not read it" or "they are
+      // off", which is the distinction the whole union exists to hold.
+      for (const other of STATES) {
+        const otherLabel = COLUMN_WORK_PRESENTATION[other].label;
+        if (otherLabel === null || otherLabel === expected) continue;
+        expect(day, `day view for "${state}" also says "${otherLabel}"`).not.toContain(otherLabel);
+        expect(week, `week view for "${state}" also says "${otherLabel}"`).not.toContain(otherLabel);
+      }
+
+      // The texture is the other half of the claim, and it comes from the same
+      // row of the same mapping: hatched states must never be grey, because grey
+      // is a positive claim that somebody was not working.
+      expect(hatches(day) > 0, `day view hatch for "${state}"`).toBe(shown.hatched);
+      expect(hatches(week) > 0, `week view hatch for "${state}"`).toBe(shown.hatched);
+      if (shown.hatched) {
+        expect(offLabels(day), `day view prints "Off" for "${state}"`).toBe(0);
+        expect(offLabels(week), `week view prints "Off" for "${state}"`).toBe(0);
+      }
+    });
+  }
 });
 
 describe("the elapsed strip on a column that IS working", () => {
