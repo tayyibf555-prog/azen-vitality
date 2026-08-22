@@ -103,24 +103,6 @@ describe("every browser beacon delivers through the one shared transport", () =>
  * ------------------------------------------------------------------------- */
 
 /**
- * Every .ts/.tsx under src/, as a path relative to src/.
- *
- * THE WALK IS SHARED NOW (lib/test-support/walk-src.ts), and the reason is the one
- * this file's own comment used to state alone: it is rooted through import.meta.url
- * rather than process.cwd(), so a worktree copy of the repo sweeps ITS OWN tree and
- * not the one the runner happens to sit in. Written here as advice, that was
- * ignored by the very next sweep added to the suite — which rooted at cwd — so the
- * root now lives in a function no caller can override.
- *
- * TESTS ARE SKIPPED (the walker's default), and that is not a loophole: standing a
- * fake browser up around these mechanics is what a test of them has to do, and the
- * biggest offender would be this very file.
- */
-function sourceFiles(): string[] {
-  return walkSrc();
-}
-
-/**
  * Exceptions to the keepalive sweep below. EMPTY, AND KEPT.
  *
  * It held one name: the landing tracker, which hand-rolled a keepalive fetch with
@@ -142,7 +124,20 @@ describe("no other file in the tree grows a transport of its own", () => {
   // held byte-identical copies for months while it named two. This is the pin that
   // does not depend on anyone noticing.
   it("is the only place in src/ that calls navigator.sendBeacon", () => {
-    const offenders = sourceFiles().filter(
+    // walkSrc() is every .ts/.tsx under src/, relative to src/, and the walk is
+    // SHARED (lib/test-support/walk-src.ts) for the reason this file's own comment
+    // used to state alone: it roots through import.meta.url rather than
+    // process.cwd(), so a worktree copy of the repo sweeps ITS OWN tree and not the
+    // one the runner happens to sit in. Written here as advice, that was ignored by
+    // the very next sweep added to the suite, which rooted at cwd.
+    //
+    // TESTS ARE SKIPPED (the walker's default), and that is not a loophole: standing
+    // a fake browser up around these mechanics is what a test of them has to do, and
+    // the biggest offender would be this very file. DOT-DIRECTORIES ARE SKIPPED too
+    // (also the default) and that IS the right answer for a whole-src sweep: the only
+    // dot-directory under src/ would be a nested checkout (.claude/worktrees/<name>/),
+    // which would report this file's own transport as a second copy of itself.
+    const offenders = walkSrc().filter(
       (file) =>
         file !== TRANSPORT_FILE &&
         codeOnly(readFileSync(srcPath(file), "utf8")).includes("navigator.sendBeacon"),
@@ -153,7 +148,7 @@ describe("no other file in the tree grows a transport of its own", () => {
   });
 
   it("is the only place a keepalive fetch is written, bar the one named exception", () => {
-    const offenders = sourceFiles().filter(
+    const offenders = walkSrc().filter(
       (file) =>
         file !== TRANSPORT_FILE &&
         !KEEPALIVE_ELSEWHERE.has(file) &&
@@ -165,7 +160,7 @@ describe("no other file in the tree grows a transport of its own", () => {
   // MUTATION: break the walk (a wrong SRC_ROOT, a filter that matches nothing) and
   // the two sweeps above pass by finding no files at all. This is what notices.
   it("actually walks the tree it claims to", () => {
-    const files = sourceFiles();
+    const files = walkSrc();
     expect(files.length).toBeGreaterThan(200);
     expect(files).toContain(TRANSPORT_FILE);
     for (const [, file] of CALL_SITES) expect(files).toContain(file);

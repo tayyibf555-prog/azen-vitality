@@ -308,18 +308,42 @@ interface ScanNouns {
  * from `pageAll`, and once when the page size measured against drifted from the page
  * size asked for.
  *
- * IT RETURNS RAW ROWS PER SITE, NOT NORMALISED ONES, and null for a site that could
- * not be read whole. Normalising is the caller's: appointments need the raw rows a
- * second time to build the list, and patients and plans attach their own site id to
- * their own row type. Nothing here decides what a panel says — a null site is simply
- * a site this scan will not vouch for, and each caller already knows what that means
- * for its own figures.
+ * IT RETURNS RAW ROWS PER SITE, NOT NORMALISED ONES. Normalising is the caller's:
+ * appointments need the raw rows a second time to build the list, and patients and
+ * plans attach their own site id to their own row type. Nothing here decides what a
+ * panel says — a site it will not vouch for is simply that, and each caller already
+ * knows what that means for its own figures.
+ *
+ * AND A SITE IT WILL NOT VOUCH FOR SAYS WHY, WHICH IS WHAT LET THE FOURTH SCAN JOIN.
+ * It used to return `null` — one word for two different facts about the source — and
+ * three callers then applied identical all-or-nothing policy with a dead `null` arm
+ * after their own early return. scanClaims could not use it at all: the UDA panel's
+ * sentence differs by cause ("there are more claims than we can read" is not "we
+ * could not reach Dentally"), and a null cannot tell them apart, so it kept a
+ * fourth byte-similar copy of this walk. A discriminated result carries the cause,
+ * the dead arms are gone, and all four scans are on one block.
  */
+type SiteScan =
+  | { siteId: string; raw: unknown[] }
+  | { siteId: string; failed: "truncated" | "error" };
+
+/** The sites that answered COMPLETELY, or null if any one of them did not — the
+ *  all-or-nothing policy three of the four callers apply verbatim, written once so
+ *  the arm that can no longer be reached is not written four times either. */
+function allSitesComplete(perSite: readonly SiteScan[]): Array<{ siteId: string; raw: unknown[] }> | null {
+  const whole: Array<{ siteId: string; raw: unknown[] }> = [];
+  for (const site of perSite) {
+    if ("failed" in site) return null;
+    whole.push(site);
+  }
+  return whole;
+}
+
 async function scanWindowedPerSite(
   siteIds: readonly string[],
   nouns: ScanNouns,
   fetchPage: (siteId: string, page: number, perPage: number) => Promise<ListPage>,
-): Promise<Array<{ siteId: string; raw: unknown[] } | null>> {
+): Promise<SiteScan[]> {
   const tail = nouns.consequence === null ? "" : `; ${nouns.consequence}`;
   return Promise.all(
     siteIds.map(async (siteId) => {
@@ -341,13 +365,13 @@ async function scanWindowedPerSite(
               : `[dashboard] ${nouns.scan} read ${read.raw.length} of ${read.expected} ` +
                   `${nouns.rows} for site ${siteId}${tail}`,
           );
-          return null;
+          return { siteId, failed: "truncated" };
         }
         return { siteId, raw: read.raw };
       } catch (err) {
         rethrowIfBudgetRefused(err); // not a failed scan; see the header
         console.error(`[dashboard] ${nouns.scan} failed for site ${siteId}`, err);
-        return null;
+        return { siteId, failed: "error" };
       }
     }),
   );
@@ -441,10 +465,10 @@ async function scanAppointments(
     },
   );
 
-  if (perSite.some((s) => s === null)) {
+  const sites = allSitesComplete(perSite);
+  if (sites === null) {
     return { normalised: null, rows: [], coverage: null };
   }
-  const sites = perSite.filter((s): s is { siteId: string; raw: unknown[] } => s !== null);
 
   // The practitioner read was started ALONGSIDE this scan, not before it, and its
   // names are only needed now — to fill an appointment row that did not carry its
@@ -521,58 +545,46 @@ async function scanClaims(
   const after = shiftDayKey(contractStart, -1) ?? contractStart;
   const before = shiftDayKey(today, 1) ?? today;
 
-  const perSite = await Promise.all(
-    siteIds.map(async (siteId) => {
-      try {
-        const read = await pageAll(
-          async (page, perPage) => {
-            const res = await client.listNhsClaims({
-              siteId: dentallySiteId(siteId),
-              after,
-              before,
-              page,
-              perPage,
-            });
-            return { rows: res.nhs_claims ?? [], meta: res.meta };
-          },
-          PER_PAGE,
-          SCAN_MAX_PAGES,
-        );
-        if (!read.complete) {
-          // A truncated read cannot state a contract-year total. The two ways of
-          // knowing it is truncated are kept apart in the log, because they are
-          // different facts about the source: it told us the count and we fell short,
-          // or it told us nothing and we ran out of budget.
-          console.error(
-            read.expected === null
-              ? `[dashboard] NHS claim scan hit the page cap for site ${siteId} with no meta.total ` +
-                  `to verify against; reporting the UDA figures unavailable`
-              : `[dashboard] NHS claim scan read ${read.raw.length} of ${read.expected} ` +
-                  `contract-year claims for site ${siteId}; reporting the UDA figures unavailable ` +
-                  `rather than totalling a slice`,
-          );
-          return { rows: null, dropped: 0, truncated: true };
-        }
-        const { rows, dropped } = normaliseNhsClaims(read.raw);
-        return { rows: rows.map((c) => ({ ...c, siteId })), dropped, truncated: false };
-      } catch (err) {
-        rethrowIfBudgetRefused(err); // not a failed scan; see the header
-        console.error(`[dashboard] NHS claim scan failed for site ${siteId}`, err);
-        return { rows: null, dropped: 0, truncated: false };
-      }
-    }),
+  // ON THE SHARED PER-SITE BLOCK, like the other three scans. It was the fourth copy
+  // of that walk and was kept out for one reason: it needs to tell a TRUNCATED site
+  // from a FAILED one, because the UDA panel's sentence differs by cause, and the
+  // helper answered `null` for both. It answers with the cause now, so the copy is
+  // gone and the group-level distinction below is unchanged.
+  //
+  // The per-site log wording is the helper's grammar rather than this scan's own —
+  // same two branches, same nouns, same consequence; the no-count branch additionally
+  // names the page cap it hit, which is the one thing this copy never said.
+  const perSite = await scanWindowedPerSite(
+    siteIds,
+    {
+      scan: "NHS claim scan",
+      rows: "contract-year claims",
+      consequence: "reporting the UDA figures unavailable rather than totalling a slice",
+    },
+    async (siteId, page, perPage) => {
+      const res = await client.listNhsClaims({
+        siteId: dentallySiteId(siteId),
+        after,
+        before,
+        page,
+        perPage,
+      });
+      return { rows: res.nhs_claims ?? [], meta: res.meta };
+    },
   );
 
-  if (perSite.some((s) => s.rows === null)) {
+  const sites = allSitesComplete(perSite);
+  if (sites === null) {
     // Truncation is the WHOLE group's story only if nothing else went wrong: a site
     // that genuinely failed is an outage, and an outage must not be dressed up as
     // "there is too much data", which reads like a smaller problem than it is.
-    const truncated = perSite.every((s) => s.rows !== null || s.truncated);
+    const truncated = perSite.every((s) => !("failed" in s) || s.failed === "truncated");
     return { rows: null, dropped: 0, truncated };
   }
+  const normalised = sites.map((s) => ({ siteId: s.siteId, ...normaliseNhsClaims(s.raw) }));
   return {
-    rows: perSite.flatMap((s) => s.rows ?? []),
-    dropped: perSite.reduce((n, s) => n + s.dropped, 0),
+    rows: normalised.flatMap((n) => n.rows.map((c) => ({ ...c, siteId: n.siteId }))),
+    dropped: normalised.reduce((n, x) => n + x.dropped, 0),
     truncated: false,
   };
 }
@@ -646,10 +658,9 @@ async function scanPatients(
       return { rows: res.patients ?? [], meta: res.meta };
     },
   );
-  if (perSite.some((s) => s === null)) return null;
-  return perSite.flatMap((s) =>
-    s === null ? [] : normalisePatients(s.raw).rows.map((p) => ({ ...p, siteId: s.siteId })),
-  );
+  const sites = allSitesComplete(perSite);
+  if (sites === null) return null;
+  return sites.flatMap((s) => normalisePatients(s.raw).rows.map((p) => ({ ...p, siteId: s.siteId })));
 }
 
 /**
@@ -712,11 +723,10 @@ async function scanPlans(
       return { rows: res.treatment_plans ?? [], meta: res.meta };
     },
   );
-  if (perSite.some((s) => s === null)) return null;
-  return perSite.flatMap((s) =>
-    s === null
-      ? []
-      : normaliseTreatmentPlans(s.raw).rows.map((p) => ({ ...p, siteId: s.siteId })),
+  const sites = allSitesComplete(perSite);
+  if (sites === null) return null;
+  return sites.flatMap((s) =>
+    normaliseTreatmentPlans(s.raw).rows.map((p) => ({ ...p, siteId: s.siteId })),
   );
 }
 

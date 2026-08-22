@@ -287,3 +287,107 @@ describe("toPatient, through getPatientById", () => {
     expect(p?.title).toBeNull(); // never invented
   });
 });
+
+// ---------------------------------------------------------------------------
+// F3 — THE THIRD SIBLING: A PAGED READ IS NOT A COMPLETE ONE.
+//
+// The record's invoice walk was migrated onto `pageToCeiling` and its `truncated`
+// was DISCARDED at the call site, so the read stayed "ok" over a partial list and
+// Balance, Lifetime spend, Total invoiced and Total paid were all reduced over it
+// and printed in red at the top of the record as fact. `pageToCeiling` also has no
+// completeness signal beyond "did I run out of pages" — its own header says in terms
+// that it is not sound for anything that will be summed — so a server stating 40
+// invoices and handing back 12 on a short page looked finished.
+//
+// Both halves are closed here, against the SAME `meta.total` the debtors scan and
+// the collection sweep already measure themselves against (live-probed 2026-08-22:
+// the total honours patient_id). The degradation is the read's own existing failed
+// pathway, because that is what the record already renders: "Unavailable" on the
+// balance slots and "we could not read this" on the Account tab. A balance must
+// never silently understate — a patient told they owe nothing, from a list that was
+// missing the invoices they owe on, is the exact claim this record forbids.
+// ---------------------------------------------------------------------------
+describe("F3: the record refuses to total a partial invoice list", () => {
+  /** `count` invoices over 100-row pages, with whatever meta the source publishes. */
+  function invoiceSource(count: number, meta: unknown) {
+    state.getPatientInvoices = (_p, page) => {
+      const start = ((page ?? 1) - 1) * PER_PAGE;
+      const rows = Array.from({ length: Math.max(0, Math.min(PER_PAGE, count - start)) }, (_, i) => ({
+        id: `inv-${start + i}`,
+        amount: 100,
+        amount_outstanding: 100,
+      }));
+      return Promise.resolve({ invoices: rows, meta });
+    };
+  }
+
+  it("FAILS the invoice read when Dentally says more invoices match than it returned", async () => {
+    // Twelve rows on a short page and a stated forty. Every money figure on this
+    // record is a reduction over those twelve; the missing twenty-eight could be the
+    // ones this patient owes on, so the account is unreadable, not £1,200.
+    invoiceSource(12, { total: 40, current_page: 1 });
+
+    const detail = await getPatientDetail("p-short", "site-cc");
+
+    expect(
+      detail.reads.invoices,
+      "a provably partial invoice list was totalled and printed as the patient\'s balance",
+    ).toBe("failed");
+    // And no figure is derived from it, so nothing can understate: the record renders
+    // "Unavailable" off reads.invoices on every slot that would have shown one.
+    expect(detail.invoices).toEqual([]);
+    expect(detail.outstanding).toBe(0);
+    expect(detail.lifetimeSpend).toBe(0);
+    expect(detail.totalInvoiced).toBe(0);
+  });
+
+  it("FAILS it when the walk exhausts the page bound on full pages", async () => {
+    // The half `pageToCeiling` already knew and this call site threw away: ten full
+    // pages, no short page, a thousand invoices read and an unknown number missing.
+    invoiceSource(2_000, undefined);
+
+    const detail = await getPatientDetail("p-bound", "site-cc");
+
+    expect(detail.reads.invoices, "the pager\'s own truncation is still discarded").toBe("failed");
+    expect(detail.invoices).toEqual([]);
+    expect(detail.outstanding).toBe(0);
+  });
+
+  it("CONTROL: a short page that reaches the published count is a complete account", async () => {
+    invoiceSource(12, { total: 12, current_page: 1 });
+
+    const detail = await getPatientDetail("p-whole", "site-cc");
+
+    expect(detail.reads.invoices).toBe("ok");
+    expect(detail.invoices).toHaveLength(12);
+    expect(detail.outstanding).toBe(1_200);
+  });
+
+  it("CONTROL: an envelope with no count keeps the short-page stop, exactly as before", async () => {
+    invoiceSource(12, undefined);
+
+    const detail = await getPatientDetail("p-nometa", "site-cc");
+
+    expect(detail.reads.invoices).toBe("ok");
+    expect(detail.invoices).toHaveLength(12);
+    expect(detail.outstanding).toBe(1_200);
+  });
+
+  it("leaves the OTHER three reads alone: only the account is withheld", async () => {
+    invoiceSource(12, { total: 40, current_page: 1 });
+    state.getPatientNotes = (_p, page) =>
+      Promise.resolve({ notes: (page ?? 1) === 1 ? [{ id: "n1", body: "latex allergy" }] : [] });
+
+    const detail = await getPatientDetail("p-scoped", "site-cc");
+
+    expect(detail.reads).toEqual({
+      appointments: "ok",
+      plans: "ok",
+      notes: "ok",
+      invoices: "failed",
+    });
+    // The allergy is still on the record. A money guard that blanked the clinical
+    // notes would be a worse bug than the one it fixed.
+    expect(detail.notes.at(0)?.body).toBe("latex allergy");
+  });
+});

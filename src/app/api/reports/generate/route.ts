@@ -5,6 +5,7 @@ import { getViewSiteIds } from "@/lib/site-view";
 import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/guard";
 import { requireCapability } from "@/lib/auth/capability-guard";
 import { buildReportPrompt, cleanLine } from "@/lib/reports/ai";
+import { periodWord } from "@/lib/reports/period-word";
 import { buildSnapshot, type ReportPeriod } from "@/lib/reports/snapshot";
 
 export const dynamic = "force-dynamic";
@@ -65,7 +66,10 @@ export async function POST(request: Request): Promise<Response> {
   // sampled (see ai.ts). The message below survives for the one case that still
   // cannot be stated — a period past the sample bound whose COUNT also failed.
   if (!snapshot.hasEnoughData) {
-    const pw = period === "week" ? "weekly" : "monthly";
+    // The same adjective the prompt and the screen use. Spelled out here for a
+    // while, which is how the word the owner reads in an error can drift from the
+    // word the model was told to write.
+    const pw = periodWord(period);
     const error = snapshot.readFailed
       ? `Your live enquiry activity could not be read just now, so the ${pw} review cannot be written from it. This is a read failing, not a quiet ${period}. Try again shortly.`
       : snapshot.truncated && !snapshot.countsExact

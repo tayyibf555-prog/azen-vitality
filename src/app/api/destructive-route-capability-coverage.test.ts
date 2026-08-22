@@ -44,8 +44,22 @@ const ROUTE_FILE = "/route.ts";
  * a full second checkout, and a sweep rooted at the runner's cwd would enumerate
  * one tree's routes while claiming to have audited the other's — on the file whose
  * job is to prove that no write route in the platform is unguarded.
+ *
+ * `includeDotDirs` for the same reason, one level down. The walker skips
+ * dot-directories by default, and the app router does NOT: `.well-known` is listed
+ * in Next's own docs as a custom endpoint you may define, so
+ * `app/api/.well-known/x/route.ts` — or any dot-folder a future integration wants —
+ * is a live, publicly reachable handler. A POST route parked in one would be
+ * invisible to this sweep, and the sweep would go on reporting that every write
+ * route in the platform is guarded. An audit that cannot see a route must not be
+ * the thing that says the route is safe.
  */
-const ROUTES = walkSrc({ subdir: "app/api", extensions: [".ts"], includeTests: true })
+const ROUTES = walkSrc({
+  subdir: "app/api",
+  extensions: [".ts"],
+  includeTests: true,
+  includeDotDirs: true,
+})
   .filter((file) => file.endsWith(ROUTE_FILE))
   .map((file) => file.slice(API_PREFIX.length, -ROUTE_FILE.length));
 

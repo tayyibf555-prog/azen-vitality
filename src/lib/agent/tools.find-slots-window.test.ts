@@ -17,7 +17,7 @@
 // ONE description of what Dentally accepts. These tests pin the four properties
 // that fix has to have, against a stub that enforces Dentally's own rules.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { makeDispatch } from "./tools";
+import { makeDispatch, slotsWithinDays } from "./tools";
 import type { AgentContext } from "./types";
 
 const HOUR_MS = 3_600_000;
@@ -342,15 +342,23 @@ describe("find_slots reads a reversed date pair the way the patient meant it", (
   });
 });
 
-// BOTH DATES ARE OPTIONAL IN THIS TOOL'S SCHEMA, AND THAT IS WHAT MADE THE SWAP
-// DANGEROUS. When the model names only an END date the START is not the model's
-// date at all — it is today, defaulted inside find_slots. A swap that cannot tell
-// those two apart reads "was anything free yesterday?" as the range
-// [yesterday..today], the clamp moves the start to now, and the agent answers a
-// question about a day that has GONE with today's real times — confidently, and
-// with a Dentally read to back it up. Refusing in words is the behaviour this
-// path had before the swap existed, and it is the correct one.
-describe("find_slots does not turn a lone PAST end date into an offer of today", () => {
+// AN END DATE THAT HAS PASSED IS A QUESTION ABOUT THE PAST, WHATEVER THE START
+// SAYS — and that is what makes the swap dangerous here.
+//
+// Read as a range, [something..a day that has gone] is ordered into
+// [gone..today], the clamp moves the start to now, and the agent answers with
+// today's real times — confidently, with a Dentally read behind them — a question
+// whose deadline expired. Refusing in words is the behaviour this path had before
+// the swap existed, and it is the correct one.
+//
+// THE GUARD USED TO FIRE ONLY WHEN `fromDate` WAS ABSENT, on the reasoning that a
+// defaulted start is not the model's date. True, but not the rule: both dates are
+// OPTIONAL in this tool's schema and models fill both far more readily than one,
+// so {fromDate: today, toDate: <a date a year gone>} — an explicit start beside a
+// wrong-year echo — walked straight past it and was served today's diary. These
+// tests hold the uniform rule: the END is read against TODAY, and the start never
+// enters into it.
+describe("find_slots does not turn a PAST end date into an offer of today", () => {
   it("refuses a lone past toDate, with ZERO Dentally calls, instead of offering today's times", async () => {
     const dentally = strictDentally([windowOn(TODAY, "15:00", "17:00")]);
     const out = await findSlots(dentally, { treatment: "hygiene", toDate: "2026-08-19" });
@@ -403,8 +411,10 @@ describe("find_slots does not turn a lone PAST end date into an offer of today",
   });
 
   it("keeps swapping an EXPLICIT reversed pair: a supplied from is the model's own date", async () => {
-    // The rule above is about a DEFAULTED start, not about ordering. When the
-    // model supplies both dates, backwards still means the range between them.
+    // PIN COMMENT CORRECTED with the uniform rule. It used to say the refusal
+    // above was "about a DEFAULTED start"; it is about a past END. Ordering is
+    // untouched by it: two dates that are both still AHEAD, named in the wrong
+    // order, still mean the range between them and are still swapped by the seam.
     const dentally = strictDentally([windowOn("2026-09-05", "09:00", "10:00")]);
     const { slots, error } = await findSlots(dentally, {
       treatment: "hygiene",
@@ -415,5 +425,77 @@ describe("find_slots does not turn a lone PAST end date into an offer of today",
     expect(error).toBeUndefined();
     expect(slots).toHaveLength(2);
     expect(Date.parse(dentally.sent[0]!.startTime)).toBe(Date.parse("2026-09-05T00:00:00.000+01:00"));
+  });
+
+  // THE HOLE THE OLD SPELLING LEFT, AND THE ONE THIS RULE EXISTS FOR.
+  //
+  // The guard only fired when `fromDate` was OMITTED. A model filling both
+  // optional fields — which is the common case, not the exotic one — sailed past
+  // it: {fromDate: today (explicitly), toDate: a date a year gone} was ordered
+  // into [past..today], clamped to now, and answered with TODAY'S real diary.
+  it("refuses a past toDate that the model paired with an EXPLICIT fromDate of today", async () => {
+    const dentally = strictDentally([windowOn(TODAY, "15:00", "17:00")]);
+    const out = await findSlots(dentally, { treatment: "hygiene", fromDate: TODAY, toDate: "2025-09-10" });
+
+    // Zero Dentally calls: not the availability read, not even the practitioner list.
+    expect(dentally.getAvailability).not.toHaveBeenCalled();
+    expect(dentally.listPractitioners).not.toHaveBeenCalled();
+    expect(out.slots).toEqual([]);
+    expect(out.error).toMatch(/passed/i);
+    expect(out.error).toMatch(/find_slots again/);
+    // Project rule: nothing the agent says may name a funding regime.
+    expect(out.error).not.toMatch(/\b(NHS|private)\b/i);
+  });
+
+  it("refuses a past toDate under a FUTURE fromDate too: the deadline decides, not the start", async () => {
+    // Read as a range this is [gone..the 10th of next month], a perfectly askable
+    // question — but the patient's question was bounded by a deadline that has
+    // expired, and no upcoming time answers it.
+    const dentally = strictDentally([windowOn(TOMORROW, "09:00", "10:00")]);
+    const out = await findSlots(dentally, { treatment: "hygiene", fromDate: "2026-09-10", toDate: "2026-08-19" });
+
+    expect(dentally.getAvailability).not.toHaveBeenCalled();
+    expect(dentally.listPractitioners).not.toHaveBeenCalled();
+    expect(out.slots).toEqual([]);
+    expect(out.error).toMatch(/passed/i);
+  });
+
+  it("still serves TODAY for an explicit today..today: only a toDate BEFORE today refuses", async () => {
+    // The boundary the rule turns on, and the reason it is a strict compare. Today
+    // is not past: the practice is open, and this is the ask a patient makes most.
+    const dentally = strictDentally([windowOn(TODAY, "15:00", "17:00")]);
+    const { slots, error } = await findSlots(dentally, { treatment: "hygiene", fromDate: TODAY, toDate: TODAY });
+
+    expect(error).toBeUndefined();
+    expect(dentally.getAvailability).toHaveBeenCalledTimes(1);
+    expect(slots.length).toBeGreaterThan(0);
+    expect(slots.every((s) => londonDay(s.start_time) === TODAY)).toBe(true);
+  });
+});
+
+// slotsWithinDays IS ITS OWN DEFENCE AGAINST A BACKWARDS PAIR.
+//
+// Read literally, [the 10th .. the 5th] is a range no slot can be inside, so an
+// unordered trim keeps NOTHING and the agent reports an empty diary on days the
+// practice is open — the exact outage that made one shared answer to "what does
+// backwards mean" necessary. In-repo the only caller hands over the pair
+// bookingAvailabilityWindow already ordered, which makes the call a no-op there;
+// these pin the ordering directly, so the defence cannot be deleted as dead code
+// on the strength of today's caller. Mirrors bookingDaysWithin's own reversed-pair
+// test on the booking seam.
+describe("slotsWithinDays orders the pair it is handed", () => {
+  const unit = (day: string) => ({
+    start_time: `${day}T10:00:00.000+01:00`,
+    finish_time: `${day}T10:30:00.000+01:00`,
+  });
+
+  it("trims a REVERSED pair to the days between them, never to nothing", () => {
+    const units = [unit("2026-09-04"), unit("2026-09-06"), unit("2026-09-11")];
+    expect(slotsWithinDays(units, "2026-09-10", "2026-09-05")).toEqual([unit("2026-09-06")]);
+  });
+
+  it("leaves a pair that is already in order exactly as it found it", () => {
+    const units = [unit("2026-09-04"), unit("2026-09-06"), unit("2026-09-11")];
+    expect(slotsWithinDays(units, "2026-09-05", "2026-09-10")).toEqual([unit("2026-09-06")]);
   });
 });

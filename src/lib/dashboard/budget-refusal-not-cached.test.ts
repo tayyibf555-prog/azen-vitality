@@ -472,9 +472,17 @@ describe("EVERY degrading catch in the assembly separates a refusal from a failu
       }
       blocks.push(source.slice(i, end + 1));
     }
-    // Seven Dentally scans plus the nightly-count read; a scan added without a catch
+    // Six Dentally catches plus the nightly-count read; a scan added without a catch
     // does not degrade at all, which is also fine.
-    expect(blocks.length, `${path} has no degrading catches left to check`).toBeGreaterThanOrEqual(8);
+    //
+    // IT WAS EIGHT. The NHS claim scan was the fourth copy of the shared per-site
+    // block (scanWindowedPerSite) and joined it, so its own `catch (err)` is gone and
+    // the ONE catch inside the shared block now covers all four windowed scans —
+    // which is a strictly stronger version of this rule, not a weakening of it: the
+    // shared catch is still checked below like every other, and a fifth scan added to
+    // the block inherits the re-throw instead of having to remember it. The floor
+    // moved with the code rather than the rule being relaxed.
+    expect(blocks.length, `${path} has no degrading catches left to check`).toBeGreaterThanOrEqual(7);
 
     for (const block of blocks) {
       // The nightly patient count reads OUR OWN table, so it has no Dentally refusal

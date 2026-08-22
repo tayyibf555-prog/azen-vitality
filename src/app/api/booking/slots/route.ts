@@ -93,12 +93,51 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     // clamp below and the cache key are this route's own and both must describe
     // the range that will actually be read. This is one policy with one
     // implementation, not a second opinion.
-    const { fromDate: from, toDate: orderedTo } = orderedDayRange(requestedFrom, requestedTo);
+    const ordered = orderedDayRange(requestedFrom, requestedTo);
+    let to = ordered.toDate;
+    // ANCHOR AT TODAY, THEN CLAMP — in that order, and the order is the whole fix.
+    //
+    // `from` defaults to today, so a lone `to` in the past arrives here as the
+    // ordered range [pastTo..today]: a range that still TOUCHES today, and whose
+    // future part is a perfectly good question. The 14-day clamp, applied to that
+    // pair, anchored its fourteen days at `pastTo` and cut the range back to
+    // [pastTo..pastTo+13] — still entirely in the past for any `to` more than a
+    // fortnight back. The booking seam then rightly refused a window it could never
+    // ask Dentally about, and the patient got a cheerful 200 with an EMPTY calendar
+    // on a day the practice was open. Before the ordering landed, that same request
+    // clamped to `to = from` and served today.
+    //
+    // So the effective start is moved up to today whenever the ordered range reaches
+    // today or beyond, and only then is the fortnight measured. Any range touching
+    // today or the future now serves its future part — which is all Dentally can
+    // answer for anyway, since availability needs a start strictly in the future —
+    // and a range ENTIRELY in the past is the only one left with nothing to serve.
+    const today = londonDayKey(now);
+    const from = to >= today && ordered.fromDate < today ? today : ordered.fromDate;
     // Clamp: never more than 14 days in one request. Applied to the ORDERED pair,
     // so a reversed range spanning half a year is bounded like any other; before
     // the swap it read as a negative span and slipped past this check entirely.
-    let to = orderedTo;
     if (Date.parse(to) - Date.parse(from) > MAX_RANGE_DAYS * DAY_MS) to = shiftDay(from, MAX_RANGE_DAYS);
+
+    // A RANGE ENTIRELY IN THE PAST, SAID OUT LOUD.
+    //
+    // After the anchor this is the only shape left that cannot touch today (the
+    // clamp only ever pulls `to` DOWN toward `from`, never below it), and it is a
+    // real answer rather than an error: nothing is free on days that have ended.
+    // But `{days: []}` alone cannot say that — it is the identical response to a
+    // fully booked practice, which is why the calendar could show an outage as
+    // "no times". `rangeInPast` is the one bit that tells them apart.
+    //
+    // ADDITIVE, SO NO CONSUMER BREAKS: both readers in this repo (the public
+    // booking calendar and the client slot picker) branch on `ok` and read `days`,
+    // and ignore any field they were not looking for; a widget that wants to say
+    // "those dates have passed" can now do so without guessing. Answered here, ahead
+    // of the cache and of Dentally, because the answer depends on today rather than
+    // on availability — caching it under a key that outlives the day it was true on
+    // is how it would go stale.
+    if (to < today) {
+      return Response.json({ ok: true, days: [], rangeInPast: true });
+    }
 
     const key = `${siteId}:${from}:${to}`;
     const hit = cache.get(key);

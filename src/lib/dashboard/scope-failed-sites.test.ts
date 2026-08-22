@@ -75,9 +75,22 @@ describe("F3: each scope names only the failures it can see", () => {
     for (const scope of v.scopes) expect(scope.takingsFailedSites).toEqual([]);
   });
 
-  it("drops a failed id that is not one of this client's sites rather than naming it", () => {
+  it("NAMES a failed id that is in none of this client's sites, on the scope that covers everything", () => {
+    // THIS TEST USED TO PIN THE OPPOSITE — that an unrecognised id was dropped from
+    // every scope — and the drop was the wrong default. The list is assembled by the
+    // read layer's own site loop, so an id the view does not recognise means the two
+    // have drifted, and that is the moment the practice most needs to be told a
+    // takings figure came from an incomplete read. Filtering it away deleted the only
+    // disclosure there was, precisely when something unexpected had happened.
+    //
+    // The consumer was already built for this: practice-dashboard.tsx renders
+    // `view.sites.find(...)?.name ?? id`, so an unknown id shows as the raw id.
     const v = view(["site-belonging-to-nobody"]);
-    for (const scope of v.scopes) expect(scope.takingsFailedSites).toEqual([]);
+
+    expect(scopeOf(v, null).takingsFailedSites).toEqual(["site-belonging-to-nobody"]);
+    // A single-practice scope still names only its own: an id that is not this
+    // practice's is not this practice's story, whether or not anyone recognises it.
+    for (const site of [A, B, C]) expect(scopeOf(v, site.id).takingsFailedSites).toEqual([]);
   });
 });
 

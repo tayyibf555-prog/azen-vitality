@@ -33,6 +33,13 @@
 // walk the WHOLE REPO (source-hygiene.test.ts, which reads scripts/ and supabase/
 // too, and by bytes rather than by extension) therefore keeps its own walk on
 // purpose — it is a different sweep, not a fifth copy of this one.
+//
+// AND WHAT A CALLER MUST STILL DECIDE: dot-directories. Skipping them by default
+// was inherited from the hand-rolled walks and it is wrong for the two sweeps whose
+// claim is about routing — Next SERVES app/.well-known/**/route.ts — so those pass
+// `includeDotDirs: true` and the rest state why they do not. That option is the one
+// place a walk can silently narrow without anything going red, so what it changes is
+// pinned in walk-src.test.ts against a real dot-directory rather than assumed.
 // ===========================================================================
 
 import { readdirSync } from "node:fs";
@@ -66,19 +73,45 @@ export interface WalkSrcOptions {
   extensions?: readonly string[] | null;
   /** Include `*.test.ts` / `*.test.tsx`. Off by default. */
   includeTests?: boolean;
+  /**
+   * Descend into dot-prefixed directories too. OFF by default, and the default is
+   * NOT the safe answer everywhere.
+   *
+   * Next's app router genuinely serves them. `.well-known` is listed in the
+   * framework's own docs as a custom endpoint you may define
+   * (node_modules/next/dist/docs/01-app/02-guides/backend-for-frontend.md), so
+   * `app/.well-known/<name>/route.ts` is a real, publicly reachable route handler.
+   * A sweep that skips it is not merely incomplete: the destructive-route audit
+   * states that NO write route in the platform is unguarded, and a walk that never
+   * opened the file would be saying that about a route it never saw. Same for the
+   * loading.tsx sweep, whose sentence is about the SHAPE of src/app.
+   *
+   * So the sweeps whose claim is about ROUTING turn this on, and they are narrowed
+   * to app/ or app/api. The whole-src sweeps leave it off deliberately: the only
+   * dot-directory a walk of ALL of src/ is likely to meet is a nested checkout
+   * (.claude/worktrees/<name>/ is a complete copy of this repo), and descending one
+   * finds every declaration a second time and reports a divergence that is not real.
+   *
+   * `node_modules` and `.git` are skipped either way; see NEVER_DESCENDED.
+   */
+  includeDotDirs?: boolean;
 }
 
 /**
- * Never descended into.
+ * Never descended into, whatever a caller asks for.
  *
- * `node_modules` and dot-directories do not exist under src/ today, so skipping
- * them changes nothing about what any current caller sees. They are here for the
- * day one does: `.claude/worktrees` is a full copy of this repo, and a sweep that
- * followed one would find every declaration a second time and report a divergence
- * that does not exist.
+ * `node_modules` is a second copy of half of npm and `.git` is object storage
+ * rather than source; a sweep reaching either is reading files no reviewer will
+ * ever edit, and would report every declaration in a vendored package as if it
+ * were ours. Neither is a judgement call a caller gets to make, so neither is
+ * reachable through an option. Every OTHER dot-directory is a judgement call, and
+ * `includeDotDirs` is where it is made — see the option's own note.
  */
-function skipDirectory(name: string): boolean {
-  return name === "node_modules" || name.startsWith(".");
+const NEVER_DESCENDED = new Set(["node_modules", ".git"]);
+
+function skipDirectory(name: string, includeDotDirs: boolean): boolean {
+  if (NEVER_DESCENDED.has(name)) return true;
+  return !includeDotDirs && name.startsWith(".");
 }
 
 const TEST_FILE = /\.test\.tsx?$/;
@@ -95,14 +128,19 @@ function extensionOf(name: string): string {
  * files, and a list in readdir order is a different list on a different machine.
  */
 export function walkSrc(options: WalkSrcOptions = {}): string[] {
-  const { subdir = "", extensions = [".ts", ".tsx"], includeTests = false } = options;
+  const {
+    subdir = "",
+    extensions = [".ts", ".tsx"],
+    includeTests = false,
+    includeDotDirs = false,
+  } = options;
   const found: string[] = [];
 
   const walk = (dir: string, prefix: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (skipDirectory(entry.name)) continue;
+        if (skipDirectory(entry.name, includeDotDirs)) continue;
         walk(join(dir, entry.name), rel);
         continue;
       }

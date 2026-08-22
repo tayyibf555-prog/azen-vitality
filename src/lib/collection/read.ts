@@ -39,10 +39,30 @@
 // the point. The sentence this read gates is one the practice sends to a real
 // person, mid-conversation, about money they are said to owe; a balance summed
 // over a provably partial list is a claim nobody may make.
+//
+// AND `meta.total` HONOURS `patient_id`, WHICH IS NOW PROVEN RATHER THAN ASSUMED.
+// The check above is only safe if the count describes THIS REQUEST'S result set. Had
+// Dentally published the whole index's count against a patient-scoped request, every
+// patient alive would have come back short of ~34,000 and the closer would have
+// refused every single one of them, for ever — a silent, total shutdown of the
+// collection sweep that no test could have caught, because the mock publishes an
+// honest per-request count.
+//
+// Probed live, read-only GET, 2026-08-22: /v1/invoices reports meta.total 34,209
+// unfiltered, 3,854 for `paid=false`, and 1 for a sampled `patient_id` — with the one
+// returned row belonging to that patient. The total is filter-honouring on all three,
+// so `expected` is authoritative here and the completeness gate is sound.
+//
+// IT WALKS ON THE SHARED PAGER NOW, NOT A PRIVATE COPY OF IT. This held pageAll's
+// contract minus two of its stops: it never abandoned a walk Dentally had already
+// said was too big for the bound (page one carries the count), and it never stopped
+// on reaching that count, so a patient with exactly MAX_PAGES x PER_PAGE invoices
+// paged to the cap and was reported TRUNCATED — a complete history refused as a
+// partial one, which costs a real conversation. Both stops are pageAll's, tested
+// there, and this file now gets them by using it rather than by re-deriving them.
 
-import { rethrowIfBudgetRefused } from "@/lib/dentally/client";
+import { pageAll } from "@/lib/reports/scan";
 import { dentallyFromEnv } from "@/lib/dentally/read";
-import { metaTotal } from "@/lib/dentally/paging";
 
 /** Rows per page, matching every other paged read in this repo. */
 const PER_PAGE = 100;
@@ -69,49 +89,33 @@ export interface PatientInvoiceRead {
  * that), so assuming it honours `patient_id` would risk summing somebody else's
  * invoices into this patient's balance. Rows whose patient_id does not match are
  * dropped rather than trusted, and a page that produced NO matching rows still
- * counts toward the bound.
- *
- * A budget refusal PROPAGATES. It must: absorbing it here would produce an empty
- * invoice list, and an empty invoice list reads as "this patient owes nothing",
- * which would stop a live conversation on the strength of a read nobody made.
+ * counts toward the walk.
  */
 export async function readPatientInvoices(patientId: string): Promise<PatientInvoiceRead> {
   const client = dentallyFromEnv();
-  const rows: Array<Record<string, unknown>> = [];
-  let truncated = true;
-  /** `meta.total` from page one, or null when the envelope published none. */
-  let expected: number | null = null;
-  /** RAW rows returned, before the patient filter: the like-for-like left-hand side
-   *  of a total that describes this request's own result set. */
-  let fetched = 0;
 
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    let batch: unknown[];
-    try {
-      const res = await client.listInvoices({ patientId, page, perPage: PER_PAGE });
-      batch = res.invoices ?? [];
-      if (page === 1) expected = metaTotal(res.meta);
-    } catch (err) {
-      // A refusal is not a failed read, it is a read that never happened.
-      rethrowIfBudgetRefused(err);
-      throw err;
-    }
-    for (const raw of batch) {
-      const r = raw as Record<string, unknown>;
-      // String() both sides: Dentally ids arrive as numbers from live and as
-      // strings from the mock, and a type mismatch here would drop every row.
-      if (String(r.patient_id ?? "") !== String(patientId)) continue;
-      rows.push(r);
-    }
-    fetched += batch.length;
-    if (batch.length < PER_PAGE) {
-      // Complete ONLY if Dentally agrees. It published a count and we hold fewer
-      // rows than it: the history has a hole in it whatever the last page looked
-      // like, and `truncated` stays true so the caller refuses to quote.
-      truncated = expected !== null && fetched < expected;
-      break;
-    }
-  }
+  // A budget refusal PROPAGATES straight out of here — there is no catch, and that
+  // is the point. pageAll does not swallow anything, and neither does this: the
+  // alternative is an empty invoice list, which reads as "this patient owes
+  // nothing" and would stop a live conversation on a read nobody made.
+  const read = await pageAll(
+    async (page, perPage) => {
+      const res = await client.listInvoices({ patientId, page, perPage });
+      return { rows: res.invoices ?? [], meta: res.meta };
+    },
+    PER_PAGE,
+    MAX_PAGES,
+  );
 
-  return { rows, truncated };
+  // The patient filter runs on the RAW rows, AFTER the walk, so completeness is
+  // measured like for like against a total that describes this request's own result
+  // set. Comparing the filtered rows against it would report every response that
+  // carried somebody else's row as truncated for ever.
+  const rows = read.raw
+    .map((raw) => raw as Record<string, unknown>)
+    // String() both sides: Dentally ids arrive as numbers from live and as strings
+    // from the mock, and a type mismatch here would drop every row.
+    .filter((r) => String(r.patient_id ?? "") === String(patientId));
+
+  return { rows, truncated: !read.complete };
 }

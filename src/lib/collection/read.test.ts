@@ -18,6 +18,12 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// readPatientInvoices now walks on pageAll (src/lib/reports/scan.ts), which opens
+// with `import "server-only"`. That import is fine in the two SERVER routes this
+// module has (api/collection/[action] and api/collection/sweep) and is unresolvable
+// under vitest, so it is stubbed here exactly as gating.test.ts stubs it.
+vi.mock("server-only", () => ({}));
+
 const state = vi.hoisted<{ listInvoices: (arg: unknown) => Promise<unknown> }>(() => ({
   listInvoices: () => Promise.resolve({ invoices: [] }),
 }));
@@ -32,9 +38,14 @@ import { readPatientInvoices } from "./read";
 const PER_PAGE = 100;
 const inv = (i: number) => ({ id: `inv-${i}`, patient_id: "pat-1", amount: "10.0", amount_outstanding: "10.0" });
 
+/** Pages requested since the last reset — the two new stops are about COST as much
+ *  as about honesty, and a stop that does not stop is invisible from the rows. */
+let pagesFetched = 0;
+
 /** `count` rows on page one, then a short page, with whatever meta is published. */
 function source(count: number, meta: unknown) {
   state.listInvoices = ((a: { page?: number }) => {
+    pagesFetched += 1;
     const page = a.page ?? 1;
     const start = (page - 1) * PER_PAGE;
     const rows = Array.from({ length: Math.max(0, Math.min(PER_PAGE, count - start)) }, (_, i) =>
@@ -45,6 +56,7 @@ function source(count: number, meta: unknown) {
 }
 
 beforeEach(() => {
+  pagesFetched = 0;
   state.listInvoices = () => Promise.resolve({ invoices: [] });
 });
 
@@ -78,13 +90,48 @@ describe("F1: readPatientInvoices measures its walk against meta.total", () => {
     expect(read.truncated).toBe(false);
   });
 
-  it("CONTROL: exhausting the page bound is still truncated, count or no count", async () => {
-    // MAX_PAGES is 5, so 500 full rows never reaches a short page.
-    source(500, { total: 500, current_page: 1 });
+  it("CONTROL: exhausting the page bound with NO count is truncated, as it always was", async () => {
+    // MAX_PAGES is 5, so 500 full rows never reaches a short page, and with no count
+    // to check against, "the walk ran out of pages" is the only evidence there is.
+    source(500, undefined);
 
     const read = await readPatientInvoices("pat-1");
     expect(read.rows).toHaveLength(500);
     expect(read.truncated).toBe(true);
+  });
+
+  it("a patient with EXACTLY the page bound's worth of invoices is complete, not refused", async () => {
+    // THE EDGE THE HAND-ROLLED WALK GOT WRONG. 500 invoices, Dentally says 500, and
+    // MAX_PAGES x PER_PAGE is 500: the walk holds every row the server says exists.
+    // The old loop had no reached-expected stop, so it fell out of the `for` on the
+    // page bound and reported a COMPLETE history as truncated — and the closer
+    // refuses on truncated, so this patient could never be spoken to about a balance
+    // that was, in fact, fully read.
+    source(500, { total: 500, current_page: 1 });
+
+    const read = await readPatientInvoices("pat-1");
+
+    expect(read.rows).toHaveLength(500);
+    expect(
+      read.truncated,
+      "a fully-read invoice history was refused because the walk ended on the bound",
+    ).toBe(false);
+    // And it stopped ON reaching the count rather than spending a sixth request to
+    // watch a short page confirm what page five already proved.
+    expect(pagesFetched).toBe(5);
+  });
+
+  it("ABANDONS a walk Dentally has already said is bigger than the bound, on page ONE", async () => {
+    // meta.total arrives with page one, so a patient holding more invoices than the
+    // bound can carry is KNOWN to be unreadable before the second request is made.
+    // The old loop paged all five anyway — five live requests, at BACKGROUND
+    // priority, against a shared 3,600/hour quota — to reach the same refusal.
+    source(900, { total: 900, current_page: 1 });
+
+    const read = await readPatientInvoices("pat-1");
+
+    expect(read.truncated).toBe(true);
+    expect(pagesFetched, "the walk paged on after Dentally said it could not finish").toBe(1);
   });
 
   it("counts RAW rows against the total, not the ones that survived the patient filter", async () => {

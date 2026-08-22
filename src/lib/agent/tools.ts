@@ -311,7 +311,7 @@ function requestedDayKey(value: unknown): string | null {
 /**
  * find_slots' answer to a question about a day that has already ended.
  *
- * One string, two callers (the defaulted-`from` guard and the null window), so
+ * One string, two callers (the past-`toDate` guard and the null window), so
  * the words a patient may hear cannot drift apart between them. An empty list
  * alone reads as "the practice is fully booked", which is a lie about a day that
  * is simply in the past — hence an error the model can repeat.
@@ -334,14 +334,21 @@ const FIND_SLOTS_PAST_DAY_RESULT = JSON.stringify({
  * is unparseable — both mirror availabilityRowsWithinDays, which only ever drops
  * what is PROVEN to lie outside.
  *
- * A REVERSED pair is not handled here at all any more, and there is no local
- * "trim nothing" arm for one: ordering is bookingAvailabilityWindow's job, and
- * the single caller below trims with the ordered pair that window reports. Should
- * a future caller pass a raw pair, orderedDayRange — the same function the window
- * uses — is what it must call, so there is never a second answer to what
- * backwards means.
+ * A REVERSED pair IS handled here, by the first line: orderedDayRange, the very
+ * function bookingAvailabilityWindow uses, so there is one answer to what
+ * backwards means rather than a second opinion. That call is the DEFENCE, and it
+ * stays whether or not today's caller needs it — read literally, a backwards pair
+ * is a range no slot can be inside, so an unordered trim keeps NOTHING and the
+ * patient is told the practice is shut on days it is open. That outage is the
+ * reason the ordering was centralised in the first place.
+ *
+ * In-repo the single caller below already hands over the ordered pair the window
+ * reported, which makes the call a no-op there; it is EXPORTED so the defence is
+ * pinned by its own test rather than by an assumption about who calls it. Exactly
+ * mirrors bookingDaysWithin, its opposite number on the booking seam, which
+ * orders its own pair and is tested for it the same way.
  */
-function slotsWithinDays(units: unknown[], requestedFrom: string, requestedTo: string): unknown[] {
+export function slotsWithinDays(units: unknown[], requestedFrom: string, requestedTo: string): unknown[] {
   const { fromDate: fromDayKey, toDate: toDayKey } = orderedDayRange(requestedFrom, requestedTo);
   if (!DAY_KEY.test(fromDayKey) || !DAY_KEY.test(toDayKey)) return units;
   return units.filter((u) => {
@@ -514,23 +521,35 @@ export function makeDispatch(deps: ToolDeps) {
         // means and reports the pair it settled on, which is what both trims below
         // read.
         //
-        // ONE RULE STAYS LOCAL, AND IT HAS TO. Both dates are OPTIONAL in this
-        // tool's schema, so `from` is often not the model's date at all but today,
-        // defaulted right here. THE SEAM CANNOT KNOW WHETHER `fromDate` WAS
-        // DEFAULTED — that knowledge exists only at this tool boundary. Handed
-        // {toDate: yesterday} and nothing else, a blind swap turns "was anything
-        // free yesterday?" (or a wrong-year echo of a date already gone) into
-        // [yesterday..today], which the clamp then serves as today: the agent
-        // confidently offers TODAY'S times for a question about a day that has
-        // passed. A lone `to` in the past is not a reversed range — it is a
-        // question about the past — and it takes the refusal below, with zero
-        // Dentally calls.
+        // ONE RULE STAYS LOCAL, AND IT HAS TO: AN EXPLICIT END DATE THAT HAS
+        // ALREADY PASSED IS A QUESTION ABOUT THE PAST, WHATEVER THE START SAYS.
+        //
+        // A named `toDate` is a DEADLINE — "anything before the 10th?" — and a
+        // deadline that has gone cannot be answered with an upcoming time. Ordered
+        // blindly, such a pair becomes [past..today], the clamp moves the start to
+        // now, and the agent confidently offers TODAY'S real times, with a real
+        // Dentally read behind them, for a day that ended. The seam cannot make this
+        // call: only here is it known that a date came from the model at all, since
+        // BOTH dates are optional in this tool's schema and `from` is otherwise
+        // today, defaulted on the next line.
+        //
+        // THE RULE IS READ AGAINST TODAY, AND NEVER AGAINST `from`. It used to fire
+        // only when `fromDate` was OMITTED, which is not how models fill an optional
+        // pair: {fromDate: <today, explicitly>, toDate: "2025-09-10"} — a wrong-year
+        // echo alongside a start the model did supply — walked straight past the
+        // guard and was served today's diary. The end date decides, uniformly.
+        //
+        // WHAT THIS DELIBERATELY DOES NOT TOUCH. A lone past `fromDate` with no end
+        // named (or a future one) is not a question about the past but this tool's
+        // own fortnight, clamped to now, and still searches forward. Two dates in the
+        // wrong order that are both still ahead are still swapped, by the seam.
         const explicitFromDayKey = requestedDayKey(input.fromDate);
         const requestedToDayKey = requestedDayKey(input.toDate);
-        const fromDayKey = explicitFromDayKey ?? londonDayKey(now);
-        if (explicitFromDayKey === null && requestedToDayKey !== null && requestedToDayKey < fromDayKey) {
+        const todayDayKey = londonDayKey(now);
+        if (requestedToDayKey !== null && requestedToDayKey < todayDayKey) {
           return FIND_SLOTS_PAST_DAY_RESULT;
         }
+        const fromDayKey = explicitFromDayKey ?? todayDayKey;
         const toDayKey = requestedToDayKey ?? shiftYmd(fromDayKey, AGENT_SEARCH_WINDOW_DAYS);
         const queryWindow = bookingAvailabilityWindow(fromDayKey, toDayKey, now.getTime());
         // Every requested day has already ended. Dentally can never answer for it, so

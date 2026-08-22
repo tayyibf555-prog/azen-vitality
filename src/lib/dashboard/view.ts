@@ -906,6 +906,9 @@ function buildScope(
   practitionerNameById: ReadonlyMap<string, string>,
 ): ScopeView {
   const siteByPatientId = input.siteByPatientId ?? null;
+  /** Every site this view knows about — used to spot a failed id that is in none of
+   *  them, which is a fact worth printing rather than filtering away. */
+  const knownSiteIds = input.sites.map((s) => s.id);
   // A claim scan that stopped short and a claim scan that failed both hand us null.
   // Only the caller knows which, so it says, and the panels quote it verbatim.
   const claimsReason =
@@ -1000,8 +1003,20 @@ function buildScope(
     unattributedPayments: live.unattributedPayments,
     // NARROWED HERE, ONCE. A scope names only failures inside itself; the all-sites
     // scope covers every site and so keeps the whole list.
-    takingsFailedSites: (input.takingsFailedSites ?? []).filter((id) =>
-      siteIdsInScope.includes(id),
+    //
+    // AND AN ID THAT IS IN NEITHER LIST IS STILL NAMED, on the scope that covers
+    // everything. `takingsFailedSites` is assembled from the read layer's own site
+    // loop, so an id that is not in `input.sites` means the two lists have drifted —
+    // a site retired mid-assembly, a config the read layer saw and the view did not.
+    // A plain `includes` dropped it from every scope, so the ONE disclosure the
+    // dashboard has about an unreadable practice disappeared precisely when
+    // something unexpected had happened. Silence about a failure is the wrong
+    // default. practice-dashboard.tsx already renders `sites.find(...)?.name ?? id`,
+    // so an unrecognised id surfaces as the raw id — which is exactly what somebody
+    // debugging this needs to see. A single-practice scope still names only itself:
+    // an id that is not that practice's is not that practice's story.
+    takingsFailedSites: (input.takingsFailedSites ?? []).filter(
+      (id) => siteIdsInScope.includes(id) || (siteId === null && !knownSiteIds.includes(id)),
     ),
   };
 }

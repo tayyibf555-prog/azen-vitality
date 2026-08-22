@@ -3,7 +3,7 @@
 // in-module cache (one browsing patient must not hammer Dentally), and the
 // friendly 502 on a Dentally failure.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   getAvailability: vi.fn(async (..._a: unknown[]) => ({ availability: [] as unknown[] })),
@@ -162,5 +162,85 @@ describe("GET /api/booking/slots", () => {
     const res = await get({ client: "vitality", site: "site-cc", from: ymd(9), to: ymd(10) });
     expect(res.status).toBe(200);
     expect(h.dentallyAgentClient).not.toHaveBeenCalled();
+  });
+
+  // A RANGE THAT REACHES TODAY IS SERVED FROM TODAY, NOT ABANDONED IN THE PAST.
+  //
+  // `from` defaults to today, so `?to=<a date weeks back>` arrives as the ordered
+  // range [pastTo..today]. The 14-day clamp then measured its fortnight from
+  // `pastTo` and handed the booking seam [pastTo..pastTo+13] — a window entirely
+  // in the past, which Dentally can never answer for, so the seam refused it
+  // without asking and the patient got a cheerful 200 with an EMPTY calendar on a
+  // day the practice was open. (The older clamp-to-`from` spelling served today.)
+  //
+  // The clock is frozen so "today" is a fact rather than a race: at the boundary
+  // of a real London day these ranges would otherwise mean different things
+  // between one assertion and the next.
+  describe("a past `to`, and a range with no future left in it", () => {
+    const NOW_ISO = "2026-08-21T14:17:33.000+01:00"; // a BST afternoon
+    const TODAY = "2026-08-21";
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(NOW_ISO));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("serves TODAY for a lone past `to`, instead of the empty calendar the clamp made of it", async () => {
+      h.getAvailability.mockResolvedValue({
+        availability: [
+          { start_time: `${TODAY}T15:00:00.000+01:00`, finish_time: `${TODAY}T16:00:00.000+01:00`, practitioner_id: 7 },
+        ],
+      });
+      const res = await get({ client: "vitality", site: "site-cc", to: "2026-07-22" });
+      expect(res.status).toBe(200);
+
+      // Dentally is ASKED. Before the anchor there was no call at all: the clamped
+      // window had already ended, so the seam answered [] without one.
+      expect(h.getAvailability).toHaveBeenCalledTimes(1);
+      const arg = h.getAvailability.mock.calls[0]![0] as { startTime: string };
+      expect(Date.parse(arg.startTime)).toBeGreaterThan(Date.now());
+      expect(londonDay(arg.startTime)).toBe(TODAY);
+
+      // And the patient gets today's real times, not an empty day.
+      const j = (await res.json()) as {
+        ok: boolean;
+        days: Array<{ date: string; slots: unknown[] }>;
+        rangeInPast?: boolean;
+      };
+      expect(j.ok).toBe(true);
+      expect(j.days.map((d) => d.date)).toEqual([TODAY]);
+      expect(j.days[0]!.slots).toHaveLength(2); // 15:00 and 15:30
+      // Nothing was refused, so nothing is marked as past.
+      expect(j.rangeInPast).toBeUndefined();
+    });
+
+    it("marks a range ENTIRELY in the past, rather than passing it off as no availability", async () => {
+      const res = await get({ client: "vitality", site: "site-cc", from: "2026-07-01", to: "2026-07-10" });
+      expect(res.status).toBe(200);
+      const j = (await res.json()) as { ok: boolean; days: unknown[]; rangeInPast?: boolean };
+
+      // Still a 200 and still an honest empty list — nothing IS free on days that
+      // have ended — but `{days: []}` alone is the same answer a fully booked
+      // practice gives. This bit is what lets the widget tell them apart.
+      expect(j.ok).toBe(true);
+      expect(j.days).toEqual([]);
+      expect(j.rangeInPast).toBe(true);
+      // Nothing is asked of Dentally for days it could never answer for.
+      expect(h.getAvailability).not.toHaveBeenCalled();
+      expect(h.listPractitioners).not.toHaveBeenCalled();
+    });
+
+    it("still bounds a range that STARTS in the past at 14 days from today, not from the start", async () => {
+      // The anchor moves the start; the fortnight is then measured from there, so a
+      // month-long ask still reads a fortnight of real, future days.
+      const res = await get({ client: "vitality", site: "site-rv", from: "2026-07-25", to: "2026-09-30" });
+      expect(res.status).toBe(200);
+      const arg = h.getAvailability.mock.calls[0]![0] as { startTime: string; finishTime: string };
+      expect(londonDay(arg.startTime)).toBe(TODAY);
+      expect(londonDay(arg.finishTime)).toBe("2026-09-03"); // today + 13 days
+    });
   });
 });

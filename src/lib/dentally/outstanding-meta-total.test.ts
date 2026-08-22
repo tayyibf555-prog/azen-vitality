@@ -70,6 +70,10 @@ const patient = (id: string, site: string) => ({
   site_id: site,
 });
 
+/** Every /v1/invoices page this scan asked for, reset per test. The reached-expected
+ *  stop is invisible from the rows — it changes only the bill — so it is counted. */
+let invoicePages = 0;
+
 /** Every warning this scan emitted, reset per test. A spy re-installed by spyOn on an
  *  already-spied method keeps its old calls, which would leak one test's warning into
  *  the next and make the last assertion below pass or fail for the wrong reason. */
@@ -80,6 +84,7 @@ beforeEach(() => {
   vi.stubEnv("DENTALLY_BASE_URL", "http://dentally.invalid");
   state.listPatients = () => Promise.resolve({ patients: [] });
   state.listInvoices = () => Promise.resolve({ invoices: [] });
+  invoicePages = 0;
   warnings = [];
   vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
     warnings.push(String(args[0]));
@@ -88,10 +93,12 @@ beforeEach(() => {
 
 /** One site, one page of rows, and whatever `meta` the source chooses to publish. */
 function oneSite(rows: unknown[], meta: unknown) {
-  state.listInvoices = ((a: { page?: number }) =>
-    Promise.resolve(
+  state.listInvoices = ((a: { page?: number }) => {
+    invoicePages += 1;
+    return Promise.resolve(
       (a.page ?? 1) === 1 ? { invoices: rows, meta } : { invoices: [], meta },
-    )) as never;
+    );
+  }) as never;
   state.listPatients = ((a: { siteId?: string; page?: number }) =>
     Promise.resolve({
       patients: (a.page ?? 1) === 1 ? [patient("pat-1", "site-1"), patient("pat-2", "site-1")] : [],
@@ -136,6 +143,43 @@ describe("F1: the debtors scan measures its walk against meta.total", () => {
     const out = await listOutstandingDetailed(["site-1"]);
     expect(out.truncated).toBe(false);
     expect(out.rows).toHaveLength(1);
+  });
+
+  it("STOPS the walk the moment it holds every unpaid invoice Dentally says exists", async () => {
+    // Two FULL pages and a count of exactly 200: page two proves the walk finished,
+    // and the third request would buy nothing but the short page the other stop
+    // waits for. This scan runs per site, on a 60-second cache, against the shared
+    // 3,600/hour ceiling a cron emptied for a whole working day on 2026-08-20.
+    //
+    // There is deliberately NO page-one abandon to match it: a truncated debtors
+    // read still DISPLAYS, as an explicit floor on the Payments page, so its later
+    // pages earn their cost. A reports scan that cannot finish prints nothing, which
+    // is why pageAll abandons and this does not.
+    const PAGE = 100;
+    state.listInvoices = ((a: { page?: number }) => {
+      invoicePages += 1;
+      const page = a.page ?? 1;
+      const rows =
+        page <= 2
+          ? Array.from({ length: PAGE }, (_, i) =>
+              unpaid(`inv-${page}-${i}`, i % 2 === 0 ? "pat-1" : "pat-2", 100),
+            )
+          : [];
+      return Promise.resolve({ invoices: rows, meta: { total: 2 * PAGE, current_page: page } });
+    }) as never;
+    state.listPatients = ((a: { page?: number }) =>
+      Promise.resolve({
+        patients: (a.page ?? 1) === 1 ? [patient("pat-1", "site-1"), patient("pat-2", "site-1")] : [],
+      })) as never;
+
+    const out = await listOutstandingDetailed(["site-1"]);
+
+    expect(out.truncated, "a walk that reached Dentally's own count was called a floor").toBe(false);
+    // Two debtors, 200 invoices between them: every row was read and aggregated.
+    expect(out.rows.map((r) => r.patientId).sort()).toEqual(["pat-1", "pat-2"]);
+    expect(out.rows.reduce((n, r) => n + r.outstanding, 0)).toBe(2 * PAGE * 100);
+    expect(invoicePages, "the walk paged on after it already held every matching row").toBe(2);
+    expect(warnings.filter((m) => m.includes("short page"))).toHaveLength(0);
   });
 
   it("CONTROL: the ignored-site_id early stop is not mistaken for a truncation", async () => {

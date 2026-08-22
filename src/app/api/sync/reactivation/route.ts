@@ -33,6 +33,7 @@ import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/
 import { enrolmentBudget } from "@/lib/enrolment/budget";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
+import { metaTotal } from "@/lib/dentally/paging";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -387,12 +388,43 @@ async function syncSite(
         all.push(...rows);
         if (rows.length < PER_PAGE) break;
       }
-      const inv = await client.getPatientInvoices(patient.id);
+      // AND PAGE THE INVOICES, for the same reason and with the same stop. This was
+      // a single unpaged call — one 100-row page, no truncation signal — feeding
+      // deriveHistoricSpend, three lines under an appointment read that had already
+      // been paged for exactly this. Historic spend ranks who gets chased and shapes
+      // what they are offered, so a long-standing patient whose older invoices sat
+      // past page one was scored on a fraction of what they have actually spent.
+      const invoiceRows: unknown[] = [];
+      let invoicesExpected: number | null = null;
+      for (let ip = 1; ip <= 20; ip += 1) {
+        const r = await client.getPatientInvoices(patient.id, ip, PER_PAGE);
+        const rows = Array.isArray(r.invoices) ? r.invoices : [];
+        // Page one carries the count. Live read-only probe, 2026-08-22: /v1/invoices
+        // reports meta.total 34,209 unfiltered and 1 for a sampled `patient_id`, with
+        // the returned row belonging to that patient — the total describes the
+        // request, so it can be compared against what this walk holds.
+        if (ip === 1) invoicesExpected = metaTotal(r.meta);
+        invoiceRows.push(...rows);
+        if (rows.length < PER_PAGE) break;
+      }
+      // A SHORT WALK IS AN UNREAD PATIENT, degraded exactly as a failed secondary
+      // read is: leave them unenriched, so step 4 skips them and the high-water mark
+      // does NOT advance past them, and the next run tries again. The alternative is
+      // scoring somebody on a spend figure we know is missing rows — the reactivation
+      // equivalent of the balance the collection sweep refuses to quote.
+      if (invoicesExpected !== null && invoiceRows.length < invoicesExpected) {
+        console.warn(
+          `[reactivation] patient ${patient.id}: invoice read held ${invoiceRows.length} of the ` +
+            `${invoicesExpected} Dentally says match; leaving them unenriched for the next run ` +
+            `rather than scoring them on a partial spend history.`,
+        );
+        return;
+      }
       const appts = summariseAppointments({ appointments: all }, now);
       enriched.set(patient.id, {
         lastVisitAt: appts.lastVisitAt,
         futureBookingExists: appts.futureBookingExists,
-        historicSpend: deriveHistoricSpend(inv),
+        historicSpend: deriveHistoricSpend({ invoices: invoiceRows }),
       });
     } catch {
       // leave unset -> skipped in step 4

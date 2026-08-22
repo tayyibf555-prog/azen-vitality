@@ -13,8 +13,19 @@
 // src/, sweeps it, and passes, having said nothing at all about the code that was
 // actually changed. That is why the assertions below name FILES rather than only
 // counting them: a count cannot tell two checkouts of the same repo apart.
+//
+// THE ROOT IS NOT THE ONLY WAY A WALK NARROWS IN SILENCE. What it refuses to DESCEND
+// into does the same thing, one directory at a time, and this walk skips every
+// dot-prefixed folder by default. Next's app router serves those — `.well-known` is
+// named in the framework's own docs as an endpoint you may define — so a route parked
+// in one is live and invisible to the sweep whose stated job is that no write route
+// is unguarded. `includeDotDirs` is the answer, and an option nobody checks is worth
+// nothing: the last describe below builds a REAL dot-directory under src/ and proves
+// the option changes what comes back, because with no dot-folder in the tree "the
+// option works" and "the option is ignored" produce identical output everywhere else.
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { SRC_ROOT, srcPath, walkSrc } from "./walk-src";
 
@@ -53,6 +64,24 @@ const MIGRATED = [
   ["the destructive-route sweep", "app/api/destructive-route-capability-coverage.test.ts"],
 ] as const;
 
+/**
+ * The sweeps whose sentence is about ROUTING, and so the ones that may not skip a
+ * folder the router serves. The third column is the claim each file prints, because
+ * that claim is the reason the option is not optional there.
+ */
+const DOT_DIR_SWEEPS = [
+  [
+    "the destructive-route sweep",
+    "app/api/destructive-route-capability-coverage.test.ts",
+    "no write route in the platform is unguarded",
+  ],
+  [
+    "the loading.tsx sweep",
+    "app/navigation-instant-coverage.test.ts",
+    "no loading.tsx exists anywhere under src/app",
+  ],
+] as const;
+
 describe("the walk is rooted at this file, never at the runner", () => {
   // MUTATION: swap the import.meta.url derivation for `join(process.cwd(), "src")`
   // "because it reads better". That is the exact edit this module exists to make
@@ -88,6 +117,25 @@ describe("the walk is rooted at this file, never at the runner", () => {
     expect(code, `${file} has re-rooted a read at the runner's directory`).not.toContain(
       "process.cwd",
     );
+  });
+
+  // MUTATION: drop `includeDotDirs: true` from either sweep "because src/app holds no
+  // dot-folders today". Both stay green, both go on printing the same claim, and both
+  // have stopped covering a directory the framework will happily serve.
+  //
+  // These two are pinned and the other callers are not, deliberately. A dot-directory
+  // is a ROUTING fact — app/.well-known/<x>/route.ts is a reachable handler — so a
+  // sweep whose claim is about routes, or about the shape of src/app, has to look in
+  // one. The whole-src walks (beacon-transport, money-path-hardening, dentally/paging)
+  // are the opposite case: the only dot-directory they would meet is a nested checkout
+  // under src/, and descending it counts every declaration twice. They keep the
+  // default, and say so where they call it.
+  it.each(DOT_DIR_SWEEPS)("%s looks inside dot-directories", (_name, file, claim) => {
+    const code = codeOnly(readFileSync(srcPath(file), "utf8"));
+    expect(
+      code,
+      `${file} claims "${claim}", which it cannot claim about a directory it never opens`,
+    ).toContain("includeDotDirs: true");
   });
 });
 
@@ -131,15 +179,106 @@ describe("what a caller can ask for", () => {
     expect(files).toEqual([...files].sort());
   });
 
-  // MUTATION: drop the node_modules / dot-directory skip. Neither exists under src/
-  // today, so nothing goes red — until a .claude worktree or an installed package
-  // lands under src/ and every declaration in the repo is found twice.
-  it("never descends into node_modules or a dot-directory", () => {
-    expect(HELPER_CODE).toContain('name === "node_modules"');
+  // MUTATION: drop the node_modules / .git skip, or make dot-directories the default
+  // for every caller. Neither exists under src/ today, so nothing goes red — until a
+  // .claude worktree or an installed package lands there and every declaration in the
+  // repo is found twice.
+  it("skips node_modules, .git and — by default — every dot-directory", () => {
+    expect(HELPER_CODE).toContain('"node_modules"');
+    expect(HELPER_CODE).toContain('".git"');
     expect(HELPER_CODE).toContain('name.startsWith(".")');
     for (const file of walkSrc({ includeTests: true })) {
       expect(file.split("/").some((s) => s === "node_modules" || s.startsWith("."))).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OPTION THAT DECIDES WHAT A SWEEP CANNOT SEE.
+//
+// Every assertion above this line is about files that exist anyway. This one has to
+// MAKE a dot-directory, because src/ holds none — which is exactly why the blind spot
+// survived four hand-rolled walks and the consolidation that replaced them.
+//
+// The fixture is created and destroyed inside the assertion, under lib/test-support/
+// rather than under app/, so no other sweep in a parallel run can see it: the two
+// callers that pass includeDotDirs are narrowed to app/ and app/api, and every other
+// caller takes the default and skips dot-directories entirely.
+// ---------------------------------------------------------------------------
+
+interface DotDirFixture {
+  /** A .ts file directly inside the dot-directory: the one the option is about. */
+  file: string;
+  /** Inside a nested node_modules — never returned, whatever the option says. */
+  vendored: string;
+  /** Inside a nested .git — likewise. */
+  git: string;
+}
+
+function withDotDirFixture<T>(run: (fixture: DotDirFixture) => T): T {
+  // mkdtemp, not a fixed name: two runners on one checkout must not collide, and a
+  // leftover from a crashed run must not be mistaken for a real directory.
+  const abs = mkdtempSync(srcPath("lib/test-support/.walk-fixture-"));
+  const dir = `lib/test-support/${basename(abs)}`;
+  try {
+    // Named route.ts because that is the file the destructive-route sweep hunts: the
+    // fixture stands in for app/.well-known/<x>/route.ts, which Next serves.
+    writeFileSync(join(abs, "route.ts"), "export {};\n");
+    mkdirSync(join(abs, "node_modules"));
+    writeFileSync(join(abs, "node_modules", "route.ts"), "export {};\n");
+    mkdirSync(join(abs, ".git"));
+    writeFileSync(join(abs, ".git", "route.ts"), "export {};\n");
+    return run({
+      file: `${dir}/route.ts`,
+      vendored: `${dir}/node_modules/route.ts`,
+      git: `${dir}/.git/route.ts`,
+    });
+  } finally {
+    rmSync(abs, { recursive: true, force: true });
+  }
+}
+
+describe("dot-directories, which the app router serves and this walk hides", () => {
+  // MUTATION: accept `includeDotDirs` and then ignore it — read it into a variable and
+  // never pass it to skipDirectory. Every sweep in the suite stays green, the two
+  // security sweeps go on printing their claims, and the option is decoration. This is
+  // the assertion that fails, because it is the only one with a dot-directory to find.
+  it("are hidden by default and returned when the caller asks", () => {
+    withDotDirFixture(({ file }) => {
+      expect(
+        walkSrc(),
+        "the default must stay narrow: a nested checkout is the dot-directory a whole-src walk actually meets",
+      ).not.toContain(file);
+      expect(
+        walkSrc({ includeDotDirs: true }),
+        "includeDotDirs changed nothing, so it is not wired to the skip",
+      ).toContain(file);
+    });
+  });
+
+  it("stay out of a subdirectory walk that does not reach them", () => {
+    withDotDirFixture(({ file }) => {
+      expect(walkSrc({ subdir: "app", includeDotDirs: true })).not.toContain(file);
+      expect(walkSrc({ subdir: "lib", includeDotDirs: true })).toContain(file);
+    });
+  });
+
+  // node_modules and .git are NOT part of the judgement call: an option that let one
+  // through would have a sweep report a vendored package's declarations as ours.
+  it("never reach into node_modules or .git, whatever the option says", () => {
+    withDotDirFixture(({ vendored, git }) => {
+      const everything = walkSrc({ includeDotDirs: true, includeTests: true, extensions: null });
+      expect(everything).not.toContain(vendored);
+      expect(everything).not.toContain(git);
+    });
+  });
+
+  it("leave nothing behind: the fixture exists only inside the assertion", () => {
+    const seen = withDotDirFixture(({ file }) => {
+      expect(walkSrc({ includeDotDirs: true })).toContain(file);
+      return file;
+    });
+    expect(walkSrc({ includeDotDirs: true }), "the fixture outlived its test").not.toContain(seen);
   });
 });
 

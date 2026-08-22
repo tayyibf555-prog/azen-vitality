@@ -9,18 +9,12 @@ import { periodWord } from "./period-word";
 import { SNAPSHOT_LEAD_LIMIT } from "./snapshot";
 import type { ReportPeriod, ReportSnapshot } from "./snapshot";
 
-/**
- * Re-exported, not defined here.
- *
- * The prompt and the Reports SCREEN have to call the same period the same thing,
- * and two of the screen's three uses are inside a "use client" component. This
- * module is not importable from one: it takes SNAPSHOT_LEAD_LIMIT as a value from
- * snapshot.ts, which reaches the Supabase service client through the speed-to-lead
- * repository. So the word itself lives in period-word.ts, which imports nothing at
- * runtime, and is re-exported here for server-side callers who would look for it
- * beside the prompt that uses it. See the header of period-word.ts.
- */
-export { periodWord };
+// periodWord is IMPORTED here and deliberately NOT re-exported. This module takes
+// SNAPSHOT_LEAD_LIMIT as a value from snapshot.ts, which reaches the Supabase SERVICE
+// client through the speed-to-lead repository, and nothing in that chain carries
+// `server-only` to make a client import fail. A re-export here would leave the one
+// import path that ships that chain to the browser sitting in autocomplete beside the
+// word every screen wants. Every caller imports from @/lib/reports/period-word.
 
 /** Strip dash characters and tidy whitespace (house style: no em/en-dash). */
 export function cleanLine(s: string): string {

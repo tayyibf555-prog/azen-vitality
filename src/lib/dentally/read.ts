@@ -1417,15 +1417,60 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
 
   // PAGED. Every money figure on this record - Balance, Lifetime spend, Total
   // invoiced, Total paid and the whole Account table - is a reduction over this
-  // array, and it was a single unpaged 100-row call. A truncated array does not fail
-  // any honesty guard: reads.invoices stays "ok" and a wrong balance is printed in
-  // red at the top of the record as fact.
+  // array, and it was a single unpaged 100-row call.
+  //
+  // AND A PARTIAL ARRAY NOW FAILS THE READ, which is the honesty guard it was
+  // missing. Paging alone was not enough: `pageToCeiling` RETURNS its truncation and
+  // this call site threw it away, so a patient past the 1,000-invoice bound still had
+  // `reads.invoices` = "ok" and a balance summed over whatever was reached printed in
+  // red at the top of their record as fact. Worse, `pageToCeiling` has no completeness
+  // signal at all beyond "did I run out of pages" (see the header of ./paging.ts, which
+  // says in terms that it is NOT sound for anything that will be summed), so a server
+  // that stated 40 invoices and handed back 12 on a short page looked complete.
+  //
+  // So the count is captured on page one and the walk is checked against it, the way
+  // the debtors scan below and reports/scan.ts's pageAll both are. Live read-only
+  // probe, 2026-08-22: /v1/invoices reports meta.total 34,209 unfiltered and 1 for a
+  // sampled `patient_id`, with the returned row belonging to that patient — the total
+  // describes the request, so `expected` can be trusted here.
+  //
+  // DEGRADING MEANS THE READ'S OWN EXISTING FAILED PATHWAY, not a new state: the
+  // header's Balance slot, RecordSummary's Balance and Lifetime spend and both halves
+  // of the Account tab already branch on `reads.invoices === "failed"` and render
+  // "Unavailable" / "we could not read this". Rows are dropped with it, so no figure
+  // is derived from a list nobody may total, and the record says it could not read the
+  // account rather than understating what a patient owes. There is no "partial"
+  // rendering to fall back to and a half-filled invoice table would be worse than
+  // none: a coordinator scanning it cannot see the rows that are missing.
+  const invoiceWalk = { expected: null as number | null, fetched: 0 };
   const invoicesP = pageToCeiling(
-    (page, perPage) => client.getPatientInvoices(patientId, page, perPage).then((res) => res.invoices ?? []),
+    (page, perPage) =>
+      client.getPatientInvoices(patientId, page, perPage).then((res) => {
+        const rows = res.invoices ?? [];
+        if (page === 1) invoiceWalk.expected = metaTotal(res.meta);
+        // RAW rows, like for like with a total that describes this request.
+        invoiceWalk.fetched += rows.length;
+        return rows;
+      }),
     PER_PAGE,
     10,
   )
-    .then(({ rows }) => rows.map((inv) => inv as Record<string, unknown>))
+    .then(({ rows, truncated }) => {
+      const short =
+        invoiceWalk.expected !== null && invoiceWalk.fetched < invoiceWalk.expected;
+      if (truncated || short) {
+        console.warn(
+          `[dentally] getPatientDetail: patient ${patientId} invoice read is INCOMPLETE (` +
+            (short
+              ? `held ${invoiceWalk.fetched} of the ${invoiceWalk.expected} invoices Dentally says match`
+              : `exhausted the page bound on full pages`) +
+            `); reporting the account unavailable rather than printing a balance summed over part of it.`,
+        );
+        health.invoices = "failed";
+        return [] as Record<string, unknown>[];
+      }
+      return rows.map((inv) => inv as Record<string, unknown>);
+    })
     .catch((err: unknown) => {
       noteRefusal(err);
       health.invoices = "failed";
@@ -1624,6 +1669,18 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
     // one and checked at the end; falling short of it raises the SAME `truncated`
     // flag the page cap does, so the figure is disclosed as a floor rather than
     // presented as the book.
+    //
+    // AND THE COUNT HONOURS `paid=false`, WHICH IS NOW PROBED RATHER THAN ASSUMED.
+    // The check is only sound if the total describes THIS request. Had Dentally
+    // published the whole index's count against the filtered call, every site would
+    // have fallen short of it on every scan and the Payments page would have
+    // presented the practice's debt as a floor for ever — a permanent caveat nobody
+    // could clear, which is its own kind of dishonesty.
+    //
+    // Probed live, read-only GET, 2026-08-22: /v1/invoices reports meta.total 34,209
+    // unfiltered and 3,854 for `paid=false` (and 1 for a sampled `patient_id`, with
+    // the returned row belonging to that patient). The total tracks the filters, so
+    // `expected` is authoritative here.
     let expected: number | null = null;
     let fetched = 0;
     try {
@@ -1665,6 +1722,24 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
           break;
         }
         if (invoices.length < PER_PAGE) { sawShortPage = true; break; }
+        // EVERYTHING DENTALLY SAYS EXISTS IS IN HAND. `meta.total` arrived with page
+        // one, so the moment `fetched` reaches it the walk is provably finished and
+        // the next request would only buy the short page the stop above waits for.
+        // On the largest site that is one live request saved per scan, every 60s,
+        // for a verdict that does not change.
+        //
+        // NO PAGE-ONE ABANDON HERE, DELIBERATELY, and that is where this walk differs
+        // from pageAll. A reports scan that cannot finish prints nothing, so its pages
+        // are wasted; this one DISPLAYS what it read as an explicit floor on the
+        // Payments page, so the pages past the first are worth their cost even when
+        // the total is known to be unreachable.
+        //
+        // Guarded off the ignored-filter path exactly as the post-loop check is: on
+        // that path `fetched` is one page of a count describing the WHOLE group's
+        // index, so comparing them would stop the walk on a total that was never
+        // this site's to reach. (Unreachable today — the branch above breaks first —
+        // and kept in step with its post-loop twin rather than left to drift.)
+        if (!ignoredFilter && expected !== null && fetched >= expected) { sawShortPage = true; break; }
       }
       if (!sawShortPage) {
         truncated = true;

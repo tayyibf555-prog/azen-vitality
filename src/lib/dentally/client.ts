@@ -618,9 +618,17 @@ export class DentallyClient {
    * 40 invoices whose 3 unpaid ones fell past the first page read "Balance £0.00" on
    * the record while the dashboard debtors panel, which pages the index properly,
    * listed them owing hundreds.
+   *
+   * THE ENVELOPE'S `meta` IS RETURNED, not dropped. It carries `meta.total` — how
+   * many invoices Dentally says match this patient — which is the only thing that can
+   * tell a walk that FINISHED from a walk that was cut short by a server handing back
+   * fewer rows than it said it had. Every caller of this reduces the rows into money,
+   * so every caller needs it. Live read-only probe, 2026-08-22: the total honours
+   * `patient_id` (34,209 unfiltered, 1 for a sampled patient, the returned row that
+   * patient's), so it describes the request rather than the index.
    */
   getPatientInvoices(patientId: string, page = 1, perPage = 100) {
-    return this.get<{ invoices: unknown[] }>("/v1/invoices", {
+    return this.get<{ invoices: unknown[]; meta?: unknown }>("/v1/invoices", {
       patient_id: patientId, page, per_page: perPage,
     });
   }

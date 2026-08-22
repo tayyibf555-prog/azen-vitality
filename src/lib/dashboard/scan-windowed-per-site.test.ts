@@ -19,6 +19,15 @@ vi.mock("server-only", () => ({}));
 // truncated site withholds its own panel and nobody else's, a failed site does the
 // same, a budget refusal still PROPAGATES rather than degrading to an empty scan,
 // and the two ways of being truncated are still logged apart.
+//
+// F4 — AND THE FOURTH COPY JOINED THEM. scanClaims was the same walk a fourth time
+// and was excluded for one reason: the UDA panel's sentence differs by CAUSE ("there
+// are more claims this contract year than one read can cover" is not "NHS claims
+// could not be read from Dentally"), and the helper answered `null` for both. The
+// helper now returns a discriminated per-site result carrying the cause, which
+// deleted the dead `null` arms in the other three callers as well. The group-level
+// distinction scanClaims makes off that cause is pinned below, because it is the
+// whole reason it stayed out.
 // ---------------------------------------------------------------------------
 
 const SITES = 3;
@@ -97,7 +106,7 @@ describe("F5: the three windowed scans run one shared per-site block", () => {
 
     expect((source.match(/async function scanWindowedPerSite\(/g) ?? []).length).toBe(1);
 
-    for (const fn of ["scanAppointments", "scanPatients", "scanPlans"]) {
+    for (const fn of ["scanAppointments", "scanPatients", "scanPlans", "scanClaims"]) {
       const start = source.indexOf(`async function ${fn}(`);
       expect(start, `${fn} is gone`).toBeGreaterThan(-1);
       // Up to the next top-level declaration.
@@ -192,5 +201,76 @@ describe("F5: the three windowed scans run one shared per-site block", () => {
     expect(errors.filter((m) => m.includes("patient scan failed for site"))).toHaveLength(SITES);
     expect(errors.some((m) => m.includes("patient scan read"))).toBe(false);
     expect(errors.some((m) => m.includes("patient scan hit the page cap"))).toBe(false);
+  }, 120_000);
+});
+
+describe("F4: the shared block carries scanClaims' truncated-vs-failed distinction", () => {
+  // The ONE thing that kept this scan out of the helper. The panel says something
+  // different for each cause, and "there is too much data" must never be printed over
+  // an outage: it reads like a smaller problem than it is.
+
+  it("a TRUNCATED claim site gets the too-much-data sentence", async () => {
+    globalThis.fetch = shortOf("nhs_claims", { rows: 40, total: 500 });
+
+    const progress = group(await assemble()).udaProgress;
+
+    expect(progress.completedUda.value).toBeNull();
+    expect(progress.completedUda.reason).toContain(
+      "more NHS claims this contract year than one read can cover",
+    );
+  }, 120_000);
+
+  it("a FAILED claim site gets the could-not-be-read sentence instead", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      const key = url.pathname.split("/").pop() ?? "";
+      if (key === "nhs_claims") {
+        return new Response(JSON.stringify({ error: "upstream is down" }), { status: 500 });
+      }
+      return new Response(JSON.stringify({ [key]: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const progress = group(await assemble()).udaProgress;
+
+    expect(progress.completedUda.value).toBeNull();
+    expect(
+      progress.completedUda.reason,
+      "an outage was dressed up as there being too much data to read",
+    ).toContain("could not be read from Dentally");
+    expect(errors.filter((m) => m.includes("NHS claim scan failed for site"))).toHaveLength(SITES);
+  }, 120_000);
+
+  it("ONE failed site among truncated ones is still reported as the outage it is", async () => {
+    // The group-level rule, unchanged by the move: truncation is the whole group's
+    // story only if nothing else went wrong.
+    let seen = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      const key = url.pathname.split("/").pop() ?? "";
+      const page = Number(url.searchParams.get("page") ?? "1");
+      if (key !== "nhs_claims") {
+        return new Response(JSON.stringify({ [key]: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      seen += 1;
+      // The first site to ask errors; the rest come back short of a stated count.
+      if (seen === 1) return new Response(JSON.stringify({ error: "down" }), { status: 500 });
+      return new Response(
+        JSON.stringify({
+          nhs_claims: page > 1 ? [] : Array.from({ length: 40 }, (_, i) => row(key, page, i)),
+          meta: { total: 500, current_page: page },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const progress = group(await assemble()).udaProgress;
+
+    expect(progress.completedUda.reason).toContain("could not be read from Dentally");
   }, 120_000);
 });

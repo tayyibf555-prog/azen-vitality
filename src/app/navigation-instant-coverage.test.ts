@@ -28,8 +28,20 @@ import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
  * almost anywhere: agent work happens in .claude/worktrees/<name>/, a complete
  * second checkout, and a loading.tsx reintroduced in one tree while the suite swept
  * the other would come back a clean green.
+ *
+ * AND `includeDotDirs`, because src/app is a ROUTED tree and Next serves dot-folders
+ * in it: `.well-known` is named in the framework's own docs as an endpoint you may
+ * define. The walker skips dot-directories by default, which would leave a
+ * `app/.well-known/x/loading.tsx` invisible to the one sweep whose whole sentence is
+ * "there is no loading.tsx anywhere under src/app". Nothing under src/app is a
+ * nested checkout, so the reason the default exists does not apply here.
  */
-const APP_FILES = walkSrc({ subdir: "app", extensions: null, includeTests: true });
+const APP_FILES = walkSrc({
+  subdir: "app",
+  extensions: null,
+  includeTests: true,
+  includeDotDirs: true,
+});
 
 describe("no loading.tsx anywhere under src/app", () => {
   // ---------------------------------------------------------------------
