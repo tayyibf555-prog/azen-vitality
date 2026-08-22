@@ -57,7 +57,7 @@ describe("a dashboard view cached by a PREVIOUS deployment", () => {
       delete (scope as Partial<(typeof view.scopes)[number]>).takingsFailedSites;
     }
     const html = renderToStaticMarkup(
-      createElement(PracticeDashboard, { view, initialSiteId: null }),
+      createElement(PracticeDashboard, { view, clientSlug: "vitality", initialSiteId: null }),
     );
     expect(html.length).toBeGreaterThan(0);
   });
@@ -65,7 +65,7 @@ describe("a dashboard view cached by a PREVIOUS deployment", () => {
   it("still renders the current shape with the failed site named", () => {
     const view = minimalView();
     const html = renderToStaticMarkup(
-      createElement(PracticeDashboard, { view, initialSiteId: null }),
+      createElement(PracticeDashboard, { view, clientSlug: "vitality", initialSiteId: null }),
     );
     expect(html).toContain("Romford Road");
   });
