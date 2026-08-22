@@ -34,6 +34,7 @@ import {
   RunCoverage,
 } from "@/components/client/reports/allocation-table";
 import type { ReportPreset } from "@/lib/reports/report-window";
+import { PAY_DEFAULT_PRESET } from "@/lib/reports/report-window";
 import type {
   NhsBandReadResult,
   PaymentAllocationReadResult,
@@ -423,7 +424,8 @@ const PAY_PRESETS: { key: ReportPreset; label: string }[] = [
  * is fetched through that route. reports-view.tsx reads the SAME constant, so the
  * selected tab always matches the data the server actually read.
  */
-export const PAY_DEFAULT_PRESET: ReportPreset = "last_7";
+// PAY_DEFAULT_PRESET moved to report-window.ts: a server page imports it too,
+// and a "use client" module must never export a VALUE a server component reads.
 
 function PaymentAllocationReportView({
   clientSlug,

@@ -59,6 +59,17 @@
         "NODE_OPTIONS=--max-http-header-size=131072 DENTALLY_BASE_URL=http://localhost:3002/api/mock-dentally DENTALLY_WRITE_ENABLED=true DENTALLY_WRITE_API_KEY=local-mock-only DENTALLY_WRITE_BASE_URL=http://localhost:3002/api/mock-dentally MESSAGING_DRY_RUN=true npm run dev -- -p 3002"
       ],
       "port": 3002
+    },
+    {
+      "name": "azen-prod-3009",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "start",
+        "-p",
+        "3009"
+      ],
+      "port": 3009
     }
   ]
 }

@@ -6,7 +6,11 @@ import { buildSnapshot, reportsGate, snapshotUsable } from "@/lib/reports/snapsh
 import { periodWord } from "@/lib/reports/period-word";
 import { presetWindow } from "@/lib/reports/report-window";
 import { readNhsBandReport, readPaymentAllocation, readNhsClinicalReport } from "@/lib/reports/flagship-read";
-import { FlagshipReports, PAY_DEFAULT_PRESET } from "./flagship-reports";
+// FlagshipReports is RENDERED (a client reference is exactly right); but no VALUE
+// may be imported from that "use client" module into this server page - see the
+// note on PAY_DEFAULT_PRESET in report-window.ts for the 500 that taught us.
+import { FlagshipReports } from "./flagship-reports";
+import { PAY_DEFAULT_PRESET } from "@/lib/reports/report-window";
 import { ReportsWorkspace } from "./reports-workspace";
 import { UsageSection } from "./usage-section";
 

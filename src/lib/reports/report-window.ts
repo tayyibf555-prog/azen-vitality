@@ -107,3 +107,19 @@ export function customWindow(from: unknown, to: unknown): DayWindow | null {
 export function windowLabel(w: DayWindow): string {
   return w.from === w.to ? w.from : `${w.from} to ${w.to}`;
 }
+
+/**
+ * The preset the allocation report OPENS on — server page and client component
+ * must agree, and this is the one module both may import.
+ *
+ * IT MUST NOT LIVE IN flagship-reports.tsx. That file is "use client", and under
+ * React Server Components EVERY export of a client module — components and plain
+ * constants alike — becomes a client-reference proxy when a server component
+ * imports it. The server page once imported this constant from there: the proxy
+ * matched no presetWindow case, the window came back undefined, and the reports
+ * page 500d at render while tsc, vitest (plain node ignores the directive) and
+ * the production build all stayed green. Render-time only, invisible to every
+ * gate — which is why the constant lives HERE and reports-view.test.ts pins the
+ * import path.
+ */
+export const PAY_DEFAULT_PRESET: ReportPreset = "last_7";
