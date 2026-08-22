@@ -3,6 +3,7 @@ import { PageHeader, StatCard, EmptyState, SectionCard } from "@/components/prim
 import { getClient } from "@/lib/mock";
 import { getViewSiteIds, getViewSiteSelection, ALL_SITES } from "@/lib/site-view";
 import { buildSnapshot, reportsGate, snapshotUsable } from "@/lib/reports/snapshot";
+import { periodWord } from "@/lib/reports/period-word";
 import { presetWindow } from "@/lib/reports/report-window";
 import { readNhsBandReport, readPaymentAllocation, readNhsClinicalReport } from "@/lib/reports/flagship-read";
 import { FlagshipReports, PAY_DEFAULT_PRESET } from "./flagship-reports";
@@ -113,7 +114,7 @@ export async function ReportsView({ clientSlug }: { clientSlug: string }) {
           }
           description={
             gate.readFailed
-              ? `The live enquiry store did not answer, so the ${gate.period === "week" ? "weekly" : "monthly"} figures and the AI review cannot be written from it. This is a read failing, not a quiet ${gate.period} — nothing here says your enquiries have stopped. Try again shortly.`
+              ? `The live enquiry store did not answer, so the ${periodWord(gate.period)} figures and the AI review cannot be written from it. This is a read failing, not a quiet ${gate.period} — nothing here says your enquiries have stopped. Try again shortly.`
               : `This ${gate.period} holds more enquiries than a single read carries, so the figures behind the review would be a floor rather than a total. They are not shown from a partial count.`
           }
         />

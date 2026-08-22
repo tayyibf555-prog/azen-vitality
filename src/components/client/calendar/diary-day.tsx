@@ -6,6 +6,7 @@ import type { FundingCode } from "@/lib/calendar/funding";
 import { occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
 import {
   columnIsHatched,
+  columnIsLoud,
   columnWorkSummary,
   offSpans,
   type ColumnWorkState,
@@ -688,13 +689,16 @@ export function DiaryDay({
           ? "Not loaded"
           : (columnWorkSummary(col.workState, { hoursPending }) ??
             columnCounts(col.appointments));
-        // A pending read is quiet, and so is a date in the past: neither is a
-        // problem the reader has to do anything about. Only a failure and a
-        // clinician we cannot place are loud.
-        const loud =
-          countsUnavailable ||
-          (col.workState === "unknown" && !hoursPending) ||
-          col.workState === "unconfirmed";
+        // WHICH STATES SHOUT is not decided here either, for the same reason the
+        // words are not: it was an or-chain in this file and a byte-identical one
+        // in the week grid, and a chain over six states cannot be made to fail when
+        // a seventh is added -- it just renders quiet. COLUMN_WORK_PRESENTATION
+        // carries the loudness now, exhaustively, beside each state's words.
+        //
+        // `countsUnavailable` stays HERE because it is not a work state at all: it
+        // is THIS screen's own failed read, and the clinician's day may be perfectly
+        // well known behind it.
+        const loud = countsUnavailable || columnIsLoud(col.workState, { hoursPending });
         const soloed = soloKey === col.key;
 
         // WHITE SPACE, AS A NUMBER. Computed from exactly the spans drawn above

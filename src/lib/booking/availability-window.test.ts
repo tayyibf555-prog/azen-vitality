@@ -115,6 +115,48 @@ describe("bookingAvailabilityWindow", () => {
     expect(w).not.toBeNull();
     expectDentallyWouldAccept(w.startTime, w.finishTime, NOW);
   });
+
+  // ONE ANSWER TO WHAT BACKWARDS MEANS, AND IT IS THIS FUNCTION'S.
+  //
+  // A reversed pair used to be decided three times over: the agent tool swapped
+  // it, /api/booking/slots clamped `to` down to `from` (five open days silently
+  // gone from a patient's calendar, with a 200 and no error), and this module
+  // treated it as a caller bug and trimmed nothing. Nobody ever means an empty
+  // range, so the window orders the pair and REPORTS what it ordered — the trims
+  // downstream read that, not what their caller passed.
+  describe("a reversed pair", () => {
+    it("is ordered, not read literally as a range no day can be inside", () => {
+      const reversed = bookingAvailabilityWindow("2026-09-14", "2026-09-01", NOW)!;
+      const ordered = bookingAvailabilityWindow("2026-09-01", "2026-09-14", NOW)!;
+      expect(reversed).toEqual(ordered);
+      expect(reversed.startTime).toBe("2026-08-31T23:00:00.000Z");
+      expect(reversed.finishTime).toBe("2026-09-14T22:59:59.999Z");
+    });
+
+    it("comes back with the ORDERED days on the window, so every trim reads the same pair", () => {
+      const w = bookingAvailabilityWindow("2026-09-14", "2026-09-01", NOW)!;
+      expect(w.fromDate).toBe("2026-09-01");
+      expect(w.toDate).toBe("2026-09-14");
+    });
+
+    it("is still NULL when both ends have passed: ordering must not smuggle a dead range back", () => {
+      expect(bookingAvailabilityWindow("2026-08-19", "2026-08-17", NOW)).toBeNull();
+    });
+
+    it("leaves a pair it cannot order alone, keys and all", () => {
+      // An unreadable key is not evidence of a reversal; the "do not trim what you
+      // cannot read" policy downstream still has the last word on it.
+      const w = bookingAvailabilityWindow("2026-08-21", "not-a-date", NOW)!;
+      expect(w.fromDate).toBe("2026-08-21");
+      expect(w.toDate).toBe("not-a-date");
+    });
+  });
+
+  it("reports the very days it was given when they were already in order", () => {
+    const w = bookingAvailabilityWindow("2026-09-01", "2026-09-14", NOW)!;
+    expect(w.fromDate).toBe("2026-09-01");
+    expect(w.toDate).toBe("2026-09-14");
+  });
 });
 
 describe("bookingDaysWithin", () => {
@@ -139,7 +181,16 @@ describe("bookingDaysWithin", () => {
     const days = [day("2026-08-21")];
     expect(bookingDaysWithin(days, "nonsense", "2026-08-21")).toEqual(days);
     expect(bookingDaysWithin(days, "2026-08-21", "nonsense")).toEqual(days);
-    expect(bookingDaysWithin(days, "2026-08-23", "2026-08-21")).toEqual(days);
+  });
+
+  // PIN UPDATED with the single reversed-pair policy: this used to assert that a
+  // reversed range was waved through UNTRIMMED, which was the third of three
+  // different answers to what backwards means (the tool swapped, the route
+  // clamped to=from). It is ordered now, exactly as bookingAvailabilityWindow
+  // orders it, so the days kept always describe the days asked about.
+  it("trims a reversed range the way the window does — swapped, never untrimmed", () => {
+    const days = [day("2026-08-20"), day("2026-08-22"), day("2026-08-24")];
+    expect(bookingDaysWithin(days, "2026-08-23", "2026-08-21")).toEqual([day("2026-08-22")]);
   });
 });
 

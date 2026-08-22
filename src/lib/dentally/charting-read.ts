@@ -34,6 +34,7 @@
 
 import { DentallyClient } from "./client";
 import { dentallyFromEnv } from "./read";
+import { pageToCeiling } from "./paging";
 import { dentallySiteId } from "@/lib/mock/clients";
 import { readPlanId } from "@/lib/calendar/funding";
 import { parseTeeth } from "@/lib/charting/fdi";
@@ -105,29 +106,16 @@ const ITEMS_MAX_PAGES = 25;
 /** The catalogue, its categories and this patient's plans are all small. */
 const SMALL_MAX_PAGES = 5;
 
-/**
- * Page a chart read to a short page or to `maxPages`, AND SAY WHICH.
- *
- * A THIRD FUNCTION ONCE CALLED `pageAll`, and the third different contract under that
- * one name: reports/scan.ts's measures completeness against Dentally's `meta.total`,
- * dentally/read.ts's truncates in silence, and this one reports hitting the ceiling
- * through a `truncated` flag the chart puts on screen. Named for what it does, so a
- * reader can tell which guarantee they are holding.
- */
-async function pageToCeiling<T>(
-  fetchPage: (page: number) => Promise<T[]>,
-  maxPages: number,
-): Promise<{ rows: T[]; truncated: boolean }> {
-  const rows: T[] = [];
-  for (let page = 1; page <= maxPages; page += 1) {
-    const batch = await fetchPage(page);
-    rows.push(...batch);
-    if (batch.length < PER_PAGE) return { rows, truncated: false }; // short page => last page
-  }
-  // Ran out of pages before running out of rows. Not an error, but not a complete
-  // read either, and the difference is the whole reason this flag exists.
-  return { rows, truncated: true };
-}
+// THE PAGER ITSELF LIVES IN ./paging, and it is now the ONLY copy in the repo.
+//
+// This file used to declare its own `pageToCeiling` and src/lib/dentally/read.ts
+// declared `pageBounded` beside it: the same loop, line for line, differing only in
+// whether the truncation was returned or discarded. Both also measured a short page
+// against their OWN module's PER_PAGE while every caller chose `per_page` inside its
+// closure — nothing tied the size asked for to the size measured against, which is
+// exactly the drift `pageAll` was fixed for two directories away. The shared one
+// takes `perPage` as an argument and hands it to the fetcher, so the two cannot
+// disagree. Behaviour here is unchanged: every caller below still pages at PER_PAGE.
 
 // --- Mapping ---------------------------------------------------------------
 
@@ -313,10 +301,11 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
   let truncatedCatalogue = false; // the treatment list, its categories, the plans
 
   const itemsP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatmentPlanItems({ patientId, page, perPage: PER_PAGE })
+        .listTreatmentPlanItems({ patientId, page, perPage })
         .then((res) => (Array.isArray(res.treatment_plan_items) ? res.treatment_plan_items : [])),
+    PER_PAGE,
     ITEMS_MAX_PAGES,
   )
     .then((out) => {
@@ -330,10 +319,11 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
     });
 
   const treatmentsP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatments({ page, perPage: PER_PAGE })
+        .listTreatments({ page, perPage })
         .then((res) => (Array.isArray(res.treatments) ? res.treatments : [])),
+    PER_PAGE,
     SMALL_MAX_PAGES,
   )
     .then((out) => {
@@ -347,10 +337,11 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
     });
 
   const categoriesP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatmentCategories({ page, perPage: PER_PAGE })
+        .listTreatmentCategories({ page, perPage })
         .then((res) => (Array.isArray(res.treatment_categories) ? res.treatment_categories : [])),
+    PER_PAGE,
     SMALL_MAX_PAGES,
   )
     .then((out) => {
@@ -369,10 +360,11 @@ export async function getPatientChartUncached(patientId: string, siteId: string)
   // own, a failed plans read would render as "this patient has no treatment plans",
   // which is a different clinical statement from "we could not read them".
   const plansP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatmentPlansById({ siteId: dentallySiteId(siteId), patientId, page, perPage: PER_PAGE })
+        .listTreatmentPlansById({ siteId: dentallySiteId(siteId), patientId, page, perPage })
         .then((res) => (Array.isArray(res.treatment_plans) ? res.treatment_plans : [])),
+    PER_PAGE,
     SMALL_MAX_PAGES,
   )
     .then((out) => {
@@ -828,10 +820,11 @@ export async function getPlanPanelReadUncached(
   let truncatedSupporting = false; // the plan list, the diary and the practitioners
 
   const itemsP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatmentPlanItems({ patientId, page, perPage: PER_PAGE })
+        .listTreatmentPlanItems({ patientId, page, perPage })
         .then((res) => (Array.isArray(res.treatment_plan_items) ? res.treatment_plan_items : [])),
+    PER_PAGE,
     ITEMS_MAX_PAGES,
   )
     .then((out) => {
@@ -845,12 +838,13 @@ export async function getPlanPanelReadUncached(
     });
 
   const apptsP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatmentAppointments({ patientId, page, perPage: PER_PAGE })
+        .listTreatmentAppointments({ patientId, page, perPage })
         .then((res) =>
           Array.isArray(res.treatment_appointments) ? res.treatment_appointments : [],
         ),
+    PER_PAGE,
     PANEL_SMALL_MAX_PAGES,
   )
     .then((out) => {
@@ -864,10 +858,11 @@ export async function getPlanPanelReadUncached(
     });
 
   const plansP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listTreatmentPlansById({ siteId: dentallySiteId(siteId), patientId, page, perPage: PER_PAGE })
+        .listTreatmentPlansById({ siteId: dentallySiteId(siteId), patientId, page, perPage })
         .then((res) => (Array.isArray(res.treatment_plans) ? res.treatment_plans : [])),
+    PER_PAGE,
     PANEL_SMALL_MAX_PAGES,
   )
     .then((out) => {
@@ -888,10 +883,11 @@ export async function getPlanPanelReadUncached(
   // would then report "not in this patient's appointment list" for an appointment
   // that plainly exists in Dentally.
   const diaryP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .getPatientAppointments(patientId, page, PER_PAGE, true)
+        .getPatientAppointments(patientId, page, perPage, true)
         .then((res) => (Array.isArray(res.appointments) ? res.appointments : [])),
+    PER_PAGE,
     DIARY_MAX_PAGES,
   )
     .then((out) => {
@@ -925,10 +921,11 @@ export async function getPlanPanelReadUncached(
   // carry their initials, and dropping them here would put the unresolved mark
   // against exactly the oldest entries.
   const practitionersP = pageToCeiling(
-    (page) =>
+    (page, perPage) =>
       client
-        .listPractitioners(dentallySiteId(siteId), { page, perPage: PER_PAGE })
+        .listPractitioners(dentallySiteId(siteId), { page, perPage })
         .then((res) => (Array.isArray(res.practitioners) ? res.practitioners : [])),
+    PER_PAGE,
     PANEL_SMALL_MAX_PAGES,
   )
     .then((out) => {

@@ -157,12 +157,15 @@ describe("F4: an unpaid invoice with no site is disclosed, not swallowed", () =>
       (c) => c.id === "accounts-unattributed",
     );
     expect(caveat, "the omission is back to being silent").toBeTruthy();
-    expect(caveat!.material).toBe(true);
     expect(caveat!.text).toContain("3 unpaid invoices");
     // BOTH causes, neither claimed. "N invoices carry no site" is a number this read
     // cannot stand behind while the key spans practices this client does not run.
-    expect(caveat!.text).toContain("filed under no site, or under a practice outside this group");
-    expect(caveat!.text).toContain("may be understated");
+    expect(caveat!.text).toContain("part of that gap is debt this group does not own");
+    expect(caveat!.text).toContain("filed under no site");
+    // INFORMATIONAL, not a warning. See caveat-unattributed-footnote.test.ts: on this
+    // key the gap is the resting state, not an incident, and a warning that is always
+    // on is a warning nobody reads.
+    expect(caveat!.material).toBe(false);
   }, 120_000);
 
   it("changes no figure: the balance is still what was actually read", async () => {

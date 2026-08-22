@@ -56,7 +56,7 @@ function column(over: Partial<DayColumnInput> = {}): DayColumnInput {
   };
 }
 
-function renderDay(col: DayColumnInput): string {
+function renderDay(col: DayColumnInput, opts: { hoursPending?: boolean } = {}): string {
   return renderToStaticMarkup(
     createElement(DiaryDay, {
       columns: [col],
@@ -65,6 +65,7 @@ function renderDay(col: DayColumnInput): string {
       ariaLabel: "Diary",
       soloKey: null,
       onSolo: noop,
+      hoursPending: opts.hoursPending ?? false,
       countsUnavailable: false,
       funding: {},
       nowTop: null,
@@ -78,7 +79,10 @@ function renderDay(col: DayColumnInput): string {
   );
 }
 
-function renderDays(day: Partial<DayColumnDayInput> = {}): string {
+function renderDays(
+  day: Partial<DayColumnDayInput> = {},
+  opts: { hoursPending?: boolean } = {},
+): string {
   const input: DayColumnDayInput = {
     dayKey: "2026-07-31",
     appointments: [],
@@ -97,6 +101,7 @@ function renderDays(day: Partial<DayColumnDayInput> = {}): string {
       bounds: BOUNDS,
       zoom: "normal" as const,
       ariaLabel: "Diary",
+      hoursPending: opts.hoursPending ?? false,
       countsUnavailable: false,
       funding: {},
       onPickDay: noop,
@@ -119,6 +124,22 @@ function offLabels(html: string): number {
 function hatches(html: string): number {
   return html.split("repeating-linear-gradient(45deg").length - 1;
 }
+
+/**
+ * The weight and colour the header's SECOND LINE is set in, lifted out of the
+ * rendered class list. Both grids build this span from the same three base classes,
+ * so one regex reads either of them.
+ *
+ *   "font-semibold text-ink"     LOUD    -- this column needs a human
+ *   "font-semibold text-muted"   quiet   -- "Not working": emphatic, but not a problem
+ *   "font-medium text-muted"     quiet   -- ordinary
+ */
+function summaryWeight(html: string): string | null {
+  const m = html.match(/class="block truncate text-\[10px\] leading-\[1\.25\] tabular-nums ([^"]*)"/);
+  return m ? m[1] : null;
+}
+
+const LOUD = "font-semibold text-ink";
 
 describe("the column for a clinician whose whole answer went unasked", () => {
   it("does NOT say 'Not working' about a morning nobody could ask about", () => {
@@ -205,6 +226,70 @@ describe("the words for a work state, in both grids at once", () => {
       }
     });
   }
+});
+
+// ===========================================================================
+// AND THE OTHER HALF OF THE HEADER: WHICH STATES SHOUT.
+//
+// The words came from COLUMN_WORK_PRESENTATION; the WEIGHT did not. It was a
+// byte-identical or-chain in each grid --
+//
+//     (state === "unknown" && !hoursPending) || state === "unconfirmed"
+//
+// -- which is the same non-exhaustive shape the words were rescued from, one
+// property later, and with a worse failure: a seventh state falling out of the
+// bottom of a ternary chain at least printed VISIBLE nonsense, while one falling
+// out of these renders correct words in a quiet grey. A state that exists because
+// something needs attention would have been added, worded carefully, and then
+// whispered on both screens.
+//
+// This walks the mapping and asserts the pair agree, per state, in both settled
+// and pending readings. It is the mutation test too: flip one `loud` in the Record
+// and BOTH grids change together, which is exactly the coupling that was missing.
+// ===========================================================================
+describe("which states shout, in both grids at once", () => {
+  const STATES = Object.keys(COLUMN_WORK_PRESENTATION) as ColumnWorkState[];
+
+  for (const state of STATES) {
+    const shown = COLUMN_WORK_PRESENTATION[state];
+
+    // hoursPending is the availability read still being in flight. Only "unknown"
+    // is allowed to care: a failure sentence flashing on every day change is the
+    // false alarm the pendingLabel exists to avoid.
+    for (const hoursPending of [false, true]) {
+      const expectedLoud =
+        shown.loud === "whenHoursSettled" ? !hoursPending : shown.loud;
+      const how = hoursPending ? "while the hours are still loading" : "once the hours have settled";
+
+      it(`"${state}" is ${expectedLoud ? "LOUD" : "quiet"} ${how}, in both grids`, () => {
+        const day = summaryWeight(renderDay(column({ workState: state }), { hoursPending }));
+        const week = summaryWeight(renderDays({ workState: state }, { hoursPending }));
+
+        expect(day, "the day grid's header line was not found at all").not.toBeNull();
+        expect(week, "the week grid's header line was not found at all").not.toBeNull();
+        expect(day === LOUD, `day view loudness for "${state}"`).toBe(expectedLoud);
+        expect(week === LOUD, `week view loudness for "${state}"`).toBe(expectedLoud);
+        // The pair, stated directly: the two grids must not merely each be right,
+        // they must be the SAME, because drifting apart is the defect this closes.
+        expect(week, `the grids disagree about "${state}"`).toBe(day);
+      });
+    }
+  }
+
+  // The three states that were loud before this moved into the Record, named
+  // rather than derived, so the migration is pinned as byte-identical rather than
+  // pinned against itself.
+  it("shouts for exactly the states it shouted for before", () => {
+    const loudNow = STATES.filter(
+      (s) => summaryWeight(renderDay(column({ workState: s }))) === LOUD,
+    );
+    expect(loudNow).toEqual(["unknown", "unconfirmed"]);
+    // ...and "unknown" alone falls silent while the read is in flight.
+    const loudPending = STATES.filter(
+      (s) => summaryWeight(renderDay(column({ workState: s }), { hoursPending: true })) === LOUD,
+    );
+    expect(loudPending).toEqual(["unconfirmed"]);
+  });
 });
 
 describe("the elapsed strip on a column that IS working", () => {

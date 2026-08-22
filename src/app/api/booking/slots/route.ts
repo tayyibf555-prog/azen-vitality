@@ -1,7 +1,7 @@
 import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { getClient, getSites } from "@/lib/mock/clients";
 import { dentallyFromEnv } from "@/lib/dentally/read";
-import { fetchAvailabilityDays, type BookingDay } from "@/lib/booking/slots";
+import { fetchAvailabilityDays, orderedDayRange, type BookingDay } from "@/lib/booking/slots";
 import { londonDayKey } from "@/lib/time/london";
 
 export const dynamic = "force-dynamic";
@@ -68,13 +68,36 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     }
 
     const now = new Date();
-    const from = url.searchParams.get("from") ?? londonDayKey(now);
-    let to = url.searchParams.get("to") ?? shiftDay(from, MAX_RANGE_DAYS);
-    if (!YMD.test(from) || !YMD.test(to) || Number.isNaN(Date.parse(`${from}T00:00:00Z`)) || Number.isNaN(Date.parse(`${to}T00:00:00Z`))) {
+    const requestedFrom = url.searchParams.get("from") ?? londonDayKey(now);
+    const requestedTo = url.searchParams.get("to") ?? shiftDay(requestedFrom, MAX_RANGE_DAYS);
+    if (
+      !YMD.test(requestedFrom) ||
+      !YMD.test(requestedTo) ||
+      Number.isNaN(Date.parse(`${requestedFrom}T00:00:00Z`)) ||
+      Number.isNaN(Date.parse(`${requestedTo}T00:00:00Z`))
+    ) {
       return bad("Please choose a valid date range.", 400);
     }
-    // Clamp: never before `from`, never more than 14 days in one request.
-    if (Date.parse(to) < Date.parse(from)) to = from;
+    // A BACKWARDS RANGE IS NOT THIS ROUTE'S CALL ANY MORE.
+    //
+    // It used to clamp `to` down to `from`, which answered a patient who had
+    // picked the 10th and then the 5th with ONE day and a cheerful 200: the five
+    // open days between them simply vanished from the calendar, with nothing in
+    // the response to say they had been dropped. Meanwhile the agent tool swapped
+    // the pair and the booking module trimmed nothing — three answers to one
+    // question. The booking seam owns it now (orderedDayRange, called by
+    // bookingAvailabilityWindow), and a reversed pair is served as the whole range
+    // the patient meant.
+    //
+    // The pair is ordered HERE TOO, from that same shared function, because the
+    // clamp below and the cache key are this route's own and both must describe
+    // the range that will actually be read. This is one policy with one
+    // implementation, not a second opinion.
+    const { fromDate: from, toDate: orderedTo } = orderedDayRange(requestedFrom, requestedTo);
+    // Clamp: never more than 14 days in one request. Applied to the ORDERED pair,
+    // so a reversed range spanning half a year is bounded like any other; before
+    // the swap it read as a negative span and slipped past this check entirely.
+    let to = orderedTo;
     if (Date.parse(to) - Date.parse(from) > MAX_RANGE_DAYS * DAY_MS) to = shiftDay(from, MAX_RANGE_DAYS);
 
     const key = `${siteId}:${from}:${to}`;

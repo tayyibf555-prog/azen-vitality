@@ -269,10 +269,14 @@ describe("find_slots refuses to ask about a day that has already ended", () => {
 // A model that says the days in the wrong order is not a model that means an
 // empty range. "Anything between the 5th and the 10th?" comes back as
 // fromDate="2026-09-10", toDate="2026-09-05" often enough, and before
-// orderedDayPair that pair asked Dentally a perfectly good question about the
-// 10th and then discarded every row it answered with — each one started after the
-// end of the 5th — leaving {slots: []} with no error for the agent to relay. The
-// patient was told nothing was free on days the practice was open.
+// the seam ordered it, that pair asked Dentally a perfectly good question about
+// the 10th and then discarded every row it answered with — each one started after
+// the end of the 5th — leaving {slots: []} with no error for the agent to relay.
+// The patient was told nothing was free on days the practice was open.
+//
+// The ordering is no longer this file's: bookingAvailabilityWindow applies
+// orderedDayRange and reports the pair it settled on, and find_slots trims with
+// that. These tests hold the BEHAVIOUR, wherever the swap lives.
 describe("find_slots reads a reversed date pair the way the patient meant it", () => {
   const EARLIER = "2026-09-05";
   const LATER = "2026-09-10";
@@ -335,5 +339,81 @@ describe("find_slots reads a reversed date pair the way the patient meant it", (
     expect(dentally.listPractitioners).not.toHaveBeenCalled();
     expect(out.slots).toEqual([]);
     expect(out.error).toMatch(/passed/i);
+  });
+});
+
+// BOTH DATES ARE OPTIONAL IN THIS TOOL'S SCHEMA, AND THAT IS WHAT MADE THE SWAP
+// DANGEROUS. When the model names only an END date the START is not the model's
+// date at all — it is today, defaulted inside find_slots. A swap that cannot tell
+// those two apart reads "was anything free yesterday?" as the range
+// [yesterday..today], the clamp moves the start to now, and the agent answers a
+// question about a day that has GONE with today's real times — confidently, and
+// with a Dentally read to back it up. Refusing in words is the behaviour this
+// path had before the swap existed, and it is the correct one.
+describe("find_slots does not turn a lone PAST end date into an offer of today", () => {
+  it("refuses a lone past toDate, with ZERO Dentally calls, instead of offering today's times", async () => {
+    const dentally = strictDentally([windowOn(TODAY, "15:00", "17:00")]);
+    const out = await findSlots(dentally, { treatment: "hygiene", toDate: "2026-08-19" });
+
+    expect(dentally.getAvailability).not.toHaveBeenCalled();
+    expect(dentally.listPractitioners).not.toHaveBeenCalled();
+    expect(out.slots).toEqual([]);
+    expect(out.error).toMatch(/passed/i);
+    expect(out.error).toMatch(/find_slots again/);
+    // Project rule: nothing the agent says may name a funding regime.
+    expect(out.error).not.toMatch(/\b(NHS|private)\b/i);
+  });
+
+  it("refuses a wrong-YEAR echo of a date, which is the same mistake a year wide", async () => {
+    // Models echo dates back with last year's year often enough. Ordered blindly
+    // that is a twelve month range ending today; read honestly it is a date gone.
+    const dentally = strictDentally([windowOn(TODAY, "15:00", "17:00")]);
+    const out = await findSlots(dentally, { treatment: "hygiene", toDate: "2025-08-22" });
+
+    expect(dentally.getAvailability).not.toHaveBeenCalled();
+    expect(out.error).toMatch(/passed/i);
+  });
+
+  it("still searches today..toDate when the lone toDate is in the FUTURE", async () => {
+    const dentally = strictDentally([
+      windowOn(TODAY, "15:00", "16:00"),
+      windowOn(TOMORROW, "09:00", "10:00"),
+      windowOn(DAY_AFTER, "09:00", "10:00"), // inside the widened window, outside the question
+    ]);
+    const { slots } = await findSlots(dentally, { treatment: "hygiene", toDate: TOMORROW });
+
+    expect(dentally.getAvailability).toHaveBeenCalledTimes(1);
+    // Today's remaining half hours and tomorrow's, and nothing from the day after.
+    expect(slots).toHaveLength(4);
+    expect(slots.some((s) => londonDay(s.start_time) === TODAY)).toBe(true);
+    expect(slots.every((s) => londonDay(s.start_time) !== DAY_AFTER)).toBe(true);
+    // The defaulted start is still today, on the grid: nothing about this ask changed.
+    expect(Date.parse(dentally.sent[0]!.startTime)).toBe(Date.parse("2026-08-21T14:30:00.000+01:00"));
+  });
+
+  it("still searches forward from a lone PAST fromDate, exactly as it always has", async () => {
+    // The mirror image, and it is NOT a question about the past: a start that has
+    // gone with no end named is this tool's own fortnight, clamped to now.
+    const dentally = strictDentally([windowOn(TOMORROW, "09:00", "10:00")]);
+    const { slots } = await findSlots(dentally, { treatment: "hygiene", fromDate: "2026-08-19" });
+
+    expect(dentally.getAvailability).toHaveBeenCalledTimes(1);
+    expect(Date.parse(dentally.sent[0]!.startTime)).toBeGreaterThan(Date.now());
+    expect(slots).toHaveLength(2);
+  });
+
+  it("keeps swapping an EXPLICIT reversed pair: a supplied from is the model's own date", async () => {
+    // The rule above is about a DEFAULTED start, not about ordering. When the
+    // model supplies both dates, backwards still means the range between them.
+    const dentally = strictDentally([windowOn("2026-09-05", "09:00", "10:00")]);
+    const { slots, error } = await findSlots(dentally, {
+      treatment: "hygiene",
+      fromDate: "2026-09-10",
+      toDate: "2026-09-05",
+    });
+
+    expect(error).toBeUndefined();
+    expect(slots).toHaveLength(2);
+    expect(Date.parse(dentally.sent[0]!.startTime)).toBe(Date.parse("2026-09-05T00:00:00.000+01:00"));
   });
 });

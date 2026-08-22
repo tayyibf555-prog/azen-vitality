@@ -455,6 +455,72 @@ describe("the counts and the detail describe one window", () => {
     expect(Math.round(m.enquiryToBookedRate * 100)).toBeLessThanOrEqual(100);
   });
 
+  // MUTATION: delete the console.error and keep only the clamp. That is exactly what
+  // this was, and it is the shape of defence that hides the thing it defends against:
+  // 201 booked out of 100 enquiries does not reach the page as a visible absurdity, it
+  // reaches it as "100% of enquiries booked" -- the most FLATTERING plausible figure in
+  // the whole range, printed as fact and narrated by the AI review as one. The clamp is
+  // right to bound the display; it was wrong to be the only thing that happened. The
+  // pair that produced it is now searchable in the logs.
+  it("SAYS SO when the two counts are impossible, as well as clamping them", async () => {
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    });
+    try {
+      listLeadsMock.mockResolvedValue(
+        Array.from({ length: 100 }, (_, i) => contactedLead(daysAgo((i % 20) + 1), "booked")),
+      );
+      countLeadsMock.mockImplementation(async (_s: string[], _since: string, stages?: string[]) =>
+        stages?.includes("booked") ? 201 : 100,
+      );
+
+      const m = await buildSnapshot("month", ["site-cc"]);
+
+      // CLAMPED, exactly as before. The log does not change what the page prints.
+      expect(m.enquiryToBookedRate, "the clamp still stands").toBe(1);
+
+      // AND LOGGED, naming BOTH counts. A message saying only "rate out of range" is
+      // the same laundering with a receipt: the two figures are what identify which
+      // read drifted, and 201-against-100 is a different bug from 4-against-3.
+      const impossible = logged.filter((line) => line.includes("[reports] snapshot"));
+      expect(impossible, "the impossible pair was clamped in silence").toHaveLength(1);
+      expect(impossible[0], "the booked count is missing from the log").toContain("201");
+      expect(impossible[0], "the enquiry count is missing from the log").toContain("100");
+      expect(impossible[0], "the period is missing from the log").toContain("month");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("stays quiet for a rate that is merely high, including exactly 100%", async () => {
+    // The control, and the thing that keeps the log worth reading. A practice that
+    // booked every enquiry it received is a GOOD WEEK, not a defect, and an error line
+    // on every one of them is how a real one gets scrolled past.
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    });
+    try {
+      listLeadsMock.mockResolvedValue(
+        Array.from({ length: 10 }, (_, i) => contactedLead(daysAgo((i % 20) + 1), "booked")),
+      );
+      countLeadsMock.mockImplementation(async (_s: string[], _since: string, stages?: string[]) =>
+        stages?.includes("booked") ? 10 : 10,
+      );
+
+      const m = await buildSnapshot("month", ["site-cc"]);
+
+      expect(m.enquiryToBookedRate).toBe(1);
+      expect(
+        logged.filter((line) => line.includes("[reports] snapshot")),
+        "a perfect conversion week is not a defect",
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("leaves an ordinary rate exactly where it was", async () => {
     // The clamp must not round or shift a real figure: the control for the two above.
     listLeadsMock.mockResolvedValue(

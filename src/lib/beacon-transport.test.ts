@@ -26,21 +26,15 @@
 // state and mints nothing, so it cannot become the place any two of those values
 // meet (supabase/migrations/0094).
 
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { describe, it, expect, afterEach } from "vitest";
+import { srcPath, walkSrc } from "./test-support/walk-src";
 import { postJsonBeacon } from "./beacon-transport";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-/** src/, through import.meta.url rather than process.cwd(), so a worktree copy of
- *  the repo sweeps ITS OWN tree and not the one the runner happens to sit in. */
-const SRC_ROOT = join(HERE, "..");
-
-const TRANSPORT_SOURCE = readFileSync(join(HERE, "beacon-transport.ts"), "utf8");
 
 /** This module's own path under src/: the one file the sweep below must exempt. */
 const TRANSPORT_FILE = "lib/beacon-transport.ts";
+
+const TRANSPORT_SOURCE = readFileSync(srcPath(TRANSPORT_FILE), "utf8");
 
 /** Source with comments stripped: what a file DOES, not what it explains. */
 function codeOnly(source: string): string {
@@ -49,15 +43,23 @@ function codeOnly(source: string): string {
 
 /**
  * Every module that must not grow a transport of its own again, as a path under
- * src/. Two are smile-assessment's; the other two are why this file no longer
- * lives in that feature's folder — a public funnel tracker shared with the booking
- * page, and the authed shell's product-usage beacon.
+ * src/. Two are smile-assessment's; the rest are why this file no longer lives in
+ * that feature's folder — a public funnel tracker shared with the booking page, the
+ * authed shell's product-usage beacon, and a public landing page's tracker.
+ *
+ * THE FIFTH WAS AN EXEMPTION, not an oversight, and the exemption was wrong. The
+ * landing tracker posted with a keepalive fetch and no sendBeacon, and was listed
+ * in KEEPALIVE_ELSEWHERE below on the reasoning that folding it in "would change
+ * what that public page does". It would, and the change is the one it wanted:
+ * `cta_clicked` fires WHILE the browser is navigating to the booking page, and a
+ * keepalive fetch is the weaker of the two answers to exactly that moment.
  */
 const CALL_SITES = [
   ["the anonymous step beacon", "lib/smile-assessment/step-beacon.ts"],
   ["the lead progress beacon", "lib/smile-assessment/funnel-progress-beacon.ts"],
   ["the public funnel tracker", "lib/funnel/client.ts"],
   ["the product-usage beacon", "components/platform/usage-beacon.tsx"],
+  ["the landing-page tracker", "lib/landing/track.ts"],
 ] as const;
 
 /* ---------------------------------------------------------------------------
@@ -69,7 +71,7 @@ describe("every browser beacon delivers through the one shared transport", () =>
   // file reads on its own". That is exactly the state this dedup ended, and the
   // next fix to delivery would then land in part of the telemetry only.
   it.each(CALL_SITES)("%s posts through postJsonBeacon", (_name, file) => {
-    const code = codeOnly(readFileSync(join(SRC_ROOT, file), "utf8"));
+    const code = codeOnly(readFileSync(srcPath(file), "utf8"));
     expect(code, `${file} no longer imports the shared transport`).toMatch(
       /import\s*\{\s*postJsonBeacon\s*\}\s*from\s*["']@\/lib\/beacon-transport["']/,
     );
@@ -81,7 +83,7 @@ describe("every browser beacon delivers through the one shared transport", () =>
   // MUTATION: keep the import AND a "just this once" direct sendBeacon next to it.
   // A second delivery path in a beacon is the duplication wearing a hat.
   it.each(CALL_SITES)("%s holds no transport of its own", (_name, file) => {
-    const code = codeOnly(readFileSync(join(SRC_ROOT, file), "utf8"));
+    const code = codeOnly(readFileSync(srcPath(file), "utf8"));
     for (const mechanic of ["sendBeacon", "new Blob(", "keepalive", "fetch("]) {
       expect(code, `${file} still does its own delivery: found ${mechanic}`).not.toContain(
         mechanic,
@@ -103,35 +105,36 @@ describe("every browser beacon delivers through the one shared transport", () =>
 /**
  * Every .ts/.tsx under src/, as a path relative to src/.
  *
- * TESTS ARE SKIPPED, and that is not a loophole: standing a fake browser up around
- * these mechanics is what a test of them has to do, and the biggest offender would
- * be this very file.
+ * THE WALK IS SHARED NOW (lib/test-support/walk-src.ts), and the reason is the one
+ * this file's own comment used to state alone: it is rooted through import.meta.url
+ * rather than process.cwd(), so a worktree copy of the repo sweeps ITS OWN tree and
+ * not the one the runner happens to sit in. Written here as advice, that was
+ * ignored by the very next sweep added to the suite — which rooted at cwd — so the
+ * root now lives in a function no caller can override.
+ *
+ * TESTS ARE SKIPPED (the walker's default), and that is not a loophole: standing a
+ * fake browser up around these mechanics is what a test of them has to do, and the
+ * biggest offender would be this very file.
  */
 function sourceFiles(): string[] {
-  const found: string[] = [];
-  const walk = (dir: string, prefix: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        walk(join(dir, entry.name), rel);
-        continue;
-      }
-      if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) continue;
-      found.push(rel);
-    }
-  };
-  walk(SRC_ROOT, "");
-  return found;
+  return walkSrc();
 }
 
 /**
- * NAMED ON PURPOSE, not overlooked: the landing tracker posts with a keepalive
- * fetch and NO sendBeacon at all — a smaller, one-path shape rather than a copy of
- * this one. Folding it in would change what that public page does, so it is listed
- * here instead. A file that appears in this set without that being true, or a NEW
- * name added to it, is the thing to argue with.
+ * Exceptions to the keepalive sweep below. EMPTY, AND KEPT.
+ *
+ * It held one name: the landing tracker, which hand-rolled a keepalive fetch with
+ * no sendBeacon at all and was argued for as "a smaller shape, not a copy". That
+ * argument was wrong in the direction that matters — postJsonBeacon only ADDS
+ * sendBeacon-first delivery, and `cta_clicked` fires as the visitor navigates away,
+ * which is precisely the moment a bare fetch is the one that gets cancelled. It is
+ * now a call site (above) like the other four.
+ *
+ * The set stays because an exception has to be NAMEABLE. Deleting it would mean the
+ * next file that wants one gets it by editing a filter instead of adding a line
+ * here with a reason attached to it.
  */
-const KEEPALIVE_ELSEWHERE = new Set(["lib/landing/track.ts"]);
+const KEEPALIVE_ELSEWHERE = new Set<string>([]);
 
 describe("no other file in the tree grows a transport of its own", () => {
   // MUTATION: paste the block into a fifth feature's beacon. The list above only
@@ -142,7 +145,7 @@ describe("no other file in the tree grows a transport of its own", () => {
     const offenders = sourceFiles().filter(
       (file) =>
         file !== TRANSPORT_FILE &&
-        codeOnly(readFileSync(join(SRC_ROOT, file), "utf8")).includes("navigator.sendBeacon"),
+        codeOnly(readFileSync(srcPath(file), "utf8")).includes("navigator.sendBeacon"),
     );
     expect(offenders, "a new copy of the beacon transport: route it through postJsonBeacon").toEqual(
       [],
@@ -154,7 +157,7 @@ describe("no other file in the tree grows a transport of its own", () => {
       (file) =>
         file !== TRANSPORT_FILE &&
         !KEEPALIVE_ELSEWHERE.has(file) &&
-        codeOnly(readFileSync(join(SRC_ROOT, file), "utf8")).includes("keepalive"),
+        codeOnly(readFileSync(srcPath(file), "utf8")).includes("keepalive"),
     );
     expect(offenders, "a new keepalive sender: route it through postJsonBeacon").toEqual([]);
   });

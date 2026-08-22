@@ -111,20 +111,20 @@ export function PracticeDashboard({
   // instead of saying one of them did not. The read layer sends ids (it has no
   // display names); `view.sites` is the only place they are paired.
   //
-  // AND SCOPED TO WHAT THIS STRIP IS SHOWING. `view.takingsFailedSites` is assembled
-  // once for the whole group and was appended verbatim to every scope's caveat, so a
-  // manager looking at N15 alone could be told "the site that did not answer: N17" —
-  // about a practice not on her screen, whose failure blanks nothing she can see, in
-  // a sentence that follows a blank she now has no explanation for. Worse in the
+  // AND THE LIST ARRIVES ALREADY SCOPED. It used to be one group-level field on the
+  // view that THIS component narrowed by hand — the only consumer that did — so a
+  // manager looking at N15 alone could be told "the site that did not answer: N17":
+  // a practice not on her screen, whose failure blanks nothing she can see, in a
+  // sentence that follows a blank she now has no explanation for. Worse in the
   // plural: a single-site scope could be followed by a list of two other practices.
-  // A scope names only failures inside itself; a scope with none appends nothing.
-  const failedSiteNames = useMemo(() => {
-    const inScope =
-      scope.siteId === null
-        ? view.takingsFailedSites
-        : view.takingsFailedSites.filter((id) => id === scope.siteId);
-    return inScope.map((id) => view.sites.find((s) => s.id === id)?.name ?? id);
-  }, [view.takingsFailedSites, view.sites, scope.siteId]);
+  // The narrowing is now buildScope's, on the scope structure itself, so the next
+  // consumer of this disclosure cannot start from the unscoped list — there is not
+  // one to start from. All that is left here is ids to names, which is a display
+  // job: the read layer sends ids and `view.sites` is the only place they are paired.
+  const failedSiteNames = useMemo(
+    () => scope.takingsFailedSites.map((id) => view.sites.find((s) => s.id === id)?.name ?? id),
+    [scope.takingsFailedSites, view.sites],
+  );
   const takings = useMemo(
     () =>
       takingsCaveats({

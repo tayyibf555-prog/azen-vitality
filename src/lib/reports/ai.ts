@@ -5,17 +5,26 @@
 // live figures (enquiries, bookings, response time), so the prompt cannot narrate
 // spend, revenue, return on spend or compliance: those have no live source yet.
 
+import { periodWord } from "./period-word";
 import { SNAPSHOT_LEAD_LIMIT } from "./snapshot";
 import type { ReportPeriod, ReportSnapshot } from "./snapshot";
+
+/**
+ * Re-exported, not defined here.
+ *
+ * The prompt and the Reports SCREEN have to call the same period the same thing,
+ * and two of the screen's three uses are inside a "use client" component. This
+ * module is not importable from one: it takes SNAPSHOT_LEAD_LIMIT as a value from
+ * snapshot.ts, which reaches the Supabase service client through the speed-to-lead
+ * repository. So the word itself lives in period-word.ts, which imports nothing at
+ * runtime, and is re-exported here for server-side callers who would look for it
+ * beside the prompt that uses it. See the header of period-word.ts.
+ */
+export { periodWord };
 
 /** Strip dash characters and tidy whitespace (house style: no em/en-dash). */
 export function cleanLine(s: string): string {
   return s.replace(/[—–]/g, ", ").replace(/[ \t]+\n/g, "\n").trim();
-}
-
-/** Label for the period used throughout the prompt ("weekly" / "monthly"). */
-function periodWord(period: ReportPeriod): string {
-  return period === "week" ? "weekly" : "monthly";
 }
 
 /** A first-response time in plain English ("42 seconds" / "3 minutes"). */

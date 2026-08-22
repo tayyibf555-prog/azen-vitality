@@ -100,6 +100,34 @@ describe("GET /api/booking/slots", () => {
     expect(londonDay(arg.finishTime)).toBe(ymd(3 + 13));
   });
 
+  // PIN CORRECTED — the route used to clamp a backwards range to `to = from`.
+  //
+  // A patient who tapped the later day first got ONE day back, a 200, and no hint
+  // that the days between had been dropped: an open calendar looked all but shut.
+  // Meanwhile the agent tool swapped the same pair and the booking module trimmed
+  // nothing, so one question had three answers. The seam decides it now
+  // (orderedDayRange, applied inside bookingAvailabilityWindow), and this route
+  // reads that same function rather than holding a second opinion.
+  it("serves a reversed from/to as the WHOLE range, not the single day the old clamp left", async () => {
+    const from = ymd(6);
+    const to = ymd(2);
+    const res = await get({ client: "vitality", site: "site-cc", from, to });
+    expect(res.status).toBe(200);
+    const arg = h.getAvailability.mock.calls[0]![0] as { startTime: string; finishTime: string };
+    expect(londonDay(arg.startTime)).toBe(to); // the earlier day starts the window
+    expect(londonDay(arg.finishTime)).toBe(from); // and the later one ends it
+  });
+
+  it("still bounds a reversed range at 14 days, which the old clamp never had to", async () => {
+    // Reversed, the span reads NEGATIVE and slipped past the 14-day check
+    // untouched; only the to=from clamp hid how wide it really was.
+    const res = await get({ client: "vitality", site: "site-cc", from: ymd(40), to: ymd(3) });
+    expect(res.status).toBe(200);
+    const arg = h.getAvailability.mock.calls[0]![0] as { startTime: string; finishTime: string };
+    expect(londonDay(arg.startTime)).toBe(ymd(3));
+    expect(londonDay(arg.finishTime)).toBe(ymd(3 + 13));
+  });
+
   it("rejects malformed dates cleanly", async () => {
     const res = await get({ client: "vitality", site: "site-cc", from: "junk", to: ymd(2) });
     expect(res.status).toBe(400);

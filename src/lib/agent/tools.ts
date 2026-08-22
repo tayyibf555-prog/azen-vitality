@@ -7,6 +7,7 @@ import {
   findExactSlot,
   chunkWindowIntoSlots,
   bookingAvailabilityWindow,
+  orderedDayRange,
   BOOKING_SLOT_DURATION_MIN,
   type BookingDay,
   type BookingSlot,
@@ -308,35 +309,18 @@ function requestedDayKey(value: unknown): string | null {
 }
 
 /**
- * The requested day pair, put in order — the ONE place a reversed pair is fixed.
+ * find_slots' answer to a question about a day that has already ended.
  *
- * The model does not always say the days in the order it means them. "Anything
- * between the 5th and the 10th?" comes back as often as fromDate="2026-09-10",
- * toDate="2026-09-05" as the other way round, and every seam downstream reads
- * from-then-to: the window is built off the FROM day, while both trims drop
- * anything past the TO day. A reversed pair therefore asked Dentally a perfectly
- * valid question about the 10th and then threw away every row it answered with,
- * because each one started after the end of the 5th. The tool returned
- * `{slots: []}` with no error at all, and the agent told a patient nothing was
- * free on days the practice was open.
- *
- * SWAP, DO NOT REFUSE. The patient's intent in "between the 5th and the 10th" is
- * not ambiguous — nobody means an empty range — so serving it beats handing the
- * model an error to relay, which costs the patient a whole turn to correct a
- * mistake they did not make. Erroring would also be indistinguishable, in the
- * transcript, from the practice being shut.
- *
- * Both keys are `YYYY-MM-DD` by construction (see requestedDayKey), so the
- * lexicographic compare IS a date compare. A null `to` — the model named no end
- * date — is not a pair and is left exactly as it came.
+ * One string, two callers (the defaulted-`from` guard and the null window), so
+ * the words a patient may hear cannot drift apart between them. An empty list
+ * alone reads as "the practice is fully booked", which is a lie about a day that
+ * is simply in the past — hence an error the model can repeat.
  */
-function orderedDayPair(
-  fromDayKey: string,
-  toDayKey: string | null,
-): { fromDayKey: string; toDayKey: string | null } {
-  if (toDayKey !== null && toDayKey < fromDayKey) return { fromDayKey: toDayKey, toDayKey: fromDayKey };
-  return { fromDayKey, toDayKey };
-}
+const FIND_SLOTS_PAST_DAY_RESULT = JSON.stringify({
+  slots: [],
+  error:
+    "That date has already passed, so there are no times to offer for it. Ask the patient which upcoming date suits them, then call find_slots again.",
+});
 
 /**
  * Chunked slots whose own London day falls inside the requested range.
@@ -346,19 +330,20 @@ function orderedDayPair(
  * inside the range, so the row is rightly kept, and comes out the other side as
  * units on both days. A slot's day is decided by the slot's own start.
  *
- * A range that cannot be read (a reversed pair) is NOT trimmed, and neither is a
- * slot whose start is unparseable — both mirror availabilityRowsWithinDays, which
- * only ever drops what is PROVEN to lie outside.
+ * A range that cannot be read is NOT trimmed, and neither is a slot whose start
+ * is unparseable — both mirror availabilityRowsWithinDays, which only ever drops
+ * what is PROVEN to lie outside.
  *
- * The reversed-pair arm is now defence in depth rather than the handling:
- * orderedDayPair puts the pair in order before the window is even built, so no
- * caller can reach here with one. It stays because its POLICY is the same policy
- * — a range that reads backwards never silently empties an answer — and because a
- * future caller that skips the normalisation should degrade to "trim nothing",
- * not to "return nothing".
+ * A REVERSED pair is not handled here at all any more, and there is no local
+ * "trim nothing" arm for one: ordering is bookingAvailabilityWindow's job, and
+ * the single caller below trims with the ordered pair that window reports. Should
+ * a future caller pass a raw pair, orderedDayRange — the same function the window
+ * uses — is what it must call, so there is never a second answer to what
+ * backwards means.
  */
-function slotsWithinDays(units: unknown[], fromDayKey: string, toDayKey: string): unknown[] {
-  if (!DAY_KEY.test(fromDayKey) || !DAY_KEY.test(toDayKey) || toDayKey < fromDayKey) return units;
+function slotsWithinDays(units: unknown[], requestedFrom: string, requestedTo: string): unknown[] {
+  const { fromDate: fromDayKey, toDate: toDayKey } = orderedDayRange(requestedFrom, requestedTo);
+  if (!DAY_KEY.test(fromDayKey) || !DAY_KEY.test(toDayKey)) return units;
   return units.filter((u) => {
     const row = u && typeof u === "object" ? (u as Record<string, unknown>) : {};
     const ms = Date.parse(typeof row.start_time === "string" ? row.start_time : "");
@@ -523,14 +508,29 @@ export function makeDispatch(deps: ToolDeps) {
         // widens the finish to the 25 hours Dentally insists on. The widening is
         // taken back off the ANSWER below; it is never left in it.
         //
-        // The pair is put in ORDER first (orderedDayPair), before the window, before
-        // the requests, before either trim — so every seam below reads a from that
-        // really does come before its to, and a model echoing "the 5th and the 10th"
-        // back the wrong way round cannot silently empty the answer.
-        const { fromDayKey, toDayKey: requestedToDayKey } = orderedDayPair(
-          requestedDayKey(input.fromDate) ?? londonDayKey(now),
-          requestedDayKey(input.toDate),
-        );
+        // A REVERSED PAIR IS ORDERED BY THE WINDOW, NOT HERE. This file used to do
+        // its own swap, one caller above the seam that had a second opinion and the
+        // route that had a third; bookingAvailabilityWindow now owns what backwards
+        // means and reports the pair it settled on, which is what both trims below
+        // read.
+        //
+        // ONE RULE STAYS LOCAL, AND IT HAS TO. Both dates are OPTIONAL in this
+        // tool's schema, so `from` is often not the model's date at all but today,
+        // defaulted right here. THE SEAM CANNOT KNOW WHETHER `fromDate` WAS
+        // DEFAULTED — that knowledge exists only at this tool boundary. Handed
+        // {toDate: yesterday} and nothing else, a blind swap turns "was anything
+        // free yesterday?" (or a wrong-year echo of a date already gone) into
+        // [yesterday..today], which the clamp then serves as today: the agent
+        // confidently offers TODAY'S times for a question about a day that has
+        // passed. A lone `to` in the past is not a reversed range — it is a
+        // question about the past — and it takes the refusal below, with zero
+        // Dentally calls.
+        const explicitFromDayKey = requestedDayKey(input.fromDate);
+        const requestedToDayKey = requestedDayKey(input.toDate);
+        const fromDayKey = explicitFromDayKey ?? londonDayKey(now);
+        if (explicitFromDayKey === null && requestedToDayKey !== null && requestedToDayKey < fromDayKey) {
+          return FIND_SLOTS_PAST_DAY_RESULT;
+        }
         const toDayKey = requestedToDayKey ?? shiftYmd(fromDayKey, AGENT_SEARCH_WINDOW_DAYS);
         const queryWindow = bookingAvailabilityWindow(fromDayKey, toDayKey, now.getTime());
         // Every requested day has already ended. Dentally can never answer for it, so
@@ -538,13 +538,11 @@ export function makeDispatch(deps: ToolDeps) {
         // list — and the model is told the plain truth rather than handed an empty
         // list it would report to the patient as "nothing free". Mirrors
         // fetchAvailabilityDays, which answers a null window with no request at all.
-        if (queryWindow === null) {
-          return JSON.stringify({
-            slots: [],
-            error:
-              "That date has already passed, so there are no times to offer for it. Ask the patient which upcoming date suits them, then call find_slots again.",
-          });
-        }
+        if (queryWindow === null) return FIND_SLOTS_PAST_DAY_RESULT;
+        // The days the window was actually built for: the pair, in the order the
+        // seam settled on. Trimming with anything else is how the answer and the
+        // question come apart.
+        const { fromDate: windowFromDayKey, toDate: windowToDayKey } = queryWindow;
         // Live Dentally availability is PER PRACTITIONER (start_time/finish_time ISO
         // datetimes + practitioner_ids[]; each row carries its practitioner_id) —
         // calibrated against the live API 2026-07-11. So: the site's active
@@ -575,7 +573,9 @@ export function makeDispatch(deps: ToolDeps) {
         // Only when the model named an END date: with none, the range IS this tool's
         // own fourteen day search, nothing was widened past it, and trimming would
         // only throw away rows Dentally chose to answer with.
-        const allSlots = requestedToDayKey ? availabilityRowsWithinDays(rows, fromDayKey, toDayKey) : rows;
+        const allSlots = requestedToDayKey
+          ? availabilityRowsWithinDays(rows, windowFromDayKey, windowToDayKey)
+          : rows;
         // Practitioner targeting. A segment-outreach invite primes a preferred clinician
         // (context.outreachInvite.practitionerId): offer THAT clinician's diary first, but
         // SOFT-prefer rather than hard-filter, so if they have no slots in the window the
@@ -604,7 +604,7 @@ export function makeDispatch(deps: ToolDeps) {
         // a slot can still land on a day nobody asked about).
         const units = chunkAvailabilityRows(slots, treatment?.durationMinutes ?? BOOKING_SLOT_DURATION_MIN);
         return JSON.stringify({
-          slots: requestedToDayKey ? slotsWithinDays(units, fromDayKey, toDayKey) : units,
+          slots: requestedToDayKey ? slotsWithinDays(units, windowFromDayKey, windowToDayKey) : units,
         });
       }
       case "treatment_info": {

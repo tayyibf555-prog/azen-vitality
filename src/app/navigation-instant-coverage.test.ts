@@ -1,7 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
+import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
 
 // ===========================================================================
 // TWO STRUCTURAL RULES THAT KEEP NAVIGATION FAST — AND ONE THAT KEEPS IT ALIVE.
@@ -20,20 +19,17 @@ import { describe, it, expect } from "vitest";
 // build, or on a screenshot.
 // ===========================================================================
 
-const APP_DIR = fileURLToPath(new URL(".", import.meta.url));
-const SRC_DIR = join(APP_DIR, "..");
-
-function walk(dir: string, hit: (path: string, name: string) => void): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules") continue;
-      walk(full, hit);
-    } else {
-      hit(full, entry.name);
-    }
-  }
-}
+/**
+ * Every file under src/app, as a path relative to src/ — EVERY file, not just the
+ * TypeScript ones, because what this sweep is looking for is a FILENAME.
+ *
+ * The walk comes from lib/test-support/walk-src.ts, which roots itself through its
+ * own import.meta.url rather than the runner's cwd. That matters here more than
+ * almost anywhere: agent work happens in .claude/worktrees/<name>/, a complete
+ * second checkout, and a loading.tsx reintroduced in one tree while the suite swept
+ * the other would come back a clean green.
+ */
+const APP_FILES = walkSrc({ subdir: "app", extensions: null, includeTests: true });
 
 describe("no loading.tsx anywhere under src/app", () => {
   // ---------------------------------------------------------------------
@@ -56,10 +52,9 @@ describe("no loading.tsx anywhere under src/app", () => {
   // intent-armed prefetch the second block below pins.
   // ---------------------------------------------------------------------
   it("finds none", () => {
-    const found: string[] = [];
-    walk(APP_DIR, (path, name) => {
-      if (/^loading\.(tsx|ts|jsx|js)$/.test(name)) found.push(path.slice(APP_DIR.length));
-    });
+    const found = APP_FILES.filter((file) =>
+      /^loading\.(tsx|ts|jsx|js)$/.test(file.slice(file.lastIndexOf("/") + 1)),
+    );
     expect(
       found,
       "A route-level loading.tsx streams its children through a Suspense boundary " +
@@ -68,6 +63,23 @@ describe("no loading.tsx anywhere under src/app", () => {
         "Suspense boundary INSIDE the page instead, or show pending state with " +
         "useLinkStatus / useTransition.",
     ).toEqual([]);
+  });
+
+  // MUTATION: break the walk — a wrong root, a subdir that does not exist, a filter
+  // that matches nothing — and the assertion above passes by finding no files at
+  // all. It is an `toEqual([])` check, which is the shape that reads exactly the
+  // same whether the tree is clean or was never opened, so the walk needs a witness
+  // of its own. Naming files rather than only counting them is deliberate: a cwd
+  // rooting reaches a real src/, just not necessarily THIS one.
+  it("actually walks the tree it claims to", () => {
+    expect(APP_FILES.length).toBeGreaterThan(100);
+    expect(APP_FILES).toContain("app/layout.tsx");
+    expect(APP_FILES, "the walk is not rooted at THIS file's tree").toContain(
+      "app/navigation-instant-coverage.test.ts",
+    );
+    // A non-.ts file, so the "every file, not just TypeScript" reach is pinned too:
+    // a loading.jsx would be invisible to an extension-filtered walk.
+    expect(APP_FILES).toContain("app/globals.css");
   });
 });
 
@@ -105,7 +117,7 @@ describe("every nav surface arms a prefetch on intent", () => {
   };
 
   it.each(Object.entries(SURFACES))("%s (%s) uses IntentLink", (relPath, what) => {
-    const source = readFileSync(join(SRC_DIR, relPath), "utf8");
+    const source = readFileSync(srcPath(relPath), "utf8");
     expect(source, `${what}: expected an IntentLink import`).toContain(
       '@/components/platform/intent-link',
     );
@@ -128,7 +140,7 @@ describe("every nav surface arms a prefetch on intent", () => {
   // itself; this only checks that the surfaces are actually plugged into it.
   // -----------------------------------------------------------------------
   it.each(Object.entries(SURFACES))("%s (%s) marks pending through usePendingNav", (relPath, what) => {
-    const source = readFileSync(join(SRC_DIR, relPath), "utf8");
+    const source = readFileSync(srcPath(relPath), "utf8");
     expect(source, `${what}: expected the shared hook's import`).toContain(
       '@/components/platform/use-pending-nav',
     );
@@ -157,7 +169,7 @@ describe("every nav surface arms a prefetch on intent", () => {
     "components/client/patients/record/patient-tab-strip.tsx",
     "components/agency/agency-sidebar.tsx",
   ])("%s carries no un-armed <Link>", (relPath) => {
-    const source = readFileSync(join(SRC_DIR, relPath), "utf8");
+    const source = readFileSync(srcPath(relPath), "utf8");
     expect(source, "a bare <Link> on a force-dynamic route prefetches nothing").not.toMatch(
       /<Link\b/,
     );
@@ -168,10 +180,7 @@ describe("every nav surface arms a prefetch on intent", () => {
   // (`prefetch={active ? null : false}`) is one word and the whole effect: null
   // means "auto", and auto is precisely the mode that does nothing here.
   it("IntentLink arms prefetch={true}, not the default auto", () => {
-    const source = readFileSync(
-      join(SRC_DIR, "components/platform/intent-link.tsx"),
-      "utf8",
-    );
+    const source = readFileSync(srcPath("components/platform/intent-link.tsx"), "utf8");
     expect(source).toMatch(/prefetch=\{armed \? true : false\}/);
   });
 });

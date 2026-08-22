@@ -1,6 +1,6 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
 
 vi.mock("server-only", () => ({}));
 
@@ -492,7 +492,11 @@ describe("F5: the takings caveat names the practice that did not answer", () => 
     });
 
     const view = await readDashboard();
-    expect(view.takingsFailedSites).toEqual(["site-rv"]);
+    // The list is now PER SCOPE, already narrowed by buildScope. The all-sites scope
+    // covers every practice, so it still carries the whole failure list; the scope
+    // for a site that answered carries none of it.
+    expect(group(view).takingsFailedSites).toEqual(["site-rv"]);
+    expect(view.scopes.find((s) => s.siteId === "site-cc")!.takingsFailedSites).toEqual([]);
     // Disclosure only: the sites that DID answer still state their figures, and the
     // group total is blank for the usual reason — a missing key, not this list.
     const rv = view.scopes.find((s) => s.siteId === "site-rv")!;
@@ -522,9 +526,9 @@ describe("F5: the takings caveat names the practice that did not answer", () => 
       balances: null,
       claims: null,
     });
-    expect(view.takingsFailedSites).toEqual(["site-rv"]);
+    expect(group(view).takingsFailedSites).toEqual(["site-rv"]);
 
-    const names = view.takingsFailedSites.map(
+    const names = group(view).takingsFailedSites.map(
       (id) => view.sites.find((s) => s.id === id)?.name ?? id,
     );
     const withNames = takingsCaveats({
@@ -644,7 +648,8 @@ describe("F7: an invoice is bucketed on created_at, the field the filter uses", 
 // ---------------------------------------------------------------------------
 
 describe("F8: meta.total is parsed in exactly one place", () => {
-  const readSource = readFileSync(join(process.cwd(), "src/lib/dashboard/read.ts"), "utf8");
+  // srcPath, not process.cwd(): see the sweep below for why the difference matters.
+  const readSource = readFileSync(srcPath("lib/dashboard/read.ts"), "utf8");
 
   it("imports the shared parser and declares none of its own", () => {
     expect(readSource).toContain('from "@/lib/reports/scan"');
@@ -673,40 +678,53 @@ describe("F8: meta.total is parsed in exactly one place", () => {
   //
   // A reader who knew one had no way to tell which was in front of them, and the
   // difference between them is the difference between a total and a slice. The two
-  // weaker ones are now named for what they do (`pageBounded`, `pageToCeiling`); this
-  // pins that the name stays attached to the ONE pager that can prove a read is whole.
+  // weaker ones have since been unified into one bounded pager named for what it does
+  // (`pageToCeiling`, src/lib/dentally/paging.ts); this pins that the `pageAll` name
+  // stays attached to the ONE pager that can prove a read is whole.
   //
   // It crawls the whole of src/ rather than a list of files, because a fourth copy
   // will not be written where the last three were.
+  //
+  // AND IT CRAWLS THE RIGHT src/. This sweep was first written rooted at
+  // process.cwd(), which is the RUNNER's directory and not this file's. Agent work
+  // here happens in .claude/worktrees/<name>/ — a complete second checkout — so a
+  // run from one tree against the other's suite would sweep the trunk, find one
+  // `pageAll`, pass, and have said nothing whatsoever about the worktree's code. The
+  // walk now comes from lib/test-support/walk-src.ts, which roots itself through its
+  // own import.meta.url and exposes no root option for a caller to get wrong.
   // -------------------------------------------------------------------------
 
-  it("declares `pageAll` exactly once in the whole of src/", () => {
-    const SRC = join(process.cwd(), "src");
-    const declarations: string[] = [];
-    const DECLARES_PAGE_ALL =
-      /(?:function\s+pageAll\s*[<(]|(?:const|let|var)\s+pageAll\s*[:=])/;
+  const DECLARES_PAGE_ALL = /(?:function\s+pageAll\s*[<(]|(?:const|let|var)\s+pageAll\s*[:=])/;
 
-    const walk = (dir: string): void => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const full = join(dir, entry.name);
-        // .claude/worktrees and node_modules are full repo copies: they would match
-        // the same declaration again and report a divergence that does not exist.
-        if (entry.isDirectory()) {
-          if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-          walk(full);
-          continue;
-        }
-        if (!/\.tsx?$/.test(entry.name)) continue;
-        if (DECLARES_PAGE_ALL.test(readFileSync(full, "utf8"))) declarations.push(full);
-      }
-    };
-    walk(SRC);
+  // TESTS INCLUDED in the sweep on purpose: a fixture that declares its own `pageAll`
+  // to stand in for the real one is the same collision under a friendlier name.
+  const SWEPT = walkSrc({ includeTests: true });
+
+  it("declares `pageAll` exactly once in the whole of src/", () => {
+    const declarations = SWEPT.filter((file) =>
+      DECLARES_PAGE_ALL.test(readFileSync(srcPath(file), "utf8")),
+    );
 
     expect(
-      declarations.map((f) => f.slice(SRC.length + 1)),
+      declarations,
       "a second function named pageAll is back; two pagers under one name is how a " +
         "truncated read gets totalled",
     ).toEqual(["lib/reports/scan.ts"]);
+  });
+
+  // MUTATION: break the walk — a wrong root, an extension filter that matches
+  // nothing — and the sweep above passes by finding no files at all, reporting a
+  // clean tree it never opened. This is what notices. It is also what would have
+  // caught the cwd rooting: a worktree run reached a real src/, just not this one,
+  // so a tripwire that only counts files is not enough — it has to name a file that
+  // exists BESIDE this test.
+  it("actually walks the tree it claims to", () => {
+    expect(SWEPT.length).toBeGreaterThan(200);
+    expect(SWEPT).toContain("lib/reports/scan.ts");
+    expect(SWEPT).toContain("lib/dashboard/read.ts");
+    expect(SWEPT, "the walk is not rooted at THIS file's tree").toContain(
+      "lib/dashboard/money-path-hardening.test.ts",
+    );
   });
 
   it("uses it on BOTH the takings aggregate and the paging guard", async () => {

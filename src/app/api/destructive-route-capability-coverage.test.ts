@@ -1,8 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { CAPABILITIES, CAPABILITY_KEYS } from "@/lib/capabilities/keys";
+import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
 
 // ===========================================================================
 // A CAPABILITY THAT GUARDS NOTHING IS WORSE THAN NO CAPABILITY.
@@ -32,24 +31,26 @@ import { CAPABILITIES, CAPABILITY_KEYS } from "@/lib/capabilities/keys";
 // authorisation at all, plus a hard floor on how many are on the capability tier.
 // ===========================================================================
 
-const API_DIR = fileURLToPath(new URL(".", import.meta.url));
-/** src/ — API_DIR is src/app/api. */
-const SRC_DIR = join(API_DIR, "..", "..");
+/** Every route's path under /api, e.g. "permissions" or "patients/[id]/profile". */
+const API_PREFIX = "app/api/";
+const ROUTE_FILE = "/route.ts";
 
-function findRoutes(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...findRoutes(full));
-    else if (entry.name === "route.ts") out.push(relative(API_DIR, join(full, "..")).split(sep).join("/"));
-  }
-  return out.sort();
-}
-
-const ROUTES = findRoutes(API_DIR);
+/**
+ * Every API route in the platform, as its path under /api.
+ *
+ * The walk comes from lib/test-support/walk-src.ts, which roots itself through its
+ * own import.meta.url and offers no root option to get wrong. The rooting is the
+ * load-bearing part: agent work in this repo happens in .claude/worktrees/<name>/,
+ * a full second checkout, and a sweep rooted at the runner's cwd would enumerate
+ * one tree's routes while claiming to have audited the other's — on the file whose
+ * job is to prove that no write route in the platform is unguarded.
+ */
+const ROUTES = walkSrc({ subdir: "app/api", extensions: [".ts"], includeTests: true })
+  .filter((file) => file.endsWith(ROUTE_FILE))
+  .map((file) => file.slice(API_PREFIX.length, -ROUTE_FILE.length));
 
 function routeSource(route: string): string {
-  return readFileSync(join(API_DIR, route, "route.ts"), "utf8");
+  return readFileSync(srcPath(`${API_PREFIX}${route}${ROUTE_FILE}`), "utf8");
 }
 
 /** A route that exports at least one state-changing method. */
@@ -286,7 +287,7 @@ describe("2. the catalog and the filesystem agree, in both directions", () => {
     CAPABILITIES.flatMap((d) => (d.enforcedIn ?? []).map((f) => `${d.key}::${f}`)),
   )("%s — the service file exists and really calls the guard with that key", (pair) => {
     const [key, file] = pair.split("::");
-    const path = join(SRC_DIR, file);
+    const path = srcPath(file);
     expect(existsSync(path), `${key} names ${file}, which does not exist`).toBe(true);
     const src = readFileSync(path, "utf8");
     expect(src, `${file} does not call requireCapability`).toContain(CAPABILITY_TOKEN);
@@ -378,7 +379,7 @@ describe("3. every call is awaited", () => {
 
   it.each([...new Set(callers)])("%s awaits every requireCapability call", (id) => {
     const [kind, path] = id.split("::");
-    const src = kind === "api" ? routeSource(path) : readFileSync(join(SRC_DIR, path), "utf8");
+    const src = kind === "api" ? routeSource(path) : readFileSync(srcPath(path), "utf8");
     // Every occurrence must be preceded by `await ` — allowing for the import line
     // and the type-only mention, which are matched and skipped explicitly.
     const lines = src.split("\n");

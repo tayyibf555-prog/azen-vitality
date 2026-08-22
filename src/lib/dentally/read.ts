@@ -4,6 +4,7 @@ import { DentallyBudgetExceededError, DentallyClient, rethrowIfBudgetRefused } f
 import { normaliseAppointmentState } from "./appointment-state";
 import { dentallyScopeRefusal, dentallyScopeRefused, runWithDentallyPriority } from "./budget";
 import { notesFromEnvelope, toNoteRecords, type NoteRecord } from "./notes-shape";
+import { metaTotal, pageToCeiling } from "./paging";
 import { dentallySiteId, siteIdFromDentally, clientIdForSites } from "@/lib/mock/clients";
 import {
   createDisplayCache,
@@ -386,40 +387,27 @@ export const OUTSTANDING_TTL_MS = 15 * 60_000;
 // hundreds of simultaneous Dentally connections against the shared rate budget.
 const DEBTOR_RESOLVE_CHUNK = 8;
 
-/**
- * Page a DISPLAY read to a short page, or to `maxPages` — AND SILENTLY TRUNCATE THERE.
- *
- * IT USED TO BE CALLED `pageAll`, WHICH IS THE NAME OF A DIFFERENT FUNCTION WITH A
- * STRONGER CONTRACT. src/lib/reports/scan.ts exports the real `pageAll`: it measures
- * completeness against Dentally's own `meta.total` and hands back
- * `{ raw, complete, expected }` so a caller CANNOT total a slice by accident. This one
- * has no completeness signal at all — a walk that runs out of pages returns whatever
- * it reached, indistinguishable from a walk that finished. Two functions, one name,
- * opposite guarantees about the single question that matters, and a reader who knew
- * one of them had no way to tell which was in front of them.
- *
- * THE TRUNCATION IS DELIBERATE HERE AND MUST STAY. These are DISPLAY reads: a name
- * map, a patient list, an appointment feed. `listPatients` bounds at MAX_PAGES (100
- * pages, 10,000 rows a site) against a live book of ~17,000 on the largest site, and
- * that bound is the point — the Patients page is not going to fetch a whole book to
- * render a list, and it is not totalling money over what it gets. Migrating these
- * callers onto the shared pager would change what they RECEIVE (its early bail would
- * hand back page one the moment `meta.total` exceeded the budget, which is exactly
- * what /v1/patients publishes), so this stays a bounded pager and is now named as one.
- *
- * NEVER USE IT FOR A FIGURE. Anything that will be summed, counted or printed as a
- * total belongs on reports/scan.ts's pageAll, where "did the walk finish?" has an
- * answer.
- */
-async function pageBounded<T>(fetchPage: (page: number) => Promise<T[]>, maxPages: number = MAX_PAGES): Promise<T[]> {
-  const out: T[] = [];
-  for (let page = 1; page <= maxPages; page += 1) {
-    const rows = await fetchPage(page);
-    out.push(...rows);
-    if (rows.length < PER_PAGE) break; // short page => last page
-  }
-  return out;
-}
+// THE DISPLAY READS BELOW PAGE ON THE SHARED BOUNDED PAGER (./paging).
+//
+// THIS FILE USED TO DECLARE ITS OWN, `pageBounded`, and charting-read.ts declared
+// `pageToCeiling` beside it: the same walk, line for line, differing only in whether
+// the truncation came back or was discarded. Both also measured a short page against
+// their own module's PER_PAGE while each caller chose `per_page` inside its closure,
+// so nothing tied the size ASKED FOR to the size MEASURED AGAINST — the exact drift
+// `pageAll` had just been fixed for in src/lib/reports/scan.ts. The shared pager takes
+// `perPage` as an argument and hands it to the fetcher, so the two cannot disagree.
+//
+// THE TRUNCATION IS STILL DISCARDED HERE, AND THAT IS DELIBERATE — but it is now
+// discarded AT THE CALL SITE (`.rows`, or `(await ...).rows`) rather than inside a
+// pager that never offered it. These are DISPLAY reads: a name map, a patient list,
+// an appointment feed. `listPatients` bounds at MAX_PAGES (100 pages, 10,000 rows a
+// site) against a live book of ~17,000 on the largest site, and that bound is the
+// point — the Patients page is not going to fetch a whole book to render a list, and
+// it is not totalling money over what it gets.
+//
+// NEVER USE IT FOR A FIGURE. Anything that will be summed, counted or printed as a
+// total belongs on reports/scan.ts's `pageAll`, where "did the walk finish?" is
+// measured against Dentally's own row count and answered.
 
 // Cross-request TTL cache for the expensive live Dentally DISPLAY reads. Every
 // force-dynamic page re-pages Dentally on navigation; on a real-size practice
@@ -610,10 +598,14 @@ async function _listPatientsUncached(siteIds: string[], maxPages?: number): Prom
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
       try {
-        const rows = await pageBounded(
-          (page) =>
-            client.listPatients({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE }).then((res) => res.patients ?? []),
-          maxPages,
+        // `.rows`: the truncation is DISCARDED HERE, at the call site and in the
+        // open, rather than by a pager that never offered it. The bound is the point
+        // on a display read — see the header above.
+        const { rows } = await pageToCeiling(
+          (page, perPage) =>
+            client.listPatients({ siteId: dentallySiteId(siteId), page, perPage }).then((res) => res.patients ?? []),
+          PER_PAGE,
+          maxPages ?? MAX_PAGES,
         );
         return rows.map((p) => toPatient(p as Record<string, unknown>));
       } catch (err) {
@@ -657,11 +649,12 @@ async function _searchPatientsUncached(siteIds: string[], query: string): Promis
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
       try {
-        const rows = await pageBounded(
-          (page) =>
+        const { rows } = await pageToCeiling(
+          (page, perPage) =>
             client
-              .listPatients({ siteId: dentallySiteId(siteId), query, page, perPage: PER_PAGE })
+              .listPatients({ siteId: dentallySiteId(siteId), query, page, perPage })
               .then((res) => res.patients ?? []),
+          PER_PAGE,
           SEARCH_MAX_PAGES,
         );
         return rows.map((p) => toPatient(p as Record<string, unknown>));
@@ -828,10 +821,13 @@ const listAppointmentsCached = cache(
     const perSite = await Promise.all(
       siteIds.map(async (siteId) => {
         try {
-          const rows = await pageBounded((page) =>
-            client
-              .listAppointments({ siteId: dentallySiteId(siteId), fromDate: from || undefined, toDate: to || undefined, page, perPage: PER_PAGE })
-              .then((res) => res.appointments ?? []),
+          const { rows } = await pageToCeiling(
+            (page, perPage) =>
+              client
+                .listAppointments({ siteId: dentallySiteId(siteId), fromDate: from || undefined, toDate: to || undefined, page, perPage })
+                .then((res) => res.appointments ?? []),
+            PER_PAGE,
+            MAX_PAGES,
           );
           return rows.map((a) => toAppointment(a as Record<string, unknown>, siteId));
         } catch (err) {
@@ -912,16 +908,19 @@ export async function listAppointmentsSafe(
   const perSite = await Promise.all(
     siteIds.map(async (siteId) => {
       try {
-        const rows = await pageBounded((page) =>
-          client
-            .listAppointments({
-              siteId: dentallySiteId(siteId),
-              fromDate: from || undefined,
-              toDate: to || undefined,
-              page,
-              perPage: PER_PAGE,
-            })
-            .then((res) => res.appointments ?? []),
+        const { rows } = await pageToCeiling(
+          (page, perPage) =>
+            client
+              .listAppointments({
+                siteId: dentallySiteId(siteId),
+                fromDate: from || undefined,
+                toDate: to || undefined,
+                page,
+                perPage,
+              })
+              .then((res) => res.appointments ?? []),
+          PER_PAGE,
+          MAX_PAGES,
         );
         return rows.map((a) => toAppointment(a as Record<string, unknown>, siteId));
       } catch (err) {
@@ -1341,16 +1340,17 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   //      before they offer a prime slot.
   //   2. This was the only per-patient read here that was a single unpaged 100-row
   //      call, so a long-standing patient's history silently stopped at 100 rows with
-  //      no marker of any kind. pageBounded loops until a short page.
+  //      no marker of any kind. The bounded pager loops until a short page.
   // Bounded at 10 pages (1,000 appointments) because this is one patient, not a book.
-  const apptsP = pageBounded(
-    (page) =>
+  const apptsP = pageToCeiling(
+    (page, perPage) =>
       client
-        .getPatientAppointments(patientId, page, PER_PAGE, true)
+        .getPatientAppointments(patientId, page, perPage, true)
         .then((res) => res.appointments ?? []),
+    PER_PAGE,
     10,
   )
-    .then((rows) => rows.map((a) => toAppointment(a as Record<string, unknown>, siteId)))
+    .then(({ rows }) => rows.map((a) => toAppointment(a as Record<string, unknown>, siteId)))
     .catch((err: unknown) => {
       noteRefusal(err);
       health.appointments = "failed";
@@ -1362,14 +1362,15 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   // ~100 Dentally calls on every record open. A patient has few plans, so a small
   // bound is plenty; the client-side filter stays as a safety net in case Dentally
   // ignores patient_id the way it ignores site_id.
-  const plansP = pageBounded(
-    (page) =>
+  const plansP = pageToCeiling(
+    (page, perPage) =>
       client
-        .listTreatmentPlans({ siteId: dentallySiteId(siteId), patientId, page, perPage: PER_PAGE })
+        .listTreatmentPlans({ siteId: dentallySiteId(siteId), patientId, page, perPage })
         .then((res) => res.treatment_plans ?? []),
+    PER_PAGE,
     5,
   )
-    .then((plans) =>
+    .then(({ rows: plans }) =>
       plans
         .map((pl) => pl as Record<string, unknown>)
         .filter((r) => String(r.patient_id ?? "") === patientId)
@@ -1402,11 +1403,12 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   // they do not recognise, which lands in the catch below as health.notes = "failed".
   // That is deliberate: for this stream, "we could not read it" is the only honest
   // thing to say about a response we did not understand.
-  const notesP = pageBounded(
-    (page) => client.getPatientNotes(patientId, page, PER_PAGE).then(notesFromEnvelope),
+  const notesP = pageToCeiling(
+    (page, perPage) => client.getPatientNotes(patientId, page, perPage).then(notesFromEnvelope),
+    PER_PAGE,
     10,
   )
-    .then(toNoteRecords)
+    .then(({ rows }) => toNoteRecords(rows))
     .catch((err: unknown) => {
       noteRefusal(err);
       health.notes = "failed";
@@ -1418,11 +1420,12 @@ async function _getPatientDetailUncached(patientId: string, siteId: string): Pro
   // array, and it was a single unpaged 100-row call. A truncated array does not fail
   // any honesty guard: reads.invoices stays "ok" and a wrong balance is printed in
   // red at the top of the record as fact.
-  const invoicesP = pageBounded(
-    (page) => client.getPatientInvoices(patientId, page, PER_PAGE).then((res) => res.invoices ?? []),
+  const invoicesP = pageToCeiling(
+    (page, perPage) => client.getPatientInvoices(patientId, page, perPage).then((res) => res.invoices ?? []),
+    PER_PAGE,
     10,
   )
-    .then((rows) => rows.map((inv) => inv as Record<string, unknown>))
+    .then(({ rows }) => rows.map((inv) => inv as Record<string, unknown>))
     .catch((err: unknown) => {
       noteRefusal(err);
       health.invoices = "failed";
@@ -1611,10 +1614,27 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
     // the ignored-filter signature. If a site exhausts the page cap on full pages the
     // total may be understated, so we log it rather than presenting a silent partial.
     let sawShortPage = false;
+    // AND A SHORT PAGE IS NOT PROOF THE WALK GOT EVERYTHING. /v1/invoices publishes
+    // `meta.total` — exactly how many rows match `paid=false` for this request — and
+    // this walk used to ignore it, so "the last page was short" was the ONLY evidence
+    // it had that the practice's whole unpaid book was in hand. That is the same
+    // inference reports/scan.ts's pageAll exists to stop being made about money: an
+    // index that is not date-ordered, a filter the server may have applied loosely,
+    // and a total printed on the Payments page as fact. The count is captured on page
+    // one and checked at the end; falling short of it raises the SAME `truncated`
+    // flag the page cap does, so the figure is disclosed as a floor rather than
+    // presented as the book.
+    let expected: number | null = null;
+    let fetched = 0;
     try {
       for (let page = 1; page <= OUTSTANDING_MAX_PAGES; page += 1) {
         const res = await client.listInvoices({ siteId: dentallySiteId(siteId), page, perPage: PER_PAGE, paid: false });
         const invoices = res.invoices ?? [];
+        // Page one carries the count. `fetched` is the RAW rows this site handed back,
+        // not the deduped ones: the comparison has to be like for like with a total
+        // that describes this request's own result set.
+        if (page === 1) expected = metaTotal(res.meta);
+        fetched += invoices.length;
         let newInPage = 0;
         for (const inv of invoices) {
           const r = inv as Record<string, unknown>;
@@ -1651,6 +1671,18 @@ async function _listOutstandingUncached(siteIds: string[]): Promise<OutstandingR
         console.warn(
           `[dentally] listOutstanding: site ${siteId} hit the ${OUTSTANDING_MAX_PAGES}-page cap without a short page; ` +
             `the outstanding total may be understated (raise OUTSTANDING_MAX_PAGES or confirm the paid=false filter is honoured).`,
+        );
+      } else if (!ignoredFilter && expected !== null && fetched < expected) {
+        // A SHORT PAGE THAT ARRIVED TOO EARLY. Dentally said how many unpaid invoices
+        // match and handed back fewer, so rows are missing however tidily the walk
+        // ended. NOT checked on the ignored-filter path: that break is deliberate —
+        // an earlier site already covered the whole group — so `fetched` there is one
+        // page of a total that describes the whole index, and comparing them would
+        // manufacture a truncation out of the workaround.
+        truncated = true;
+        console.warn(
+          `[dentally] listOutstanding: site ${siteId} ended on a short page holding ${fetched} of the ` +
+            `${expected} unpaid invoices Dentally says match; the outstanding total is a FLOOR, not the book.`,
         );
       }
     } catch (err) {

@@ -226,9 +226,28 @@ export async function buildSnapshot(
   // caller passing the two figures in from somewhere else. A rate above 1 renders as
   // "201% of enquiries booked" and is read aloud by the AI review as a fact about the
   // practice; a nonsense figure the page cannot stand behind must not be one it
-  // prints. The clamp is deliberately silent: it bounds what is shown, it does not
-  // invent the missing enquiries.
+  // prints. The clamp BOUNDS what is shown; it does not invent the missing enquiries.
+  //
+  // BUT IT IS NO LONGER SILENT, and that was the flaw in it. Silence is what turns a
+  // defence into a launderer: 9 booked against 4 enquiries is an IMPOSSIBLE pair, and
+  // clamping it produced "100% of enquiries booked" -- not an obviously broken figure
+  // a reader would question, but the most flattering plausible number in the range,
+  // printed on the page and read aloud by the AI review as a fact about the practice.
+  // The regression it is defending against lives in the shared-instant plumbing above
+  // (one `untilIso` across three concurrent queries), and if that ever breaks, the
+  // clamp is the reason nobody would find out. So the impossible pair is LOGGED, with
+  // both counts in it, and then clamped exactly as before: the page still refuses to
+  // print a nonsense figure, and the defect is now something an engineer can search
+  // the logs for instead of something the product quietly absorbs.
   const rawRate = enquiries > 0 ? booked / enquiries : 0;
+  if (rawRate > 1) {
+    console.error(
+      `[reports] snapshot ${period}: ${booked} booked against ${enquiries} enquiries is ` +
+        `impossible (rate ${rawRate}). The two counts disagree about one window -- check ` +
+        `the shared untilIso across the count and detail reads. Clamping to 100% for ` +
+        `display; the figure shown is a bound, not a measurement.`,
+    );
+  }
   const enquiryToBookedRate = Math.round(Math.min(1, Math.max(0, rawRate)) * 100) / 100;
 
   return {

@@ -27,9 +27,22 @@
 // than the page bound, we have not seen their account, and the caller must not
 // treat a partial history as a whole one. It reports `truncated` and the sweep
 // refuses the patient.
+//
+// AND "TRUNCATED" IS MEASURED, NOT INFERRED FROM A SHORT PAGE. This walk used to
+// call itself complete the moment a page came back under PER_PAGE — the one piece
+// of evidence a hand-rolled pager has, and not evidence at all on an index that is
+// ordered by id rather than by date. /v1/invoices publishes `meta.total`: exactly
+// how many rows match this request. So the count is captured on page one and the
+// walk is checked against it, the way reports/scan.ts's pageAll checks every read
+// that carries a figure. Falling short raises the SAME `truncated` flag the page
+// bound does, which is what makes the closer refuse the patient — and refusing is
+// the point. The sentence this read gates is one the practice sends to a real
+// person, mid-conversation, about money they are said to owe; a balance summed
+// over a provably partial list is a claim nobody may make.
 
 import { rethrowIfBudgetRefused } from "@/lib/dentally/client";
 import { dentallyFromEnv } from "@/lib/dentally/read";
+import { metaTotal } from "@/lib/dentally/paging";
 
 /** Rows per page, matching every other paged read in this repo. */
 const PER_PAGE = 100;
@@ -66,12 +79,18 @@ export async function readPatientInvoices(patientId: string): Promise<PatientInv
   const client = dentallyFromEnv();
   const rows: Array<Record<string, unknown>> = [];
   let truncated = true;
+  /** `meta.total` from page one, or null when the envelope published none. */
+  let expected: number | null = null;
+  /** RAW rows returned, before the patient filter: the like-for-like left-hand side
+   *  of a total that describes this request's own result set. */
+  let fetched = 0;
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     let batch: unknown[];
     try {
       const res = await client.listInvoices({ patientId, page, perPage: PER_PAGE });
       batch = res.invoices ?? [];
+      if (page === 1) expected = metaTotal(res.meta);
     } catch (err) {
       // A refusal is not a failed read, it is a read that never happened.
       rethrowIfBudgetRefused(err);
@@ -84,8 +103,12 @@ export async function readPatientInvoices(patientId: string): Promise<PatientInv
       if (String(r.patient_id ?? "") !== String(patientId)) continue;
       rows.push(r);
     }
+    fetched += batch.length;
     if (batch.length < PER_PAGE) {
-      truncated = false;
+      // Complete ONLY if Dentally agrees. It published a count and we hold fewer
+      // rows than it: the history has a hole in it whatever the last page looked
+      // like, and `truncated` stays true so the caller refuses to quote.
+      truncated = expected !== null && fetched < expected;
       break;
     }
   }

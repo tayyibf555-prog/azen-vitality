@@ -296,24 +296,72 @@ function shiftDayKey(ymd: string, days: number): string {
 /** A `YYYY-MM-DD` London day key, as every caller of the reader passes. */
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * A requested London day range, PUT IN ORDER — the one implementation of what a
+ * reversed pair means, for this module and for every caller above it.
+ *
+ * SWAP, DO NOT REFUSE, AND DO NOT COLLAPSE. No caller ever means an empty range.
+ * A patient tapping the 10th and then the 5th, and a language model echoing
+ * "between the 5th and the 10th" back as from=10th/to=5th, both mean the six days
+ * between them. Read literally, a reversed pair is a range no day can be inside:
+ * the window is built off the FROM day while every trim drops anything past the
+ * TO day, so the answer arrives and is then thrown away in full — an empty
+ * calendar, or `{slots: []}` with no error, on days the practice is open. That is
+ * indistinguishable, to the patient, from the practice being shut.
+ *
+ * The three callers used to decide this for themselves and decided it three
+ * different ways (the agent tool swapped, /api/booking/slots clamped `to` down to
+ * `from` and silently deleted the days between, and this module treated it as a
+ * caller bug and trimmed nothing). ONE answer now, and it lives here, next to the
+ * window it feeds.
+ *
+ * Only an EXPLICITLY reversed pair of day keys is touched. Anything that is not a
+ * `YYYY-MM-DD` key is passed through untouched, because a compare it cannot
+ * order is not evidence of a reversal — the existing "unreadable range" policies
+ * downstream still have the last word on those.
+ */
+export function orderedDayRange(fromDate: string, toDate: string): { fromDate: string; toDate: string } {
+  // Both keys are `YYYY-MM-DD`, so the lexicographic compare IS a date compare.
+  if (DAY_KEY.test(fromDate) && DAY_KEY.test(toDate) && toDate < fromDate) {
+    return { fromDate: toDate, toDate: fromDate };
+  }
+  return { fromDate, toDate };
+}
+
 export interface BookingAvailabilityWindow {
   /** ISO start: on the booking grid, and always strictly after now. */
   startTime: string;
   /** ISO finish: always more than 24 hours after `startTime`. */
   finishTime: string;
+  /**
+   * The London day range this window was actually built for: the caller's pair,
+   * put in order (see orderedDayRange). Callers TRIM with these rather than with
+   * what they passed in, so the days asked of Dentally and the days kept out of
+   * its answer can never disagree.
+   */
+  fromDate: string;
+  /** See `fromDate`: the ordered end of the range this window was built for. */
+  toDate: string;
 }
 
 /**
  * The availability window to SEND for a requested London day range, or null when
  * the whole range has already ended and there is nothing worth asking.
  *
+ * A reversed pair is normalised here (orderedDayRange) rather than by any caller,
+ * and the ordered pair is handed back on the result so the trims downstream read
+ * the same two days this window was built from.
+ *
  * `nowMs` is a parameter rather than a clock read, so this is pure and testable.
  */
 export function bookingAvailabilityWindow(
-  fromDate: string,
-  toDate: string,
+  requestedFromDate: string,
+  requestedToDate: string,
   nowMs: number,
 ): BookingAvailabilityWindow | null {
+  // ORDER FIRST, before the window, before anything reads either end of it.
+  const { fromDate, toDate } = orderedDayRange(requestedFromDate, requestedToDate);
+
   // The earliest start Dentally will accept, snapped UP onto the booking grid.
   //
   // The buffer absorbs clock skew between our machine and theirs, and the one
@@ -339,6 +387,8 @@ export function bookingAvailabilityWindow(
   return {
     startTime: new Date(startMs).toISOString(),
     finishTime: new Date(finishMs).toISOString(),
+    fromDate,
+    toDate,
   };
 }
 
@@ -350,12 +400,20 @@ export function bookingAvailabilityWindow(
  * times as well, and the create route would revalidate against days nobody asked
  * about.
  *
- * A range that cannot be read (an unparseable key, or a reversed pair) is NOT
- * trimmed. A caller passing a bad range seeing too many days is a caller bug;
- * a patient shown an empty calendar is an outage.
+ * A range that cannot be READ (an unparseable key) is NOT trimmed. A caller
+ * passing a bad range seeing too many days is a caller bug; a patient shown an
+ * empty calendar is an outage.
+ *
+ * A REVERSED pair is a different thing and is no longer waved through untrimmed:
+ * it is ordered by orderedDayRange, exactly as bookingAvailabilityWindow orders
+ * it, so the days kept cannot disagree with the days asked about. This function
+ * is exported, so the ordering stays here as the one defence rather than an
+ * assumption about who calls it; in-repo every caller already hands it the pair
+ * the window reported, which makes the call a no-op.
  */
-export function bookingDaysWithin(days: BookingDay[], fromDate: string, toDate: string): BookingDay[] {
-  if (!DAY_KEY.test(fromDate) || !DAY_KEY.test(toDate) || toDate < fromDate) return days;
+export function bookingDaysWithin(days: BookingDay[], requestedFrom: string, requestedTo: string): BookingDay[] {
+  const { fromDate, toDate } = orderedDayRange(requestedFrom, requestedTo);
+  if (!DAY_KEY.test(fromDate) || !DAY_KEY.test(toDate)) return days;
   return days.filter((d) => d.date >= fromDate && d.date <= toDate);
 }
 
@@ -401,7 +459,13 @@ export async function fetchAvailabilityDays(
     duration: BOOKING_SLOT_DURATION_MIN,
   });
   const rows = Array.isArray(res.availability) ? res.availability : [];
-  return bookingDaysWithin(groupSlotsIntoLondonDays(parseAvailabilityRows(rows), now), fromDate, toDate);
+  // Trimmed with the window's OWN pair, not the arguments: bookingAvailabilityWindow
+  // is what ordered a reversed range, and the days kept must be the days asked for.
+  return bookingDaysWithin(
+    groupSlotsIntoLondonDays(parseAvailabilityRows(rows), now),
+    queryWindow.fromDate,
+    queryWindow.toDate,
+  );
 }
 
 /**

@@ -3,6 +3,7 @@ import type { AvailabilityWindow } from "./availability";
 import {
   COLUMN_WORK_PRESENTATION,
   columnIsHatched,
+  columnIsLoud,
   columnWorkState,
   columnWorkSummary,
   mergeSpans,
@@ -322,6 +323,66 @@ describe("COLUMN_WORK_PRESENTATION, the one mapping both grids read", () => {
       COLUMN_WORK_PRESENTATION[s].pendingLabel,
     ]).filter((w): w is string => typeof w === "string");
     expect(new Set(said).size, `duplicated wording: ${said.join(" | ")}`).toBe(said.length);
+  });
+
+  // MUTATION: take `loud` back out of the Record and leave the rule as an or-chain
+  // in each grid. That is where it lived, byte for byte, in both of them, and a
+  // chain over six states greets the seventh by rendering it quiet.
+  it("says of EVERY state whether it shouts, so a new one cannot be silent by omission", () => {
+    for (const state of ALL_WORK_STATES) {
+      const loud = COLUMN_WORK_PRESENTATION[state].loud;
+      expect(
+        loud === true || loud === false || loud === "whenHoursSettled",
+        `"${state}" has no loudness`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("columnIsLoud", () => {
+  // The or-chain both grids carried, restated as its truth table. Byte-identical:
+  //   (state === "unknown" && !hoursPending) || state === "unconfirmed"
+  it("shouts for exactly what the two grids used to shout for", () => {
+    expect(columnIsLoud("working")).toBe(false);
+    expect(columnIsLoud("off")).toBe(false);
+    expect(columnIsLoud("unknown")).toBe(true);
+    expect(columnIsLoud("unconfirmed")).toBe(true);
+    expect(columnIsLoud("past")).toBe(false);
+    expect(columnIsLoud("unreportable")).toBe(false);
+  });
+
+  it("falls silent for 'unknown' while the read is in flight, and for nothing else", () => {
+    expect(columnIsLoud("unknown", { hoursPending: true })).toBe(false);
+    // "unconfirmed" is not waiting on anything: the availability answer is IN, it
+    // simply carries no site. A pending read has nothing to say about it.
+    expect(columnIsLoud("unconfirmed", { hoursPending: true })).toBe(true);
+    for (const state of ALL_WORK_STATES) {
+      if (state === "unknown") continue;
+      expect(
+        columnIsLoud(state, { hoursPending: true }),
+        `a pending read moved "${state}"`,
+      ).toBe(columnIsLoud(state));
+    }
+  });
+
+  // The default matters: every caller passes `hoursPending` as a plain boolean, and
+  // an omitted option must read as "settled" rather than as "still loading" -- the
+  // wrong way round would silence the failure state permanently.
+  it("treats an absent hoursPending as settled, not as pending", () => {
+    for (const state of ALL_WORK_STATES) {
+      expect(columnIsLoud(state)).toBe(columnIsLoud(state, { hoursPending: false }));
+    }
+  });
+
+  // Loud and hatched are DIFFERENT questions and must not quietly become one:
+  // "past" and "unreportable" hatch (we have no answer) and stay quiet (there is
+  // nothing to be done), which is the pair a single flag would collapse.
+  it("is not the hatch under another name", () => {
+    const hatched = ALL_WORK_STATES.filter((s) => columnIsHatched(s));
+    const loud = ALL_WORK_STATES.filter((s) => columnIsLoud(s));
+    expect(hatched).not.toEqual(loud);
+    expect(columnIsHatched("past")).toBe(true);
+    expect(columnIsLoud("past")).toBe(false);
   });
 });
 

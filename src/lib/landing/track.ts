@@ -20,8 +20,20 @@
 // values) — that is what lets funnelVariantSummary group results per variant.
 //
 // Deliberately silent: analytics must never break or slow the public page, so the
-// call is fire-and-forget, uses keepalive (so a click that navigates away still
-// sends), and swallows every error. No-ops during SSR or when fetch is absent.
+// call is fire-and-forget and swallows every error. No-ops during SSR.
+//
+// DELIVERY IS NOT THIS FILE'S BUSINESS. It goes out through postJsonBeacon, the one
+// transport every browser beacon in the platform uses. This module hand-rolled a
+// keepalive fetch instead, and carried a named exemption in beacon-transport.test.ts
+// arguing that it was "a smaller shape, not a copy" — a bare keepalive fetch with no
+// sendBeacon in front of it. That was the wrong half to be missing. `cta_clicked`
+// fires as the visitor is ALREADY NAVIGATING to the booking page, and sendBeacon is
+// the API that survives that navigation; keepalive is the fallback for when it does
+// not exist or refuses the payload. The shared transport does both, in that order,
+// and swallows everything, so this file is strictly better delivered and now holds
+// no transport of its own.
+
+import { postJsonBeacon } from "@/lib/beacon-transport";
 
 // 'viewed' and 'cta_clicked' feed the A/B counters; 'section_<name>' steps are
 // per-section scroll-depth markers (the endpoint accepts arbitrary step strings,
@@ -45,12 +57,19 @@ const FUNNEL_EVENT_ENDPOINT = "/api/funnel-event";
  * contract, inside the endpoint's batched `events` envelope.
  */
 export function trackLandingEvent(event: LandingEvent): void {
-  if (typeof window === "undefined" || typeof fetch === "undefined") return;
+  // SSR-INERT, and the guard stays here rather than moving into the transport: a
+  // landing page is server-rendered, this runs during that render, and there is no
+  // visitor to attribute an event to yet. (The transport is browser-safe either
+  // way — it feature-detects — but "did this page get viewed?" is a question only
+  // the browser can answer, so not asking it on the server is this file's rule.)
+  if (typeof window === "undefined") return;
   try {
-    void fetch(FUNNEL_EVENT_ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    // Serialised HERE, not by the transport: the funnel-event envelope is this
+    // file's contract with that endpoint, and the transport takes a string exactly
+    // so it never gets a say in what a body may contain.
+    postJsonBeacon(
+      FUNNEL_EVENT_ENDPOINT,
+      JSON.stringify({
         clientSlug: event.clientSlug,
         surface: "landing",
         sessionId: event.sessionId,
@@ -61,12 +80,10 @@ export function trackLandingEvent(event: LandingEvent): void {
           },
         ],
       }),
-      keepalive: true,
-    }).catch(() => {
-      // Swallow: analytics is best-effort and must never surface to the visitor.
-    });
+    );
   } catch {
-    // Swallow synchronous throws (e.g. serialisation) too.
+    // Swallow synchronous throws (e.g. serialisation). The transport swallows
+    // every delivery failure of its own; this catch covers the line above it.
   }
 }
 

@@ -146,6 +146,20 @@ export interface ColumnWorkPresentation {
    * alarm, and an alarm a receptionist learns to ignore is worse than none.
    */
   pendingLabel?: string;
+  /**
+   * Whether the header's second line is set in the LOUD weight -- the emphasis
+   * that says "this one needs you", as against the quiet grey of a line that is
+   * merely informative.
+   *
+   * `"whenHoursSettled"` is the honest third value and not a cleverness: "unknown"
+   * is loud once the read has come back and stayed unknown, and quiet while it is
+   * still in flight, because a failure shouting on every day change is the false
+   * alarm the pendingLabel above exists to avoid. Modelled as a value rather than
+   * a callback so this Record stays something you can READ -- all six states'
+   * loudness visible in one column, which is the property that makes an omission
+   * obvious.
+   */
+  loud: boolean | "whenHoursSettled";
 }
 
 /**
@@ -167,28 +181,53 @@ export interface ColumnWorkPresentation {
  * choose its own sentence can collapse two states the union spent six members
  * keeping apart, and the day view and the week view can say different things
  * about the same clinician on the same day.
+ *
+ * AND WHY `loud` JOINED THEM. It was the one per-state property left outside, as a
+ * byte-identical or-chain in each grid:
+ *
+ *     (state === "unknown" && !hoursPending) || state === "unconfirmed"
+ *
+ * which is the same non-exhaustive shape this Record was built to end, one property
+ * later. A seventh member of the union compiled clean in both chains, fell out of
+ * the bottom of each, and rendered QUIET -- so a state that exists precisely because
+ * something needs a human's attention would have been added to the union, worded
+ * carefully here, and then whispered. Folded in, an omission is a compile error in
+ * this file instead.
  */
 export const COLUMN_WORK_PRESENTATION: Record<ColumnWorkState, ColumnWorkPresentation> = {
   // We asked, and they are in. The header carries the counts, not a sentence.
-  working: { hatched: false, label: null },
+  working: { hatched: false, label: null, loud: false },
   // We asked, and they are not. The ONLY state grey may be painted for: a claim
-  // about the whole day, made only when the whole day was answerable.
-  off: { hatched: false, label: "Not working" },
+  // about the whole day, made only when the whole day was answerable. Quiet: it is
+  // an ordinary fact about a rota, not something anybody has to act on.
+  off: { hatched: false, label: "Not working", loud: false },
   // "Hours not loaded" is a DIFFERENT sentence from "Not working": the first says
   // we could not find out, the second says we asked and they are off. Collapsing
-  // them is the confident empty this whole design refuses.
-  unknown: { hatched: true, label: "Hours not loaded", pendingLabel: "Reading hours" },
+  // them is the confident empty this whole design refuses. LOUD once the read has
+  // settled -- a column nobody can read is a column nobody should book into -- and
+  // quiet while it is still in flight, when there is nothing yet to be alarmed by.
+  unknown: {
+    hatched: true,
+    label: "Hours not loaded",
+    pendingLabel: "Reading hours",
+    loud: "whenHoursSettled",
+  },
   // NOT "Not working". They may well be working, at another of these practices,
-  // and their availability carries no site to tell us.
-  unconfirmed: { hatched: true, label: "Not confirmed here" },
+  // and their availability carries no site to tell us. LOUD, and the only state
+  // that is loud unconditionally: it is the one a receptionist can actually do
+  // something about, by finding out where the clinician is today.
+  unconfirmed: { hatched: true, label: "Not confirmed here", loud: true },
   // NOT "Hours not loaded" either: nothing failed and nothing will load. Dentally
-  // will not answer for a date that has gone by.
-  past: { hatched: true, label: "Date has passed" },
+  // will not answer for a date that has gone by. Quiet, for the same reason it is
+  // not worded as a failure: there is nothing to be done about a date in the past,
+  // and an alarm about one teaches staff to ignore the alarms that matter.
+  past: { hatched: true, label: "Date has passed", loud: false },
   // NOT "Date has passed": the date is TODAY, and today has not passed. NOT "Not
   // working" either: their morning is missing from the answer because Dentally
   // only reports hours from now onwards, and silence about the morning is not
-  // evidence.
-  unreportable: { hatched: true, label: "Hours not reportable" },
+  // evidence. Quiet: the day is working normally from here on, and the gap is in
+  // the history rather than in anything ahead of the reader.
+  unreportable: { hatched: true, label: "Hours not reportable", loud: false },
 };
 
 /**
@@ -216,6 +255,25 @@ export function columnWorkSummary(
   return opts.hoursPending === true && shown.pendingLabel !== undefined
     ? shown.pendingLabel
     : shown.label;
+}
+
+/**
+ * Whether this state's header line is set in the LOUD weight. Both grids call
+ * THIS rather than restating the rule, for the same reason they both call
+ * `columnWorkSummary`: two copies of a rule about six states is two chances to
+ * word a seventh one silently.
+ *
+ * NOT the whole story on either screen. A grid ORs in its own failure -- the
+ * counts it could not load, which is that screen's read failing rather than
+ * anything about the clinician -- and that stays where it belongs, beside the
+ * screen that failed.
+ */
+export function columnIsLoud(
+  state: ColumnWorkState,
+  opts: { hoursPending?: boolean } = {},
+): boolean {
+  const loud = COLUMN_WORK_PRESENTATION[state].loud;
+  return loud === "whenHoursSettled" ? opts.hoursPending !== true : loud;
 }
 
 export function columnWorkState(args: {

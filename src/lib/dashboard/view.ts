@@ -191,6 +191,17 @@ export interface AccountsPanel {
    * Disclosure only. It never changes a figure; it says what a figure leaves out.
    */
   unattributedUnpaid: number | null;
+  /**
+   * The scope this panel was built for: null for the whole group, else a site id.
+   *
+   * IT IS HERE SO THE DISCLOSURE ABOVE CAN BE WORDED HONESTLY WITHOUT THE CALLER
+   * BEING TRUSTED TO SAY WHICH SCOPE IT IS RENDERING. `unattributedUnpaid` is a
+   * GROUP-level count, and what it leaves out of a SINGLE practice's balance is a
+   * different and larger set — the sibling practices in this group are excluded from
+   * that figure too. A caveat that cannot tell the two apart names two causes as if
+   * they were exhaustive; see accountsCaveats.
+   */
+  siteId: string | null;
 }
 
 /**
@@ -234,6 +245,24 @@ export interface ScopeView {
   periods: Record<DashboardPeriod, PeriodPanels>;
   /** Payments with no site id, excluded from a per-site total rather than folded in. */
   unattributedPayments: number;
+  /**
+   * Sites whose takings read did not answer AND THAT THIS SCOPE CAN SEE, by id.
+   *
+   * IT LIVES ON THE SCOPE BECAUSE THE SCOPING IS THE POINT. The list used to be a
+   * single group-level field on the view, and every consumer was then responsible for
+   * narrowing it to the scope it was rendering. Exactly one did — practice-dashboard
+   * did the filter in a `useMemo` — so a manager looking at N15 alone was told her
+   * blank was caused by N17, a practice not on her screen whose failure blanks nothing
+   * she can see. The next consumer (the co-pilot's narration, the owner overview)
+   * would have started from the same unscoped field and made the same mistake, and
+   * nothing in the types would have stopped it. So the narrowing happens ONCE, here,
+   * and the unscoped list is no longer reachable from PracticeDashboardView at all.
+   *
+   * Disclosure only. Whether a cell is blank is decided solely by a missing key in
+   * `takingsWindowTotals`, inside computeTakingsStrip; this list never widens or
+   * narrows that. Empty on every healthy assembly.
+   */
+  takingsFailedSites: string[];
 }
 
 // --- The appointment list ---------------------------------------------------
@@ -328,14 +357,11 @@ export interface PracticeDashboardView {
   /** Payment rows the normaliser could not read at all. FIXTURE PATH ONLY: the live
    *  path totals no rows, so it drops none — see paymentsCoverage. */
   droppedPayments: number;
-  /**
-   * Sites whose takings read did not answer, by id, for the caveat to NAME.
-   *
-   * Disclosure only. Whether a cell is blank is decided solely by a missing key in
-   * `takingsWindowTotals`, inside computeTakingsStrip; this list never widens or
-   * narrows that. Empty on every healthy assembly.
-   */
-  takingsFailedSites: string[];
+  // NO GROUP-LEVEL `takingsFailedSites` HERE, DELIBERATELY. It was a whole-group list
+  // on the view that every reader had to remember to narrow, and a reader who forgot
+  // named a practice that is not on the screen. It is now per scope
+  // (ScopeView.takingsFailedSites), already narrowed, so the unscoped list cannot be
+  // reached and the mistake cannot be made a second time.
   /** Claim rows the normaliser could not read at all. */
   droppedClaims: number;
 }
@@ -356,10 +382,13 @@ export interface BuildViewInput {
    */
   takingsWindowTotals?: TakingsWindowTotals | null;
   /**
-   * Site ids whose takings read did not answer. DISCLOSURE ONLY: it names the
-   * practices in the caveat and NEVER decides whether a cell is blank — that stays
-   * the missing-key test inside computeTakingsStrip, so there is exactly one rule
-   * about when a total may be stated.
+   * Site ids whose takings read did not answer, as the READ layer saw them: the whole
+   * group, unnarrowed. buildScope splits it per scope on the way in, and only the
+   * narrowed lists come out (ScopeView.takingsFailedSites).
+   *
+   * DISCLOSURE ONLY: it names the practices in the caveat and NEVER decides whether a
+   * cell is blank — that stays the missing-key test inside computeTakingsStrip, so
+   * there is exactly one rule about when a total may be stated.
    */
   takingsFailedSites?: readonly string[];
   /**
@@ -797,6 +826,7 @@ function buildAccountsPanel(
       // Nothing to qualify: there is no balance on the screen for rows to be missing
       // from, and a count of omissions beside the word "Unavailable" says nothing.
       unattributedUnpaid: null,
+      siteId,
     };
   }
   const accounts = computeOutstandingAccounts({ balances, dropped, siteByPatientId, siteId });
@@ -811,8 +841,10 @@ function buildAccountsPanel(
     // invoice carrying no site could belong to a patient of ANY of these practices —
     // balances are attributed by patient, not by the invoice's own site — so there is
     // no scope it is safely irrelevant to. It cannot be apportioned between them
-    // either, so it is stated as what it is: a group-level omission.
+    // either, so it is stated as what it is: a group-level omission — which is
+    // exactly why the scope travels with it.
     unattributedUnpaid,
+    siteId,
   };
 }
 
@@ -966,6 +998,11 @@ function buildScope(
     ),
     periods,
     unattributedPayments: live.unattributedPayments,
+    // NARROWED HERE, ONCE. A scope names only failures inside itself; the all-sites
+    // scope covers every site and so keeps the whole list.
+    takingsFailedSites: (input.takingsFailedSites ?? []).filter((id) =>
+      siteIdsInScope.includes(id),
+    ),
   };
 }
 
@@ -1013,7 +1050,6 @@ export function buildDashboardView(input: BuildViewInput): PracticeDashboardView
     paymentsCoverage: input.paymentsCoverage,
     appointmentsCoverage: input.appointmentsCoverage,
     droppedPayments: input.droppedPayments ?? 0,
-    takingsFailedSites: [...(input.takingsFailedSites ?? [])],
     droppedClaims: input.droppedClaims ?? 0,
   };
 }

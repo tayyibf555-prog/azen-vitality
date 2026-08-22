@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { SectionCard } from "@/components/primitives";
 import type { ReportPeriod, ReportSnapshot } from "@/lib/reports/snapshot";
+import { periodWord } from "@/lib/reports/period-word";
 
 /** A first-response time in plain English ("42s" / "3m"). */
 function responseLabel(seconds: number | null): string {
@@ -126,7 +127,7 @@ function ReportPanel({ report, period }: { report: Report; period: ReportPeriod 
     <section className="space-y-4">
       <h4 className="flex items-center gap-2 border-b border-line pb-2.5 text-title text-navy">
         <Sparkles size={14} className="text-blue-royal" />
-        AI {period === "week" ? "weekly" : "monthly"} business review
+        AI {periodWord(period)} business review
       </h4>
 
       {report.headline ? (
@@ -272,7 +273,7 @@ export function ReportsWorkspace({
         {loading && !report ? (
           <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong bg-card-muted/60 px-6 py-10 text-sm text-muted">
             <Loader2 size={16} className="animate-spin text-muted" />
-            Writing your {period === "week" ? "weekly" : "monthly"} review...
+            Writing your {periodWord(period)} review...
           </div>
         ) : null}
 
@@ -281,7 +282,7 @@ export function ReportsWorkspace({
         ) : !loading ? (
           <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-line-strong bg-card-muted/40 px-4 py-6 text-sm text-muted">
             <ListChecks size={16} className="shrink-0 text-muted" />
-            Generate a report to get a written {period === "week" ? "weekly" : "monthly"} review with
+            Generate a report to get a written {periodWord(period)} review with
             highlights and recommendations.
           </div>
         ) : null}

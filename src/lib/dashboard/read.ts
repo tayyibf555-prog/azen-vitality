@@ -42,7 +42,7 @@ import { parseAggregateAmountPence, parseMoneyPence } from "@/lib/dashboard/mone
 //
 // The import direction is clean: scan.ts imports nothing from this module graph, only
 // "server-only".
-import { metaTotal, pageAll } from "@/lib/reports/scan";
+import { metaTotal, pageAll, type ListPage } from "@/lib/reports/scan";
 import { takingsWindowKey, type TakingsWindowTotal } from "@/lib/dashboard/takings";
 import { nhsContractYear } from "@/lib/dashboard/uda";
 import { getPatientCounts } from "@/lib/patient-count/repository";
@@ -281,6 +281,78 @@ function paymentsWindowTotal(meta: unknown): TakingsWindowTotal | null {
 
 // --- Appointments -----------------------------------------------------------
 
+/**
+ * The log nouns for one windowed scan. Everything else about the three of them is
+ * the same, which is the whole point of the helper below.
+ */
+interface ScanNouns {
+  /** "appointment scan" — the subject of the sentence. */
+  scan: string;
+  /** "appointments" — what was counted, plural. */
+  rows: string;
+  /** What the panel does about it, or null where the scan's caller says so instead. */
+  consequence: string | null;
+}
+
+/**
+ * ONE WINDOWED, PER-SITE, COMPLETE-OR-NOTHING SCAN. Three scans used it as three
+ * copies.
+ *
+ * scanAppointments, scanPatients and scanPlans were the same thirty-five lines
+ * three times over: Promise.all across the sites, a try, a `pageAll` at PER_PAGE
+ * and SCAN_MAX_PAGES, a two-branch truncation log (it published a count and we fell
+ * short / it published none and we ran out of budget), a normaliser, and a catch
+ * that rethrows a budget refusal and reports the site unread. Only the nouns and the
+ * normaliser differed. Three copies of a stop is three places to keep in step, and
+ * this file has already paid that bill twice — once when the hand-rolled walks drifted
+ * from `pageAll`, and once when the page size measured against drifted from the page
+ * size asked for.
+ *
+ * IT RETURNS RAW ROWS PER SITE, NOT NORMALISED ONES, and null for a site that could
+ * not be read whole. Normalising is the caller's: appointments need the raw rows a
+ * second time to build the list, and patients and plans attach their own site id to
+ * their own row type. Nothing here decides what a panel says — a null site is simply
+ * a site this scan will not vouch for, and each caller already knows what that means
+ * for its own figures.
+ */
+async function scanWindowedPerSite(
+  siteIds: readonly string[],
+  nouns: ScanNouns,
+  fetchPage: (siteId: string, page: number, perPage: number) => Promise<ListPage>,
+): Promise<Array<{ siteId: string; raw: unknown[] } | null>> {
+  const tail = nouns.consequence === null ? "" : `; ${nouns.consequence}`;
+  return Promise.all(
+    siteIds.map(async (siteId) => {
+      try {
+        const read = await pageAll(
+          (page, perPage) => fetchPage(siteId, page, perPage),
+          PER_PAGE,
+          SCAN_MAX_PAGES,
+        );
+        if (!read.complete) {
+          // The two ways of knowing a read is truncated are logged APART, because
+          // they are different facts about the source and send someone to different
+          // places: it published a count and we fell short of it, or it published
+          // none and we ran out of page budget.
+          console.error(
+            read.expected === null
+              ? `[dashboard] ${nouns.scan} hit the page cap for site ${siteId} at ` +
+                  `${SCAN_MAX_PAGES} pages with no meta.total to verify against${tail}`
+              : `[dashboard] ${nouns.scan} read ${read.raw.length} of ${read.expected} ` +
+                  `${nouns.rows} for site ${siteId}${tail}`,
+          );
+          return null;
+        }
+        return { siteId, raw: read.raw };
+      } catch (err) {
+        rethrowIfBudgetRefused(err); // not a failed scan; see the header
+        console.error(`[dashboard] ${nouns.scan} failed for site ${siteId}`, err);
+        return null;
+      }
+    }),
+  );
+}
+
 interface AppointmentScan {
   normalised: DashboardAppointment[] | null;
   rows: AppointmentSource[];
@@ -351,51 +423,28 @@ async function scanAppointments(
   const client = dentallyFromEnv();
   const from = shiftDayKey(today, -(HISTORY_DAYS - 1)) ?? today;
 
-  const perSite = await Promise.all(
-    siteIds.map(async (siteId) => {
-      try {
-        const read = await pageAll(
-          async (page, perPage) => {
-            const res = await client.listAppointments({
-              siteId: dentallySiteId(siteId),
-              fromDate: from,
-              toDate: today,
-              page,
-              perPage,
-            });
-            return { rows: res.appointments ?? [], meta: res.meta };
-          },
-          PER_PAGE,
-          SCAN_MAX_PAGES,
-        );
-        if (!read.complete) {
-          // A window scan cannot be narrowed honestly: the API returns the range,
-          // not a day-ordered stream, so a truncated read leaves unknown holes.
-          // The two ways of knowing it is truncated are logged apart, because they
-          // are different facts about the source and send someone to different
-          // places: it published a count and we fell short of it, or it published
-          // none and we ran out of page budget.
-          console.error(
-            read.expected === null
-              ? `[dashboard] appointment scan hit the page cap for site ${siteId} with no ` +
-                  `meta.total to verify against`
-              : `[dashboard] appointment scan read ${read.raw.length} of ${read.expected} ` +
-                  `appointments for site ${siteId}`,
-          );
-          return { raw: [] as unknown[], siteId, ok: false };
-        }
-        return { raw: read.raw, siteId, ok: true };
-      } catch (err) {
-        rethrowIfBudgetRefused(err); // not a failed scan; see the header
-        console.error(`[dashboard] appointment scan failed for site ${siteId}`, err);
-        return { raw: [] as unknown[], siteId, ok: false };
-      }
-    }),
+  // A window scan cannot be narrowed honestly: the API returns the range, not a
+  // day-ordered stream, so a truncated read leaves unknown holes and the panel says
+  // the figures are unavailable rather than showing a window with gaps in it.
+  const perSite = await scanWindowedPerSite(
+    siteIds,
+    { scan: "appointment scan", rows: "appointments", consequence: null },
+    async (siteId, page, perPage) => {
+      const res = await client.listAppointments({
+        siteId: dentallySiteId(siteId),
+        fromDate: from,
+        toDate: today,
+        page,
+        perPage,
+      });
+      return { rows: res.appointments ?? [], meta: res.meta };
+    },
   );
 
-  if (perSite.some((s) => !s.ok)) {
+  if (perSite.some((s) => s === null)) {
     return { normalised: null, rows: [], coverage: null };
   }
+  const sites = perSite.filter((s): s is { siteId: string; raw: unknown[] } => s !== null);
 
   // The practitioner read was started ALONGSIDE this scan, not before it, and its
   // names are only needed now — to fill an appointment row that did not carry its
@@ -408,7 +457,7 @@ async function scanAppointments(
 
   const normalised: DashboardAppointment[] = [];
   const rows: AppointmentSource[] = [];
-  for (const site of perSite) {
+  for (const site of sites) {
     const batch = normaliseAppointments(site.raw);
     normalised.push(...batch.rows.map((a) => ({ ...a, siteId: site.siteId })));
     for (const raw of site.raw) {
@@ -555,12 +604,23 @@ async function scanClaims(
  * A short count on a takings screen is acted on; a stated gap is questioned.
  *
  * AND IT IS THE SHARED PAGER THAT REPORTS IT, not a fourth hand-rolled copy of the
- * same walk. /v1/patients DOES publish `meta.total` on live — countPatients in
- * client.ts reads a site's exact patient count off a one-row page of this very
- * endpoint — so here the count half of the pager is live behaviour, not a
- * someday: a slice bigger than the page budget is abandoned after one request, and a
- * walk that ends short of the published count is caught rather than trusted. The
- * local mock publishes no meta, so dev exercises the short-page path.
+ * same walk.
+ *
+ * `meta.total` HONOURS `updated_after` HERE, AND THAT IS NOW PROVEN RATHER THAN
+ * ASSUMED. The claim used to rest on countPatients in client.ts, which reads a
+ * site's exact patient count off a one-row page of this endpoint — but it does so
+ * UNFILTERED, so it proves only that the field exists, not that it describes the
+ * narrowed query this scan actually sends. If Dentally had published the whole
+ * book's count against a filtered request, every walk here would have ended short
+ * of it and the panel would have blanked the patient counts permanently.
+ *
+ * Probed live, read-only GET, 2026-08-22: /v1/patients on site N15 reports
+ * meta.total 27,594 unfiltered and 585 with `updated_after` set to a recent day. The
+ * count describes the FILTERED result set, so the completeness check here is sound
+ * and `expected` can be trusted: a slice bigger than the page budget is abandoned
+ * after one request, and a walk that ends short of the published count is caught
+ * rather than trusted. The local mock publishes no meta, so dev exercises the
+ * short-page path.
  */
 async function scanPatients(
   siteIds: readonly string[],
@@ -568,44 +628,28 @@ async function scanPatients(
 ): Promise<DashboardPatient[] | null> {
   const client = dentallyFromEnv();
   const from = shiftDayKey(today, -(HISTORY_DAYS - 1)) ?? today;
-  const perSite = await Promise.all(
-    siteIds.map(async (siteId) => {
-      try {
-        const read = await pageAll(
-          async (page, perPage) => {
-            const res = await client.listPatients({
-              siteId: dentallySiteId(siteId),
-              updatedAfter: from,
-              page,
-              perPage,
-            });
-            return { rows: res.patients ?? [], meta: res.meta };
-          },
-          PER_PAGE,
-          SCAN_MAX_PAGES,
-        );
-        if (!read.complete) {
-          console.error(
-            read.expected === null
-              ? `[dashboard] patient scan hit the page cap for site ${siteId} at ${SCAN_MAX_PAGES} ` +
-                  `pages with no meta.total to verify against; reporting the patient counts ` +
-                  `unavailable rather than counting a partial book`
-              : `[dashboard] patient scan read ${read.raw.length} of ${read.expected} patients ` +
-                  `for site ${siteId}; reporting the patient counts unavailable rather than ` +
-                  `counting a partial book`,
-          );
-          return null;
-        }
-        return normalisePatients(read.raw).rows.map((p) => ({ ...p, siteId }));
-      } catch (err) {
-        rethrowIfBudgetRefused(err); // not a failed scan; see the header
-        console.error(`[dashboard] patient scan failed for site ${siteId}`, err);
-        return null;
-      }
-    }),
+  const perSite = await scanWindowedPerSite(
+    siteIds,
+    {
+      scan: "patient scan",
+      rows: "patients",
+      consequence:
+        "reporting the patient counts unavailable rather than counting a partial book",
+    },
+    async (siteId, page, perPage) => {
+      const res = await client.listPatients({
+        siteId: dentallySiteId(siteId),
+        updatedAfter: from,
+        page,
+        perPage,
+      });
+      return { rows: res.patients ?? [], meta: res.meta };
+    },
   );
   if (perSite.some((s) => s === null)) return null;
-  return perSite.flatMap((s) => s ?? []);
+  return perSite.flatMap((s) =>
+    s === null ? [] : normalisePatients(s.raw).rows.map((p) => ({ ...p, siteId: s.siteId })),
+  );
 }
 
 /**
@@ -627,12 +671,22 @@ async function scanPatients(
  * dashboard assembly. A stated gap on OPEN and exact numbers on the other two is
  * strictly more truthful than three confident numbers that were none of them right.
  *
- * PAGED BY THE SHARED PAGER, like every other scan in this file. Whether live
- * /v1/treatment_plans publishes `meta.total` is UNVERIFIED — the local mock does,
- * live has never been probed for it — and the migration does not depend on the
- * answer: with no meta the short-page stop is the whole story and the read costs
- * what it always did; with one, an index bigger than the budget is abandoned after a
- * single request. Either way the panel says exactly what it said before.
+ * PAGED BY THE SHARED PAGER, like every other scan in this file, AND ITS COUNT IS
+ * NOW PROBED RATHER THAN ASSUMED EITHER WAY.
+ *
+ * This used to read "whether live /v1/treatment_plans publishes `meta.total` is
+ * UNVERIFIED". It publishes one, and — the half that actually matters — the count
+ * describes the FILTERED query rather than the whole index. Probed live, read-only
+ * GET, 2026-08-22: site N15 reports meta.total 86,562 unfiltered and 536 for
+ * `updated_after` set to a recent day. Had the total come back unfiltered against a
+ * filtered request, `expected` would have exceeded the page budget on every
+ * assembly, `pageAll` would have abandoned the walk on page one, and this panel
+ * would have reported the plan counts unavailable for ever — which is why the
+ * question was worth one request to settle rather than reasoning about.
+ *
+ * So `expected` is authoritative here: an index bigger than the budget is abandoned
+ * after a single request, and a walk that ends short of the count is caught. The
+ * local mock publishes `{ total, page }` too, so dev exercises the same path.
  */
 async function scanPlans(
   siteIds: readonly string[],
@@ -640,44 +694,30 @@ async function scanPlans(
 ): Promise<DashboardTreatmentPlan[] | null> {
   const client = dentallyFromEnv();
   const from = shiftDayKey(today, -(HISTORY_DAYS - 1)) ?? today;
-  const perSite = await Promise.all(
-    siteIds.map(async (siteId) => {
-      try {
-        const read = await pageAll(
-          async (page, perPage) => {
-            const res = await client.listTreatmentPlans({
-              siteId: dentallySiteId(siteId),
-              updatedAfter: from,
-              page,
-              perPage,
-            });
-            return { rows: res.treatment_plans ?? [], meta: res.meta };
-          },
-          PER_PAGE,
-          SCAN_MAX_PAGES,
-        );
-        if (!read.complete) {
-          console.error(
-            read.expected === null
-              ? `[dashboard] treatment plan scan hit the page cap for site ${siteId} at ` +
-                  `${SCAN_MAX_PAGES} pages with no meta.total to verify against; reporting the ` +
-                  `plan counts unavailable rather than counting a partial index`
-              : `[dashboard] treatment plan scan read ${read.raw.length} of ${read.expected} ` +
-                  `plans for site ${siteId}; reporting the plan counts unavailable rather than ` +
-                  `counting a partial index`,
-          );
-          return null;
-        }
-        return normaliseTreatmentPlans(read.raw).rows.map((p) => ({ ...p, siteId }));
-      } catch (err) {
-        rethrowIfBudgetRefused(err); // not a failed scan; see the header
-        console.error(`[dashboard] treatment plan scan failed for site ${siteId}`, err);
-        return null;
-      }
-    }),
+  const perSite = await scanWindowedPerSite(
+    siteIds,
+    {
+      scan: "treatment plan scan",
+      rows: "plans",
+      consequence:
+        "reporting the plan counts unavailable rather than counting a partial index",
+    },
+    async (siteId, page, perPage) => {
+      const res = await client.listTreatmentPlans({
+        siteId: dentallySiteId(siteId),
+        updatedAfter: from,
+        page,
+        perPage,
+      });
+      return { rows: res.treatment_plans ?? [], meta: res.meta };
+    },
   );
   if (perSite.some((s) => s === null)) return null;
-  return perSite.flatMap((s) => s ?? []);
+  return perSite.flatMap((s) =>
+    s === null
+      ? []
+      : normaliseTreatmentPlans(s.raw).rows.map((p) => ({ ...p, siteId: s.siteId })),
+  );
 }
 
 // --- Invoices: the INVOICED panel and the ACCOUNTS ranking ------------------

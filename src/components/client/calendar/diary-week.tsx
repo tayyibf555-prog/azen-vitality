@@ -4,7 +4,12 @@ import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import type { DiaryEntryRecord } from "@/lib/calendar/entries";
-import { columnWorkSummary, type ColumnWorkState, type Span } from "@/lib/calendar/working-spans";
+import {
+  columnIsLoud,
+  columnWorkSummary,
+  type ColumnWorkState,
+  type Span,
+} from "@/lib/calendar/working-spans";
 import { capacityLine, capacitySentence, columnCapacity } from "@/lib/calendar/capacity";
 import { layoutColumn } from "./diary-grid";
 import { dow, dnum, mondayOf, shiftDay } from "./calendar-logic";
@@ -107,12 +112,12 @@ export function DiaryDays({
         const summary = unavailable
           ? "Not loaded"
           : (columnWorkSummary(d.workState, { hoursPending }) ?? columnCounts(d.appointments));
-        // A date in the past is as quiet as a pending read: there is nothing for
-        // the reader to do about either.
-        const loud =
-          unavailable ||
-          (d.workState === "unknown" && !hoursPending) ||
-          d.workState === "unconfirmed";
+        // Same loudness as the day view, and again not by copying the rule. It was
+        // an or-chain here and a byte-identical one there, both non-exhaustive, so a
+        // seventh state would have been carefully worded in one place and quietly
+        // whispered in two. `unavailable` stays here: it is this screen's own failed
+        // counts, not a claim about the clinician.
+        const loud = unavailable || columnIsLoud(d.workState, { hoursPending });
 
         // The same free-time figure the day view prints, asking the week's own
         // question: which day this week has room. Identical rules — only a

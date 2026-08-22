@@ -21,16 +21,24 @@ vi.mock("server-only", () => ({}));
 //            and the walk came up short of it, the rows are missing and the old loop
 //            could not tell — it would have counted them and printed the figure.
 //
-// WHICH ENDPOINTS ACTUALLY PUBLISH `meta.total`, as this repo knows it today:
-//   /v1/patients        YES on live — countPatients (client.ts) reads a site's exact
-//                       patient count off a one-row page of it. The local mock does
-//                       not, so dev exercises the short-page path.
-//   /v1/treatment_plans the local mock publishes `{ total, page }`; live UNVERIFIED.
+// WHICH ENDPOINTS ACTUALLY PUBLISH `meta.total`, AND WHETHER IT DESCRIBES THE
+// FILTERED QUERY — the half that decides whether `expected` may be trusted at all.
+// A count that described the WHOLE index against a NARROWED request would exceed the
+// page budget on every assembly, and pageAll would abandon each walk on page one and
+// blank the panel for ever. Both are live-probed, read-only GET, on site N15:
+//   /v1/patients        YES, and FILTERED. 2026-08-22: meta.total 27,594 unfiltered,
+//                       585 with `updated_after` set to a recent day. (countPatients
+//                       in client.ts only ever proved the field EXISTS — it reads it
+//                       unfiltered.) The local mock publishes none, so dev exercises
+//                       the short-page path.
+//   /v1/treatment_plans YES, and FILTERED. 2026-08-22: meta.total 86,562 unfiltered,
+//                       536 with `updated_after` set to a recent day. The local mock
+//                       publishes `{ total, page }` too.
 //   /v1/appointments    no probe of live has recorded one, and the mock publishes
 //                       none.
-// The migration does not depend on the answer: with no meta the short-page stop is
-// the whole story and the read costs exactly what it always did. That is the control
-// at the bottom of this file.
+// The migration does not depend on the answer for the third: with no meta the
+// short-page stop is the whole story and the read costs exactly what it always did.
+// That is the control at the bottom of this file.
 // ---------------------------------------------------------------------------
 
 const SITES = 3;
@@ -160,9 +168,9 @@ describe("F3: a walk that ends on a short page is checked against the count", ()
   }, 120_000);
 
   it("CONTROL: the same short page with no count published is a complete read", async () => {
-    // The endpoints that publish nothing (today: /v1/appointments, and
-    // /v1/treatment_plans on live as far as this repo knows) must keep working
-    // exactly as they did — the fix must not turn every readable panel off.
+    // The endpoints that publish nothing (today: /v1/appointments on live, and the
+    // local mock's /v1/patients) must keep working exactly as they did — the fix must
+    // not turn every readable panel off.
     const counter = newCounter();
     globalThis.fetch = pagedFetch(counter, {
       keys: ["appointments", "patients", "treatment_plans"],

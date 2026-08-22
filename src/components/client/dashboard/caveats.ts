@@ -181,22 +181,55 @@ export function accountsCaveats(panel: AccountsPanel): Caveat[] {
   // patients'. Until this sentence existed, that patient's balance was simply short
   // and nothing on the screen said so.
   //
-  // TWO CAUSES, AND THE SENTENCE COMMITS TO NEITHER, because the read cannot tell them
-  // apart without fetching every row it deliberately did not fetch: the key sees an
-  // umbrella of practices, only some of which this client runs, so part of this gap is
-  // debt it is CORRECT to exclude. "N invoices carry no site" would be a number nobody
-  // can stand behind; this says what is missing and why it might be missing.
+  // IT IS A FOOTNOTE, NOT AN ALARM, AND THAT IS A CORRECTION.
+  //
+  // It shipped as `material: true` — the warning glyph, and the entry `leadCaveat`
+  // hands the mark beside the headline — on the tacit assumption that a non-zero gap
+  // is an incident. On this key it is the resting state. The key reads an umbrella of
+  // five practices of which this client runs three, so the gap is dominated,
+  // permanently, by two practices' entire unpaid books: a large, stable N that will
+  // fire on every scope, on every assembly, for ever. A warning that is always on is
+  // a warning nobody reads, and it would sit next to the money figure crowding out
+  // the caveats that ARE events — a dropped balance row, a period that could not be
+  // read. So it is informational, and worded as the standing fact it is.
+  //
+  // AND THE CAUSES ARE NOT EXHAUSTIVE ON A SCOPED VIEW, WHICH THE OLD SENTENCE
+  // IMPLIED THEY WERE. "filed under no site, or under a practice outside this group"
+  // is the whole story for the ALL-SITES scope. On a single practice it is not: that
+  // balance also excludes the sibling practices IN this group, and the number itself
+  // is a group-level count that was never measured against a single site's book. So
+  // the single-site wording says what the balance covers and states plainly that more
+  // than the counted rows is left out, rather than offering two causes as a complete
+  // list. Neither version claims a cause it cannot prove: separating unsited rows from
+  // other practices' rows would take the group-wide walk the site split exists to
+  // avoid.
   const missing = panel.unattributedUnpaid ?? 0;
   if (missing > 0) {
-    out.push({
-      id: "accounts-unattributed",
-      label: `${missing} unpaid invoice${s(missing)} not shown`,
-      text:
-        `Dentally holds ${missing} unpaid invoice${s(missing)} that this balance does not ` +
-        `include: ${isAre(missing)} filed under no site, or under a practice outside this ` +
-        `group. Some may belong to patients here, so the balance may be understated.`,
-      material: true,
-    });
+    out.push(
+      panel.siteId === null
+        ? {
+            id: "accounts-unattributed",
+            label: "Other practices on this key",
+            text:
+              `Dentally holds ${missing} unpaid invoice${s(missing)} that this balance does not ` +
+              `include. This Dentally key reads an umbrella of practices, so part of that gap is ` +
+              `debt this group does not own, and part may be invoices filed under no site — some ` +
+              `of which could belong to patients here. It is a standing gap on a shared key, not ` +
+              `an event, and it changes no figure on this panel.`,
+            material: false,
+          }
+        : {
+            id: "accounts-unattributed",
+            label: "What this balance covers",
+            text:
+              `This balance covers this practice's own patients. Across the whole Dentally key ` +
+              `there ${isAre(missing)} ${missing} unpaid invoice${s(missing)} that no site-scoped ` +
+              `read reaches, and on one practice more than that is left out: the other practices ` +
+              `in this group are excluded here by design too. Read the figure as this practice's, ` +
+              `not as everything Dentally holds.`,
+            material: false,
+          },
+    );
   }
 
   return out;
