@@ -160,6 +160,16 @@ export function DiaryKey() {
             }
             label="We could not find out"
           />
+          {/* The same claim at half volume. It earns a row of its own because it
+              is the texture the whole grid wears every evening, and a reader who
+              cannot tell it from the one above reads a finished day as a failure
+              — which is exactly what this pair of textures was split to stop. */}
+          <Item
+            mark={
+              <Texture backgroundImage="repeating-linear-gradient(45deg, var(--card) 0 6px, var(--card-muted) 6px 8px)" />
+            }
+            label="The day has ended and the hours can no longer be read"
+          />
         </Row>
 
         <Row>
@@ -175,7 +185,20 @@ export function DiaryKey() {
           />
           <Item
             mark={<span aria-hidden className="h-[14px] w-[3px] shrink-0 bg-navy" />}
-            label="A navy seam on the right edge means a double booking"
+            label="A navy seam on the right edge means another booking beside it"
+          />
+          {/* The tab is new, and a mark on the grid that is not in the key is a
+              mark you can only learn by hovering. */}
+          <Item
+            mark={
+              <span
+                aria-hidden
+                className="flex h-[14px] w-[8px] shrink-0 items-center justify-center rounded-[2px] border border-dashed border-line-strong bg-card text-[8px] font-bold text-muted"
+              >
+                X
+              </span>
+            }
+            label="A slim tab at the column's edge: a cancellation or no-show in an hour that is also booked"
           />
         </Row>
 

@@ -52,6 +52,25 @@ export interface UnconfirmedPresence {
   dayKey: string;
 }
 
+/**
+ * Whether an appointment in this state CONSUMES the clinician's time.
+ *
+ * cancelled and did_not_attend do not: nobody was treated, and the slot is
+ * recoverable. Everything else does, INCLUDING a state we do not recognise --
+ * a state we cannot read is not evidence that a slot is free.
+ *
+ * It lives here, in the module whose header spends thirty lines arguing which
+ * states count as evidence, because the rule was written out by hand in four
+ * separate places (day-load, move-service, the diary's capacity filter and the
+ * grid's lane layout) and a diary that paints a cancellation as free time while
+ * the drop validator treats it as occupied is a booking made into a slot the
+ * screen said was empty. One predicate, so the paint and the refusal cannot
+ * come to disagree.
+ */
+export function occupiesTime(state: string): boolean {
+  return state !== "cancelled" && state !== "did_not_attend";
+}
+
 /** Sort, merge and drop empties. Touching spans (end === start) are merged. */
 export function mergeSpans(spans: readonly Span[]): Span[] {
   const clean = spans
@@ -160,6 +179,90 @@ export interface ColumnWorkPresentation {
    * obvious.
    */
   loud: boolean | "whenHoursSettled";
+  /**
+   * The hatch drawn at HALF STRENGTH.
+   *
+   * The texture still says "we do not have an answer", because that is still
+   * true; the volume says nobody has to do anything about it. Only the finished
+   * day below sets it, and only because the same texture that reads as "look at
+   * this" at eleven in the morning reads as noise at seven in the evening.
+   */
+  quietHatch?: boolean;
+}
+
+/**
+ * What a column may say once THE DAY IT DESCRIBES HAS RUN OUT.
+ *
+ * WHY A SECOND RECORD AND NOT A CONDITION AT THE USE SITE. "unreportable" is
+ * honest per column and, at half past three, actionable: a receptionist can see
+ * that the morning is missing and that the afternoon is still askable. At seven
+ * in the evening it is neither. Every clinician's whole day is behind the clamp,
+ * so every one of thirteen columns says the same sentence at once, and thirteen
+ * copies of a caveat is not thirteen facts -- it is a screen that reads as
+ * broken. The owner's word for it, seeing it beside Dentally, was "terrible".
+ *
+ * So the STATE does not change (nothing new was learned about the clinician, and
+ * columnWorkState is untouched); the PRESENTATION does. The header stops
+ * repeating a caveat nobody can act on and prints the day's counts instead --
+ * which is what every other finished day in the diary prints -- the hatch drops
+ * to half strength, and the caveat itself is said ONCE, quietly, under the date.
+ *
+ * KEYED BY THE UNION, like its sibling above, so a seventh state is a compile
+ * error here too. `null` means "this state has nothing different to say when the
+ * day is over", which is the honest answer for five of the six:
+ *
+ *   working       already prints counts. Nothing to collapse.
+ *   off           we asked about the whole day and they were not in. Still true
+ *                 at midnight, and "Not working" is the fact, not a caveat.
+ *   unknown       a read that FAILED does not become fine because time passed.
+ *                 It is the one state that must keep shouting.
+ *   unconfirmed   a clinician who might have been at another practice is still
+ *                 unplaced tomorrow, when somebody has to reconcile the day.
+ *   past          "Date has passed" IS the finished-day sentence already.
+ */
+export const COLUMN_WORK_ELAPSED_DAY: Record<ColumnWorkState, ColumnWorkPresentation | null> = {
+  working: null,
+  off: null,
+  unknown: null,
+  unconfirmed: null,
+  past: null,
+  // The counts, not the caveat. Hatched still, because we genuinely never got an
+  // answer about these hours -- but quietly, and with no sentence of its own.
+  unreportable: { hatched: true, quietHatch: true, label: null, loud: false },
+};
+
+/** What both grids pass in beside the state: the reading, not the claim. */
+export interface ColumnWorkContext {
+  /** The availability read is still in flight. */
+  hoursPending?: boolean;
+  /**
+   * How many minutes of the practice's own working day still lie AHEAD of the
+   * minute Dentally's answer begins at -- the part of today that could still be
+   * asked about. Zero means the day has run out.
+   *
+   * DERIVED, never a new server field: it is the site's closing minute for this
+   * day minus `answerableFromMin`, both of which the grids already hold. Left
+   * `undefined` by a caller that cannot say, and then nothing changes.
+   */
+  askableMinutesRemaining?: number;
+}
+
+/**
+ * THE ONE RESOLVER. Every reader of the two Records above goes through this, so
+ * the finished-day collapse cannot be applied to the words and forgotten for the
+ * texture, or applied in the day grid and forgotten in the week grid.
+ */
+export function columnWorkPresentation(
+  state: ColumnWorkState,
+  ctx: ColumnWorkContext = {},
+): ColumnWorkPresentation {
+  const elapsed = COLUMN_WORK_ELAPSED_DAY[state];
+  // A caller that did not say is a caller that does not know: undefined must
+  // behave exactly as it did before this rule existed.
+  if (elapsed !== null && ctx.askableMinutesRemaining !== undefined && ctx.askableMinutesRemaining <= 0) {
+    return elapsed;
+  }
+  return COLUMN_WORK_PRESENTATION[state];
 }
 
 /**
@@ -236,8 +339,16 @@ export const COLUMN_WORK_PRESENTATION: Record<ColumnWorkState, ColumnWorkPresent
  * Derived from the mapping above, so the texture cannot disagree with the words
  * and neither can be forgotten for a new state.
  */
-export function columnIsHatched(state: ColumnWorkState): boolean {
-  return COLUMN_WORK_PRESENTATION[state].hatched;
+export function columnIsHatched(state: ColumnWorkState, ctx: ColumnWorkContext = {}): boolean {
+  return columnWorkPresentation(state, ctx).hatched;
+}
+
+/**
+ * Whether that hatch is drawn at half strength. See ColumnWorkPresentation's
+ * `quietHatch`: same claim, lower volume, for a day nobody can act on.
+ */
+export function columnHatchIsQuiet(state: ColumnWorkState, ctx: ColumnWorkContext = {}): boolean {
+  return columnWorkPresentation(state, ctx).quietHatch === true;
 }
 
 /**
@@ -249,9 +360,9 @@ export function columnIsHatched(state: ColumnWorkState): boolean {
  */
 export function columnWorkSummary(
   state: ColumnWorkState,
-  opts: { hoursPending?: boolean } = {},
+  opts: ColumnWorkContext = {},
 ): string | null {
-  const shown = COLUMN_WORK_PRESENTATION[state];
+  const shown = columnWorkPresentation(state, opts);
   return opts.hoursPending === true && shown.pendingLabel !== undefined
     ? shown.pendingLabel
     : shown.label;
@@ -270,9 +381,9 @@ export function columnWorkSummary(
  */
 export function columnIsLoud(
   state: ColumnWorkState,
-  opts: { hoursPending?: boolean } = {},
+  opts: ColumnWorkContext = {},
 ): boolean {
-  const loud = COLUMN_WORK_PRESENTATION[state].loud;
+  const loud = columnWorkPresentation(state, opts).loud;
   return loud === "whenHoursSettled" ? opts.hoursPending !== true : loud;
 }
 

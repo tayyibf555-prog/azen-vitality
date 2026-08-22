@@ -6,11 +6,13 @@ import type { Placed } from "./diary-grid";
 import {
   accessibleSentence,
   blockBodyText,
+  blockChrome,
   blockEdges,
   blockLeadLine,
   blockMetaLine,
   blockStyle,
   blockTier,
+  blockWidthPx,
   bodyLineCount,
   shortPatientName,
   stateGlyph,
@@ -19,6 +21,7 @@ import {
   type DiaryAppointment,
   type Zoom,
 } from "./diary-view";
+import { LANE_CASCADE_PX, RECOVERABLE_STRIP_PX } from "./diary-grid";
 import { RESIZE_HANDLE_MIN_BLOCK_PX } from "./diary-drag";
 import { paletteSlotFor } from "./treatment-type";
 import { stateLabel } from "./calendar-logic";
@@ -67,6 +70,11 @@ import { cn } from "@/lib/utils";
 export function blockDomId(appointmentId: string): string {
   return `diary-appt-${appointmentId}`;
 }
+
+// RECOVERABLE_STRIP_PX lives in diary-grid.ts, beside the layout that RESERVES
+// it. It is deliberately not re-exported from here: this is a "use client"
+// module, and a value re-exported from one is a value a server file can import
+// without noticing (see rsc-value-import.test.ts).
 
 function Glyph({ state, size = 10 }: { state: string; size?: number }) {
   const glyph = stateGlyph(state);
@@ -136,7 +144,16 @@ export function AppointmentBlock({
   // length is still stated in the title and in the detail panel.
   const drawnEndMin = Math.min(placed.endMin, boundsEndMin);
   const { top, height } = blockEdges(placed.startMin, drawnEndMin, boundsStartMin, zoom);
-  const tier: BlockTier = blockTier(height, placed.lanes);
+  // A RECOVERABLE row that shares its time with a real booking is a slim tab at
+  // the column's edge and nothing more: it must not take width off a patient who
+  // is coming in. It keeps its height, its click target, its keyboard place and
+  // its full accessible sentence. See layoutColumn's rule 3.
+  const strip = placed.strip;
+  const widthPx = strip
+    ? RECOVERABLE_STRIP_PX
+    : blockWidthPx(placed.span, placed.lanes) - (placed.edgeInset ? RECOVERABLE_STRIP_PX : 0);
+  const tier: BlockTier = strip ? "bar" : blockTier(height, widthPx);
+  const chrome = blockChrome(widthPx);
   const style = blockStyle(appt.state);
 
   const slot = paletteSlotFor(appt.reason);
@@ -144,8 +161,8 @@ export function AppointmentBlock({
   const line = `var(--type-${slot}-line)`;
   const ink = `var(--type-${slot}-ink)`;
 
-  const leadLine = blockLeadLine(appt);
-  const bodyText = blockBodyText(appt, funding);
+  const leadLine = blockLeadLine(appt, chrome.narrow);
+  const bodyText = blockBodyText(appt, funding, chrome.narrow);
   const sentence = accessibleSentence(appt, clinicianName, placed.lanes, funding);
   const meta = blockMetaLine(appt);
   const title = `${appt.patientName}${meta ? ` · ${meta}` : ""} · ${stateLabel(appt.state)}`;
@@ -154,17 +171,14 @@ export function AppointmentBlock({
   const rail = fundingRailVar(funding);
 
   // A neighbour to the right means a clash. A double booking reads as a split
-  // block with a navy seam down the middle.
-  const clashSeam = placed.lane < placed.lanes - 1;
+  // block with a navy seam down the middle. It is the block's own SPAN that
+  // decides it now, not the lane count: a block that expanded into the empty
+  // slots beside it reaches the cluster's right edge and has no neighbour, and
+  // drawing a clash seam on it was telling the reader about a double booking
+  // that is not there.
+  const clashSeam = !strip && placed.lane + placed.span < placed.lanes;
 
-  // The narrow variants: a third of a 112px column is 34px, which cannot carry
-  // the reference's 28px clear strip AND wrapped text. The rail narrows rather
-  // than disappearing, because funding must not silently drop out on a busy day.
-  const narrow = tier === "name" || tier === "bar" || placed.lanes >= 3;
-  const railWidth = narrow ? 2 : 3;
-  const railLeft = narrow ? 3 : 4;
-  const padLeft = narrow ? 8 : 11;
-  const padRight = narrow ? 14 : 28;
+  const { railWidth, railLeft, padLeft, padRight } = chrome;
 
   const cancelled = appt.state === "cancelled";
   const inSurgery = appt.state === "in_surgery";
@@ -219,8 +233,27 @@ export function AppointmentBlock({
       style={{
         top,
         height,
-        left: `calc(${placed.lane} * 100% / ${placed.lanes})`,
-        width: `calc(100% / ${placed.lanes})`,
+        // THE THREE GEOMETRIES, in one place.
+        //   strip    a fixed tab pinned to the column's right edge: a cancelled
+        //            or missed booking that would otherwise have taken half the
+        //            column off a patient who is coming in.
+        //   depth>0  a fourth (fifth, sixth) simultaneous booking. It is drawn in
+        //            the last slot, stepped right and stacked in FRONT, rather
+        //            than every block in the cluster being made thinner. Nothing
+        //            is hidden and nothing is narrowed to nothing.
+        //   normal   its own slot, plus every empty slot to its right.
+        ...(strip
+          ? { right: 0, width: RECOVERABLE_STRIP_PX }
+          : {
+              left:
+                placed.depth > 0
+                  ? `calc(${placed.lane} * 100% / ${placed.lanes} + ${placed.depth * LANE_CASCADE_PX}px)`
+                  : `calc(${placed.lane} * 100% / ${placed.lanes})`,
+              width: placed.edgeInset
+                ? `calc(${placed.span} * 100% / ${placed.lanes} - ${RECOVERABLE_STRIP_PX}px)`
+                : `calc(${placed.span} * 100% / ${placed.lanes})`,
+            }),
+        zIndex: placed.depth > 0 ? placed.depth : undefined,
         // The SOURCE of an active gesture stays exactly where it was, faded, so
         // the reader can see what they are moving FROM while the preview shows
         // where it is going.
@@ -261,8 +294,10 @@ export function AppointmentBlock({
           color: ink,
           paddingTop: BLOCK_PAD_Y[tier],
           paddingBottom: BLOCK_PAD_Y[tier],
-          paddingLeft: padLeft,
-          paddingRight: padRight,
+          // The 14px tab has nothing to pad: eleven pixels of padding on it
+          // would leave three for the mark.
+          paddingLeft: strip ? 0 : padLeft,
+          paddingRight: strip ? 0 : padRight,
           outline: moveOutline,
           outlineOffset: moveOutline ? -2 : undefined,
         }}
@@ -274,7 +309,7 @@ export function AppointmentBlock({
         ) : null}
         {/* The 3px state spine. Cancelled is the one state that has none, which is
             itself the strongest glanceable signal on the grid. */}
-        {style.spine && !cancelled ? (
+        {style.spine && !cancelled && !strip ? (
           <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", style.spine)} />
         ) : null}
 
@@ -282,7 +317,7 @@ export function AppointmentBlock({
             covers all five unresolvable cases identically - no patient id, a 404,
             a timeout, no plan on file, and a real plan outside this practice's
             whitelist. "Private" is never inferred from an absence. */}
-        {rail ? (
+        {rail && !strip ? (
           <span
             aria-hidden
             className="absolute inset-y-0"
@@ -307,7 +342,27 @@ export function AppointmentBlock({
           <span aria-hidden className="absolute inset-y-0 right-0 w-[3px] bg-navy" />
         ) : null}
 
-        {tier === "bar" ? null : tier === "name" ? (
+        {strip ? (
+          /* THE RECOVERABLE TAB. A cancellation or a no-show that shares its
+             hour with a real booking, drawn 14px wide at the column's edge. The
+             mark alone: the time, the patient and the state are all in the
+             title, the accessible sentence and the panel, and the block is still
+             a full-height click and keyboard target. */
+          <span aria-hidden className="relative flex h-full items-start justify-center pt-[1px]">
+            {glyph?.kind === "text" ? (
+              <span
+                className={cn(
+                  "font-bold leading-none",
+                  glyph.text === "DNA" ? "text-[7px]" : "text-[10px]",
+                )}
+              >
+                {glyph.text}
+              </span>
+            ) : glyph ? (
+              <Glyph state={appt.state} size={9} />
+            ) : null}
+          </span>
+        ) : tier === "bar" ? null : tier === "name" ? (
           <span aria-hidden className="relative flex items-center gap-1 overflow-hidden">
             {/* At this height a corner glyph does not fit, and without the letter
                 pending and confirmed would be separated by hue alone. */}
@@ -329,16 +384,33 @@ export function AppointmentBlock({
           </span>
         ) : (
           <span aria-hidden className="relative block h-full overflow-hidden">
-            {/* Line 1, always: "09:30 N.Lamprell", exactly the reference's form.
-                The FULL name is never lost - it is in the title attribute, the
+            {/* Line 1: "09:30 N.Lamprell" at full width, and the TIME ALONE once
+                the block is too narrow to carry both -- at which point line 2 is
+                the name rather than the treatment. What it used to do at that
+                width was print "09:3", which is not a time.
+                The FULL name is never lost: it is in the title attribute, the
                 accessible sentence and the panel. */}
             <span
               className={cn(
-                "block truncate text-[10px] font-semibold leading-[1.15]",
+                "flex items-center gap-1 text-[10px] font-semibold leading-[1.15] tabular-nums",
                 cancelled && "line-through",
               )}
             >
-              {leadLine}
+              {/* Narrow blocks wear the state mark INLINE. A 16px clear strip
+                  down the right edge of a 52px block is a third of it, and the
+                  text was being squeezed into what was left. */}
+              {chrome.inlineGlyph && glyph ? (
+                <span aria-hidden className="shrink-0 leading-none">
+                  {glyph.kind === "text" ? (
+                    <span className={glyph.text === "DNA" ? "text-[7.5px] font-bold" : "font-bold"}>
+                      {glyph.text}
+                    </span>
+                  ) : (
+                    <Glyph state={appt.state} size={9} />
+                  )}
+                </span>
+              ) : null}
+              <span className="truncate">{leadLine}</span>
             </span>
 
             {/* The wrapped body. -webkit-line-clamp stops it on a WHOLE line at a
@@ -346,21 +418,32 @@ export function AppointmentBlock({
                 way the reference's does and nothing is ever half-drawn. */}
             {tier === "full" && bodyText ? (
               <span
-                className="text-[9.5px] font-normal leading-[1.25]"
-                style={{
-                  display: "-webkit-box",
-                  WebkitBoxOrient: "vertical",
-                  WebkitLineClamp: bodyLineCount(height),
-                  overflow: "hidden",
-                  color: `color-mix(in oklab, ${ink} 78%, transparent)`,
-                }}
+                className={cn(
+                  "text-[9.5px] leading-[1.25]",
+                  // On a narrow block line two IS the patient, so it carries the
+                  // patient's weight rather than the treatment line's.
+                  chrome.narrow ? "block truncate font-semibold" : "font-normal",
+                )}
+                style={
+                  chrome.narrow
+                    ? { color: ink }
+                    : {
+                        display: "-webkit-box",
+                        WebkitBoxOrient: "vertical",
+                        WebkitLineClamp: bodyLineCount(height),
+                        overflow: "hidden",
+                        color: `color-mix(in oklab, ${ink} 78%, transparent)`,
+                      }
+                }
               >
                 {bodyText}
               </span>
             ) : null}
 
             {/* The reference leaves a clear strip down the right edge of every
-                block. This is what lives in it. */}
+                block. This is what lives in it -- unless the block is too narrow
+                to spare it, in which case the mark has already been drawn inline
+                above and only the note dot stays here. */}
             <span className="absolute right-[3px] top-[2px] flex items-center gap-[3px]">
               {/* The one mark that survives every tier above "bar": something is
                   typed on this booking. At "lead" the note TEXT is not drawn, so
@@ -376,7 +459,7 @@ export function AppointmentBlock({
                   in_surgery inverts it to a navy square behind a white S: it is
                   the one state that should shout, and at most one column is in
                   surgery at any moment. */}
-              {glyph ? (
+              {glyph && !chrome.inlineGlyph ? (
                 <span
                   className="flex h-[13px] min-w-[13px] items-center justify-center rounded-[2px] px-[1px] leading-none"
                   style={{

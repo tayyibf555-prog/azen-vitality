@@ -38,6 +38,10 @@ import { DiaryDays, type DayColumnDayInput } from "./diary-week";
 const BOUNDS = { startMin: 480, endMin: 1200 }; // 08:00 - 20:00
 /** 15:02 London: the clamped start of a diary read taken at three o'clock. */
 const AFTERNOON = 15 * 60 + 2;
+/** The practice's own closing minute. NOT the drawn extent: see dayCloseMin. */
+const CLOSES_AT = 19 * 60;
+/** 19:13 London: the clamped start of the read the owner was looking at. */
+const AFTER_CLOSING = 19 * 60 + 13;
 /** One booked appointment, 10:00-10:30, as a working span. */
 const MORNING_BOOKING: Span = { startMin: 600, endMin: 630 };
 
@@ -56,10 +60,14 @@ function column(over: Partial<DayColumnInput> = {}): DayColumnInput {
   };
 }
 
-function renderDay(col: DayColumnInput, opts: { hoursPending?: boolean } = {}): string {
+function renderDay(
+  col: DayColumnInput | DayColumnInput[],
+  opts: { hoursPending?: boolean; dayCloseMin?: number } = {},
+): string {
   return renderToStaticMarkup(
     createElement(DiaryDay, {
-      columns: [col],
+      columns: Array.isArray(col) ? col : [col],
+      dayCloseMin: opts.dayCloseMin,
       bounds: BOUNDS,
       zoom: "normal" as const,
       ariaLabel: "Diary",
@@ -335,6 +343,119 @@ describe("the elapsed strip on a column that IS working", () => {
   });
 });
 
+// ===========================================================================
+// THE DAY THAT HAS RUN OUT.
+//
+// WHAT THE PRACTICE SAW, at seven in the evening on Saturday 22 August 2026,
+// with our diary open beside Dentally's: twelve clinician columns, and every
+// single one of them headed "Hours not reportable". Each was individually
+// honest -- the whole working day was behind Dentally's availability clamp, so
+// nobody's hours could be asked about any more -- and collectively it read as a
+// screen that had failed. The owner's word for it was "terrible".
+//
+// Thirteen copies of a caveat are not thirteen facts. So the STATE is untouched
+// (nothing new was learned about any clinician, and columnWorkState still says
+// "unreportable"); the PRESENTATION collapses once the day it describes has run
+// out: the header prints the counts, which is what every other finished day in
+// the diary prints, and the caveat is said once, quietly, under the date.
+//
+// The distinction that has to survive is the AFTERNOON one, and it is the reason
+// this cannot simply be "unreportable is quiet now". At half past three the
+// morning is missing and the afternoon is still askable, and a receptionist can
+// act on that. At seven in the evening there is nothing to act on.
+// ===========================================================================
+describe("a day that has run out", () => {
+  const finished = () =>
+    column({ workState: "unreportable", answerableFromMin: AFTER_CLOSING });
+
+  it("shows the column's COUNTS, not the caveat, once the practice has shut", () => {
+    const html = renderDay(finished(), { dayCloseMin: CLOSES_AT });
+    expect(html).not.toContain("Hours not reportable");
+    // What every other finished day in this diary shows. The fixture column has
+    // nothing booked, so this is its count line.
+    expect(html).toContain("Nothing booked");
+  });
+
+  it("says the caveat NO MORE THAN ONCE across a whole day view", () => {
+    // The defect measured directly: twelve columns, twelve copies. The sentence
+    // itself now lives once in the board's standing-context line, so the grid's
+    // own count of it is zero however many clinicians are drawn.
+    const twelve = Array.from({ length: 12 }, (_, i) =>
+      column({ key: `p-${i}`, id: `p-${i}`, name: `Clinician ${i}`, workState: "unreportable", answerableFromMin: AFTER_CLOSING }),
+    );
+    const html = renderDay(twelve, { dayCloseMin: CLOSES_AT });
+    expect(html.split("Hours not reportable").length - 1).toBeLessThanOrEqual(1);
+  });
+
+  it("KEEPS the per-column warning at half past three, when it is still actionable", () => {
+    // The contrast that proves the collapse is about the day running out and not
+    // about the sentence being inconvenient. The morning is missing, the
+    // afternoon is still askable, and the column still says so.
+    const html = renderDay(
+      column({ workState: "unreportable", answerableFromMin: AFTERNOON }),
+      { dayCloseMin: CLOSES_AT },
+    );
+    expect(html).toContain("Hours not reportable");
+  });
+
+  it("keeps the hatch, because we still never got an answer -- but quietly", () => {
+    const finishedHtml = renderDay(finished(), { dayCloseMin: CLOSES_AT });
+    const middayHtml = renderDay(
+      column({ workState: "unreportable", answerableFromMin: AFTERNOON }),
+      { dayCloseMin: CLOSES_AT },
+    );
+    // Still hatched: grey would be a positive claim that nobody was working.
+    expect(hatches(finishedHtml)).toBeGreaterThan(0);
+    expect(offLabels(finishedHtml)).toBe(0);
+    // But a different, paler stripe: the same texture at a volume nobody has to
+    // act on. The two must not be the same string, or nothing changed.
+    const quiet = "var(--card) 0 6px, var(--card-muted) 6px 8px";
+    expect(finishedHtml).toContain(quiet);
+    expect(middayHtml).not.toContain(quiet);
+  });
+
+  it("changes NOTHING for a caller that cannot say when the practice shuts", () => {
+    // dayCloseMin undefined is a caller that does not know, and a caller that
+    // does not know must get exactly the behaviour that existed before this rule.
+    const html = renderDay(finished());
+    expect(html).toContain("Hours not reportable");
+  });
+
+  it("leaves the five other states alone: only 'unreportable' collapses", () => {
+    // A read that FAILED does not become fine because time passed, and a
+    // clinician who might have been at another practice is still unplaced
+    // tomorrow when somebody has to reconcile the day.
+    for (const state of ["unknown", "unconfirmed", "past", "off"] as ColumnWorkState[]) {
+      const expected = COLUMN_WORK_PRESENTATION[state].label;
+      const html = renderDay(column({ workState: state, answerableFromMin: AFTER_CLOSING }), {
+        dayCloseMin: CLOSES_AT,
+      });
+      expect(html, `"${state}" stopped saying "${expected}" on a finished day`).toContain(
+        expected as string,
+      );
+    }
+  });
+
+  it("holds in the day-per-column views, which decide this independently", () => {
+    const html = renderDays({
+      workState: "unreportable",
+      answerableFromMin: AFTER_CLOSING,
+      closeMin: CLOSES_AT,
+    });
+    expect(html).not.toContain("Hours not reportable");
+    expect(html).toContain("Nothing booked");
+  });
+
+  it("and keeps the week grid's afternoon warning too", () => {
+    const html = renderDays({
+      workState: "unreportable",
+      answerableFromMin: AFTERNOON,
+      closeMin: CLOSES_AT,
+    });
+    expect(html).toContain("Hours not reportable");
+  });
+});
+
 describe("the board's wiring, which is what makes any of this reach the grid", () => {
   // Read from SOURCE because the wiring lives in a React closure inside a client
   // component this node-environment suite cannot mount, exactly as move-copy's
@@ -356,5 +477,30 @@ describe("the board's wiring, which is what makes any of this reach the grid", (
   it("hands the same minute on to the columns, so the grids can paint the strip", () => {
     expect(board).toContain("diaryDay.answerableFromMin");
     expect(board).toMatch(/return \{[\s\S]{0,120}answerableFromMin,/);
+  });
+
+  // The other half of the finished-day rule, and the half the grid cannot test
+  // for itself: the columns fall silent, so SOMETHING has to say the caveat, and
+  // it has to say it once. Read from source for the same reason the two above
+  // are: the wiring lives in a React closure this node-environment suite cannot
+  // mount. Both halves fail differently -- drop the first and the grid falls
+  // silent about a real gap in what we know; drop the second and the caveat is
+  // back in twelve columns at once.
+  it("hands the practice's CLOSING minute to the day grid, not the drawn extent", () => {
+    // bounds.endMin is snapped out to whole hours and stretched to cover
+    // anything booked late: on the evening this was written a 19:05 appointment
+    // had pushed it to 20:00, and a day that had plainly ended would still have
+    // had 47 minutes of "askable" in it.
+    expect(board).toMatch(/const dayCloseMin = useMemo\(\s*\(\) => openingWindowFor\(/);
+    expect(board).toMatch(/<DiaryDay[\s\S]{0,400}dayCloseMin=\{dayCloseMin\}/);
+  });
+
+  it("says the elapsed-day caveat ONCE, in the standing-context line", () => {
+    const note = /notes\.push\(\s*"The practice day has ended[^"]*"/.exec(board);
+    expect(note, "the once-only elapsed-day sentence is gone from the board").not.toBeNull();
+    // Gated on the day having genuinely been clamped past closing, so it is
+    // never said about a past day (which says "Date has passed" per column) or a
+    // future one (which is answered in full).
+    expect(board).toMatch(/dayCloseMin <= \(answerableFrom\[day\] \?\? 0\)/);
   });
 });

@@ -200,7 +200,39 @@ export function bodyLineCount(heightPx: number): number {
 }
 
 /**
- * Which children a block may draw at its actual height.
+ * The width a block is DRAWN at, in px, for its share of a column.
+ *
+ * Measured against COL_MIN_PX and not the column's real width, because the
+ * columns are minmax(112px, 1fr): 112 is the width they take on the day the
+ * layout matters, which is a Saturday with thirteen clinicians on screen. Any
+ * wider screen only ever gives a block MORE room than this says, so a decision
+ * made here is never one the reader has to live with at a smaller size. Pure,
+ * so the degrade ladder can be tested without a browser.
+ */
+export function blockWidthPx(span: number, lanes: number): number {
+  return Math.max(0, Math.round((COL_MIN_PX * Math.max(0, span)) / Math.max(1, lanes)));
+}
+
+/**
+ * Below this drawn width a block cannot carry "09:30 N.Lamprell" on one line, so
+ * it carries "09:30" and moves the name down to line two.
+ *
+ * 76px is two thirds of a minimum column. Measured: 112px minus the 2px border,
+ * the 10px left pad and the 18px right strip leaves 82px for text at full width,
+ * which is sixteen characters at 10px; halve the column and 52px minus the same
+ * chrome leaves 22px, which is four. The old block kept the one-line form at
+ * every width and printed "09:3" against a patient nobody could name.
+ */
+export const BLOCK_NARROW_PX = 76;
+
+/**
+ * Below this a block carries a state mark and a short name and nothing else --
+ * no time, no second line. A third of a minimum column is 37px.
+ */
+export const BLOCK_MARK_ONLY_PX = 50;
+
+/**
+ * Which children a block may draw at its actual height AND width.
  *
  * The tier decides what EXISTS; nothing is ever half-drawn by clipping. A
  * 5 minute block at Normal is 12px and carries no text at all, which is why the
@@ -209,16 +241,61 @@ export function bodyLineCount(heightPx: number): number {
  * NOT floored to a 24px WCAG target: drawing a 5 minute appointment at a
  * 10 minute height is a lie about the booking.
  *
- * Lanes cap the tier because a clash halves the width, and the cap is TIGHTER
- * than it was now that the body wraps rather than truncating: a half-width 56px
- * column cannot wrap a body without putting one word on each line, and a 34px
- * third of a column cannot carry a lead line either.
+ * WIDTH, NOT LANE COUNT, IS THE CAP, and that is the correction. The cap used to
+ * read the cluster's lane count, so a block that was drawn FULL WIDTH inside a
+ * three-lane cluster -- which layoutColumn's expansion rule now makes the common
+ * case on a busy column -- was demoted to a state mark and four characters of a
+ * name for no reason a reader could see. A block that has the room draws what
+ * fits in it.
  */
-export function blockTier(heightPx: number, lanes: number): BlockTier {
+export function blockTier(heightPx: number, widthPx: number): BlockTier {
   const byHeight: BlockTier =
     heightPx >= 32 ? "full" : heightPx >= 20 ? "lead" : heightPx >= 13 ? "name" : "bar";
-  const cap: BlockTier = lanes >= 3 ? "name" : lanes >= 2 ? "lead" : "full";
+  const cap: BlockTier = widthPx < BLOCK_MARK_ONLY_PX ? "name" : "full";
   return RANK_TIER[Math.min(TIER_RANK[byHeight], TIER_RANK[cap])];
+}
+
+/** The horizontal chrome a block of this drawn width can afford. */
+export interface BlockChrome {
+  /** Time alone on line 1, patient name on line 2. See BLOCK_NARROW_PX. */
+  narrow: boolean;
+  /** The state mark sits before the text instead of in the top-right corner. */
+  inlineGlyph: boolean;
+  padLeft: number;
+  padRight: number;
+  railLeft: number;
+  railWidth: number;
+}
+
+/**
+ * The one place a block's horizontal chrome is decided.
+ *
+ * It was four ternaries inlined in the component, all keyed off the lane count,
+ * and between them they spent 39px of a 52px half-width block on padding. The
+ * numbers here are what is LEFT for text once the 3px state spine and the 3px
+ * funding rail are cleared, and they tighten with the width rather than with the
+ * lane count, which is the same correction blockTier makes.
+ */
+export function blockChrome(widthPx: number): BlockChrome {
+  const narrow = widthPx < BLOCK_NARROW_PX;
+  const tight = widthPx < BLOCK_MARK_ONLY_PX;
+  return {
+    narrow,
+    // The corner square needs 16px of clear strip. Below the narrow threshold
+    // that is a fifth of the block, so the mark moves inline instead of the
+    // text being squeezed around it.
+    inlineGlyph: narrow,
+    // The spine is 3px and the rail sits just inboard of it: 8 clears both at
+    // full size, 7 at the tightened rail.
+    padLeft: tight ? 7 : narrow ? 8 : 10,
+    // The clear strip on the right, and it has to hold BOTH marks: the 4px note
+    // dot, a 3px gap, and the 13px state square, plus 3px off the edge. 18 was
+    // measured on a block without a note and clipped the last two characters of
+    // every patient who had one.
+    padRight: narrow ? 9 : 24,
+    railLeft: narrow ? 3 : 4,
+    railWidth: narrow ? 2 : 3,
+  };
 }
 
 /** A large enough off span to carry the word "Off" rather than being bare grey. */
@@ -603,10 +680,15 @@ export function shortPatientName(name: string): string {
  * Falls back to the name alone when the start cannot be parsed, rather than
  * printing a placeholder time. An invented time on a diary is a clinical error.
  */
-export function blockLeadLine(appt: DiaryAppointment): string {
+export function blockLeadLine(appt: DiaryAppointment, narrow = false): string {
   const short = shortPatientName(appt.patientName);
   const times = blockTimes(appt);
-  return times ? `${times.startLabel} ${short}` : short;
+  if (!times) return short;
+  // NARROW: the time alone, and the name moves to line two. Twenty-two pixels
+  // cannot hold "09:30 N.Lamprell", and what it printed instead was "09:3" --
+  // a time that is not a time, above a patient nobody could name. A block that
+  // cannot say both says the one that is never ambiguous first.
+  return narrow ? times.startLabel : `${times.startLabel} ${short}`;
 }
 
 /**
@@ -625,7 +707,17 @@ export function blockLeadLine(appt: DiaryAppointment): string {
  * Dentally's own booking-note text; AppointmentRecord carries no money at all,
  * and our equivalent is appt.note, rendered verbatim.
  */
-export function blockBodyText(appt: DiaryAppointment, funding: FundingCode): string {
+export function blockBodyText(
+  appt: DiaryAppointment,
+  funding: FundingCode,
+  narrow = false,
+): string {
+  // On a narrow block line one is the time alone, so line two is the NAME. The
+  // patient is the one thing a receptionist reading across a double booking has
+  // to have; the treatment and the note are still in the tooltip, the panel and
+  // the accessible sentence.
+  if (narrow) return shortPatientName(appt.patientName);
+
   const parts: string[] = [];
   const fundingLabel = FUNDING_LABEL[funding];
   if (fundingLabel !== "") parts.push(fundingLabel);
@@ -706,8 +798,8 @@ export function accessibleSentence(
 // --- the rules ----------------------------------------------------------------
 
 export interface RuleMarks {
-  /** Every 5 minute mark that is NOT also a half hour or an hour. */
-  fives: number[];
+  /** Every 15 minute slot mark that is NOT also a half hour or an hour. */
+  quarters: number[];
   /** Every 30 minute mark that is NOT also an hour. */
   halves: number[];
   hours: number[];
@@ -716,27 +808,35 @@ export interface RuleMarks {
 /**
  * The three rule weights, computed ONCE and DISJOINT by construction.
  *
- * A 30 is never also emitted as a 5 and a 60 never also as a 30, so the grid
+ * A 30 is never also emitted as a 15 and a 60 never also as a 30, so the grid
  * cannot draw two rules of different weights on the same pixel and leave a
  * half-hour line looking like a hairline.
  *
- * The 5 minute rules are SUPPRESSED at "compact": eight pixels between rules is
- * moire, and a rule you cannot count is noise rather than hierarchy.
+ * FIFTEEN MINUTES, NOT FIVE, and drawn DASHED. That is the reference's own slot
+ * rule and it is the correction: a rule every five minutes is a rule every 12px
+ * at Normal and every 8px at Compact, which is not a grid a reader can count --
+ * it is a grey wash behind the appointments, and beside Dentally's own diary it
+ * was the single biggest reason ours read as noisy. Fifteen minutes is 36px at
+ * Normal, 24 at Compact and 48 at Roomy: countable at every density, so the
+ * suppression the five minute rules needed at Compact is gone with them.
+ *
+ * Nothing is lost by it. A booking is placed by its own edges, which are drawn
+ * from the same px-per-minute constant, so a 10 minute appointment at 09:05 sits
+ * exactly where it sits whether or not a hairline happens to pass under it.
  */
-export function ruleMarks(bounds: { startMin: number; endMin: number }, zoom: Zoom): RuleMarks {
-  const fives: number[] = [];
+export function ruleMarks(bounds: { startMin: number; endMin: number }): RuleMarks {
+  const quarters: number[] = [];
   const halves: number[] = [];
   const hours: number[] = [];
   if (!Number.isFinite(bounds.startMin) || !Number.isFinite(bounds.endMin)) {
-    return { fives, halves, hours };
+    return { quarters, halves, hours };
   }
-  const drawFives = zoom !== "compact";
-  for (let m = Math.ceil(bounds.startMin / 5) * 5; m <= bounds.endMin; m += 5) {
+  for (let m = Math.ceil(bounds.startMin / 15) * 15; m <= bounds.endMin; m += 15) {
     if (m % 60 === 0) hours.push(m);
     else if (m % 30 === 0) halves.push(m);
-    else if (drawFives) fives.push(m);
+    else quarters.push(m);
   }
-  return { fives, halves, hours };
+  return { quarters, halves, hours };
 }
 
 // --- multiday -----------------------------------------------------------------

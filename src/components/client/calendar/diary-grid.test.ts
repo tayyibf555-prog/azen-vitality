@@ -8,6 +8,7 @@ import {
   layoutColumn,
   londonMinutes,
   nowFraction,
+  MAX_DRAWN_LANES,
 } from "./diary-grid";
 
 const appt = (start: string, durationMin = 30, finish: string | null = null) => ({
@@ -15,6 +16,17 @@ const appt = (start: string, durationMin = 30, finish: string | null = null) => 
   finish,
   durationMin,
 });
+
+/** The same, in a state. 09:00 London is 08:00Z through BST. */
+const at = (hhmm: string, durationMin = 30, state = "confirmed") => ({
+  start: `2026-07-30T${hhmm}:00Z`,
+  finish: null,
+  durationMin,
+  state,
+});
+
+/** "08:00" -> the London wall-minute it lands on in July (BST). */
+const londonOf = (hhmm: string) => (Number(hhmm.slice(0, 2)) + 1) * 60 + Number(hhmm.slice(3, 5));
 
 describe("londonMinutes", () => {
   it("reads the London wall clock, not UTC, through BST", () => {
@@ -141,6 +153,159 @@ describe("layoutColumn", () => {
     const [p] = layoutColumn([appt("2026-07-30T08:15:00Z", 30, "2026-07-30T09:00:00Z")]);
     expect(p.startMin).toBe(9 * 60 + 15);
     expect(p.endMin).toBe(10 * 60);
+  });
+});
+
+// ===========================================================================
+// THE SLIVERS.
+//
+// What the practice saw on 22 August 2026, beside Dentally's own diary: one
+// clinician's day drawn as a picket fence of hair-thin vertical bars with no
+// text on any of them. Measured off the screenshot, the column was 112px and
+// the blocks in it were 28. Three causes, three sets below, and each of them is
+// a rule that has to hold on its own.
+// ===========================================================================
+describe("a column of ordinary sequential bookings", () => {
+  /** Sixteen back-to-back half hours, exactly what the busiest column held. */
+  const SIXTEEN = Array.from({ length: 16 }, (_, i) =>
+    at(`${String(8 + Math.floor(i / 2)).padStart(2, "0")}:${i % 2 === 0 ? "00" : "30"}`, 30),
+  );
+
+  it("gives every one of sixteen back-to-back bookings the WHOLE column", () => {
+    const out = layoutColumn(SIXTEEN);
+    expect(out).toHaveLength(16);
+    // Every block in its own cluster, alone, full width. Not one of the three
+    // failure modes: no shared denominator, no leftover span, no edge tab.
+    expect(out.every((p) => p.lanes === 1)).toBe(true);
+    expect(out.every((p) => p.lane === 0)).toBe(true);
+    expect(out.every((p) => p.span === 1)).toBe(true);
+    expect(out.every((p) => p.depth === 0)).toBe(true);
+    expect(out.every((p) => p.strip === false)).toBe(true);
+  });
+
+  it("does not treat an appointment ending exactly as the next begins as a clash", () => {
+    const out = layoutColumn([at("09:00", 30), at("09:30", 30), at("10:00", 30)]);
+    expect(out.map((p) => p.lanes)).toEqual([1, 1, 1]);
+  });
+
+  it("splits only the two that are genuinely in the room at once", () => {
+    const out = layoutColumn([at("09:00", 60), at("09:30", 30), at("11:00", 30)]);
+    const byStart = [...out].sort((a, b) => a.startMin - b.startMin);
+    expect(byStart.map((p) => p.lanes)).toEqual([2, 2, 1]);
+    expect(byStart.map((p) => p.span)).toEqual([1, 1, 1]);
+  });
+});
+
+describe("a block expands into the slots beside it that nothing occupies", () => {
+  // THE RULE THAT WAS MISSING. A cluster is a chain, not a crowd: these four are
+  // one connected run of three lanes, but at 11:00 there are only two
+  // appointments in the room and at 11:30 there is one.
+  const CHAIN = [
+    at("08:00", 30), // 09:00-09:30  lane 0
+    at("08:00", 30), // 09:00-09:30  lane 1   <- the genuine double booking
+    at("08:15", 105), // 09:15-11:00 lane 2
+    at("09:30", 30), // 10:30-11:00  lane 0 (reused)
+  ];
+
+  it("draws the block with nothing to its right at the full remaining width", () => {
+    const out = layoutColumn(CHAIN);
+    const late = out.find((p) => p.startMin === londonOf("09:30"));
+    expect(late, "the 10:30 booking was not placed").toBeDefined();
+    expect(late?.lanes).toBe(3);
+    expect(late?.lane).toBe(0);
+    // Lane 1 emptied at 09:30 and lane 2 is busy until 11:00, so it reaches
+    // across two of the three slots. Before this rule it was drawn at a third of
+    // a 112px column: 37px, of which 22 was padding.
+    expect(late?.span).toBe(2);
+  });
+
+  it("still holds the genuinely simultaneous pair to one slot each", () => {
+    const out = layoutColumn(CHAIN);
+    const nine = out.filter((p) => p.startMin === londonOf("08:00"));
+    expect(nine).toHaveLength(2);
+    expect(nine.every((p) => p.span === 1)).toBe(true);
+  });
+
+  it("never lets a block reach past the cluster's own width", () => {
+    for (const p of layoutColumn(CHAIN)) {
+      expect(`${p.startMin}: ${p.lane + p.span <= p.lanes}`).toBe(`${p.startMin}: true`);
+    }
+  });
+});
+
+describe("a cancelled or missed booking never takes width off a patient", () => {
+  it("demotes a cancellation that shares its hour with a real booking to the edge tab", () => {
+    // Exactly what the practice's screenshot showed: a white dashed X block
+    // holding a whole slot of the column beside the patients who were coming in.
+    const out = layoutColumn([at("09:00", 30, "confirmed"), at("09:00", 30, "cancelled")]);
+    const live = out.find((p) => p.item.state === "confirmed");
+    const dead = out.find((p) => p.item.state === "cancelled");
+    expect(live?.lanes).toBe(1);
+    expect(live?.span).toBe(1);
+    expect(live?.strip).toBe(false);
+    expect(dead?.strip).toBe(true);
+  });
+
+  it("demotes a no-show the same way, because it consumed nothing either", () => {
+    const out = layoutColumn([at("09:00", 30, "confirmed"), at("09:00", 30, "did_not_attend")]);
+    expect(out.find((p) => p.item.state === "confirmed")?.lanes).toBe(1);
+    expect(out.find((p) => p.item.state === "did_not_attend")?.strip).toBe(true);
+  });
+
+  it("keeps the full width for a cancellation in an hour nothing else uses", () => {
+    // The one case where a dashed white block genuinely says "this hour is
+    // free", which is the whole reason the diary draws cancellations at all.
+    const out = layoutColumn([at("09:00", 30, "confirmed"), at("11:00", 30, "cancelled")]);
+    const dead = out.find((p) => p.item.state === "cancelled");
+    expect(dead?.strip).toBe(false);
+    expect(dead?.lanes).toBe(1);
+    expect(dead?.span).toBe(1);
+  });
+
+  it("still splits two cancellations that share the same free hour with each other", () => {
+    const out = layoutColumn([at("11:00", 30, "cancelled"), at("11:00", 30, "cancelled")]);
+    expect(out.every((p) => p.strip === false)).toBe(true);
+    expect(out.map((p) => p.lanes)).toEqual([2, 2]);
+  });
+
+  it("counts a state it does not recognise as occupying, never as free", () => {
+    // A state we cannot read is not evidence that a slot is free. It competes
+    // for the width exactly as a confirmed booking does.
+    const out = layoutColumn([at("09:00", 30, "confirmed"), at("09:00", 30, "rescheduled?")]);
+    expect(out.every((p) => p.strip === false)).toBe(true);
+    expect(out.every((p) => p.lanes === 2)).toBe(true);
+  });
+
+  it("loses nothing: every row that can be placed is still placed", () => {
+    const rows = [
+      at("09:00", 30, "confirmed"),
+      at("09:00", 30, "cancelled"),
+      at("09:00", 30, "did_not_attend"),
+      at("10:00", 30, "cancelled"),
+    ];
+    expect(layoutColumn(rows)).toHaveLength(rows.length);
+  });
+});
+
+describe("the lane cap: a fourth simultaneous booking is stacked, not shredded", () => {
+  const FIVE = Array.from({ length: 5 }, () => at("09:00", 30));
+
+  it("never divides a column into more than a few slots", () => {
+    const out = layoutColumn(FIVE);
+    expect(out.every((p) => p.lanes === MAX_DRAWN_LANES)).toBe(true);
+    expect(out.every((p) => p.lane <= MAX_DRAWN_LANES - 1)).toBe(true);
+  });
+
+  it("steps the overflow in front of the last slot rather than hiding it", () => {
+    const out = layoutColumn(FIVE);
+    // Five bookings, five blocks. Three take a slot each; the fourth and fifth
+    // are stepped 1 and 2 places into the last one and stack in front of it.
+    expect(out).toHaveLength(5);
+    expect([...out].map((p) => p.depth).sort()).toEqual([0, 0, 0, 1, 2]);
+  });
+
+  it("leaves an ordinary clash entirely alone", () => {
+    expect(layoutColumn([at("09:00", 60), at("09:30", 30)]).every((p) => p.depth === 0)).toBe(true);
   });
 });
 

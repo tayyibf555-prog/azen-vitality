@@ -7,6 +7,7 @@ import type { DiaryEntryRecord } from "@/lib/calendar/entries";
 import {
   columnIsLoud,
   columnWorkSummary,
+  type ColumnWorkContext,
   type ColumnWorkState,
   type Span,
 } from "@/lib/calendar/working-spans";
@@ -51,6 +52,12 @@ export interface DayColumnDayInput {
   workState: ColumnWorkState;
   /** The London wall-minute this day's hours could be asked about from. See GridColumn. */
   answerableFromMin?: number;
+  /**
+   * The practice's own closing wall-minute for THIS day, so the grid can tell an
+   * afternoon partial read from a day that has run out. See DiaryDay's
+   * `dayCloseMin`, which answers the same question for the single-day view.
+   */
+  closeMin?: number;
   workingSpans: Span[];
   entries: DiaryEntryRecord[];
 }
@@ -109,15 +116,25 @@ export function DiaryDays({
         // one exhaustive mapping beside the union itself. A state added there and
         // nowhere else is worded correctly in both grids; a state added to the
         // union and NOT to the mapping does not compile.
+        // Identical derivation to the day view's, and identical reasoning: see
+        // DiaryDay. The RULE it feeds is the shared one in working-spans, so a
+        // day that has run out reads the same in both grids.
+        const workContext: ColumnWorkContext = {
+          hoursPending,
+          askableMinutesRemaining:
+            d.closeMin === undefined
+              ? undefined
+              : Math.max(0, d.closeMin - (d.answerableFromMin ?? 0)),
+        };
         const summary = unavailable
           ? "Not loaded"
-          : (columnWorkSummary(d.workState, { hoursPending }) ?? columnCounts(d.appointments));
+          : (columnWorkSummary(d.workState, workContext) ?? columnCounts(d.appointments));
         // Same loudness as the day view, and again not by copying the rule. It was
         // an or-chain here and a byte-identical one there, both non-exhaustive, so a
         // seventh state would have been carefully worded in one place and quietly
         // whispered in two. `unavailable` stays here: it is this screen's own failed
         // counts, not a claim about the clinician.
-        const loud = unavailable || columnIsLoud(d.workState, { hoursPending });
+        const loud = unavailable || columnIsLoud(d.workState, workContext);
 
         // The same free-time figure the day view prints, asking the week's own
         // question: which day this week has room. Identical rules — only a
@@ -226,6 +243,7 @@ export function DiaryDays({
           nowTop: d.nowTop,
           workState: d.workState,
           answerableFromMin: d.answerableFromMin,
+          workContext,
           workingSpans: d.workingSpans,
           entries: d.entries,
           funding,

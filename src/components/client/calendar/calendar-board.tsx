@@ -713,6 +713,23 @@ export function CalendarBoard({
     return dayBounds(spansOf(all), openMin, closeMin);
   }, [view, site, day, dayAppointments, viewDayKeys, spanAppointmentsByDay]);
 
+  /**
+   * THE PRACTICE'S OWN CLOSING MINUTE for the day on screen, and for each day in
+   * the day-per-column views.
+   *
+   * NOT `bounds.endMin`, which is the DRAWN extent: dayBounds snaps out to whole
+   * hours and stretches to cover anything booked late, so on the evening this was
+   * written a 19:05 appointment had pushed the drawn bottom to 20:00 and a day
+   * that had plainly ended still had 47 minutes of "askable" left in it. The
+   * question here is when the PRACTICE shuts, which is exactly what
+   * openingWindowFor answers, and it is entirely client-side: the site's opening
+   * hours are already in the props this board was rendered with.
+   */
+  const dayCloseMin = useMemo(
+    () => openingWindowFor(site?.openingHours, day).closeMin,
+    [site, day],
+  );
+
   // --- the now-line ----------------------------------------------------------
 
   const nowMin = now ? londonMinutes(now.toISOString()) : Number.NaN;
@@ -741,6 +758,9 @@ export function CalendarBoard({
           inWindow,
           isToday,
           nowTop,
+          // Per DAY here, not per view: the practice can shut at a different hour
+          // on the Saturday in the middle of the span.
+          closeMin: openingWindowFor(site?.openingHours, k).closeMin,
           ...columnWork(spanPractitionerId, k, appts),
         };
       }),
@@ -755,6 +775,7 @@ export function CalendarBoard({
       now,
       bounds,
       nowMin,
+      site,
       zoom,
     ],
   );
@@ -1304,6 +1325,29 @@ export function CalendarBoard({
   if (view === "day" && soloDropped) {
     notes.push("The clinician you picked is not in this day's diary, so every clinician is shown.");
   }
+  // THE ELAPSED-DAY CAVEAT, SAID ONCE.
+  //
+  // Dentally answers availability only from now onwards, so once the practice
+  // has shut, nobody's working hours for today can be asked about any more.
+  // Every column used to say so for itself, and thirteen columns each carrying
+  // "Hours not reportable" is not thirteen facts -- it is a screen that reads as
+  // broken, which is what the owner saw beside Dentally's own diary. The columns
+  // now print their counts (COLUMN_WORK_ELAPSED_DAY) and the caveat is stated
+  // here instead: once, quietly, in the standing-context line.
+  //
+  // Gated on `answerableFrom[day]` being SET, so it is only ever said about a day
+  // that really was clamped -- today. A past day says "Date has passed" per
+  // column and a future day is answered in full, and neither reaches this.
+  if (
+    view === "day" &&
+    !diaryPending &&
+    (answerableFrom[day] ?? 0) > 0 &&
+    dayCloseMin <= (answerableFrom[day] ?? 0)
+  ) {
+    notes.push(
+      "The practice day has ended, so today's working hours can no longer be read back from Dentally. The appointments and the counts are unaffected.",
+    );
+  }
 
   // The clinician list the entry dialog offers, plus the site-wide option it adds
   // itself. Always the FULL day column set, never the soloed subset: a break can
@@ -1675,6 +1719,7 @@ export function CalendarBoard({
           bounds={bounds}
           zoom={zoom}
           ariaLabel={`Diary, ${longDate(day)}, ${siteName}`}
+          dayCloseMin={dayCloseMin}
           soloKey={effectiveSolo}
           onSolo={onSolo}
           countsUnavailable={countsUnavailable}

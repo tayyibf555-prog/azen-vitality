@@ -50,7 +50,12 @@ import { occupyingEntries } from "./entries";
 import { listEntries, insertMove, insertTouch, enqueueOutbox, type MoveOutcome } from "./repository";
 import { normaliseDurationMin, validateMove, type MoveProposal } from "./move-validate";
 import { availabilityTrustedHere, readSharedPractitionerIds } from "./site-presence";
-import { columnWorkState, workingSpans, type Span } from "./working-spans";
+// occupiesTime, NOT a fourth hand-written copy of "cancelled or did_not_attend".
+// The refusal this file computes and the paint the diary draws have to agree
+// about which states consume a clinician's time -- a slot the screen shows as
+// recoverable and the validator treats as occupied is a receptionist told "no"
+// about a slot they can see is free -- so both read the one predicate.
+import { columnWorkState, occupiesTime as occupies, workingSpans, type Span } from "./working-spans";
 import { clampToSendWindow, willNotifyPatient } from "./notify";
 import { draftMoveText } from "./draft";
 
@@ -268,11 +273,6 @@ function spanOf(a: AgentAppointment): Span & { appointmentId: string } {
   const startMin = londonMinutesOf(a.startIso);
   const endMin = startMin + Math.max(1, Math.round((Date.parse(a.finishIso) - Date.parse(a.startIso)) / 60_000));
   return { startMin, endMin, appointmentId: a.id };
-}
-
-/** cancelled and did_not_attend do NOT consume a clinician's time. Everything else does. */
-function occupies(state: string): boolean {
-  return state !== "cancelled" && state !== "did_not_attend";
 }
 
 // ---------------------------------------------------------------------------

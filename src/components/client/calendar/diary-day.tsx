@@ -5,10 +5,12 @@ import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import { occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
 import {
+  columnHatchIsQuiet,
   columnIsHatched,
   columnIsLoud,
   columnWorkSummary,
   offSpans,
+  type ColumnWorkContext,
   type ColumnWorkState,
   type Span,
 } from "@/lib/calendar/working-spans";
@@ -103,6 +105,13 @@ export interface GridColumn {
    * ABOVE it were never asked about: they are hatched rather than labelled "Off".
    */
   answerableFromMin?: number;
+  /**
+   * What the column may say, beyond its state: the reading rather than the
+   * claim. See ColumnWorkContext. Carries `askableMinutesRemaining`, which is
+   * what turns thirteen columns each repeating "Hours not reportable" at seven
+   * in the evening back into thirteen columns of counts.
+   */
+  workContext?: ColumnWorkContext;
   /** The white sessions: availability windows UNION this clinician's own bookings. */
   workingSpans: readonly Span[];
   /** Breaks and notes, drawn BENEATH the appointments in their own list. */
@@ -130,6 +139,18 @@ export interface GridDrag {
  *  Pitch 6/8, deliberately distinct from the did-not-attend hatch at 5/7. */
 const HOURS_UNKNOWN_HATCH =
   "repeating-linear-gradient(45deg, var(--card-muted) 0 6px, var(--line) 6px 8px)";
+
+/**
+ * The SAME hatch at half volume, for the one case where the answer is missing
+ * and nobody can do anything about it: a day that has run out.
+ *
+ * Same pitch and same angle, so it is recognisably the same texture and means
+ * the same thing; a paler stripe on a lighter ground, so a whole grid of it at
+ * seven in the evening reads as a day that is over rather than as a screen full
+ * of warnings. See COLUMN_WORK_ELAPSED_DAY.
+ */
+const HOURS_ELAPSED_HATCH =
+  "repeating-linear-gradient(45deg, var(--card) 0 6px, var(--card-muted) 6px 8px)";
 
 /**
  * The current-time chip, drawn in BOTH gutters.
@@ -178,7 +199,7 @@ export function DiaryGrid({
   // Three DISJOINT sets, computed once: a 30 is never also emitted as a 5 and a
   // 60 never also as a 30, so two rules of different weights can never land on
   // the same pixel and leave a half hour looking like a hairline.
-  const { fives, halves, hours } = useMemo(() => ruleMarks(bounds, zoom), [bounds, zoom]);
+  const { quarters, halves, hours } = useMemo(() => ruleMarks(bounds), [bounds]);
 
   const topOf = (min: number) => blockEdges(min, min, bounds.startMin, zoom).top;
 
@@ -189,12 +210,16 @@ export function DiaryGrid({
   // scrolled-to columns unruled and uncrossed by the now-line.
   const rules = (
     <>
-      {fives.map((m) => (
+      {/* THE SLOT RULE: every quarter hour, DASHED, exactly as the reference
+          draws it. It was a solid hairline every five minutes, which at Normal
+          is a line every twelve pixels — a grey wash rather than a grid, and the
+          single loudest thing on the screen beside Dentally's own diary. */}
+      {quarters.map((m) => (
         <div
-          key={`f-${m}`}
+          key={`q-${m}`}
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 border-t"
-          style={{ top: topOf(m), borderColor: "color-mix(in oklab, var(--line) 45%, transparent)" }}
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed"
+          style={{ top: topOf(m), borderColor: "color-mix(in oklab, var(--line) 80%, transparent)" }}
         />
       ))}
       {halves.map((m) => (
@@ -376,8 +401,14 @@ export function DiaryGrid({
                 // claim they are off -- on a past day, a claim about a day we
                 // were never able to ask about -- and white would offer another
                 // practice's free time as this one's capacity.
-                background: columnIsHatched(col.workState) ? undefined : "var(--diary-off)",
-                backgroundImage: columnIsHatched(col.workState) ? HOURS_UNKNOWN_HATCH : undefined,
+                background: columnIsHatched(col.workState, col.workContext)
+                  ? undefined
+                  : "var(--diary-off)",
+                backgroundImage: columnIsHatched(col.workState, col.workContext)
+                  ? columnHatchIsQuiet(col.workState, col.workContext)
+                    ? HOURS_ELAPSED_HATCH
+                    : HOURS_UNKNOWN_HATCH
+                  : undefined,
               }}
             >
               {/* WORKING AND FREE: white, painted per session, with a hard 1px rule
@@ -640,12 +671,26 @@ export function DiaryDay({
   onOpenEntry,
   onKeyDown,
   describedById,
+  dayCloseMin,
   drag,
 }: {
   columns: DayColumnInput[];
   bounds: { startMin: number; endMin: number };
   zoom: Zoom;
   ariaLabel: string;
+  /**
+   * The practice's own closing wall-minute for the day on screen.
+   *
+   * Given so the grid can tell an afternoon partial read (the morning is
+   * missing, the afternoon is still askable, and each column says so because a
+   * receptionist can act on it) from a day that has simply RUN OUT, where every
+   * column would otherwise repeat the same caveat about hours nobody can ask
+   * about any more. Derived entirely from the site's opening hours, which the
+   * board already holds: no server shape changes for this.
+   *
+   * Undefined leaves every column exactly as it was.
+   */
+  dayCloseMin?: number;
   soloKey: string | null;
   onSolo: (key: string) => void;
   /** True when the appointment read or the clinician read failed: every derived
@@ -677,6 +722,18 @@ export function DiaryDay({
     () =>
       columns.map((col) => {
         const placed = layoutColumn(col.appointments);
+        // HOW MUCH OF THE PRACTICE'S DAY IS STILL ASKABLE. Zero means the day has
+        // run out, and a caveat about hours nobody can ask about any more stops
+        // being per-column news. Derived here from two numbers the grid already
+        // holds; the RULE it feeds lives in working-spans beside the union, so
+        // this grid and the week grid cannot come to different conclusions.
+        const workContext: ColumnWorkContext = {
+          hoursPending,
+          askableMinutesRemaining:
+            dayCloseMin === undefined
+              ? undefined
+              : Math.max(0, dayCloseMin - (col.answerableFromMin ?? 0)),
+        };
         // The header's second line. The words for a WORK STATE are not chosen
         // here: every one of them comes from COLUMN_WORK_PRESENTATION, the single
         // exhaustive mapping in the module that owns the union, so this grid and
@@ -687,8 +744,7 @@ export function DiaryDay({
         // is not a work state at all: it is this screen's failed read.
         const summary = countsUnavailable
           ? "Not loaded"
-          : (columnWorkSummary(col.workState, { hoursPending }) ??
-            columnCounts(col.appointments));
+          : (columnWorkSummary(col.workState, workContext) ?? columnCounts(col.appointments));
         // WHICH STATES SHOUT is not decided here either, for the same reason the
         // words are not: it was an or-chain in this file and a byte-identical one
         // in the week grid, and a chain over six states cannot be made to fail when
@@ -698,7 +754,7 @@ export function DiaryDay({
         // `countsUnavailable` stays HERE because it is not a work state at all: it
         // is THIS screen's own failed read, and the clinician's day may be perfectly
         // well known behind it.
-        const loud = countsUnavailable || columnIsLoud(col.workState, { hoursPending });
+        const loud = countsUnavailable || columnIsLoud(col.workState, workContext);
         const soloed = soloKey === col.key;
 
         // WHITE SPACE, AS A NUMBER. Computed from exactly the spans drawn above
@@ -812,6 +868,7 @@ export function DiaryDay({
           clinicianName: col.name,
           workState: col.workState,
           answerableFromMin: col.answerableFromMin,
+          workContext,
           workingSpans: col.workingSpans,
           entries: col.entries,
           funding,
@@ -826,6 +883,7 @@ export function DiaryDay({
       soloKey,
       onSolo,
       countsUnavailable,
+      dayCloseMin,
       funding,
       hoursPending,
       onOpenEntry,

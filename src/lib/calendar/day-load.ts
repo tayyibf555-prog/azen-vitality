@@ -30,7 +30,11 @@ import {
 import { resolveDayFunding } from "./funding-source";
 import { listEntries } from "./repository";
 import { availabilityTrustedHere, readSharedPractitionerIds } from "./site-presence";
-import type { UnconfirmedPresence } from "./working-spans";
+// occupiesTime, NOT a fourth hand-written copy of the same two state names.
+// See working-spans: the diary's paint, its capacity figure, the drop validator
+// and this loader all have to agree about which states consume a clinician's
+// time, and four copies of that rule is four chances for one of them to drift.
+import { occupiesTime as occupies, type UnconfirmedPresence } from "./working-spans";
 import type { FundingCode } from "./funding";
 import type { DiaryEntryRecord } from "./entries";
 
@@ -134,11 +138,6 @@ export async function loadDiaryDay(args: LoadDiaryDayArgs): Promise<DiaryDayPayl
     fundingFailed: funding.failed,
     entriesFailed: entries.failed,
   };
-}
-
-/** cancelled and did_not_attend do NOT prove anybody was in the building. */
-function occupies(state: string): boolean {
-  return state !== "cancelled" && state !== "did_not_attend";
 }
 
 async function readAvailability(

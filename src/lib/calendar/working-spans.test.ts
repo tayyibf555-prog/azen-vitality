@@ -11,6 +11,9 @@ import {
   workingSpans,
   type ColumnWorkState,
   type Span,
+  COLUMN_WORK_ELAPSED_DAY,
+  columnHatchIsQuiet,
+  occupiesTime,
 } from "./working-spans";
 
 const w = (startMin: number, endMin: number, practitionerId = "p"): AvailabilityWindow => ({
@@ -277,7 +280,10 @@ describe("columnIsHatched", () => {
     // Object.keys of a Record<ColumnWorkState, ...> IS the union, and the Record
     // is the thing both grids read.
     const all = ALL_WORK_STATES;
-    expect(all.filter(columnIsHatched)).toEqual([
+    // Called with the state ALONE: columnIsHatched now takes an optional reading
+    // context beside it, and passing Array.filter's index in as one would be a
+    // silent lie about the day.
+    expect(all.filter((s) => columnIsHatched(s))).toEqual([
       "unknown",
       "unconfirmed",
       "past",
@@ -410,5 +416,80 @@ describe("columnWorkSummary", () => {
     // Different words, same hatch: we still have no answer, and grey would claim
     // the clinician was off while the question was still being asked.
     expect(columnIsHatched("unknown")).toBe(true);
+  });
+});
+
+// ===========================================================================
+// COLUMN_WORK_ELAPSED_DAY, the SECOND exhaustive mapping.
+//
+// It exists because a state's honesty and a state's usefulness are different
+// things and they came apart on one specific evening. "unreportable" is exactly
+// true all day: the elapsed hours could not be asked about. At half past three
+// it is also ACTIONABLE, because the afternoon still can be. At seven, when the
+// practice has shut, every column carries it at once and the screen reads as
+// broken -- which is what the owner saw beside Dentally's own diary.
+//
+// Keyed by the union for the same reason its sibling is: a seventh state added
+// to ColumnWorkState is a compile error in working-spans.ts rather than a state
+// that silently keeps repeating a caveat nobody can act on.
+// ===========================================================================
+describe("what a column may say once the day it describes has run out", () => {
+  const OVER = { askableMinutesRemaining: 0 };
+  const LEFT = { askableMinutesRemaining: 238 }; // half past three, closing at 19:00
+
+  it("covers every member of the union, so a new state cannot slip past", () => {
+    expect(Object.keys(COLUMN_WORK_ELAPSED_DAY).sort()).toEqual([...ALL_WORK_STATES].sort());
+  });
+
+  it("collapses EXACTLY ONE state, and it is 'unreportable'", () => {
+    // A read that FAILED does not become fine because time passed; a clinician
+    // who might have been at another practice is still unplaced tomorrow, when
+    // somebody has to reconcile the day; "Date has passed" already IS the
+    // finished-day sentence; and "Not working" is a fact, not a caveat.
+    const collapses = ALL_WORK_STATES.filter((s) => COLUMN_WORK_ELAPSED_DAY[s] !== null);
+    expect(collapses).toEqual(["unreportable"]);
+  });
+
+  it("prints the counts instead of the caveat once nothing is left to ask about", () => {
+    expect(columnWorkSummary("unreportable", OVER)).toBeNull();
+    expect(columnIsLoud("unreportable", OVER)).toBe(false);
+  });
+
+  it("keeps the caveat while any of the day is still askable", () => {
+    expect(columnWorkSummary("unreportable", LEFT)).toBe("Hours not reportable");
+  });
+
+  it("keeps the HATCH either way, because we still never got an answer", () => {
+    // Grey is a positive claim that the clinician was off. It is not available
+    // here at any hour. Only the volume changes.
+    expect(columnIsHatched("unreportable", OVER)).toBe(true);
+    expect(columnHatchIsQuiet("unreportable", OVER)).toBe(true);
+    expect(columnHatchIsQuiet("unreportable", LEFT)).toBe(false);
+  });
+
+  it("changes nothing at all for a caller that did not say", () => {
+    // A caller with no view of the practice's closing time must get exactly the
+    // behaviour that existed before this rule.
+    for (const state of ALL_WORK_STATES) {
+      expect(columnWorkSummary(state)).toBe(COLUMN_WORK_PRESENTATION[state].label);
+      expect(columnIsHatched(state)).toBe(COLUMN_WORK_PRESENTATION[state].hatched);
+    }
+  });
+});
+
+describe("occupiesTime, the one predicate the paint and the refusal share", () => {
+  it("counts every state but the two that consumed nothing", () => {
+    expect(occupiesTime("cancelled")).toBe(false);
+    expect(occupiesTime("did_not_attend")).toBe(false);
+    for (const s of ["pending", "confirmed", "booked", "arrived", "in_surgery", "completed"]) {
+      expect(`${s}: ${occupiesTime(s)}`).toBe(`${s}: true`);
+    }
+  });
+
+  it("counts a state it cannot read as OCCUPYING, never as free", () => {
+    // A state we cannot read is not evidence that a slot is empty. Guessing the
+    // other way is how a patient gets booked on top of one who is coming in.
+    expect(occupiesTime("some-new-dentally-word")).toBe(true);
+    expect(occupiesTime("")).toBe(true);
   });
 });

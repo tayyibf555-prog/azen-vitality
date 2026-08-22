@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   accessibleSentence,
+  blockChrome,
   blockEdges,
   blockMetaLine,
   blockStyle,
   blockTier,
+  blockWidthPx,
   columnCounts,
+  COL_MIN_PX,
   dayCaption,
   dayCounts,
   initialsOf,
@@ -149,27 +152,33 @@ describe("blockEdges (rounds the EDGES, never the height)", () => {
 });
 
 describe("blockTier", () => {
+  /** A block with the whole column to itself. */
+  const WIDE = blockWidthPx(1, 1);
+
   it("switches at 32, 20 and 13 pixels", () => {
-    expect(blockTier(32, 1)).toBe("full");
-    expect(blockTier(31, 1)).toBe("lead");
-    expect(blockTier(20, 1)).toBe("lead");
-    expect(blockTier(19, 1)).toBe("name");
-    expect(blockTier(13, 1)).toBe("name");
-    expect(blockTier(12, 1)).toBe("bar");
+    expect(blockTier(32, WIDE)).toBe("full");
+    expect(blockTier(31, WIDE)).toBe("lead");
+    expect(blockTier(20, WIDE)).toBe("lead");
+    expect(blockTier(19, WIDE)).toBe("name");
+    expect(blockTier(13, WIDE)).toBe("name");
+    expect(blockTier(12, WIDE)).toBe("bar");
   });
 
-  it("caps at lead with two lanes and at name with three, and leaves one lane uncapped", () => {
-    // Tighter than it was, because the body now WRAPS rather than truncating: a
-    // half-width 56px column cannot wrap a body without one word per line.
-    expect(blockTier(200, 2)).toBe("lead");
-    expect(blockTier(200, 3)).toBe("name");
-    expect(blockTier(200, 8)).toBe("name");
-    expect(blockTier(200, 1)).toBe("full");
+  it("caps on the block's DRAWN WIDTH, not on how many lanes its cluster needed", () => {
+    // THE CORRECTION. The cap used to read the cluster's lane count, so a block
+    // that had expanded to fill the whole column inside a three-lane cluster --
+    // which is now the common case on a busy column, see layoutColumn -- was
+    // demoted to a state mark and four characters of a name for no reason a
+    // reader could see.
+    expect(blockTier(200, blockWidthPx(3, 3))).toBe("full"); // full width of a 3-lane cluster
+    expect(blockTier(200, blockWidthPx(2, 3))).toBe("full"); // two thirds
+    expect(blockTier(200, blockWidthPx(1, 2))).toBe("full"); // half: 56px, still carries text
+    expect(blockTier(200, blockWidthPx(1, 3))).toBe("name"); // a third: 37px, the mark only
   });
 
-  it("never promotes a short block just because it is alone in its lane", () => {
-    expect(blockTier(12, 1)).toBe("bar");
-    expect(blockTier(12, 3)).toBe("bar");
+  it("never promotes a short block just because it has the width", () => {
+    expect(blockTier(12, WIDE)).toBe("bar");
+    expect(blockTier(12, blockWidthPx(1, 3))).toBe("bar");
   });
 
   it("matches the duration matrix at every zoom", () => {
@@ -185,8 +194,59 @@ describe("blockTier", () => {
       const mins = Number(minsRaw);
       for (const zoom of ZOOMS) {
         const { height } = blockEdges(540, 540 + mins, 540, zoom);
-        expect(`${mins}@${zoom}=${blockTier(height, 1)}`).toBe(`${mins}@${zoom}=${byZoom[zoom]}`);
+        expect(`${mins}@${zoom}=${blockTier(height, WIDE)}`).toBe(`${mins}@${zoom}=${byZoom[zoom]}`);
       }
+    }
+  });
+});
+
+describe("blockWidthPx and blockChrome: the horizontal half of the degrade ladder", () => {
+  it("measures a block's share of the NARROWEST column it will ever be drawn in", () => {
+    // COL_MIN_PX, because 112 is what a column is on the day the layout matters:
+    // a Saturday with thirteen clinicians on screen. Any wider screen only ever
+    // gives the block more room than this says.
+    expect(blockWidthPx(1, 1)).toBe(COL_MIN_PX);
+    expect(blockWidthPx(1, 2)).toBe(56);
+    expect(blockWidthPx(2, 3)).toBe(75);
+    expect(blockWidthPx(1, 3)).toBe(37);
+  });
+
+  it("keeps the full-width block's clear right strip for its corner mark", () => {
+    const wide = blockChrome(blockWidthPx(1, 1));
+    expect(wide.narrow).toBe(false);
+    expect(wide.inlineGlyph).toBe(false);
+    expect(wide.padRight).toBeGreaterThanOrEqual(16);
+  });
+
+  it("spends a half-width block's pixels on TEXT rather than on padding", () => {
+    // The defect, in numbers. A half-width block is 56px. The old chrome took
+    // 11 on the left and 28 on the right and left 17px for "09:30 N.Lamprell";
+    // this leaves better than twice that, which is what "09:30" needs.
+    const half = blockChrome(blockWidthPx(1, 2));
+    expect(half.narrow).toBe(true);
+    expect(half.inlineGlyph).toBe(true);
+    expect(blockWidthPx(1, 2) - half.padLeft - half.padRight).toBeGreaterThanOrEqual(36);
+  });
+
+  it("leaves the wide block's right strip big enough for BOTH corner marks", () => {
+    // 3px off the edge, a 13px state square, a 3px gap and a 4px note dot. The
+    // strip was measured at 18 on a block with no note and clipped the last two
+    // characters of every patient who had one.
+    expect(blockChrome(blockWidthPx(1, 1)).padRight).toBeGreaterThanOrEqual(3 + 13 + 3 + 4);
+  });
+
+  it("still clears the state spine and the funding rail at every width", () => {
+    for (const [span, lanes] of [
+      [1, 1],
+      [2, 3],
+      [1, 2],
+      [1, 3],
+    ]) {
+      const c = blockChrome(blockWidthPx(span, lanes));
+      // The rail sits inboard of the 3px spine; the text must start clear of both.
+      expect(`${span}/${lanes}: ${c.padLeft >= c.railLeft + c.railWidth}`).toBe(
+        `${span}/${lanes}: true`,
+      );
     }
   });
 });
@@ -215,19 +275,21 @@ describe("blockTier thresholds actually FIT the lines each tier draws", () => {
   // the short patient name, with no time. It has no shared constant because it is
   // the only place that size is used.
   const NAME_TIER_LINE_PX = 9.5;
+  /** The height ladder is checked at the width where every tier is reachable. */
+  const FULL_WIDTH = blockWidthPx(1, 1);
 
   it("a block at the 'full' threshold fits the lead line and one body line", () => {
-    expect(blockTier(32, 1)).toBe("full");
+    expect(blockTier(32, FULL_WIDTH)).toBe("full");
     expect(blockInnerHeight(32, "full")).toBeGreaterThanOrEqual(LINE_LEAD_PX + LINE_BODY_PX);
   });
 
   it("a block at the 'lead' threshold fits its lead line", () => {
-    expect(blockTier(20, 1)).toBe("lead");
+    expect(blockTier(20, FULL_WIDTH)).toBe("lead");
     expect(blockInnerHeight(20, "lead")).toBeGreaterThanOrEqual(LINE_LEAD_PX);
   });
 
   it("a block at the 'name' threshold fits the short name line", () => {
-    expect(blockTier(13, 1)).toBe("name");
+    expect(blockTier(13, FULL_WIDTH)).toBe("name");
     expect(blockInnerHeight(13, "name")).toBeGreaterThanOrEqual(NAME_TIER_LINE_PX);
   });
 
@@ -240,7 +302,7 @@ describe("blockTier thresholds actually FIT the lines each tier draws", () => {
     for (const zoom of ZOOMS) {
       for (const mins of [5, 10, 15, 20, 30, 45, 60]) {
         const { height } = blockEdges(540, 540 + mins, 540, zoom);
-        const tier = blockTier(height, 1);
+        const tier = blockTier(height, FULL_WIDTH);
         const need =
           tier === "full"
             ? LINE_LEAD_PX + LINE_BODY_PX
@@ -263,7 +325,7 @@ describe("blockTier thresholds actually FIT the lines each tier draws", () => {
     for (const zoom of ZOOMS) {
       for (let mins = 5; mins <= 120; mins += 5) {
         const { height } = blockEdges(540, 540 + mins, 540, zoom);
-        if (blockTier(height, 1) !== "full") continue;
+        if (blockTier(height, FULL_WIDTH) !== "full") continue;
         const needed = LINE_LEAD_PX + bodyLineCount(height) * LINE_BODY_PX;
         expect(`${mins}@${zoom}: ${blockInnerHeight(height, "full") >= needed}`).toBe(
           `${mins}@${zoom}: true`,
@@ -572,35 +634,40 @@ describe("blockBodyText", () => {
 describe("ruleMarks", () => {
   const bounds = { startMin: 540, endMin: 660 }; // 09:00 to 11:00
 
-  it("emits three DISJOINT sets: an hour is never also a half, a half never a five", () => {
-    const { fives, halves, hours } = ruleMarks(bounds, "normal");
+  it("emits three DISJOINT sets: an hour is never also a half, a half never a quarter", () => {
+    const { quarters, halves, hours } = ruleMarks(bounds);
     expect(hours).toEqual([540, 600, 660]);
     expect(halves).toEqual([570, 630]);
-    for (const m of fives) {
+    for (const m of quarters) {
       expect(m % 30).not.toBe(0);
       expect(m % 60).not.toBe(0);
     }
-    const all = [...fives, ...halves, ...hours];
+    const all = [...quarters, ...halves, ...hours];
     expect(new Set(all).size).toBe(all.length);
   });
 
-  it("covers every five minute mark inside the bounds exactly once", () => {
-    const { fives, halves, hours } = ruleMarks(bounds, "roomy");
-    expect([...fives, ...halves, ...hours].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 25 }, (_, i) => 540 + i * 5),
+  it("rules the QUARTER hour, which is the reference's slot, and nothing finer", () => {
+    // The correction. A rule every five minutes is a rule every 12px at Normal
+    // and every 8px at Compact: a grey wash rather than a grid, and the loudest
+    // thing on the screen beside Dentally's own diary. Nine marks across two
+    // hours, not twenty-five.
+    const { quarters, halves, hours } = ruleMarks(bounds);
+    expect([...quarters, ...halves, ...hours].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 9 }, (_, i) => 540 + i * 15),
     );
+    expect(quarters).toEqual([555, 585, 615, 645]);
   });
 
-  it("SUPPRESSES the five minute rules at compact, where 8px apart is moire", () => {
-    const { fives, halves, hours } = ruleMarks(bounds, "compact");
-    expect(fives).toEqual([]);
-    expect(halves).toEqual([570, 630]);
-    expect(hours).toEqual([540, 600, 660]);
+  it("does not vary with the row height: 15 minutes is countable at every zoom", () => {
+    // The five minute rules had to be SUPPRESSED at compact, where 8px apart is
+    // moire. At 15 minutes compact is 24px, so there is nothing left to suppress
+    // and the zoom argument is gone rather than being carried and ignored.
+    expect(ruleMarks(bounds)).toEqual(ruleMarks({ ...bounds }));
   });
 
   it("returns empty sets for unusable bounds rather than looping", () => {
-    expect(ruleMarks({ startMin: Number.NaN, endMin: 600 }, "normal")).toEqual({
-      fives: [],
+    expect(ruleMarks({ startMin: Number.NaN, endMin: 600 })).toEqual({
+      quarters: [],
       halves: [],
       hours: [],
     });
