@@ -13,8 +13,9 @@
 // Supabase SERVICE client. Importing this one pure word from ai.ts would therefore
 // drag the whole enquiry repository -- and the service-role client with it -- into
 // the browser bundle, and nothing in that chain carries `server-only` to stop it.
-// So the word lives here, importing NOTHING at runtime, and ai.ts re-exports it for
-// callers that already sit on the server. The type import below is erased.
+// So the word lives here, importing NOTHING at runtime, and there is deliberately
+// NO re-export from ai.ts (period-word.test.ts pins its absence): every caller,
+// server or client, imports from this module. The type import below is erased.
 //
 // SINGULAR AND PLURAL ARE NOT THE SAME WORD. `periodWord` is the adjective a review
 // is described with ("weekly review", "monthly figures"); the noun for the window

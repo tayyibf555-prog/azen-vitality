@@ -79,6 +79,12 @@ function textFiles(): string[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
+        // Transient test fixtures: walk-src.test.ts materialises a real
+        // dot-prefixed directory (mkdtemp ".walk-fixture-*") mid-run and removes
+        // it again. This walker captures its file list at describe-collection
+        // time but reads the bytes later inside the its, so racing that fixture
+        // yields ENOENT here for a reason unrelated to source hygiene.
+        if (entry.name.startsWith(".walk-fixture-")) continue;
         walk(`${dir}${entry.name}/`, `${prefix}${entry.name}/`);
         continue;
       }

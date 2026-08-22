@@ -44,6 +44,30 @@ const PER_PAGE = 100;
 // function limit. The high-water mark only advances past fully-processed records,
 // so the next cron tick resumes where this one stopped.
 const MAX_PATIENTS_PER_RUN = 300;
+// HOW FAR THE INCREMENTAL MARK MAY BE HELD BACK by a patient this run could not read.
+// The mark advances only over FULLY-enriched patients and is then capped just below
+// the earliest patient that failed (step 4), because the /v1/patients feed is
+// UNORDERED: without that cap a peer updated an hour later carries the mark past the
+// failed patient, whose record is then never re-queried until Dentally happens to
+// touch it again. The backfill path has always had the equivalent (its page cursor
+// rewinds); the incremental path, where the mark IS the cursor, had only half of it.
+//
+// The holdback needs an outer edge, because one failure mode here is DETERMINISTIC
+// rather than transient: an invoice walk that ends short of `meta.total` ends short on
+// every run, so that patient would pin the mark for ever. A pinned mark is not a
+// stalled patient, it is a stalled SITE — every run re-queries `updated_after =
+// pinned`, a window that grows by roughly a day's updates a day (live read-only probe,
+// N15: /v1/patients reports meta.total 585 for a recent day against 27,594 unfiltered,
+// see lib/dashboard/read.ts) until it no longer fits inside MAX_PATIENTS_PER_RUN and
+// the rest of the window stops being seen at all.
+//
+// Six hours of the DATA clock — measured against the newest record this run actually
+// read, not wall clock, so a quiet site is never rushed — keeps a pinned window at
+// roughly 150 patients, comfortably inside the cap, while still giving a transient
+// read ~6 hourly retries (far more than a blip needs). Past that edge the run advances
+// over the patient and says so at error level, naming them: one stranded record an
+// operator can be told about beats a site that has silently stopped syncing.
+const MAX_WATERMARK_HOLDBACK_MS = 6 * 60 * 60 * 1000;
 // Hard bound on the open-plan index scan. Real Dentally ignores the site filter on
 // /v1/treatment_plans and returns no outstanding on the plan, so the early-stop below
 // halts this at one page on live data; the cap is a backstop against a large mock.
@@ -361,8 +385,10 @@ async function syncSite(
 
   // 3. Fetch each pending patient's appointments + invoices in BOUNDED-CONCURRENCY
   //    batches (was a serial ~2-calls-per-patient loop that starved later sites). A
-  //    failed read leaves the patient unenriched -> skipped below (retry next run),
-  //    never messaging on an unread record and never advancing the mark past them.
+  //    failed read leaves the patient unenriched -> skipped below, and step 4 holds
+  //    BOTH cursors back below them — the backfill page rewind AND the incremental
+  //    mark cap — so the next run really does re-query them rather than a peer's later
+  //    updated_at carrying the mark past them. Never messaging on an unread record.
   const enriched = new Map<string, { lastVisitAt: string | null; futureBookingExists: boolean; historicSpend: number }>();
   let budgetRefused = false;
   await mapWithConcurrency(pending, PATIENT_CONCURRENCY, async ({ patient }) => {
@@ -371,7 +397,10 @@ async function syncSite(
     // the patient unenriched and carry on" — right for a blip, and a way to walk the
     // whole 300-patient cap producing nothing when it is a refusal (two reads each).
     // Returning here leaves the patient unset, which is the SAME outcome the catch
-    // produces, so step 4's cursor rewind still covers them: nobody is lost.
+    // produces, so step 4's holdback still covers them on BOTH paths — the backfill
+    // page rewind and the incremental mark cap: nobody is lost. A refusal also
+    // DISABLES that cap's escape valve for this run (see step 4): we never read these
+    // patients, so nothing about them is evidence of a record that cannot be read.
     if (dentallyScopeRefused()) {
       budgetRefused = true;
       return;
@@ -408,10 +437,16 @@ async function syncSite(
         if (rows.length < PER_PAGE) break;
       }
       // A SHORT WALK IS AN UNREAD PATIENT, degraded exactly as a failed secondary
-      // read is: leave them unenriched, so step 4 skips them and the high-water mark
-      // does NOT advance past them, and the next run tries again. The alternative is
-      // scoring somebody on a spend figure we know is missing rows — the reactivation
+      // read is: leave them unenriched, so step 4 skips them and holds the high-water
+      // mark back BELOW them, and the next run tries again. The alternative is scoring
+      // somebody on a spend figure we know is missing rows — the reactivation
       // equivalent of the balance the collection sweep refuses to quote.
+      //
+      // UNLIKE the transient errors that degradation was modelled on, this shortfall
+      // is DETERMINISTIC for this patient: the same walk comes up the same rows short
+      // on every run. So "the next run tries again" holds only until
+      // MAX_WATERMARK_HOLDBACK_MS of Dentally updates have gone by, at which point
+      // step 4 advances over them with an error naming this patient.
       if (invoicesExpected !== null && invoiceRows.length < invoicesExpected) {
         console.warn(
           `[reactivation] patient ${patient.id}: invoice read held ${invoiceRows.length} of the ` +
@@ -431,17 +466,37 @@ async function syncSite(
     }
   });
 
-  // 4. Classify each enriched patient into a cohort (no Dentally I/O). Advance the
-  //    high-water mark only for FULLY-processed (enriched) patients, in page order.
+  // 4. Classify each enriched patient into a cohort (no Dentally I/O). The
+  //    incremental high-water mark advances only over FULLY-processed (enriched)
+  //    patients AND is then capped below the earliest patient this run could not read
+  //    (the block after this loop); the backfill cursor rewinds to the page holding
+  //    that patient instead (the block after that).
   const targets = [];
   let highWaterMark = updatedAfter ?? null;
+  // Earliest updated_at among the patients this run could NOT enrich, and who they
+  // are — the mark is capped below the first, and the escape valve names the second.
+  let minFailedUpdated: string | null = null;
+  let minFailedPatientId: string | null = null;
   // Patients this run has just seen with a future booking. The enrol pass below
   // reads STORED rows, which can be stale, so this is the freshest evidence we
   // have that a patient no longer needs chasing.
   const rebookedIds = new Set<string>();
   for (const { p, patient } of pending) {
     const data = enriched.get(patient.id);
-    if (!data) continue; // failed secondary read: skip, do not advance the mark past them
+    if (!data) {
+      // Failed (or budget-refused) secondary read. Withholding their OWN updated_at is
+      // not enough on its own — the feed is unordered, so a peer read later in this
+      // same run would carry the mark past them. Remember the earliest such patient;
+      // the mark is capped below them after the loop. (A record carrying no parseable
+      // updated_at cannot be pinned by either mechanism — the same blind spot the
+      // advance above has always had, and the reason the backfill pass exists.)
+      const failedUpdated = patientUpdatedAt(p);
+      if (failedUpdated && (!minFailedUpdated || failedUpdated < minFailedUpdated)) {
+        minFailedUpdated = failedUpdated;
+        minFailedPatientId = patient.id;
+      }
+      continue;
+    }
 
     const open = openByPatient.get(patient.id) ?? { plan: null, amountOutstanding: 0 };
     const input: ReactivationInput = {
@@ -493,6 +548,36 @@ async function syncSite(
     if (updated && (!highWaterMark || updated > highWaterMark)) highWaterMark = updated;
   }
 
+  // CAP THE INCREMENTAL MARK BELOW THE EARLIEST UNREAD PATIENT. Only the BACKFILL path
+  // has a rewind (below); on the incremental path the mark IS the cursor, and a peer's
+  // later updated_at would otherwise strand an unread patient permanently. A whole
+  // SECOND below the earliest failure, because we do not know whether Dentally's
+  // `updated_after` is strictly-greater or greater-or-equal (unprobed — the live key
+  // is read-only and IP-pinned, and this is not worth a live experiment): a second
+  // below the boundary is returned by either reading, and by a second-granularity
+  // filter too. Never regresses below the mark this run came in with. Same shape as
+  // sync/recall and sync/coordinator.
+  if (!backfilling && minFailedUpdated && highWaterMark && highWaterMark >= minFailedUpdated) {
+    // ESCAPE VALVE — see MAX_WATERMARK_HOLDBACK_MS. A deterministic per-patient
+    // failure (the invoice shortfall above) would otherwise pin this site's mark for
+    // ever and, once the pinned window outgrows MAX_PATIENTS_PER_RUN, stop the site
+    // syncing at all. Two deliberate refusals to escape: a budget refusal is never
+    // grounds (those patients were never read, so their state says nothing about
+    // them), and an unparseable timestamp holds back rather than advancing.
+    const heldBackMs = Date.parse(highWaterMark) - Date.parse(minFailedUpdated);
+    if (!budgetRefused && Number.isFinite(heldBackMs) && heldBackMs > MAX_WATERMARK_HOLDBACK_MS) {
+      console.error(
+        `[reactivation] site ${siteId}: patient ${minFailedPatientId} (updated_at ${minFailedUpdated}) ` +
+          `has failed enrichment across ${Math.round(heldBackMs / 3_600_000)}h of Dentally updates. ` +
+          `ADVANCING the high-water mark past them rather than pinning the whole site's sync: they will ` +
+          `NOT be re-queried until Dentally next touches their record. Investigate this patient.`,
+      );
+    } else {
+      const capped = new Date(new Date(minFailedUpdated).getTime() - 1000).toISOString();
+      highWaterMark = updatedAfter && capped < updatedAfter ? updatedAfter : capped;
+    }
+  }
+
   const ranked = rankTargets(targets, now);
   await upsertTargets(ranked);
 
@@ -526,8 +611,9 @@ async function syncSite(
       await setBackfillCursor(siteId, RESOURCE, { page: safeCursor, done: false });
     }
   } else if (highWaterMark) {
-    // Incremental: advance the updated_after mark (only when a record contributed one),
-    // so the next run re-fetches rather than skipping when nothing did.
+    // Incremental: store the updated_after mark (only when a record contributed one,
+    // so the next run re-fetches rather than skipping when nothing did) — already
+    // capped below the earliest unread patient by the block above.
     await setSyncState(siteId, RESOURCE, highWaterMark);
   }
 
@@ -602,8 +688,10 @@ async function syncSite(
     mode,
     backfillPage: backfilling ? safeCursor : null,
     // TRUE when the shared Dentally budget refused this run mid-enrichment. The
-    // unenriched patients are handled exactly as a failed read, so the backfill
-    // cursor rewinds to just before their page: coverage is partial, nobody is lost.
+    // unenriched patients are handled exactly as a failed read: the backfill cursor
+    // rewinds to just before their page, and the incremental mark is capped below the
+    // earliest of them (a refusal cannot trip that cap's escape valve, so no patient
+    // is written off for a read we never attempted). Coverage is partial, nobody is lost.
     budgetRefused: budgetRefused || undefined,
   };
 }

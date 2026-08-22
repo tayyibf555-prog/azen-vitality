@@ -19,8 +19,17 @@
 // debtors scan and the collection sweep are (live read-only probe, 2026-08-22: the
 // total honours `patient_id`). A read that comes up short leaves the patient
 // UNENRICHED — exactly what this route already does with a failed secondary read —
-// so they are skipped, the high-water mark does not advance past them, and the next
-// run tries again. Nobody is scored on a spend history we know has holes in it.
+// so they are skipped and neither cursor advances past them. Nobody is scored on a
+// spend history we know has holes in it.
+//
+// These cases all run in BACKFILL mode (the cursor below is `done: false`), so what
+// they pin is the page-cursor rewind. The INCREMENTAL path's equivalent — the
+// high-water mark being held back below the unread patient rather than being carried
+// past them by a peer — is a different mechanism and is pinned separately, in
+// watermark-holdback.test.ts. It also carries the caveat this shortfall needs: unlike
+// the transient errors the degradation was modelled on, a `meta.total` shortfall is
+// DETERMINISTIC for a given patient, so "the next run tries again" is bounded, not
+// forever.
 // ---------------------------------------------------------------------------
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -190,8 +199,10 @@ describe("F6: the reactivation sync pages a patient's invoices", () => {
 
   it("leaves a patient UNENRICHED when Dentally says more invoices match than it returned", async () => {
     // The same degradation this route already applies to a failed secondary read:
-    // skipped, not scored, and the high-water mark is not advanced past them, so the
-    // next run tries again rather than the practice chasing them on a partial history.
+    // skipped, not scored, and (this run being a BACKFILL one) the page cursor does
+    // not advance past their page, so the next run re-pages them rather than the
+    // practice chasing them on a partial history. The incremental path's own holdback
+    // is pinned in watermark-holdback.test.ts.
     store.invoiceCount = 12;
     store.invoiceTotal = 40;
 
