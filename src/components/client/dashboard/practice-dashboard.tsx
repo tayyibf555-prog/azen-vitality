@@ -122,7 +122,11 @@ export function PracticeDashboard({
   // one to start from. All that is left here is ids to names, which is a display
   // job: the read layer sends ids and `view.sites` is the only place they are paired.
   const failedSiteNames = useMemo(
-    () => scope.takingsFailedSites.map((id) => view.sites.find((s) => s.id === id)?.name ?? id),
+    // `?? []`: an L2-cached view serialized by a PREVIOUS deployment has no
+    // takingsFailedSites on its scopes, and this component must tolerate one
+    // blob-version of skew rather than 500 the whole dashboard (the cache key
+    // bump makes this transient, the default makes it harmless).
+    () => (scope.takingsFailedSites ?? []).map((id) => view.sites.find((s) => s.id === id)?.name ?? id),
     [scope.takingsFailedSites, view.sites],
   );
   const takings = useMemo(

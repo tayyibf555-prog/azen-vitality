@@ -1281,7 +1281,9 @@ function refusedDashboardView(args: ReadDashboardArgs): PracticeDashboardView {
  * pre-warm writes this SAME key with a longer ttl so the row stays fresh between
  * cron runs; see prewarmPracticeDashboard.
  */
-export const DASHBOARD_CACHE_KEY = "dashboard:v1";
+// v2: the view's scopes gained takingsFailedSites (commit 47353ac). A v1 blob
+// lacks the field, and a version bump beats trusting every consumer to default.
+export const DASHBOARD_CACHE_KEY = "dashboard:v2";
 
 /**
  * How long an assembled dashboard counts as FRESH — and therefore how often a
