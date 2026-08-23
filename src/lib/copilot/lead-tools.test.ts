@@ -297,7 +297,9 @@ beforeEach(() => {
   store.leadsByIdQueries = [];
   store.campaignQueries = [];
   store.scanQueries = [];
-  delete process.env.MESSAGING_DRY_RUN;
+  // Live now requires the exact word "false" (fail-safe inversion, see
+  // messaging/dry-run-failsafe.test.ts); this suite exercises the live path.
+  process.env.MESSAGING_DRY_RUN = "false";
 });
 
 afterEach(() => {
