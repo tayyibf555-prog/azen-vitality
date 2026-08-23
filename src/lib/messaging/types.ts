@@ -20,7 +20,16 @@ export class MessagingError extends Error {
   }
 }
 
-/** Global safety switch: when true, providers no-op and return a synthetic id. */
+/**
+ * Global safety switch: when dry, providers no-op and return a synthetic id.
+ *
+ * FAIL-SAFE BY CONSTRUCTION: live sending requires MESSAGING_DRY_RUN to be the
+ * exact string "false". Every other value - "true", absence, "True", "tru",
+ * a stray space, an emptied var during an env edit - means DRY RUN. The old
+ * rule (dry only when exactly "true") meant a typo in a Vercel env screen
+ * would have started texting real patients; the go-live step is now a
+ * deliberate, exact word, and nothing else can produce it.
+ */
 export function isDryRun(): boolean {
-  return process.env.MESSAGING_DRY_RUN === "true";
+  return process.env.MESSAGING_DRY_RUN !== "false";
 }

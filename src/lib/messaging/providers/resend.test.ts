@@ -3,7 +3,9 @@ import { sendViaResend } from "./resend";
 
 const CFG = { apiKey: "re_test", from: "Vitality <hi@vitality.test>", subject: "Hello" };
 
-beforeEach(() => { delete process.env.MESSAGING_DRY_RUN; });
+// Live sending now requires the EXACT word "false" (fail-safe: absence and
+// every typo mean dry-run), so these live-provider tests must say it.
+beforeEach(() => { process.env.MESSAGING_DRY_RUN = "false"; });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe("sendViaResend", () => {
