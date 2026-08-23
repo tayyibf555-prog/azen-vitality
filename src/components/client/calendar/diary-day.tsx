@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { FundingCode } from "@/lib/calendar/funding";
 import { occupyingEntries, type DiaryEntryRecord } from "@/lib/calendar/entries";
@@ -19,17 +19,18 @@ import { labelMinutes, layoutColumn, type Placed } from "./diary-grid";
 import {
   blockEdges,
   columnCounts,
+  freeStretches,
   initialsOf,
-  interiorGaps,
   pxPerMinute,
   ruleMarks,
+  BLOCK_INSET_PX,
   COL_MIN_PX,
   GUTTER_PX,
   GUTTER_PX_SM,
   HEADER_PX,
   OFF_LABEL_MIN_PX,
   type DiaryAppointment,
-  type InteriorGap,
+  type FreeStretch,
   type Zoom,
 } from "./diary-view";
 import { AppointmentBlock } from "./appointment-block";
@@ -86,7 +87,7 @@ export interface GridColumn {
   /** Draws the 3px navy bar along the header's top edge. */
   marked?: boolean;
   placed: Placed<DiaryAppointment>[];
-  gaps: InteriorGap[];
+  gaps: FreeStretch[];
   // NO empty-state label in the column body. The header's second line already
   // reads "Nothing booked", "Not working", "Hours not loaded" or "Not loaded"
   // under exactly the right conditions, and a body label repeated a few pixels
@@ -195,6 +196,41 @@ export function DiaryGrid({
 }) {
   const ppm = pxPerMinute(zoom);
   const dayHeight = Math.round((bounds.endMin - bounds.startMin) * ppm);
+
+  // THE REAL COLUMN WIDTH, MEASURED.
+  //
+  // Every width-derived decision a card makes -- which lines it may draw, how
+  // much padding it can afford -- was measured against COL_MIN_PX, on the
+  // reasoning that 112px is the width columns take on the day the layout
+  // matters. Round 2's empty-column filter changed that day: three clinicians
+  // across 1500px is 322px a column, and a card holding half of one was still
+  // being demoted to a state mark and four characters of a name.
+  //
+  // MEASURED and not derived from the column count, because the grid is a
+  // horizontally scrolling minmax(112px, 1fr) track inside a shell whose width
+  // this component does not know, and because guessing HIGH truncates a
+  // patient's name -- the exact defect round 1 existed to fix. COL_MIN_PX is the
+  // initial value on the server AND on the first client render, so hydration
+  // sees identical markup and the pure suites still measure the 112px case.
+  const cellsRef = useRef(new Map<string, HTMLElement>());
+  const [columnPx, setColumnPx] = useState(COL_MIN_PX);
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      let widest = 0;
+      for (const el of cellsRef.current.values()) {
+        widest = Math.max(widest, el.getBoundingClientRect().width);
+      }
+      // A zero is a cell that is display:none below lg, or a frame mid-layout.
+      // Keeping the last good value there is what stops every card on the screen
+      // flickering down a tier and back.
+      if (widest > 0) setColumnPx(Math.max(COL_MIN_PX, Math.round(widest)));
+    };
+    const observer = new ResizeObserver(measure);
+    for (const el of cellsRef.current.values()) observer.observe(el);
+    measure();
+    return () => observer.disconnect();
+  }, [columns]);
 
   // Three DISJOINT sets, computed once: a 30 is never also emitted as a 5 and a
   // 60 never also as a 30, so two rules of different weights can never land on
@@ -385,6 +421,8 @@ export function DiaryGrid({
               data-diary-col={col.key}
               ref={(el) => {
                 drag?.registerColumn(col.key, el);
+                if (el === null) cellsRef.current.delete(col.key);
+                else cellsRef.current.set(col.key, el);
               }}
               className={cn(
                 "relative border-l border-line-strong",
@@ -481,18 +519,25 @@ export function DiaryGrid({
 
               {rules}
 
-              {/* The one quantified statement about empty time: a gap bounded on
-                  BOTH sides by a drawn block. No fill, no frame, no hover, no
-                  click, and pointer-events-none, because it sits over exactly the
-                  empty slots staff aim at. */}
+              {/* THE OPEN SLOTS, IN WORDS. Every stretch inside this clinician's
+                  working time that nothing occupies, labelled once, centred:
+                  "1h 40m free". No fill, no frame, no hover, no click, and
+                  pointer-events-none, because it sits over exactly the empty
+                  slots staff aim at.
+
+                  text-faint rather than text-muted: it must be legible without
+                  ever competing with a patient's name, and at this size those two
+                  ramp steps are the difference between "there is room here" and a
+                  second column of text. */}
               {col.gaps.map((gap) => (
                 <span
                   key={`gap-${gap.top}`}
                   aria-hidden
-                  className="pointer-events-none absolute inset-x-0 flex cursor-default items-center justify-center text-[10px] font-medium tabular-nums text-muted"
+                  data-diary-free={gap.minutes}
+                  className="pointer-events-none absolute inset-x-0 flex cursor-default items-center justify-center px-1 text-center text-[10px] font-medium tabular-nums text-faint"
                   style={{ top: gap.top, height: gap.height }}
                 >
-                  {gap.minutes}m
+                  {gap.label}
                 </span>
               ))}
 
@@ -526,6 +571,7 @@ export function DiaryGrid({
                     zoom={zoom}
                     clinicianName={col.clinicianName}
                     columnKey={col.key}
+                    columnPx={columnPx}
                     funding={col.funding?.[placed.item.patientId] ?? "unknown"}
                     focused={focusedId === placed.item.id}
                     drag={
@@ -554,8 +600,10 @@ export function DiaryGrid({
               {drag?.preview && drag.preview.columnKey === col.key ? (
                 <ul aria-hidden className="pointer-events-none absolute inset-0 z-[5]">
                   <li
-                    className="absolute inset-x-[1px] overflow-hidden rounded-[4px]"
+                    className="absolute overflow-hidden rounded-[4px]"
                     style={{
+                      left: BLOCK_INSET_PX,
+                      right: BLOCK_INSET_PX,
                       ...blockEdges(
                         Math.max(drag.preview.startMin, bounds.startMin),
                         Math.min(drag.preview.endMin, bounds.endMin),
@@ -848,13 +896,13 @@ export function DiaryDay({
               : `Show only ${col.name}`,
           marked: soloed,
           placed,
-          // The gap label is a claim about BOOKABLE time, so it is cut to the
+          // The free label is a claim about BOOKABLE time, so it is cut to the
           // clinician's actual sessions and around their breaks, and it is not
           // drawn at all unless the column can honestly claim to be working.
           gaps:
             countsUnavailable || col.workState !== "working"
               ? []
-              : interiorGaps(
+              : freeStretches(
                   placed,
                   bounds.startMin,
                   bounds.endMin,

@@ -96,6 +96,51 @@ export interface Placed<T> {
    * one unreadable block for another.
    */
   edgeInset: boolean;
+  /**
+   * The COALESCED RUN this edge tab belongs to, or null for every block that is
+   * not an edge tab. See `recoverableRuns`.
+   */
+  stripRun: RecoverableRun<T> | null;
+}
+
+/**
+ * A contiguous run of recoverable rows sharing ONE edge tab.
+ *
+ * ROUND 2's CORRECTION. Round 1 gave every shadowed cancellation its own 14px
+ * tab, and the practice's Saturday had four of them touching inside one hour:
+ * what the owner saw at 12:00 was a picket fence of thin bars carrying X, X, DNA,
+ * X, two of them drawn over each other where the times overlapped. Four tabs are
+ * not four facts. The fact is "this hour holds four rows that did not happen", so
+ * contiguous recoverables now share one tab carrying the COUNT.
+ *
+ * CONTIGUOUS MEANS OVERLAPPING OR TOUCHING. Two cancellations at 12:00-12:15 and
+ * 12:15-12:30 already drew as one unbroken 14px bar with two marks on it; giving
+ * them one mark and the number 2 is the whole of the fix. A recoverable row that
+ * touches nothing is a run of one and is drawn exactly as round 1 drew it.
+ *
+ * NOTHING IS DROPPED. Every row keeps its own `Placed` entry, its own DOM block,
+ * its own id, its own click target, its own place in the keyboard order and its
+ * own announced sentence -- the board's focus path resolves a block by id, so a
+ * row collapsed out of the DOM would be a tab stop that focuses nothing. Only the
+ * PAINT is shared: `index === 0` draws the tab over the whole run's extent, and
+ * the rest are transparent hit targets at their own true times. An appointment is
+ * never drawn at a time that is not its own, tab or no tab.
+ *
+ * WHY THE MEMBER ORDER IS start ASC THEN end DESC. Later members are drawn over
+ * earlier ones, so a row wholly covered by the row after it would keep its
+ * keyboard place but lose its pointer target. Longest-first on a tie means a row
+ * nested inside another always leaves the outer one exposed below it.
+ */
+export interface RecoverableRun<T> {
+  /** The merged extent of the whole run: what the ONE tab is drawn over. */
+  startMin: number;
+  endMin: number;
+  /** How many recoverable rows this tab stands for. Always at least 1. */
+  count: number;
+  /** This row's place in the run, earliest first. Only 0 paints the tab. */
+  index: number;
+  /** Every row in the run, in that same order, so the tab can name them all. */
+  rows: readonly T[];
 }
 
 /**
@@ -212,9 +257,10 @@ export function layoutColumn<
     ...layoutLanes(live).map((p) => ({
       ...p,
       edgeInset: p.lane + p.span >= p.lanes && shadowed.some((s) => overlaps(s, p)),
+      stripRun: null,
     })),
-    ...layoutLanes(freeStanding),
-    ...shadowed.map((s) => ({
+    ...layoutLanes(freeStanding).map((p) => ({ ...p, stripRun: null })),
+    ...recoverableRuns(shadowed).map((s) => ({
       ...s,
       lane: 0,
       lanes: 1,
@@ -226,19 +272,62 @@ export function layoutColumn<
   ];
 
   // Reading order, so the DOM order matches the eye's: down the column, then
-  // left to right across a clash, with the edge tabs last.
+  // left to right across a clash, with the edge tabs last. Within one coalesced
+  // run the tab that PAINTS it sorts first, so the transparent hit targets for
+  // the rest of the run sit over it rather than under it.
   return placed.sort(
     (a, b) =>
       Number(a.strip) - Number(b.strip) ||
       a.startMin - b.startMin ||
+      (a.stripRun?.index ?? 0) - (b.stripRun?.index ?? 0) ||
       a.lane - b.lane ||
       a.depth - b.depth,
   );
 }
 
+/**
+ * Group shadowed recoverable rows into contiguous runs, one drawn tab each.
+ *
+ * Sorted earliest first (longest first on a tie: see RecoverableRun), then
+ * walked: a row starting at or before the running end joins the run, and anything
+ * later starts a fresh one. TOUCHING JOINS, because two cancellations that meet
+ * at 12:15 already drew as one unbroken bar and the reader gained nothing from
+ * the seam between them.
+ *
+ * Every input row comes back out, carrying the run it belongs to and its place in
+ * it. This decides the PAINT and never what exists.
+ */
+function recoverableRuns<T>(
+  spans: readonly RawSpan<T>[],
+): (RawSpan<T> & { stripRun: RecoverableRun<T> })[] {
+  const sorted = [...spans].sort((a, b) => a.startMin - b.startMin || b.endMin - a.endMin);
+  const runs: RawSpan<T>[][] = [];
+  let endMin = Number.NEGATIVE_INFINITY;
+  for (const s of sorted) {
+    // Strictly AFTER the running end starts a new run; at or before it joins.
+    if (runs.length === 0 || s.startMin > endMin) {
+      runs.push([s]);
+      endMin = s.endMin;
+      continue;
+    }
+    runs[runs.length - 1].push(s);
+    endMin = Math.max(endMin, s.endMin);
+  }
+
+  return runs.flatMap((members) => {
+    const startMin = Math.min(...members.map((m) => m.startMin));
+    const runEnd = Math.max(...members.map((m) => m.endMin));
+    const rows = members.map((m) => m.item);
+    return members.map((m, index) => ({
+      ...m,
+      stripRun: { startMin, endMin: runEnd, count: members.length, index, rows },
+    }));
+  });
+}
+
 /** Rules 1 and 2, over one set of rows that genuinely compete for the width. */
-function layoutLanes<T>(spans: readonly RawSpan<T>[]): Placed<T>[] {
-  const placed: Omit<Placed<T>, "strip" | "edgeInset">[] = [];
+function layoutLanes<T>(spans: readonly RawSpan<T>[]): Omit<Placed<T>, "stripRun">[] {
+  const placed: Omit<Placed<T>, "strip" | "edgeInset" | "stripRun">[] = [];
   let cluster: (RawSpan<T> & { lane: number })[] = [];
   let clusterEnd = Number.NEGATIVE_INFINITY;
   // The end time of the last appointment in each lane of the current cluster.

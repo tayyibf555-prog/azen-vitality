@@ -44,10 +44,13 @@ import {
   parseSpan,
   resolveSolo,
   sortByStart,
+  visibleColumns,
   weekColumn,
+  DIARY_COLUMNS_COOKIE,
   DIARY_ZOOM_COOKIE,
   MULTIDAY_SPANS,
   UNASSIGNED_KEY,
+  type ColumnScope,
   type DiaryAppointment,
   type FocusKey,
   type FocusPos,
@@ -135,11 +138,13 @@ function SegmentBtn({
   active,
   onClick,
   className,
+  title,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   className?: string;
+  title?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -147,6 +152,7 @@ function SegmentBtn({
       type="button"
       aria-pressed={active}
       onClick={onClick}
+      title={title}
       className={cn(
         "pressable rounded-md px-2.5 py-[3px] text-[11px] font-medium transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
@@ -164,7 +170,7 @@ function Segment({ label, children }: { label: string; children: React.ReactNode
     <div
       role="group"
       aria-label={label}
-      className="inline-flex gap-0.5 rounded-lg border border-line-strong bg-card p-[2px]"
+      className="inline-flex shrink-0 gap-0.5 rounded-lg border border-line-strong bg-card p-[2px]"
     >
       {children}
     </div>
@@ -266,6 +272,7 @@ export function CalendarBoard({
   windowTo,
   clientSlug,
   initialZoom = "normal",
+  initialColumnScope = "working",
   canMove = false,
   writeEnabled = false,
   messagingDryRun = false,
@@ -295,6 +302,13 @@ export function CalendarBoard({
   windowTo: string;
   clientSlug: string;
   initialZoom?: Zoom;
+  /**
+   * Which clinicians the DAY view draws, remembered in a cookie and read on the
+   * server so the first paint already has the right columns. "working" is the
+   * default: on the Saturday the owner reviewed, ten of thirteen columns said
+   * "Not working" and crushed the three with patients in them to 112px each.
+   */
+  initialColumnScope?: ColumnScope;
   /** True when this reader's ROLE may move an appointment. Read from the SAME
    *  list the server enforces (PATIENT_ADMIN_ROLES), so the two cannot drift.
    *  Hiding the affordance is courtesy; the server gate is the enforcement. */
@@ -332,6 +346,10 @@ export function CalendarBoard({
   });
   const [solo, setSolo] = useState<string | null>(() => searchParams.get("clinician") || null);
   const [dayZoom, setDayZoom] = useState<Zoom>(initialZoom);
+  // Which clinicians the DAY view draws. A reading preference, remembered the
+  // same way and for the same reason the row height is: it is about density, not
+  // about the practice. See visibleColumns for what may and may not be hidden.
+  const [columnScope, setColumnScope] = useState<ColumnScope>(initialColumnScope);
   // Seven day columns of a whole day do not fit at Normal, so week view keeps
   // its own density. The cookie stores the DAY zoom, which is the one that matters.
   const [weekZoom, setWeekZoom] = useState<Zoom>("compact");
@@ -366,6 +384,14 @@ export function CalendarBoard({
   useEffect(() => {
     document.cookie = `${DIARY_ZOOM_COOKIE}=${dayZoom}; path=/; max-age=31536000; samesite=lax`;
   }, [dayZoom]);
+
+  // The SAME mechanism as the row height, deliberately: one cookie each, both
+  // read by the server component, so neither preference corrects itself after
+  // hydration and a reader who asked for every clinician gets every clinician in
+  // the first paint tomorrow morning too.
+  useEffect(() => {
+    document.cookie = `${DIARY_COLUMNS_COOKIE}=${columnScope}; path=/; max-age=31536000; samesite=lax`;
+  }, [columnScope]);
 
   // --- the day's data --------------------------------------------------------
 
@@ -645,16 +671,39 @@ export function CalendarBoard({
     window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
   }, [day, view, span, siteId, effectiveSolo, isAllSites]);
 
-  const visibleDayColumns = useMemo(
-    () => (effectiveSolo ? dayColumns.filter((c) => c.key === effectiveSolo) : dayColumns),
-    [dayColumns, effectiveSolo],
-  );
+  /**
+   * The columns the day grid actually draws, carrying each one's working time and
+   * its breaks and notes.
+   *
+   * TWO FILTERS, in this order, and only one of them is a hiding rule:
+   *   - SOLO is the reader naming one clinician. It wins outright, so a deep link
+   *     to ?clinician=… opens on that clinician whatever the scope says.
+   *   - SCOPE is round 2's empty-column filter, and only when nobody is soloed.
+   *     visibleColumns owns every refusal in it: nothing is hidden while the
+   *     hours read is in flight, nothing loud is ever hidden, and hiding every
+   *     column is not allowed.
+   *
+   * `hidden` is what the toggle beside the density switch counts, so the reader
+   * is told how many clinicians are behind it rather than left to notice.
+   */
+  const { drawn: visibleGridColumns, hidden: hiddenColumnCount } = useMemo(() => {
+    if (effectiveSolo) {
+      return { drawn: dayGridColumns.filter((c) => c.key === effectiveSolo), hidden: 0 };
+    }
+    return visibleColumns(dayGridColumns, columnScope, { hoursPending: diaryPending });
+  }, [dayGridColumns, effectiveSolo, columnScope, diaryPending]);
 
-  /** The same set, carrying each column's working time and its breaks and notes. */
-  const visibleGridColumns = useMemo(
-    () =>
-      effectiveSolo ? dayGridColumns.filter((c) => c.key === effectiveSolo) : dayGridColumns,
-    [dayGridColumns, effectiveSolo],
+  /**
+   * The SAME columns without their working time, which the rail counts and the
+   * keyboard path key off.
+   *
+   * DERIVED FROM THE DRAWN SET rather than filtered again beside it. The focus
+   * path addresses a column by INDEX, so two lists filtered by two rules is a
+   * left-arrow that lands on a clinician who is not on the screen.
+   */
+  const visibleDayColumns = useMemo(
+    () => visibleGridColumns.map((c) => ({ key: c.key, id: c.id, name: c.name, appointments: c.appointments })),
+    [visibleGridColumns],
   );
 
   // The week's one clinician: whoever is soloed, else the first column. Week view
@@ -1358,10 +1407,14 @@ export function CalendarBoard({
   );
 
   return (
-    <div data-diary className="flex min-h-0 flex-col gap-2 lg:h-full">
+    <div data-diary className="flex min-h-0 flex-col gap-1.5 lg:h-full">
       {/* Command bar. The date IS the page title: a 24px display heading plus a
-          PageHeader would cost a quarter of a laptop's grid. */}
-      <div className={cn("flex h-9 items-center gap-2 border-b border-line", bleed)}>
+          PageHeader would cost a quarter of a laptop's grid.
+          ROUND 2 SLIMMED THIS ROW rather than adding one. On the owner's 1512px
+          laptop the chrome above 09:00 was 212px, most of a third of the
+          viewport, and every affordance in it earns its place -- so the height
+          came out of the paddings and the row count, not out of the controls. */}
+      <div className={cn("flex h-8 items-center gap-2 border-b border-line", bleed)}>
         <div role="group" aria-label="Change day" className="flex shrink-0 items-center gap-1">
           <button
             type="button"
@@ -1394,7 +1447,19 @@ export function CalendarBoard({
           {rangeLabel}
         </h1>
 
-        <p className="hidden min-w-0 truncate text-[11px] font-medium tabular-nums text-muted sm:block">
+        {/* The caption has always been allowed to truncate before the controls
+            beside it give way, and round 2 put one more control on this row. The
+            full sentence is recoverable on hover and is read out verbatim by the
+            status region below, so nothing is lost -- but it is now reachable
+            without a screen reader. */}
+        {/* flex-1, so it takes what is LEFT rather than reserving its own width:
+            the caption is the one thing on this row that may give way, and it
+            must give way completely before the controls beside it start
+            scrolling. */}
+        <p
+          title={caption}
+          className="hidden min-w-0 flex-1 truncate text-[11px] font-medium tabular-nums text-muted sm:block"
+        >
           {caption}
         </p>
         {/* A missing rail is visually identical to "not on file", so the absence
@@ -1405,7 +1470,13 @@ export function CalendarBoard({
           </span>
         ) : null}
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        {/* The trailing controls. It SCROLLS rather than clipping: at exactly lg
+            every lg-only control appears at once and the cluster is wider than
+            what is left of the row, and a bar with no overflow rule simply cuts
+            the last one off -- which round 2 would have done to the Key by adding
+            one segment to this row. Everything in it stays shrink-0 and therefore
+            reachable. The clinician rail below already scrolls the same way. */}
+        <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto">
           {isAllSites && sites.length > 1 ? (
             <Segment label="Site">
               {sites.map((s) => (
@@ -1415,7 +1486,7 @@ export function CalendarBoard({
               ))}
             </Segment>
           ) : null}
-          <div className="hidden lg:block">
+          <div className="hidden shrink-0 lg:block">
             <Segment label="View">
               {(["day", "week", "multiday"] as View[]).map((v) => (
                 <SegmentBtn key={v} active={view === v} onClick={() => setView(v)} className="capitalize">
@@ -1425,7 +1496,7 @@ export function CalendarBoard({
             </Segment>
           </div>
           {view === "multiday" ? (
-            <div className="hidden lg:block">
+            <div className="hidden shrink-0 lg:block">
               <Segment label="Days shown">
                 {MULTIDAY_SPANS.map((n) => (
                   <SegmentBtn key={n} active={span === n} onClick={() => setSpan(n)}>
@@ -1448,7 +1519,46 @@ export function CalendarBoard({
           >
             Add break or note
           </button>
-          <div className="hidden lg:block">
+          {/* WHO IS DRAWN. A day-view control only: the day-per-column views
+              draw ONE clinician across days, so a scope over practitioners there
+              would assert something the grid is not showing.
+
+              It sits with the density switch because that is what it is -- a
+              reading preference about how much of the screen the busy columns
+              get -- and it carries the COUNT of what is behind it, so hiding is
+              never something the reader has to notice for themselves. The
+              seven-day strip and the clinician rail above still name everybody,
+              and both still work on a hidden clinician. */}
+          {view === "day" ? (
+            <div className="hidden shrink-0 lg:block">
+              <Segment label="Practitioners shown">
+                <SegmentBtn
+                  active={columnScope === "working"}
+                  onClick={() => setColumnScope("working")}
+                  title="Only clinicians with hours or appointments today"
+                >
+                  Working
+                </SegmentBtn>
+                <SegmentBtn
+                  active={columnScope === "all"}
+                  onClick={() => setColumnScope("all")}
+                  title="Every clinician at this practice, including those with nothing on"
+                >
+                  {/* "Everyone" and not "All", which is the clinician rail's own
+                      word for "stop showing one person only". Two controls with
+                      the same label doing different things on one screen is how a
+                      receptionist presses the wrong one. */}
+                  Everyone
+                  {hiddenColumnCount > 0 ? (
+                    <span className="ml-1 text-[10px] tabular-nums opacity-70">
+                      +{hiddenColumnCount}
+                    </span>
+                  ) : null}
+                </SegmentBtn>
+              </Segment>
+            </div>
+          ) : null}
+          <div className="hidden shrink-0 lg:block">
             <Segment label="Row height">
               {(["compact", "normal", "roomy"] as Zoom[]).map((z) => (
                 <SegmentBtn key={z} active={zoom === z} onClick={() => setZoom(z)} className="capitalize">
@@ -1457,29 +1567,49 @@ export function CalendarBoard({
               ))}
             </Segment>
           </div>
+          {/* THE KEY, moved up into the command bar in round 2. It is a popover
+              rather than an expanding block, so it costs only its shut summary
+              wherever it sits -- and sitting on a row of its own it also cost
+              that row, plus the gap above it, on every screen whether or not
+              there was any standing context to print beside it. It is what makes
+              the state letters learnable (P, C, the clock, S, the tick are
+              Dentally's own notation), so it stays; only its row went -- and only
+              at lg, which is where that row was competing with the grid. */}
+          <div className="hidden shrink-0 lg:block">
+            <DiaryKey />
+          </div>
         </div>
       </div>
 
-      {/* The standing context, and the KEY beside it. One row, so the decoder
-          for the whole screen costs a single line of chrome while it is shut.
-          The key is what makes the state letters learnable: P, C, the clock, S
-          and the tick are Dentally's own notation and the practice reads them
-          fluently, but a new receptionist could previously only find out what an
-          "S" meant by hovering a block. */}
-      <div className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1", bleed)}>
-        {notes.length > 0 ? (
-          <p className="min-w-0 flex-1 text-[10px] font-medium text-muted">{notes.join(" ")}</p>
-        ) : (
-          <span className="flex-1" />
-        )}
+      {/* Below lg the command bar has no width to spare for it, and the page
+          scrolls rather than fitting the grid to the viewport, so the Key keeps
+          the row it always had. */}
+      <div className="flex shrink-0 items-center justify-end lg:hidden">
         <DiaryKey />
       </div>
+
+      {/* The standing context. Drawn ONLY when there is something to say: it used
+          to hold the row open with an empty spacer so the Key had somewhere to
+          sit, which cost 31px of a laptop's grid on every ordinary day. */}
+      {notes.length > 0 ? (
+        <p className={cn("shrink-0 text-[10px] font-medium leading-[1.35] text-muted", bleed)}>
+          {notes.join(" ")}
+        </p>
+      ) : null}
 
       {/* The seven-day strip: the practice manager's week shape, in BOTH views.
           Days outside the loaded window are shown but disabled, never hidden: an
           unfetched day renders as zero appointments, which is indistinguishable
-          from a free day on a fully booked diary. */}
-      <div className={cn("grid h-[34px] shrink-0 grid-cols-7 gap-1", bleed)}>
+          from a free day on a fully booked diary.
+
+          ONE LINE at lg and above, where the grid is competing for the same
+          pixels: the weekday, the date and the count sit on a baseline together
+          instead of stacking, which is ten pixels back for no lost fact. Below lg
+          the columns are narrow and it stays stacked -- and 44px, not the 34 it
+          was, because the stacked form has never fitted in 34: measured at 43px,
+          it was overflowing its own row and the selected day's navy pill was
+          spilling into the gap below it. */}
+      <div className={cn("grid h-11 shrink-0 grid-cols-7 gap-1 lg:h-[24px]", bleed)}>
         {strip.map((d) => {
           const isSel = d === day;
           const isToday = d === today;
@@ -1495,6 +1625,7 @@ export function CalendarBoard({
               title={inWindow ? undefined : "Not loaded"}
               className={cn(
                 "pressable flex flex-col items-center rounded-md px-1 py-[3px] transition-colors",
+                "lg:flex-row lg:items-baseline lg:justify-center lg:gap-1.5 lg:py-[2px]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/25",
                 isSel ? "bg-navy" : "hover:bg-card-muted/50",
                 !inWindow && "cursor-not-allowed opacity-40 hover:bg-transparent",
@@ -1502,7 +1633,7 @@ export function CalendarBoard({
             >
               <span
                 className={cn(
-                  "text-[9px] font-medium uppercase tracking-[0.07em]",
+                  "text-[9px] font-medium uppercase leading-[1.2] tracking-[0.07em]",
                   isSel ? "text-white/70" : "text-muted",
                 )}
               >
@@ -1510,15 +1641,24 @@ export function CalendarBoard({
               </span>
               <span
                 className={cn(
-                  "text-[12.5px] font-bold tabular-nums",
+                  "text-[12.5px] font-bold leading-[1.2] tabular-nums",
                   isSel ? "text-white" : isToday ? "text-blue-royal" : "text-navy",
                 )}
               >
                 {dnum(d)}
               </span>
-              <span className={cn("text-[9px] tabular-nums", isSel ? "text-white/70" : "text-muted")}>
-                {inWindow && count > 0 ? count : ""}
-              </span>
+              {/* The count is drawn only when there IS one, so a one-line strip
+                  does not carry a trailing gap on every quiet day. */}
+              {inWindow && count > 0 ? (
+                <span
+                  className={cn(
+                    "text-[9px] leading-[1.2] tabular-nums",
+                    isSel ? "text-white/70" : "text-muted",
+                  )}
+                >
+                  {count}
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -1531,7 +1671,7 @@ export function CalendarBoard({
       <div
         role="group"
         aria-label="Clinician"
-        className={cn("flex h-[30px] shrink-0 items-center gap-1 overflow-x-auto", bleed)}
+        className={cn("flex h-[26px] shrink-0 items-center gap-1 overflow-x-auto", bleed)}
       >
         {/* "All" is a DAY-view control only. Week view draws exactly one
             clinician, so an "All" button pressed there would assert the opposite

@@ -11,8 +11,15 @@ import {
   COL_MIN_PX,
   dayCaption,
   dayCounts,
+  columnIsHideable,
+  freeLabel,
+  freeStretches,
   initialsOf,
-  interiorGaps,
+  parseColumnScope,
+  visibleColumns,
+  FREE_LABEL_MIN_MINUTES,
+  FREE_LABEL_MIN_PX,
+  HEADER_PX,
   nextFocus,
   openingWindowFor,
   orderColumns,
@@ -41,6 +48,7 @@ import {
   type FocusItem,
   type Zoom,
 } from "./diary-view";
+import type { ColumnWorkState } from "@/lib/calendar/working-spans";
 
 const ZOOMS: Zoom[] = ["compact", "normal", "roomy"];
 
@@ -202,13 +210,49 @@ describe("blockTier", () => {
 
 describe("blockWidthPx and blockChrome: the horizontal half of the degrade ladder", () => {
   it("measures a block's share of the NARROWEST column it will ever be drawn in", () => {
-    // COL_MIN_PX, because 112 is what a column is on the day the layout matters:
-    // a Saturday with thirteen clinicians on screen. Any wider screen only ever
-    // gives the block more room than this says.
+    // COL_MIN_PX, because 112 is what a column is when nothing has been measured
+    // yet -- the server render and the first client frame. Under-promising is the
+    // safe direction: it wastes room, where over-promising truncates a name.
     expect(blockWidthPx(1, 1)).toBe(COL_MIN_PX);
     expect(blockWidthPx(1, 2)).toBe(56);
     expect(blockWidthPx(2, 3)).toBe(75);
     expect(blockWidthPx(1, 3)).toBe(37);
+  });
+
+  // ROUND 2, ITEM 4. Hiding the empty columns made the ordinary day view three
+  // wide columns instead of thirteen narrow ones, and the ladder above had the
+  // narrow one hard-coded.
+  it("takes the column's MEASURED width when the grid has one", () => {
+    expect(blockWidthPx(1, 1, 322)).toBe(322);
+    expect(blockWidthPx(1, 2, 322)).toBe(161);
+  });
+
+  it("never measures BELOW the minimum, whatever it is handed", () => {
+    // A transient 0 during layout, or a nonsense value, must not shrink every
+    // card on the screen. The floor is the width the ladder was designed at.
+    expect(blockWidthPx(1, 1, 0)).toBe(COL_MIN_PX);
+    expect(blockWidthPx(1, 1, Number.NaN)).toBe(COL_MIN_PX);
+    expect(blockWidthPx(1, 1, 40)).toBe(COL_MIN_PX);
+  });
+
+  it("stops demoting a card that has a wide column's half to itself", () => {
+    // MEASURED LIVE on the owner's Saturday after the filter landed: a 630px card
+    // printing "C E.Whitfield" and no time, because half of a 322px column was
+    // being reported as 56px.
+    expect(blockTier(144, blockWidthPx(1, 2))).toBe("full");
+    expect(blockChrome(blockWidthPx(1, 2)).narrow).toBe(true);
+    expect(blockChrome(blockWidthPx(1, 2, 322)).narrow).toBe(false);
+  });
+
+  it("gives a card with a whole column to itself real air, and not 112px worth", () => {
+    const min = blockChrome(blockWidthPx(1, 1));
+    const measured = blockChrome(blockWidthPx(1, 1, 322));
+    expect(min.wide).toBe(true);
+    expect(measured.wide).toBe(true);
+    expect(measured.padLeft).toBe(14);
+    expect(measured.padRight).toBe(26);
+    // A half of a MINIMUM column is still tight and still gets the tight chrome.
+    expect(blockChrome(blockWidthPx(1, 2)).wide).toBe(false);
   });
 
   it("keeps the full-width block's clear right strip for its corner mark", () => {
@@ -405,51 +449,234 @@ describe("stateGlyph", () => {
   });
 });
 
-describe("interiorGaps", () => {
+// ===========================================================================
+// ROUND 2, ITEM 5: the chrome above the grid, which on the owner's 1512px
+// laptop ate 212px before 09:00 rendered. The pixels came out of the paddings
+// and the row count; this is the one number in that pass that is a constant
+// rather than a class, so it is the one that can be pinned here.
+// ===========================================================================
+describe("HEADER_PX", () => {
+  it("is derived from the three lines the day header draws, with no dead air", () => {
+    // The clinician (11px at leading-[1.2]), the counts (10px at leading-[1.25])
+    // and the free-time figure (9.5px at leading-[1.2]), a 1px gap between each
+    // pair, and the button's py-1.
+    const lines = 11 * 1.2 + 10 * 1.25 + 9.5 * 1.2;
+    const needed = lines + 2 + 8;
+    // TWO-SIDED on purpose. A floor alone would let it drift back to the 56 it
+    // was, which is nine pixels of nothing at the top of every column.
+    expect(HEADER_PX).toBeGreaterThanOrEqual(needed);
+    expect(HEADER_PX - needed).toBeLessThanOrEqual(1);
+  });
+});
+
+// ===========================================================================
+// ROUND 2, ITEM 2: HIDING THE EMPTY COLUMNS.
+//
+// On the Saturday the owner reviewed, ten of thirteen columns said "Not working"
+// and rendered at COL_MIN_PX anyway, so the three columns with patients in them
+// were crushed to 112px and the diary scrolled sideways to show ten empty ones.
+// Hiding is PRESENTATION: every refusal below is about what may NOT be hidden.
+// ===========================================================================
+describe("parseColumnScope", () => {
+  it("defaults to the working clinicians for anything unrecognised or unset", () => {
+    expect(parseColumnScope(undefined)).toBe("working");
+    expect(parseColumnScope(null)).toBe("working");
+    expect(parseColumnScope("")).toBe("working");
+    expect(parseColumnScope("everyone")).toBe("working");
+  });
+
+  it("honours a stored 'all'", () => {
+    expect(parseColumnScope("all")).toBe("all");
+  });
+});
+
+describe("columnIsHideable", () => {
+  const off = {
+    appointments: [] as unknown[],
+    workState: "off" as const,
+    workingSpans: [] as { startMin: number; endMin: number }[],
+  };
+
+  it("hides a clinician we ASKED about who is not in and has nothing booked", () => {
+    expect(columnIsHideable(off)).toBe(true);
+  });
+
+  it("keeps a column that has ANY appointment, including a cancellation", () => {
+    // A cancellation is information about an hour somebody could be offered.
+    expect(columnIsHideable({ ...off, appointments: [{ state: "cancelled" }] })).toBe(false);
+  });
+
+  it("keeps a clinician who is IN with an empty book", () => {
+    // Hiding them would hide the practice's free capacity, which is the opposite
+    // of what the owner asked for.
+    expect(
+      columnIsHideable({ ...off, workState: "working", workingSpans: [{ startMin: 540, endMin: 780 }] }),
+    ).toBe(false);
+  });
+
+  it("NEVER hides a column that needs a human", () => {
+    // The two states working-spans.ts spends thirty lines keeping apart from "Not
+    // working". A failed read hidden is a clinician quietly deleted from the day;
+    // an unplaced clinician hidden is the question nobody then asks.
+    expect(columnIsHideable({ ...off, workState: "unknown" })).toBe(false);
+    expect(columnIsHideable({ ...off, workState: "unconfirmed" })).toBe(false);
+  });
+
+  it("hides a past or unreportable day's empty column, which is quiet", () => {
+    expect(columnIsHideable({ ...off, workState: "past" })).toBe(true);
+    expect(columnIsHideable({ ...off, workState: "unreportable" })).toBe(true);
+  });
+});
+
+describe("visibleColumns", () => {
+  const col = (
+    key: string,
+    over: Partial<{
+      appointments: unknown[];
+      workState: ColumnWorkState;
+      workingSpans: { startMin: number; endMin: number }[];
+    }> = {},
+  ) => ({
+    key,
+    appointments: [] as unknown[],
+    workState: "off" as ColumnWorkState,
+    workingSpans: [] as { startMin: number; endMin: number }[],
+    ...over,
+  });
+
+  const SATURDAY = [
+    col("busy", { appointments: [{}], workState: "working", workingSpans: [{ startMin: 540, endMin: 780 }] }),
+    col("in-but-empty", { workState: "working", workingSpans: [{ startMin: 540, endMin: 780 }] }),
+    ...Array.from({ length: 10 }, (_, i) => col(`idle-${i}`)),
+  ];
+
+  it("draws only the clinicians who are on, and says how many it held back", () => {
+    const { drawn, hidden } = visibleColumns(SATURDAY, "working");
+    expect(drawn.map((c) => c.key)).toEqual(["busy", "in-but-empty"]);
+    expect(hidden).toBe(10);
+  });
+
+  it("draws every column when the reader asks for everyone", () => {
+    const { drawn, hidden } = visibleColumns(SATURDAY, "all");
+    expect(drawn).toHaveLength(12);
+    expect(hidden).toBe(0);
+  });
+
+  it("hides NOTHING while the hours read is still in flight", () => {
+    // Every column's working spans are empty until Dentally answers, so a filter
+    // applied then would blank the diary and refill it a moment later. The reader
+    // would watch ten clinicians appear out of nowhere and stop trusting it.
+    const { drawn, hidden } = visibleColumns(SATURDAY, "working", { hoursPending: true });
+    expect(drawn).toHaveLength(12);
+    expect(hidden).toBe(0);
+  });
+
+  it("refuses to hide EVERY column, which would be a bare time gutter", () => {
+    // A bank holiday, or a site shut on Sundays. A grid with no columns and no
+    // explanation is the confident empty this diary refuses everywhere else.
+    const shut = Array.from({ length: 4 }, (_, i) => col(`shut-${i}`));
+    const { drawn, hidden } = visibleColumns(shut, "working");
+    expect(drawn).toHaveLength(4);
+    expect(hidden).toBe(0);
+  });
+});
+
+// ===========================================================================
+// ROUND 2, ITEM 3: "open slots etc need to be clearly visible in the day view".
+//
+// Round 1 labelled only a hole bounded on BOTH sides by a drawn block, so a
+// clinician working 09:00-17:00 with one appointment at 14:00 said nothing at
+// all about the five free hours above it. `working` is Dentally's own
+// availability now -- the same set the column is painted white from -- so the
+// edges of the day are answerable, and are answered.
+// ===========================================================================
+describe("freeLabel", () => {
+  it("says hours and minutes, and says the word", () => {
+    expect(freeLabel(100)).toBe("1h 40m free");
+    expect(freeLabel(45)).toBe("45m free");
+    expect(freeLabel(120)).toBe("2h free");
+    expect(freeLabel(60)).toBe("1h free");
+  });
+
+  it("never prints the bare minute count it replaced", () => {
+    // "140m" is a duration; "2h 20m free" is a statement about the diary.
+    expect(freeLabel(140)).toBe("2h 20m free");
+    expect(freeLabel(140)).not.toBe("140m");
+  });
+});
+
+describe("freeStretches", () => {
   const span = (startMin: number, endMin: number) => ({ startMin, endMin });
   /** A clinician who is in all day, so the geometry cases isolate the geometry. */
   const ALL_DAY = [span(0, 1440)];
 
-  it("never labels the run before the first block or after the last", () => {
-    const gaps = interiorGaps([span(600, 630)], 480, 1140, "normal", ALL_DAY);
-    expect(gaps).toEqual([]);
+  it("LABELS the run before the first block and after the last", () => {
+    // The round-2 correction, and the whole of the owner's ask. 08:00-10:00 and
+    // 10:30-19:00 are both real open time and both used to be silent.
+    const gaps = freeStretches([span(600, 630)], 480, 1140, "normal", ALL_DAY);
+    expect(gaps.map((g) => g.minutes)).toEqual([120, 510]);
+    expect(gaps.map((g) => g.label)).toEqual(["2h free", "8h 30m free"]);
   });
 
-  it("labels a gap that is strictly between two blocks", () => {
-    const gaps = interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal", ALL_DAY);
-    expect(gaps).toHaveLength(1);
+  it("labels a stretch between two blocks on the same geometry as a card", () => {
+    const gaps = freeStretches([span(540, 570), span(600, 630)], 540, 1080, "normal", ALL_DAY);
     expect(gaps[0].minutes).toBe(30);
     expect(gaps[0].top).toBe(72);
     expect(gaps[0].height).toBe(72);
+    expect(gaps[0].label).toBe("30m free");
   });
 
-  it("drops a gap shorter than fifteen minutes", () => {
-    expect(interiorGaps([span(540, 570), span(580, 610)], 540, 1080, "normal", ALL_DAY)).toEqual([]);
+  it("drops a stretch shorter than one bookable slot", () => {
+    // 09:30-09:40 is ten minutes: real, and nothing anybody can book into.
+    const gaps = freeStretches([span(540, 570), span(580, 610)], 540, 1080, "normal", ALL_DAY);
+    expect(gaps.map((g) => g.minutes)).toEqual([470]);
+    expect(FREE_LABEL_MIN_MINUTES).toBe(15);
   });
 
-  it("drops a gap that would be under twenty pixels tall at this zoom", () => {
-    // 15 minutes: 24px at Compact, but only 20px is needed, so it survives there;
-    // it is the 20px floor rather than the minute floor that bites on short gaps.
-    expect(interiorGaps([span(540, 570), span(585, 615)], 540, 1080, "compact", ALL_DAY)).toHaveLength(1);
-    // A gap under the pixel floor at the smallest zoom is dropped, not clipped.
-    expect(interiorGaps([span(540, 570), span(582, 612)], 540, 1080, "compact", ALL_DAY)).toEqual([]);
+  it("drops a stretch too short to carry the words legibly at this density", () => {
+    // THE PIXEL FLOOR, and it bites at Compact. Fifteen minutes clears the minute
+    // floor above but is only 24px at Compact, which is not enough air for a 10px
+    // label between two cards -- so it says nothing there and says "15m free" at
+    // Normal, where the same stretch is 36px.
+    expect(FREE_LABEL_MIN_PX).toBe(26);
+    const compact = freeStretches([span(540, 570), span(585, 615)], 540, 1080, "compact", ALL_DAY);
+    expect(compact.map((g) => g.minutes)).not.toContain(15);
+    const normal = freeStretches([span(540, 570), span(585, 615)], 540, 1080, "normal", ALL_DAY);
+    expect(normal.map((g) => g.label)).toContain("15m free");
+    // Twenty minutes is 32px at Compact and clears it there too.
+    const bigger = freeStretches([span(540, 570), span(590, 620)], 540, 1080, "compact", ALL_DAY);
+    expect(bigger.map((g) => g.minutes)).toContain(20);
   });
 
-  it("returns nothing for an empty column or a single block", () => {
-    expect(interiorGaps([], 540, 1080, "normal", ALL_DAY)).toEqual([]);
-    expect(interiorGaps([span(600, 660)], 540, 1080, "normal", ALL_DAY)).toEqual([]);
+  it("labels a clinician who is IN with an empty book, in one span", () => {
+    // The column the owner sees on a quiet Saturday: nothing booked, and the
+    // header already says so. The body now says how much of the day that is.
+    expect(freeStretches([], 540, 1080, "normal", [span(540, 1080)])[0].label).toBe("9h free");
   });
 
   it("counts a cancelled or did-not-attend block as occupying its span", () => {
-    // The middle block is a cancellation; the hole around it must NOT be labelled
-    // as one 90 minute gap, because the cancelled block already reads as the hole.
-    const gaps = interiorGaps([span(540, 570), span(600, 630), span(660, 690)], 540, 1080, "normal", ALL_DAY);
-    expect(gaps.map((g) => g.minutes)).toEqual([30, 30]);
+    // A recoverable hour has an affordance of its own -- the dashed card, or the
+    // counted edge tab. Printing "30m free" over the same pixels would make the
+    // same statement twice, and the free label reads as "nothing to do here".
+    const gaps = freeStretches(
+      [span(540, 570), span(600, 630), span(660, 690)],
+      540,
+      1080,
+      "normal",
+      ALL_DAY,
+    );
+    expect(gaps.map((g) => g.minutes)).toEqual([30, 30, 390]);
   });
 
-  it("merges overlapping blocks before looking for a gap", () => {
-    const gaps = interiorGaps([span(540, 600), span(550, 620), span(660, 690)], 540, 1080, "normal", ALL_DAY);
-    expect(gaps.map((g) => g.minutes)).toEqual([40]);
+  it("merges overlapping blocks before looking for free time", () => {
+    const gaps = freeStretches(
+      [span(540, 600), span(550, 620), span(660, 690)],
+      540,
+      1080,
+      "normal",
+      ALL_DAY,
+    );
+    expect(gaps.map((g) => g.minutes)).toEqual([40, 390]);
   });
 
   // THE FIGURE IS A CLAIM ABOUT BOOKABLE TIME. Everything below is the difference
@@ -458,14 +685,14 @@ describe("interiorGaps", () => {
   it("labels NOTHING when there is no working time to measure against", () => {
     // No availability, no claim. A figure with no source is exactly the confident
     // empty this screen refuses.
-    expect(interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal")).toEqual([]);
-    expect(interiorGaps([span(540, 570), span(600, 630)], 540, 1080, "normal", [])).toEqual([]);
+    expect(freeStretches([span(540, 570), span(600, 630)], 540, 1080, "normal")).toEqual([]);
+    expect(freeStretches([span(540, 570), span(600, 630)], 540, 1080, "normal", [])).toEqual([]);
   });
 
-  it("cuts the gap down to the clinician's actual session", () => {
+  it("cuts the stretch down to the clinician's actual session", () => {
     // Blocks at 09:00 and 15:00, but the session ends at 12:00. The bookable hole
-    // is 10:00 to 12:00, not 09:30 to 15:00.
-    const gaps = interiorGaps(
+    // is 09:30 to 12:00, and there is no free time at all after it.
+    const gaps = freeStretches(
       [span(540, 570), span(900, 930)],
       540,
       1080,
@@ -477,8 +704,8 @@ describe("interiorGaps", () => {
 
   it("subtracts a break, and splits the label either side of it", () => {
     // 12:00 to 12:30 booked, 15:00 to 15:30 booked, lunch 13:00 to 14:00. The
-    // reader must see 30m and 60m, never one 150m span across the lunch hour.
-    const gaps = interiorGaps(
+    // reader must never see one span running across the lunch hour.
+    const gaps = freeStretches(
       [span(720, 750), span(900, 930)],
       540,
       1080,
@@ -486,11 +713,11 @@ describe("interiorGaps", () => {
       [span(540, 1080)],
       [span(780, 840)],
     );
-    expect(gaps.map((g) => g.minutes)).toEqual([30, 60]);
+    expect(gaps.map((g) => g.minutes)).toEqual([180, 30, 60, 150]);
   });
 
   it("labels each part of a session that is split by off time", () => {
-    const gaps = interiorGaps(
+    const gaps = freeStretches(
       [span(540, 570), span(900, 930)],
       540,
       1080,
@@ -498,6 +725,15 @@ describe("interiorGaps", () => {
       [span(540, 660), span(780, 930)],
     );
     expect(gaps.map((g) => g.minutes)).toEqual([90, 120]);
+  });
+
+  it("never runs a label past the drawn day", () => {
+    // A session that outlives the grid's own bottom edge is clipped to it, or the
+    // label sits over the page behind the diary.
+    const gaps = freeStretches([], 540, 1080, "normal", [span(400, 1400)]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].minutes).toBe(540);
+    expect(gaps[0].top).toBe(0);
   });
 });
 

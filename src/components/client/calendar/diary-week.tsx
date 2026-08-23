@@ -16,8 +16,8 @@ import { layoutColumn } from "./diary-grid";
 import { dow, dnum, mondayOf, shiftDay } from "./calendar-logic";
 import {
   columnCounts,
+  freeStretches,
   initialsOf,
-  interiorGaps,
   type DiaryAppointment,
   type Zoom,
 } from "./diary-view";
@@ -223,11 +223,22 @@ export function DiaryDays({
           marked: d.dayKey === selectedDay,
           placed,
           // Cut to real sessions and around breaks, and not drawn at all unless
-          // the column can honestly claim to be working. See interiorGaps.
+          // the column can honestly claim to be working. See freeStretches.
+          //
+          // THE SAME FUNCTION as the day view, deliberately, and this is where
+          // round 2's rule "drops out naturally" for the day-per-column views:
+          // they are one clinician across days, so "where is this person free
+          // this week" is the same question the day view answers across
+          // clinicians. One grid saying "140m" while the other says
+          // "2h 20m free" would be two vocabularies for one fact.
+          //
+          // Round 2's COLUMN FILTER deliberately does NOT reach here: these
+          // columns are DAYS, not practitioners, and a day dropped out of a week
+          // because nobody worked it would silently renumber the week.
           gaps:
             unavailable || d.workState !== "working"
               ? []
-              : interiorGaps(
+              : freeStretches(
                   placed,
                   bounds.startMin,
                   bounds.endMin,

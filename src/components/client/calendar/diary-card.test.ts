@@ -21,7 +21,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DiaryDay, type DayColumnInput } from "./diary-day";
 import { RECOVERABLE_STRIP_PX } from "./diary-grid";
-import { COL_MIN_PX, type DiaryAppointment } from "./diary-view";
+import { BLOCK_INSET_PX, COL_MIN_PX, type DiaryAppointment } from "./diary-view";
 
 const BOUNDS = { startMin: 480, endMin: 1200 }; // 08:00 - 20:00
 const noop = () => {};
@@ -85,13 +85,23 @@ function blockStyleOf(html: string, id: string): string {
   return n ? n[1] : "";
 }
 
+/** The whole `<li>` for one appointment id, markup and all. */
+function blockMarkup(html: string, id: string): string {
+  const open = html.indexOf(`data-diary-block="${id}"`);
+  if (open === -1) return "";
+  return html.slice(open, html.indexOf("</li>", open));
+}
+
 /** The VISIBLE text of a block, with the screen-reader sentence stripped out. */
 function blockText(html: string, id: string): string {
   const open = html.indexOf(`data-diary-block="${id}"`);
   if (open === -1) return "";
+  // From the END of the <li>'s own opening tag, or its attributes come back as
+  // "text" and a block that draws nothing at all reads as if it drew something.
+  const from = html.indexOf(">", open) + 1;
   const end = html.indexOf("</li>", open);
   return html
-    .slice(open, end)
+    .slice(from, end)
     .replace(/<span class="sr-only">[\s\S]*?<\/span>/g, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&#x27;/g, "'")
@@ -116,6 +126,18 @@ describe("a card with the column to itself", () => {
     expect(style).toContain("left:calc(0 * 100% / 1)");
     // The navy seam means "there is another booking beside this one". There is not.
     expect(html).not.toContain("absolute inset-y-0 right-0 w-[3px] bg-navy");
+  });
+
+  // ROUND 2, ITEM 4: the spacing tune.
+  it("sits BLOCK_INSET_PX off the column rule rather than a hairline from it", () => {
+    expect(BLOCK_INSET_PX).toBe(2);
+    expect(blockMarkup(html, "solo")).toContain(`left:${BLOCK_INSET_PX}px`);
+    expect(blockMarkup(html, "solo")).toContain(`right:${BLOCK_INSET_PX}px`);
+  });
+
+  it("gives a card with the whole column its wide padding", () => {
+    expect(blockMarkup(html, "solo")).toContain("padding-left:14px");
+    expect(blockMarkup(html, "solo")).toContain("padding-right:26px");
   });
 });
 
@@ -203,6 +225,72 @@ describe("a fourth booking in the same half hour", () => {
     for (const id of ["one", "two", "three", "four"]) {
       expect(html, `${id} was not drawn`).toContain(`data-diary-block="${id}"`);
     }
+  });
+});
+
+// ===========================================================================
+// ROUND 2, ITEM 1: the picket fence, as the grid actually draws it.
+//
+// Seen live at 12:00 on the owner's Saturday: four recoverable rows touching
+// inside one booked hour, each drawing its own 14px tab, two of them painted
+// over each other. layoutColumn's coalescing is pinned in diary-grid.test.ts;
+// THIS pins that the reader ends up with one tab and one card.
+// ===========================================================================
+describe("a pile of cancellations inside one booked hour", () => {
+  const html = render([
+    appt({ id: "live", patientName: "Nadia Lamprell", durationMin: 60, start: "2026-07-30T11:00:00Z" }),
+    appt({ id: "x1", patientName: "Rajesh Patel", state: "cancelled", durationMin: 15, start: "2026-07-30T11:00:00Z" }),
+    appt({ id: "x2", patientName: "Sophie Armstrong", state: "cancelled", durationMin: 20, start: "2026-07-30T11:10:00Z" }),
+    appt({ id: "x3", patientName: "Aisha Begum", state: "did_not_attend", durationMin: 20, start: "2026-07-30T11:25:00Z" }),
+    appt({ id: "x4", patientName: "Megan Lloyd", state: "cancelled", durationMin: 20, start: "2026-07-30T11:40:00Z" }),
+  ]);
+
+  /** How many tabs are PAINTED. Four rows sharing one tab must count once. */
+  const paintedTabs = (markup: string) => markup.match(/data-diary-tab="\d+"/g)?.length ?? 0;
+
+  it("draws exactly ONE tab for four rows, and it carries the count", () => {
+    expect(paintedTabs(html)).toBe(1);
+    expect(html).toContain('data-diary-tab="4"');
+    // The DIGIT, drawn. Without it the tab is a blank 14px bar and the reader has
+    // lost the one fact four tabs at least used to carry.
+    expect(blockText(html, "x1")).toBe("4");
+  });
+
+  it("draws that one tab over the WHOLE run, not over its first row only", () => {
+    // 12:00 to 13:00 at Normal is 144px. The first row is fifteen minutes: a 36px
+    // tab beside an hour of cancelled time says the wrong thing about the hour.
+    expect(blockStyleOf(html, "x1")).toContain("height:144px");
+    expect(blockStyleOf(html, "x2")).toContain("height:48px");
+  });
+
+  it("leaves the patient who IS coming in one full-width card", () => {
+    const style = blockStyleOf(html, "live");
+    expect(style).toContain(`width:calc(1 * 100% / 1 - ${RECOVERABLE_STRIP_PX}px)`);
+    expect(blockText(html, "live")).toContain("N.Lamprell");
+    expect(blockText(html, "live")).toContain("12:00");
+  });
+
+  it("says in words what the digit counts, on the tab that carries it", () => {
+    // Fourteen pixels hold a digit. The sentence lives where a tab's detail has
+    // always lived: the hover title and the announcement.
+    expect(html).toContain("3 cancelled, 1 no-show, 12:00 to 13:00");
+  });
+
+  it("paints nothing at all behind that tab: no second dashed rectangle", () => {
+    // The three rows under the tab keep their size and their targets and draw
+    // nothing. A stack of dashed 14px boxes IS the picket fence.
+    expect(blockMarkup(html, "x2")).toContain("background:transparent");
+    expect(blockMarkup(html, "x3")).toContain("background:transparent");
+    expect(blockMarkup(html, "x2")).toContain("border-width:0");
+    expect(blockText(html, "x2")).toBe("");
+  });
+
+  it("loses no patient: all four are still drawn, focusable and announced", () => {
+    for (const id of ["x1", "x2", "x3", "x4"]) {
+      expect(html, `${id} was not drawn`).toContain(`data-diary-block="${id}"`);
+    }
+    expect(html).toContain("Rajesh Patel.");
+    expect(html).toContain("Aisha Begum.");
   });
 });
 

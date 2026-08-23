@@ -14,14 +14,16 @@ import {
   blockTier,
   blockWidthPx,
   bodyLineCount,
+  recoverableRunSummary,
   shortPatientName,
   stateGlyph,
+  BLOCK_INSET_PX,
   BLOCK_PAD_Y,
   type BlockTier,
   type DiaryAppointment,
   type Zoom,
 } from "./diary-view";
-import { LANE_CASCADE_PX, RECOVERABLE_STRIP_PX } from "./diary-grid";
+import { labelMinutes, LANE_CASCADE_PX, RECOVERABLE_STRIP_PX } from "./diary-grid";
 import { RESIZE_HANDLE_MIN_BLOCK_PX } from "./diary-drag";
 import { paletteSlotFor } from "./treatment-type";
 import { stateLabel } from "./calendar-logic";
@@ -112,6 +114,7 @@ export function AppointmentBlock({
   boundsEndMin,
   clinicianName,
   columnKey,
+  columnPx,
   funding = "unknown",
   focused,
   drag,
@@ -123,6 +126,12 @@ export function AppointmentBlock({
   /** The grid's own bottom edge. A block is never DRAWN past it. */
   boundsEndMin: number;
   zoom: Zoom;
+  /**
+   * How wide this column really is, MEASURED by the grid. Absent on the server
+   * render and until the first measurement lands, where COL_MIN_PX is assumed:
+   * see blockWidthPx, and note that the safe direction is to under-promise.
+   */
+  columnPx?: number;
   /** Always named in the accessible sentence: a half-width block is visually
    *  ambiguous about which column it belongs to. */
   clinicianName: string | null;
@@ -137,21 +146,35 @@ export function AppointmentBlock({
   onFocus: () => void;
 }) {
   const appt = placed.item;
-  // The drawn bottom is clamped to the grid's own bottom edge. dayBounds stops at
-  // 24:00, so a booking whose duration runs past London midnight (a bad finish
-  // time, or a duration Dentally reports too long) would otherwise draw a block
-  // hanging below the diary's bottom border, over the page behind it. The full
-  // length is still stated in the title and in the detail panel.
-  const drawnEndMin = Math.min(placed.endMin, boundsEndMin);
-  const { top, height } = blockEdges(placed.startMin, drawnEndMin, boundsStartMin, zoom);
   // A RECOVERABLE row that shares its time with a real booking is a slim tab at
   // the column's edge and nothing more: it must not take width off a patient who
   // is coming in. It keeps its height, its click target, its keyboard place and
   // its full accessible sentence. See layoutColumn's rule 3.
   const strip = placed.strip;
+  const run = placed.stripRun;
+  // THE COALESCED RUN, round 2. Contiguous recoverables share ONE tab carrying
+  // the count, because four tabs inside one hour is a picket fence and not four
+  // facts. The FIRST row paints that tab over the whole run's extent; the rest
+  // stay at their own true times as transparent hit targets, so no row loses its
+  // click, its keyboard place or its announcement, and no appointment is ever
+  // drawn at a time that is not its own. See RecoverableRun.
+  const runLead = run !== null && run.index === 0;
+  const runMember = run !== null && run.count > 1 && run.index > 0;
+  // The drawn bottom is clamped to the grid's own bottom edge. dayBounds stops at
+  // 24:00, so a booking whose duration runs past London midnight (a bad finish
+  // time, or a duration Dentally reports too long) would otherwise draw a block
+  // hanging below the diary's bottom border, over the page behind it. The full
+  // length is still stated in the title and in the detail panel.
+  //
+  // The tab that PAINTS a coalesced run is stretched to the run's end. Only the
+  // end: the lead is the run's earliest member by construction, so its own start
+  // IS the run's start, and saying so twice would be a line no test could fail.
+  const drawnEndMin = Math.min(runLead ? run.endMin : placed.endMin, boundsEndMin);
+  const { top, height } = blockEdges(placed.startMin, drawnEndMin, boundsStartMin, zoom);
   const widthPx = strip
     ? RECOVERABLE_STRIP_PX
-    : blockWidthPx(placed.span, placed.lanes) - (placed.edgeInset ? RECOVERABLE_STRIP_PX : 0);
+    : blockWidthPx(placed.span, placed.lanes, columnPx) -
+      (placed.edgeInset ? RECOVERABLE_STRIP_PX : 0);
   const tier: BlockTier = strip ? "bar" : blockTier(height, widthPx);
   const chrome = blockChrome(widthPx);
   const style = blockStyle(appt.state);
@@ -163,9 +186,19 @@ export function AppointmentBlock({
 
   const leadLine = blockLeadLine(appt, chrome.narrow);
   const bodyText = blockBodyText(appt, funding, chrome.narrow);
-  const sentence = accessibleSentence(appt, clinicianName, placed.lanes, funding);
+  // WHAT THE COUNT STANDS FOR, in words. Fourteen pixels carry a digit; the
+  // sentence that says what the digit means reaches the reader through the hover
+  // title and the announcement, which is where a tab's detail has always lived.
+  // Each row inside the run still opens its own detail panel from its own slice
+  // of the tab, so nothing new was invented to read one.
+  const runWords =
+    run !== null && run.count > 1
+      ? `${recoverableRunSummary(run.rows)}, ${labelMinutes(run.startMin)} to ${labelMinutes(run.endMin)}`
+      : "";
+  const runPrefix = runLead && runWords ? runWords : "";
+  const sentence = `${runPrefix ? `${runPrefix}. ` : ""}${accessibleSentence(appt, clinicianName, placed.lanes, funding)}`;
   const meta = blockMetaLine(appt);
-  const title = `${appt.patientName}${meta ? ` · ${meta}` : ""} · ${stateLabel(appt.state)}`;
+  const title = `${runPrefix ? `${runPrefix} · ` : ""}${appt.patientName}${meta ? ` · ${meta}` : ""} · ${stateLabel(appt.state)}`;
   const hasNote = Boolean(appt.note);
   const glyph = stateGlyph(appt.state);
   const rail = fundingRailVar(funding);
@@ -192,14 +225,22 @@ export function AppointmentBlock({
   // completed mixes toward --card rather than using CSS opacity, which would fade
   // the text with the fill and cost the block its legibility as well as its
   // weight.
-  const background = cancelled
-    ? "var(--card)"
-    : completed
-      ? `color-mix(in oklab, ${fill} 55%, var(--card))`
-      : fill;
+  //
+  // A row BEHIND a coalesced tab paints nothing at all: the tab in front of it
+  // already carries the fill, the dashed edge and the count that stands for it,
+  // and a second dashed rectangle over the same fourteen pixels is the picket
+  // fence this coalescing exists to end. It keeps its size, so it is still a real
+  // target for the pointer and for the keyboard.
+  const background = runMember
+    ? "transparent"
+    : cancelled
+      ? "var(--card)"
+      : completed
+        ? `color-mix(in oklab, ${fill} 55%, var(--card))`
+        : fill;
 
   const borderStyle = cancelled ? "dashed" : "solid";
-  const borderWidth = inSurgery ? 2 : 1;
+  const borderWidth = runMember ? 0 : inSurgery ? 2 : 1;
   const borderColor = cancelled ? "var(--line-strong)" : inSurgery ? "var(--navy)" : line;
 
   // The drag states. Every one of them is a NON-HUE channel, because the fill is
@@ -275,9 +316,12 @@ export function AppointmentBlock({
         onFocus={onFocus}
         title={title}
         className={cn(
-          // 1px in on each side, so two lanes show their own edges and the
-          // column's own rule stays visible behind the block.
-          "pressable absolute inset-y-0 left-[1px] right-[1px] overflow-hidden rounded-[4px] text-left transition-colors",
+          // BLOCK_INSET_PX in on each side, so two lanes show their own edges and
+          // the column's own rule stays visible behind the block. Round 2 widened
+          // it from one pixel to two: at 112px a hairline gutter was all there was
+          // room for, and on the wide columns the empty-column filter now produces
+          // a card sitting a pixel off the rule reads as pressed against it.
+          "pressable absolute inset-y-0 overflow-hidden rounded-[4px] text-left transition-colors",
           "[scroll-margin-top:44px] [scroll-margin-left:52px] [scroll-margin-right:52px]",
           // An outward ring is clipped on a block flush against a column edge
           // inside overflow:auto, so the focus outline is drawn INSET.
@@ -287,6 +331,8 @@ export function AppointmentBlock({
           saving && "pointer-events-none",
         )}
         style={{
+          left: BLOCK_INSET_PX,
+          right: BLOCK_INSET_PX,
           background,
           borderStyle,
           borderWidth,
@@ -328,7 +374,7 @@ export function AppointmentBlock({
         {/* Did not attend: the hatch is what separates it from a booked block in
             greyscale and on a projector. Pitch 5/7, distinct from the whole-column
             "hours not loaded" hatch, which is 6/8 and a different colour. */}
-        {style.hatched ? (
+        {style.hatched && !runMember ? (
           <span
             aria-hidden
             className="pointer-events-none absolute inset-0"
@@ -347,9 +393,22 @@ export function AppointmentBlock({
              hour with a real booking, drawn 14px wide at the column's edge. The
              mark alone: the time, the patient and the state are all in the
              title, the accessible sentence and the panel, and the block is still
-             a full-height click and keyboard target. */
-          <span aria-hidden className="relative flex h-full items-start justify-center pt-[1px]">
-            {glyph?.kind === "text" ? (
+             a full-height click and keyboard target.
+
+             A COALESCED RUN carries the COUNT instead of the mark, drawn once
+             over the whole run. Four marks in one hour told a reader four times
+             that something did not happen; "4" tells them once and is the number
+             they would otherwise have had to count. The rows behind the tab draw
+             nothing -- the count is what they are. What the number counts is in
+             the hover title, in the announcement and in the Key. */
+          <span
+            aria-hidden
+            data-diary-tab={runLead ? run.count : undefined}
+            className="relative flex h-full items-start justify-center pt-[1px]"
+          >
+            {runMember ? null : run !== null && run.count > 1 ? (
+              <span className="text-[10px] font-bold leading-none tabular-nums">{run.count}</span>
+            ) : glyph?.kind === "text" ? (
               <span
                 className={cn(
                   "font-bold leading-none",
@@ -496,7 +555,8 @@ export function AppointmentBlock({
       {showHandle ? (
         <span
           aria-hidden
-          className="absolute bottom-0 left-[1px] right-[1px] h-[8px] cursor-ns-resize"
+          className="absolute bottom-0 h-[8px] cursor-ns-resize"
+          style={{ left: BLOCK_INSET_PX, right: BLOCK_INSET_PX }}
         />
       ) : null}
     </li>

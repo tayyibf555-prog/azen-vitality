@@ -19,7 +19,13 @@
 
 import type { Weekday } from "@/lib/types";
 import { FUNDING_LABEL, type FundingCode } from "@/lib/calendar/funding";
-import { mergeSpans } from "@/lib/calendar/working-spans";
+import {
+  columnIsLoud,
+  mergeSpans,
+  type ColumnWorkContext,
+  type ColumnWorkState,
+  type Span,
+} from "@/lib/calendar/working-spans";
 import { diaryColumns, effectiveMinutes, labelMinutes, londonMinutes, type DiaryColumn } from "./diary-grid";
 import { stateLabel } from "./calendar-logic";
 import { typeLabelFor } from "./treatment-type";
@@ -51,13 +57,17 @@ export const COL_MIN_PX = 112;
 /**
  * The sticky column-header row.
  *
- * 56, not 44, because the day header now carries THREE lines: the clinician, the
- * booked count, and the free-time figure. Two lines at 44px left no room for the
- * third, and the free figure is the one a practice manager scans across the row
- * when somebody calls in sick — it cannot be the line that gets clipped. Twelve
- * pixels of chrome buys the answer to "who has room this afternoon".
+ * DERIVED, not chosen. The day header carries three lines — the clinician at
+ * 11px/1.2 (13.2), the counts at 10px/1.25 (12.5) and the free-time figure at
+ * 9.5px/1.2 (11.4) — plus a 1px gap between each pair (2) and the button's py-1
+ * (8). That is 47.1, so 48 fits all three with nine tenths of a pixel in hand.
+ *
+ * It was 56, measured before those three leadings were pinned, and it left nine
+ * pixels of dead air at the top of every column on the screen. Eight pixels is
+ * not nothing on a 950px laptop where the chrome above the grid already costs
+ * most of a third of the viewport; see round 2's chrome pass.
  */
-export const HEADER_PX = 56;
+export const HEADER_PX = 48;
 
 /** Cookie holding the remembered row height, read server-side so the first paint is right. */
 export const DIARY_ZOOM_COOKIE = "az_diary_zoom";
@@ -65,6 +75,105 @@ export const DIARY_ZOOM_COOKIE = "az_diary_zoom";
 /** The stored zoom, defaulting to Normal for anything unrecognised or unset. */
 export function parseZoom(raw: string | null | undefined): Zoom {
   return raw === "compact" || raw === "roomy" ? raw : "normal";
+}
+
+// --- which clinicians the day view draws --------------------------------------
+
+/**
+ * "working" draws only the clinicians who have something on today; "all" draws
+ * every column, which is what the diary did before round 2.
+ */
+export type ColumnScope = "working" | "all";
+
+/**
+ * Cookie holding the remembered column scope, read SERVER side exactly as the
+ * zoom cookie is, so the first paint already has the right columns and nothing
+ * corrects itself under the reader.
+ *
+ * It persists for the same reason zoom does and for no other: it is a reading
+ * preference about density, not a claim about the practice. Day, view, span, site
+ * and solo stay addressable in the URL and are deliberately not remembered.
+ */
+export const DIARY_COLUMNS_COOKIE = "az_diary_cols";
+
+/** The stored scope, defaulting to "working" for anything unrecognised or unset. */
+export function parseColumnScope(raw: string | null | undefined): ColumnScope {
+  return raw === "all" ? "all" : "working";
+}
+
+/**
+ * Whether a day column may be HIDDEN when the reader has asked for the
+ * clinicians who are working.
+ *
+ * THE PROBLEM. On the Saturday the owner reviewed, ten of thirteen columns said
+ * "Not working" and rendered at COL_MIN_PX anyway, so the three columns with
+ * patients in them were crushed to 112px and the diary scrolled sideways to show
+ * ten empty ones. That is the single biggest readability cost on the screen.
+ *
+ * THREE CONDITIONS, ALL REQUIRED, and each of them is a refusal:
+ *
+ *  1. NOTHING IS BOOKED. Any appointment at all keeps the column -- including a
+ *     cancellation, which is information about an hour somebody could be offered.
+ *  2. NO WORKING TIME. `workingSpans` is availability UNION this clinician's own
+ *     bookings, the same set the column is painted white from. A clinician who is
+ *     IN with an empty book has spans and keeps their column: hiding them would
+ *     hide the practice's free capacity, which is the opposite of the ask.
+ *  3. THE COLUMN IS QUIET. `columnIsLoud` is the existing shared predicate for
+ *     "this one needs a human" -- true for a failed read, and for a clinician who
+ *     might be at another of these practices -- and a column that needs a human
+ *     is never hidden from them. This is what stops the filter from quietly
+ *     disappearing the two states working-spans.ts spends thirty lines keeping
+ *     apart from "Not working".
+ *
+ * A column that survives all three is one we ASKED about, that answered "not
+ * here", and that has nothing on it. Hiding it is a presentation choice about a
+ * fact and not a claim of its own -- and the toggle beside the density switch,
+ * the count on it, the seven-day roster strip and the clinician rail above the
+ * grid all still name everybody.
+ */
+export function columnIsHideable(col: {
+  appointments: readonly unknown[];
+  workState: ColumnWorkState;
+  workingSpans: readonly Span[];
+  workContext?: ColumnWorkContext;
+}): boolean {
+  if (col.appointments.length > 0) return false;
+  if (col.workingSpans.length > 0) return false;
+  return !columnIsLoud(col.workState, col.workContext ?? {});
+}
+
+/**
+ * The day columns actually drawn, and how many were held back.
+ *
+ * TWO REFUSALS the caller must not have to remember:
+ *
+ *  - WHILE THE HOURS READ IS IN FLIGHT, NOTHING IS HIDDEN. Every column's
+ *    working spans are empty until Dentally answers, so a filter applied then
+ *    would blank the diary and refill it a moment later -- the reader would watch
+ *    ten clinicians appear out of nowhere and stop trusting the screen.
+ *  - HIDING EVERY COLUMN IS NEVER ALLOWED. A genuinely empty day (a bank
+ *    holiday, a site shut on Sundays) would otherwise draw a bare time gutter
+ *    with no explanation, which is the confident empty this diary refuses
+ *    everywhere else. When the filter would leave nothing, it does nothing.
+ */
+export function visibleColumns<
+  T extends {
+    appointments: readonly unknown[];
+    workState: ColumnWorkState;
+    workingSpans: readonly Span[];
+    workContext?: ColumnWorkContext;
+  },
+>(
+  columns: readonly T[],
+  scope: ColumnScope,
+  opts: { hoursPending?: boolean } = {},
+): { drawn: T[]; hidden: number } {
+  if (scope === "all" || opts.hoursPending === true) {
+    return { drawn: [...columns], hidden: 0 };
+  }
+  const drawn = columns.filter((c) => !columnIsHideable(c));
+  if (drawn.length === 0) return { drawn: [...columns], hidden: 0 };
+  return { drawn, hidden: columns.length - drawn.length };
 }
 
 // --- opening hours ------------------------------------------------------------
@@ -202,15 +311,26 @@ export function bodyLineCount(heightPx: number): number {
 /**
  * The width a block is DRAWN at, in px, for its share of a column.
  *
- * Measured against COL_MIN_PX and not the column's real width, because the
- * columns are minmax(112px, 1fr): 112 is the width they take on the day the
- * layout matters, which is a Saturday with thirteen clinicians on screen. Any
- * wider screen only ever gives a block MORE room than this says, so a decision
- * made here is never one the reader has to live with at a smaller size. Pure,
- * so the degrade ladder can be tested without a browser.
+ * `columnPx` DEFAULTS to COL_MIN_PX, which is what this function assumed
+ * outright before round 2: 112 is the width columns take on the day the layout
+ * matters, which was a Saturday with thirteen clinicians on screen, and a wider
+ * screen only ever gave a block more room than the ladder promised.
+ *
+ * ROUND 2 CHANGED THAT DAY. With the empty columns hidden, the same Saturday is
+ * three clinicians across 1500px -- 322px a column -- and a block holding HALF of
+ * one is 161px, which the old assumption reported as 56 and demoted to a state
+ * mark and four characters of a name. Measured live, that was a 630px-wide card
+ * printing "C E.Whitfield" and no time.
+ *
+ * So the caller may now say how wide the column really is, and DiaryGrid
+ * measures it rather than guessing. Guessing HIGH is the dangerous direction --
+ * it truncates a patient's name, which is the defect round 1 existed to fix --
+ * so the default stays the minimum, the server render uses it, and every pure
+ * test here still measures the case it was written for.
  */
-export function blockWidthPx(span: number, lanes: number): number {
-  return Math.max(0, Math.round((COL_MIN_PX * Math.max(0, span)) / Math.max(1, lanes)));
+export function blockWidthPx(span: number, lanes: number, columnPx: number = COL_MIN_PX): number {
+  const width = Number.isFinite(columnPx) ? Math.max(COL_MIN_PX, columnPx) : COL_MIN_PX;
+  return Math.max(0, Math.round((width * Math.max(0, span)) / Math.max(1, lanes)));
 }
 
 /**
@@ -255,12 +375,31 @@ export function blockTier(heightPx: number, widthPx: number): BlockTier {
   return RANK_TIER[Math.min(TIER_RANK[byHeight], TIER_RANK[cap])];
 }
 
+/**
+ * At or above this drawn width a block has a WHOLE minimum column to itself, and
+ * can afford to sit further off its own edges.
+ *
+ * COL_MIN_PX exactly, because blockWidthPx measures against that column: a block
+ * reaching it is one whose span covers every lane, which after round 2's
+ * empty-column filter is the ordinary case on a day view with three busy
+ * clinicians across 1500px. Ten pixels of left padding is right for a card
+ * squeezed into a 112px column and mean on one four times that wide, and the
+ * owner's word for the round-1 day view was that the spacing needed to be "a lot
+ * better".
+ */
+export const BLOCK_WIDE_PX = COL_MIN_PX;
+
+/** The gap a block leaves on each side, so a card never touches a column rule. */
+export const BLOCK_INSET_PX = 2;
+
 /** The horizontal chrome a block of this drawn width can afford. */
 export interface BlockChrome {
   /** Time alone on line 1, patient name on line 2. See BLOCK_NARROW_PX. */
   narrow: boolean;
   /** The state mark sits before the text instead of in the top-right corner. */
   inlineGlyph: boolean;
+  /** A block with a whole column to itself. See BLOCK_WIDE_PX. */
+  wide: boolean;
   padLeft: number;
   padRight: number;
   railLeft: number;
@@ -279,21 +418,25 @@ export interface BlockChrome {
 export function blockChrome(widthPx: number): BlockChrome {
   const narrow = widthPx < BLOCK_NARROW_PX;
   const tight = widthPx < BLOCK_MARK_ONLY_PX;
+  const wide = widthPx >= BLOCK_WIDE_PX;
   return {
     narrow,
     // The corner square needs 16px of clear strip. Below the narrow threshold
     // that is a fifth of the block, so the mark moves inline instead of the
     // text being squeezed around it.
     inlineGlyph: narrow,
+    wide,
     // The spine is 3px and the rail sits just inboard of it: 8 clears both at
-    // full size, 7 at the tightened rail.
-    padLeft: tight ? 7 : narrow ? 8 : 10,
+    // full size, 7 at the tightened rail, and 14 gives a card with the whole
+    // column real air between the rail and the patient's name.
+    padLeft: tight ? 7 : narrow ? 8 : wide ? 14 : 10,
     // The clear strip on the right, and it has to hold BOTH marks: the 4px note
     // dot, a 3px gap, and the 13px state square, plus 3px off the edge. 18 was
     // measured on a block without a note and clipped the last two characters of
-    // every patient who had one.
-    padRight: narrow ? 9 : 24,
-    railLeft: narrow ? 3 : 4,
+    // every patient who had one. 24 leaves that strip one spare pixel, which is
+    // right at 112px and tight on a card four times as wide.
+    padRight: narrow ? 9 : wide ? 26 : 24,
+    railLeft: narrow ? 3 : wide ? 5 : 4,
     railWidth: narrow ? 2 : 3,
   };
 }
@@ -514,78 +657,114 @@ export function stateGlyph(state: string): StateGlyph | null {
   return STATE_GLYPHS[state] ?? null;
 }
 
-// --- interior gaps ------------------------------------------------------------
+// --- the open slots, in words -------------------------------------------------
 
-export interface InteriorGap {
+export interface FreeStretch {
   top: number;
   height: number;
   minutes: number;
+  /** The drawn words, e.g. "1h 40m free". Decided here, so it is testable. */
+  label: string;
 }
 
 /**
- * The ONE quantified statement this screen makes about empty time: a span lying
- * strictly BETWEEN two drawn blocks in the same column, INSIDE the clinician's
- * working time and OUTSIDE their breaks.
+ * The shortest stretch that may carry the words, in MINUTES.
  *
- * Gaps before the first block and after the last are never returned, because
- * those are the ones that would presume working hours at the edges of the day.
- * Cancelled and did-not-attend blocks count as occupying their span, so the hole
- * around a cancellation is never double-labelled: the cancelled block's own
- * subtractive treatment is the signal there.
- *
- * WHY THE INTERSECTION EXISTS. An earlier note here said no data source in the
- * repo supported a working-hours claim. That was true before Dentally's own
- * availability was read; it is not true now, and `working` is exactly that
- * source, sitting in the same object as these blocks. Without the intersection,
- * a column with appointments at 12:00 and 15:00 and a lunch hour at 13:00
- * printed "150m" across a span the grid itself was drawing GREY for off and
- * blocking out for lunch: the one number a receptionist reads as bookable,
- * overstating real capacity by the whole off and break portion.
- *
- * `working` empty means "we cannot say", and NOTHING is labelled. That is the
- * correct direction: a figure is a claim, and a claim needs a source.
+ * Fifteen, because that is the grid's own dashed slot rule and the smallest
+ * thing the practice books: a stretch nobody could put an appointment into is not
+ * an open slot, and labelling it would put a number on noise.
  */
-export function interiorGaps(
+export const FREE_LABEL_MIN_MINUTES = 15;
+
+/**
+ * And the shortest it may be DRAWN at, in px. This is the floor that actually
+ * bites, and it bites at Compact.
+ *
+ * 26: the label sets at 10px and its line box is about 13, so 26 leaves six and
+ * a half pixels of air above and below it -- and the cards it sits between spend
+ * a 1px border and 3px of padding of their own, so anything less reads as the
+ * words touching a patient's name. Fifteen minutes, the minute floor above, is
+ * 36px at Normal and 48 at Roomy and gets its words; at Compact it is exactly
+ * 24px and does NOT, which is the right answer for the density a reader picks
+ * when they want the most day on the screen. The label is DROPPED there, never
+ * clipped and never shrunk to fit.
+ */
+export const FREE_LABEL_MIN_PX = 26;
+
+/**
+ * "1h 40m free", "45m free", "2h free".
+ *
+ * The words, and not the bare "140m" this replaced, because the owner's question
+ * is "where are the open slots" and nobody reads capacity in three-digit minutes.
+ * Hours and minutes are how the practice says it aloud; the trailing word is what
+ * makes the number a statement about the diary rather than a duration hanging in
+ * an empty column.
+ */
+export function freeLabel(minutes: number): string {
+  const whole = Math.max(0, Math.round(minutes));
+  const h = Math.floor(whole / 60);
+  const m = whole % 60;
+  if (h === 0) return `${m}m free`;
+  if (m === 0) return `${h}h free`;
+  return `${h}h ${m}m free`;
+}
+
+/**
+ * EVERY GENUINELY FREE STRETCH in a column: inside the clinician's working time,
+ * outside their breaks, and not occupied by anything the grid has drawn.
+ *
+ * ROUND 2 WIDENED THIS, and the widening is the owner's ask -- "open slots etc
+ * need to be clearly visible in the day view". It used to return only a span
+ * lying strictly BETWEEN two drawn blocks, on the reasoning that a stretch at
+ * either END of the day would presume working hours we did not have. We have
+ * them now: `working` is Dentally's own availability unioned with this
+ * clinician's bookings, it is the same set the column is painted white from, and
+ * the intersection below cuts to exactly that. So a clinician working 09:00-17:00
+ * with one appointment at 14:00 now says "5h free" above it and "2h 30m free"
+ * below it, where the old rule's answer was silence.
+ *
+ * `working` empty still means "we cannot say", and NOTHING is labelled. That
+ * direction never changes: a figure is a claim, and a claim needs a source.
+ *
+ * CANCELLED AND DID-NOT-ATTEND BLOCKS STILL COUNT AS OCCUPYING here, exactly as
+ * before. A recoverable hour has an affordance of its own -- the full-width
+ * dashed card, or the counted edge tab -- and printing "1h free" across the same
+ * pixels would make the same statement twice in two vocabularies, one of which a
+ * receptionist reads as "nothing to do here".
+ */
+export function freeStretches(
   placed: readonly { startMin: number; endMin: number }[],
   boundsStartMin: number,
   boundsEndMin: number,
   zoom: Zoom,
-  /** The clinician's white sessions. Omitted or empty means no gap is labelled. */
+  /** The clinician's white sessions. Omitted or empty means nothing is labelled. */
   working: readonly { startMin: number; endMin: number }[] = [],
   /** Breaks. A note does not consume time and does not subtract. */
   breaks: readonly { startMin: number; endMin: number }[] = [],
-): InteriorGap[] {
-  const spans = placed
-    .filter((s) => Number.isFinite(s.startMin) && Number.isFinite(s.endMin) && s.endMin > s.startMin)
-    .map((s) => ({ startMin: s.startMin, endMin: s.endMin }))
-    .sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
-  if (spans.length < 2) return [];
-
-  const merged: { startMin: number; endMin: number }[] = [];
-  for (const s of spans) {
-    const last = merged[merged.length - 1];
-    if (last && s.startMin <= last.endMin) last.endMin = Math.max(last.endMin, s.endMin);
-    else merged.push({ ...s });
-  }
-
+): FreeStretch[] {
   const workable = mergeSpans(working);
-  if (workable.length === 0) return [];
-  const blocked = mergeSpans(breaks);
+  const occupied = mergeSpans([
+    ...placed.filter(
+      (s) => Number.isFinite(s.startMin) && Number.isFinite(s.endMin) && s.endMin > s.startMin,
+    ),
+    ...breaks,
+  ]);
 
-  const out: InteriorGap[] = [];
-  for (let i = 1; i < merged.length; i += 1) {
-    const gapStart = Math.max(merged[i - 1].endMin, boundsStartMin);
-    const gapEnd = Math.min(merged[i].startMin, boundsEndMin);
-    if (gapEnd <= gapStart) continue;
-    // The hole, cut down to the time the clinician is actually here, then cut
-    // again around their breaks. What survives is genuinely bookable.
-    for (const piece of subtractSpans(intersectSpans({ startMin: gapStart, endMin: gapEnd }, workable), blocked)) {
-      const minutes = piece.endMin - piece.startMin;
-      if (minutes < 15) continue;
-      const { top, height } = blockEdges(piece.startMin, piece.endMin, boundsStartMin, zoom);
-      if (height < 20) continue;
-      out.push({ top, height, minutes });
-    }
+  // The white sessions, clipped to the drawn day, with everything on them taken
+  // out. What survives is bookable time and nothing else.
+  //
+  // NO SOURCE, NO FIGURE, and it falls out of THIS line rather than out of a
+  // guard above it: with no working spans there is nothing to intersect with, so
+  // nothing is labelled. An early return beside it would have been a second
+  // enforcement of one rule, which is a line no mutation can kill.
+  const inView = intersectSpans({ startMin: boundsStartMin, endMin: boundsEndMin }, workable);
+  const out: FreeStretch[] = [];
+  for (const piece of subtractSpans(inView, occupied)) {
+    const minutes = piece.endMin - piece.startMin;
+    if (minutes < FREE_LABEL_MIN_MINUTES) continue;
+    const { top, height } = blockEdges(piece.startMin, piece.endMin, boundsStartMin, zoom);
+    if (height < FREE_LABEL_MIN_PX) continue;
+    out.push({ top, height, minutes, label: freeLabel(minutes) });
   }
   return out;
 }
@@ -903,6 +1082,32 @@ export function dayCounts(appts: readonly { state: string }[]): DayCounts {
     if (a.state === "pending") pending += 1;
   }
   return { booked, pending, cancelled, noShow };
+}
+
+/**
+ * What ONE coalesced edge tab stands for, in words: "3 cancelled", "2 no-show",
+ * "2 cancelled, 1 no-show".
+ *
+ * The tab itself is fourteen pixels wide and can carry a digit and nothing else,
+ * so this is what reaches the reader through the tab's hover title and its
+ * announced sentence. The segments and their words are `columnCounts`' own, so a
+ * run of three cancellations is worded identically on the tab and in the header
+ * above it -- two vocabularies for one fact is how "3 cancelled" and "3 missed"
+ * end up on the same screen.
+ *
+ * Empty in, empty out: a tab with nothing behind it says nothing rather than "0".
+ */
+export function recoverableRunSummary(rows: readonly { state: string }[]): string {
+  let cancelled = 0;
+  let noShow = 0;
+  for (const r of rows) {
+    if (r.state === "cancelled") cancelled += 1;
+    else if (r.state === "did_not_attend") noShow += 1;
+  }
+  const parts: string[] = [];
+  if (cancelled > 0) parts.push(`${cancelled} cancelled`);
+  if (noShow > 0) parts.push(`${noShow} no-show`);
+  return parts.join(", ");
 }
 
 /** A column header's second line: only the non-zero segments, else "Nothing booked". */

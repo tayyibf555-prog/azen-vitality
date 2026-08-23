@@ -287,6 +287,97 @@ describe("a cancelled or missed booking never takes width off a patient", () => 
   });
 });
 
+// ===========================================================================
+// ROUND 2, ITEM 1: THE PICKET FENCE.
+//
+// Round 1 gave every shadowed recoverable row its OWN 14px tab. On the owner's
+// Saturday four of them touched inside one hour and what he saw at 12:00 was a
+// fence of thin bars carrying X, X, DNA, X. Contiguous recoverables now share
+// ONE tab carrying the count.
+// ===========================================================================
+describe("contiguous recoverables coalesce into one counted edge tab", () => {
+  /** The owner's 12:00 hour: one live booking, four recoverable rows on top. */
+  const PILE = [
+    at("11:00", 60, "confirmed"),
+    at("11:00", 15, "cancelled"),
+    at("11:10", 20, "cancelled"),
+    at("11:25", 20, "did_not_attend"),
+    at("11:40", 20, "cancelled"),
+  ];
+
+  it("gives four touching cancellations ONE run, and one tab that paints it", () => {
+    const tabs = layoutColumn(PILE).filter((p) => p.strip);
+    expect(tabs).toHaveLength(4);
+    expect(tabs.every((t) => t.stripRun?.count === 4)).toBe(true);
+    // Exactly one of them paints: the rest are transparent hit targets.
+    expect(tabs.filter((t) => t.stripRun?.index === 0)).toHaveLength(1);
+  });
+
+  it("draws that one tab over the whole run, 12:00 to 13:00", () => {
+    const lead = layoutColumn(PILE).find((p) => p.stripRun?.index === 0);
+    expect(lead?.stripRun?.startMin).toBe(londonOf("11:00"));
+    expect(lead?.stripRun?.endMin).toBe(londonOf("12:00"));
+  });
+
+  it("sorts the painting tab BEFORE the rows it stands for", () => {
+    // DOM order is paint order: the tab has to go down first or the transparent
+    // hit targets end up underneath it and stop taking clicks.
+    const tabs = layoutColumn(PILE).filter((p) => p.strip);
+    expect(tabs.map((t) => t.stripRun?.index)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("keeps every row: four ids in, four blocks out", () => {
+    expect(layoutColumn(PILE)).toHaveLength(PILE.length);
+    expect(layoutColumn(PILE).filter((p) => !p.strip)).toHaveLength(1);
+  });
+
+  it("joins two recoverables that merely TOUCH, because they already drew as one bar", () => {
+    const out = layoutColumn([
+      at("11:00", 60, "confirmed"),
+      at("11:00", 15, "cancelled"),
+      at("11:15", 15, "cancelled"),
+    ]);
+    expect(out.filter((p) => p.strip).every((p) => p.stripRun?.count === 2)).toBe(true);
+  });
+
+  it("starts a fresh run after a gap, so two hours are two tabs", () => {
+    const out = layoutColumn([
+      at("09:00", 480, "confirmed"),
+      at("09:00", 15, "cancelled"),
+      at("11:00", 15, "cancelled"),
+      at("11:10", 15, "cancelled"),
+    ]);
+    const tabs = out.filter((p) => p.strip);
+    expect(tabs.map((t) => t.stripRun?.count)).toEqual([1, 2, 2]);
+    expect(tabs.filter((t) => t.stripRun?.index === 0)).toHaveLength(2);
+  });
+
+  it("leaves a lone shadowed cancellation exactly as round 1 drew it", () => {
+    // A run of one: the state mark, not a count of 1. Nothing changed for it.
+    const out = layoutColumn([at("09:00", 30, "confirmed"), at("09:00", 30, "cancelled")]);
+    const tab = out.find((p) => p.strip);
+    expect(tab?.stripRun?.count).toBe(1);
+    expect(tab?.stripRun?.startMin).toBe(londonOf("09:00"));
+  });
+
+  it("puts the LONGER row first when two start together, so neither loses its click", () => {
+    // Later members are painted over earlier ones. Longest-first on a tie is what
+    // leaves a row nested inside another with pixels of its own below it.
+    const out = layoutColumn([
+      at("11:00", 60, "confirmed"),
+      at("11:00", 15, "cancelled"),
+      at("11:00", 45, "cancelled"),
+    ]);
+    const tabs = out.filter((p) => p.strip).sort((a, b) => (a.stripRun?.index ?? 0) - (b.stripRun?.index ?? 0));
+    expect(tabs.map((t) => t.endMin - t.startMin)).toEqual([45, 15]);
+  });
+
+  it("never gives an ORDINARY block a run", () => {
+    const out = layoutColumn([at("09:00", 30, "confirmed"), at("11:00", 30, "cancelled")]);
+    expect(out.every((p) => p.stripRun === null)).toBe(true);
+  });
+});
+
 describe("the lane cap: a fourth simultaneous booking is stacked, not shredded", () => {
   const FIVE = Array.from({ length: 5 }, () => at("09:00", 30));
 

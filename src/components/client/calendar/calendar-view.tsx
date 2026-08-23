@@ -15,7 +15,12 @@ import { isPatientAdminRole } from "@/lib/patient/roles";
 import { isDentallyWriteEnabled } from "@/lib/dentally/write";
 import { CalendarBoard, type PractitionersForSite } from "./calendar-board";
 import type { DiaryDaySeed } from "./use-diary-day";
-import { DIARY_ZOOM_COOKIE, parseZoom } from "./diary-view";
+import {
+  parseColumnScope,
+  parseZoom,
+  DIARY_COLUMNS_COOKIE,
+  DIARY_ZOOM_COOKIE,
+} from "./diary-view";
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -99,9 +104,14 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
     practitionersFailed = true;
   }
 
-  // The remembered row height is read HERE, not from localStorage after hydration,
-  // so the first paint is already the right density and nothing corrects itself.
-  const zoom = parseZoom((await cookies()).get(DIARY_ZOOM_COOKIE)?.value);
+  // The remembered row height and column scope are read HERE, not from
+  // localStorage after hydration, so the first paint is already the right density
+  // with the right columns and nothing corrects itself under the reader. Both are
+  // reading preferences and nothing else: day, view, span, site and the soloed
+  // clinician all stay addressable in the URL.
+  const cookieJar = await cookies();
+  const zoom = parseZoom(cookieJar.get(DIARY_ZOOM_COOKIE)?.value);
+  const columnScope = parseColumnScope(cookieJar.get(DIARY_COLUMNS_COOKIE)?.value);
 
   const initialSite = scope.isAllSites ? sites[0]?.id ?? "" : scope.selection;
   const initialDay = londonDayKey(now);
@@ -181,6 +191,7 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
       windowTo={windowTo}
       clientSlug={clientSlug}
       initialZoom={zoom}
+      initialColumnScope={columnScope}
     />
   );
 }

@@ -200,6 +200,19 @@ export function DiaryKey() {
             }
             label="A slim tab at the column's edge: a cancellation or no-show in an hour that is also booked"
           />
+          {/* A NUMBER on that tab, which is round 2's answer to four tabs in one
+              hour. It is a count and not a state letter, so it needs saying. */}
+          <Item
+            mark={
+              <span
+                aria-hidden
+                className="flex h-[14px] w-[8px] shrink-0 items-center justify-center rounded-[2px] border border-dashed border-line-strong bg-card text-[8px] font-bold text-muted"
+              >
+                3
+              </span>
+            }
+            label="A number on that tab: how many cancellations and no-shows run together there. Hover it for the names"
+          />
         </Row>
 
         <p className="text-[10px] font-medium leading-[1.45] text-muted">
