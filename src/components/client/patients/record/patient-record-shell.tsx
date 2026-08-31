@@ -5,6 +5,7 @@ import { getPatientRecordInScope } from "@/lib/patient/record";
 import { getOverride } from "@/lib/patient-status/repository";
 import { readNotesForRecord } from "@/lib/patient-notes/server-read";
 import { readMedicalReviewForHeader } from "@/lib/patient-medical/server-read";
+import { logPatientView } from "@/lib/patient-recents/server";
 import { patientTabHref } from "@/lib/patient/tabs";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
 import { PatientRecordHeader } from "./patient-record-header";
@@ -55,6 +56,33 @@ export async function PatientRecordShell({
   // and "outside your scope" alike so the 404 below cannot distinguish them.
   const record = await getPatientRecordInScope(patientId, scope.siteIds);
   if (!record) notFound();
+
+  // THE RECENTS LOG. Deliberately placed AFTER both notFound() guards above: by
+  // this line the patient has been resolved AND checked against the site-switcher
+  // scope, so what gets recorded is only ever a patient this user was actually
+  // allowed to see — and the name and site id are already in hand rather than
+  // costing a second read. This component is also the single seam that BOTH trees
+  // (/c and /owner) funnel every record open through, which is why the call is
+  // here and not duplicated in two page files.
+  //
+  // VOIDED RATHER THAN AWAITED, and that is the tradeoff taken with eyes open.
+  // Awaiting would put a database write in front of every patient record open, on
+  // the one page in the platform whose whole design — a layout rather than a page,
+  // a server-seeded notes band — exists so that it paints in a single pass. The
+  // price of voiding is that Next may finish the response before the insert lands
+  // and the opening is then not recorded. A dropped entry in a "where was I" list
+  // is the cheapest failure on offer here.
+  //
+  // This is safe ONLY because logPatientView cannot reject: it catches at its own
+  // boundary, session lookup included. A floating promise that CAN reject is an
+  // unhandled rejection at the process level, which would be a far worse outcome
+  // than the feature simply not working.
+  void logPatientView({
+    clientId: client.id,
+    patientId: record.patient.id,
+    patientName: record.patient.name,
+    siteId: record.patient.siteId,
+  });
 
   const siteName = getSite(record.patient.siteId)?.name ?? record.patient.siteId;
   // A failed override read must not 500 the record, and it must not be SILENT either.

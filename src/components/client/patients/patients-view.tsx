@@ -5,7 +5,9 @@ import { listPatients, countPatients, getPatientById, type PatientRecord } from 
 import { getPatientCounts } from "@/lib/patient-count/repository";
 import { listOverridesForSites } from "@/lib/patient-status/repository";
 import type { PatientAdminStatus } from "@/lib/patient-status/types";
+import { readRecentsForUser } from "@/lib/patient-recents/server";
 import { PatientsTable } from "./patients-table";
+import { RecentPatientsStrip } from "./recent-patients-strip";
 
 /** A quiet big-numeral text stat for the header row (was a boxed stat card). */
 function HeaderStat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
@@ -40,6 +42,16 @@ export async function PatientsView({
   }
 
   const scope = await getViewScope(client.id);
+
+  // The recents strip's read, STARTED HERE and awaited below so it overlaps the
+  // Dentally fetches instead of adding a round trip in front of them. It is kept
+  // out of the Promise.all beneath on purpose: that one is wrapped in a try that
+  // empties the patients list, and a recents failure must not blank the patients
+  // table any more than a Dentally outage should be allowed to decide what this
+  // user's history looks like. Fail-soft inside (it reports ok:false rather than
+  // throwing), so this promise cannot reject and needs no catch at the await.
+  const recentsPromise = readRecentsForUser({ clientId: client.id, siteIds: scope.siteIds });
+
   // Load only a bounded first slice (~300) so the page is fast on a real-size
   // practice (~8k patients would otherwise be ~80 sequential Dentally calls). The
   // table's search box runs a server-side Dentally query to reach anyone beyond it.
@@ -98,6 +110,11 @@ export async function PatientsView({
   const activeInSlice = activePatients.length;
   const dueRecall = patients.filter((p) => p.recallDueAt && p.recallDueAt <= nowIso).length;
 
+  const recents = await recentsPromise;
+  // One base path for both the strip and the table, so a recent patient and a
+  // listed patient can never be linked into different trees.
+  const base = basePath ?? `/c/${clientSlug}`;
+
   return (
     <>
       {/* Header row: title + the same three counts as inline text stats. */}
@@ -136,11 +153,16 @@ export async function PatientsView({
         </p>
       </section>
 
+      {/* Above the table, below the header: the shortcut is read on the way TO the
+          list, not found inside it. Renders nothing at all when there is nothing to
+          show or when the read failed — see the component for why both are null. */}
+      <RecentPatientsStrip read={recents} basePath={base} />
+
       <PatientsTable
         patients={activePatients}
         nowIso={nowIso}
         clientSlug={clientSlug}
-        basePath={basePath ?? `/c/${clientSlug}`}
+        basePath={base}
         initialFilter="active"
         overrides={overrides}
         requestedPatientId={patientId}

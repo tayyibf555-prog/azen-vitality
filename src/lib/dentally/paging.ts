@@ -97,3 +97,83 @@ export async function pageToCeiling<T>(
   // read either, and the difference is the whole reason this flag exists.
   return { rows, truncated: true };
 }
+
+/** What a walk that CAN measure itself brings back. */
+export interface CompleteRead<T> {
+  rows: T[];
+  /**
+   * True only when the walk can PROVE it read everything: either Dentally's own
+   * `meta.total` was reached, or the walk ended on a short page having never been
+   * told a total. False when it hit the page ceiling, or when it stopped short of a
+   * total the endpoint published.
+   */
+  complete: boolean;
+  /** Dentally's own row count for this query, when it published one. */
+  total: number | null;
+}
+
+/**
+ * Page ONE PATIENT'S history to the end, and MEASURE whether it got there.
+ *
+ * WHY THIS EXISTS, AND IT IS A REAL DEFECT AND NOT A REFINEMENT. The practice owner
+ * compared this platform's Correspondence tab against Dentally's own and said of ours:
+ * "it only goes back to a certain date, which is only to May". The reader behind it
+ * (src/lib/dentally/sms.ts) walked pages in a hand-rolled loop and stopped on the first
+ * page shorter than the size it asked for — the classic short-page heuristic — with NO
+ * completeness signal of any kind. Two things make that stop early and silently:
+ *
+ *   1. SEVERAL DENTALLY ENDPOINTS SILENTLY CAP per_page BELOW WHAT YOU ASK FOR.
+ *      Measured on /v1/payments and /v1/nhs_claims (see client.ts): asking for 200,
+ *      250 or 500 returns 25. An endpoint that caps a requested 100 at 25 hands back a
+ *      page of 25, the short-page rule reads that as "the end of the list", and the
+ *      walk stops on page one holding a quarter of the history. Rows come back NEWEST
+ *      FIRST, so what survives is the recent end and what is lost is everything before
+ *      it — which is precisely the shape of the complaint.
+ *   2. Even without a cap, the page ceiling was a silent stop: ten pages in, the loop
+ *      simply ended and the caller was told nothing.
+ *
+ * `meta.total` IS THE FIX AND IT WAS THERE ALL ALONG. Live read-only probe 2026-08-31:
+ * GET /v1/sms?patient_id=40000&per_page=100 returns `meta: {total: 19, page: 1}`. The
+ * old loop never looked at it. With it, a walk can compare what it HAS against what
+ * Dentally SAYS there is, and answer the only question that matters on a clinical
+ * record: is this the whole history, or only the part I could reach?
+ *
+ * AN INCOMPLETE READ MUST SAY SO. That is the contract, and `complete: false` is how
+ * this function delivers it. A correspondence list quietly missing everything before
+ * May tells a reader, by its silence, that nothing was said to that patient before May.
+ *
+ * `total: null` — an endpoint that publishes no count — is NOT treated as a failure.
+ * The walk then falls back to the short-page stop exactly as pageToCeiling does, and
+ * reports complete, because that is the strongest honest claim available.
+ */
+export async function pageToCompletion<T>(
+  fetchPage: (page: number, perPage: number) => Promise<{ rows: T[]; total: number | null }>,
+  perPage: number,
+  maxPages: number,
+): Promise<CompleteRead<T>> {
+  const rows: T[] = [];
+  let total: number | null = null;
+  for (let page = 1; page <= maxPages; page += 1) {
+    const batch = await fetchPage(page, perPage);
+    // The FIRST page's total is the one kept. A later page reporting a different count
+    // means rows were written while we walked; re-anchoring to it mid-walk would let a
+    // shrinking total make an incomplete read look finished.
+    if (total === null) total = batch.total;
+    rows.push(...batch.rows);
+
+    // KNOWN TOTAL REACHED. The only branch that can prove completeness outright.
+    if (total !== null && rows.length >= total) return { rows, complete: true, total };
+
+    // A page shorter than requested. With a published total this is NOT the end — it
+    // is the silent-cap case above, and the walk must keep going or it repeats the
+    // exact bug. `batch.rows.length === 0` is the real terminator there: an endpoint
+    // handing back nothing has no more to give, whatever its total claims.
+    if (batch.rows.length === 0) {
+      return { rows, complete: total === null || rows.length >= total, total };
+    }
+    if (batch.rows.length < perPage && total === null) return { rows, complete: true, total };
+  }
+  // Ran out of pages. If a total was published we know exactly how short we fell; if
+  // not, we only know we never saw the end. Neither is complete.
+  return { rows, complete: false, total };
+}

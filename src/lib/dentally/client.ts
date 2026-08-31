@@ -759,6 +759,127 @@ export class DentallyClient {
   }
 
   /**
+   * ONE patient's DOCUMENTS — the signed iPad forms Dentally files against a record.
+   *
+   * WHY THIS EXISTS. The Correspondence tab stated, in writing, that Dentally's
+   * "letters, email and scanned documents are not [shown], because Dentally does not
+   * return them". That was written as an honest answer and it was WRONG about the
+   * documents half: `/v1/patient_documents` answers 200 on a per-patient read with the
+   * practice's existing key. It is the same failure mode as the invented
+   * `/v1/patient_notes` path and as the old "/v1/sms is not exposed" claim — a
+   * permanent statement about the connection, made once, never re-checked.
+   *
+   * PROVENANCE — read-only GETs, api.dentally.co, 2026-08-31, four patients:
+   *
+   *   patient_id=15     200, meta {total: 2, page: 1}, 2 rows
+   *   patient_id=56194  200, meta {total: 0, page: 1}, 0 rows
+   *   patient_id=40000  200, meta {total: 5, page: 1}, 5 rows
+   *   patient_id=30000  200, meta {total: 1, page: 1}, 1 row
+   *
+   * Envelope key is `patient_documents`; `meta` carries `total` and `page` (note: NOT
+   * `total_pages` — /v1/emails publishes that one, this does not, so do not carry the
+   * grammar across). Row keys, identical on all 8 rows: id, created_at, form_completed,
+   * form_id, requires_signing, description, patient_id, url, signed, signed_at,
+   * skip_signing_after_signature_ref, updated_at, additional_fields, appointment_ids.
+   *
+   * WHAT THE 8 ROWS ACTUALLY WERE, WHICH IS THE FINDING THAT MATTERS. Every single one
+   * was `description: "NHS PR"` with a `form_id` in the `nhs_pr_*` family (nhs_pr_en,
+   * nhs_pr_r10_en, nhs_pr_r11_en), `signed: true`, `requires_signing: false`,
+   * `form_completed: false`, `additional_fields: {}`. NOT ONE was a scanned or uploaded
+   * paper document. The practice owner showed old scanned uploads on Dentally's own
+   * correspondence pages — "MH" medical-history scans, hospital letters — and none of
+   * them is here. Each of those four reads was a COMPLETE list (meta.total equalled the
+   * row count every time), so this is not a paging artefact.
+   *
+   * AND THERE IS NO OTHER ROUTE FOR THEM. `/v1/documents` and `/v1/patient_files` both
+   * return a bare 404 "Not Found" (contrast the real routes, which answer 422 with a
+   * named missing parameter — see getPatientEmails). So scanned uploads are, on
+   * everything that can be probed, UNREACHABLE, and the tab says exactly that rather
+   * than implying the document list is the whole of Dentally's correspondence page.
+   *
+   * `appointment_ids` is sometimes populated (3 of 8 rows), linking a form to the
+   * appointment it was signed for. `additional_fields` was `{}` on all 8 — never
+   * observed carrying anything, so nothing may be read out of it.
+   *
+   * THE `url` IS A PRESIGNED S3 LINK THAT EXPIRES. It points at
+   * dentally-assets.s3.eu-west-1.amazonaws.com and carries X-Amz-Expires /
+   * X-Amz-Date / X-Amz-Signature. Observed X-Amz-Expires: 42033 and 42001 seconds —
+   * about ELEVEN AND A HALF HOURS — with X-Amz-Date stamped at the instant of THIS
+   * GET. So the link is minted fresh per read and dies the same working day. Baking one
+   * into rendered HTML gives a link that works this afternoon and 404s tomorrow morning,
+   * which is worse than no link because it looks like the document is gone. The record
+   * screen therefore links at a route of ours that re-reads this endpoint at CLICK time
+   * (src/app/api/patient-documents/route.ts) and redirects to whatever URL Dentally
+   * mints then.
+   *
+   * READ ONLY. There is no create/update/delete method here and none may be added:
+   * these are signed clinical consent records, and a write path against them is not
+   * something this platform is entitled to have. The client-wide readOnly latch already
+   * refuses it; this comment is why it must stay refused.
+   *
+   * The envelope is returned RAW like every other read here; documentsFromEnvelope in
+   * ./documents-shape unwraps it and refuses a shape it does not recognise.
+   */
+  getPatientDocuments(patientId: string, page = 1, perPage = 100) {
+    return this.get<Record<string, unknown>>("/v1/patient_documents", {
+      patient_id: patientId, page, per_page: perPage,
+    });
+  }
+
+  /**
+   * ONE patient's EMAILS as Dentally holds them.
+   *
+   * BOTH PARAMETERS ARE MANDATORY, and that is measured, not assumed. Read-only probes,
+   * 2026-08-31:
+   *
+   *   GET /v1/emails                      422 {"errors":["patient_id is required"]}
+   *   GET /v1/emails?patient_id=15        422 {"errors":["external_provider is required"]}
+   *
+   * So there is NO practice-wide index — this is a per-patient poll or nothing, exactly
+   * like /v1/sms — and `external_provider` has to be sent on every call. Both values are
+   * accepted; the endpoint answers 200 for "true" and for "false" alike.
+   *
+   * THE FINDING: IT IS EMPTY. Six reads — patients 15, 40000 and 56194, each in both
+   * buckets — every one 200 with `{emails: [], meta: {total: 0, current_page: 1,
+   * total_pages: 0}}`. Zero rows, on every patient and in every bucket. Those three
+   * include the practice's most recently active records (40000 has 19 Dentally SMS and
+   * five signed forms), so this is not a matter of having sampled dormant patients.
+   *
+   * This CONFIRMS rather than overturns the standing note in
+   * src/lib/inbox/dentally-merge.ts ("/v1/emails answers but is empty for every
+   * patient"). It also means the practice owner's belief that a patient has "emails we
+   * sent him" in Dentally is not something this endpoint can evidence — whatever holds
+   * those, it is not this route, and the screen must not imply otherwise.
+   *
+   * THEREFORE THE ROW SHAPE IS UNKNOWN. Not one row has ever been observed, by anybody,
+   * on this practice. That is a materially weaker standing than /v1/sms (three patients,
+   * real rows, field names recorded) or /v1/patient_documents (eight real rows). So
+   * ./emails-shape does NOT throw on an unfamiliar row the way ./sms-shape does — it
+   * tolerates several plausible field spellings and REPORTS what it could not place, on
+   * the screen, rather than either dropping a real email or failing the whole read
+   * because a field was named something we did not predict. An email a clinician cannot
+   * see is the failure this whole build exists to remove; refusing to render one because
+   * we guessed its key name wrong would reintroduce it.
+   *
+   * `total_pages` IS published on this envelope's meta and is NOT on
+   * /v1/patient_documents'. The two grammars are genuinely different; never carry one
+   * across by analogy (see listNhsClaims for what that costs).
+   *
+   * READ ONLY, and here the reason is the same as /v1/sms's and just as serious:
+   * Dentally sends mail on the practice's behalf, so a POST to this path is far more
+   * likely to TRANSMIT A REAL EMAIL to a real patient than to file a log entry. Nothing
+   * may ever send a non-GET here and nothing may probe it to find out.
+   */
+  getPatientEmails(patientId: string, externalProvider: boolean, page = 1, perPage = 100) {
+    return this.get<Record<string, unknown>>("/v1/emails", {
+      patient_id: patientId,
+      external_provider: String(externalProvider),
+      page,
+      per_page: perPage,
+    });
+  }
+
+  /**
    * Payments, for the dashboard takings strip.
    *
    * THE DATE FILTER WORKS, AND THIS COMMENT USED TO SAY IT DID NOT.

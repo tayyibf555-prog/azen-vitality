@@ -346,6 +346,12 @@ const EXEMPT: Record<string, Exemption> = {
     roles: RECORD_ROLES,
     reason: "voice dictation for those notes; same gate as its parent. Shipped with requireUser alone (any signed-in role, and a paid third-party call), closed as part of adding the fifth role",
   },
+  "patient-documents": {
+    kind: "clinician",
+    slug: "patients",
+    roles: RECORD_ROLES,
+    reason: "opens one of Dentally's signed forms from the Correspondence tab. Read-only, and it exists ONLY because Dentally's document links are presigned S3 URLs that expire in ~11.5 hours, so the record cannot bake one in and must fetch a live one at click time. Gated exactly like the record it hangs off: the four record roles, closed to client_staff. The patient->document ownership check is structural rather than a remembered line — readDocumentUrl looks the id up inside THAT patient's own list, so there is no path that fetches a document by id alone",
+  },
   "charting/draft": {
     kind: "clinician",
     slug: "patients",
@@ -542,6 +548,7 @@ const RECORD_TIER_GUARDS = new Set<string>([
   "dentally/patients/[id]",
   "patient-notes",
   "patient-notes/transcribe",
+  "patient-documents",
   "charting/draft",
   "perio/[action]",
   "medical-history/[action]",
@@ -875,8 +882,13 @@ describe("the clinician exemptions name their roles, and deny every other role p
     .filter(([, e]) => e.kind === "clinician")
     .map(([r]) => r);
 
-  it("there are thirteen of them and every one names its roles (the sweep is not vacuous)", () => {
-    expect(clinicianRoutes).toHaveLength(13);
+  it("there are fourteen of them and every one names its roles (the sweep is not vacuous)", () => {
+    // Fourteen since 2026-08-31, when the Correspondence tab gained
+    // /api/patient-documents. The count is deliberately hard-coded rather than
+    // derived: it is the thing that makes somebody adding a record-tier route come
+    // and read this block and state who the new route is closed to, instead of
+    // quietly joining a list that grows without anybody looking at it.
+    expect(clinicianRoutes).toHaveLength(14);
     for (const route of clinicianRoutes) {
       expect(EXEMPT[route].roles, `${route} must name its roles`).toBeDefined();
       expect(EXEMPT[route].roles!.length).toBeGreaterThan(0);
@@ -884,7 +896,7 @@ describe("the clinician exemptions name their roles, and deny every other role p
     // Both halves of the exposure are represented, so a future edit cannot shrink
     // this to the easy cases: the diary and the patient database.
     expect(clinicianRoutes.filter((r) => EXEMPT[r].slug === "calendar").length).toBe(4);
-    expect(clinicianRoutes.filter((r) => EXEMPT[r].slug === "patients").length).toBe(9);
+    expect(clinicianRoutes.filter((r) => EXEMPT[r].slug === "patients").length).toBe(10);
   });
 
   it.each(clinicianRoutes)("%s: every role it does not name is refused by a guard in its source", (route) => {

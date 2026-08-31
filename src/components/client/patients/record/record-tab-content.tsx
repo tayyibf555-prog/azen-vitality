@@ -1,5 +1,10 @@
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { getClient, getSite } from "@/lib/mock/clients";
+import {
+  CORRESPONDENCE_VIEW_COOKIE,
+  parseCorrespondenceView,
+} from "@/lib/patient/correspondence-view";
 import { getViewScope } from "@/lib/site-view";
 import { getPatientRecordInScope } from "@/lib/patient/record";
 import { getOverride } from "@/lib/patient-status/repository";
@@ -205,24 +210,53 @@ export async function RecordTabContent({
   }
 
   if (slug === "correspondence") {
-    // getPatientCorrespondence reads all twelve platform message stores plus, when it
-    // is switched on, Dentally's own SMS log, and reports WHICH of them threw. The tab
-    // needs that to tell "none were sent" from "some sources are down" from "we know
-    // nothing" from "Dentally's own history is not switched on". A total failure
-    // returning null used to render as "no messages have been sent to this patient
-    // from this platform", in writing, on a clinical record.
-    const read = await getPatientCorrespondence([siteId], patient.id, patient.name).catch(() => ({
-      messages: [],
-      failedSources: ["Message history"],
-      totalSources: 1,
-      dentally: "failed" as const,
-    }));
+    // getPatientCorrespondence reads all twelve platform message stores plus, when they
+    // are switched on, Dentally's own SMS log, its documents and its email — and reports
+    // WHICH of them threw. The tab needs that to tell "none were sent" from "some
+    // sources are down" from "we know nothing" from "that Dentally read is not switched
+    // on". A total failure returning null used to render as "no messages have been sent
+    // to this patient from this platform", in writing, on a clinical record.
+    //
+    // The remembered layout is read HERE, server side, exactly as the diary reads its
+    // density and column cookies — so the first paint is already the shape the reader
+    // asked for and the list does not reshuffle under them after hydration.
+    const [read, cookieJar] = await Promise.all([
+      getPatientCorrespondence([siteId], patient.id, patient.name).catch(() => ({
+        messages: [],
+        timeline: { entries: [], undated: [] },
+        failedSources: ["Message history"],
+        totalSources: 1,
+        dentally: "failed" as const,
+        documents: "failed" as const,
+        emails: "failed" as const,
+        unreadableEmails: 0,
+        dentallyComplete: true,
+      })),
+      cookies(),
+    ]);
     return (
       <TabCorrespondence
-        messages={read.messages}
+        timeline={read.timeline}
         failedSources={read.failedSources}
         totalSources={read.totalSources}
         dentally={read.dentally}
+        documents={read.documents}
+        emails={read.emails}
+        unreadableEmails={read.unreadableEmails}
+        dentallyComplete={read.dentallyComplete}
+        view={parseCorrespondenceView(cookieJar.get(CORRESPONDENCE_VIEW_COOKIE)?.value)}
+        // A STRING, assembled here, with the document id appended per row on the client.
+        // Handing the client component a function to build it would put a callback
+        // across the RSC boundary — the crash this repo already shipped once.
+        //
+        // Null while the documents read is off, so the timeline renders no link rather
+        // than one that would 404 on a route which refuses to read.
+        documentHrefBase={
+          read.documents === "ok"
+            ? `/api/patient-documents?client=${encodeURIComponent(clientSlug)}` +
+              `&siteId=${encodeURIComponent(siteId)}&patientId=${encodeURIComponent(patient.id)}`
+            : null
+        }
       />
     );
   }

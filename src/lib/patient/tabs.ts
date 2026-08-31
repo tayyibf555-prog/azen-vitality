@@ -455,6 +455,34 @@ export const CORRESPONDENCE_COPY = {
     "own replies are here too, with the two exceptions noted below this list. " +
     "This history is held HERE, not in Dentally, and none of it is written back, so Dentally's own record " +
     "of this patient does not show it. Messages sent from Dentally itself are not shown on this screen.",
+  /**
+   * THE SENTENCE THAT WAS FALSE, AND THE THIRD TIME THIS TAB HAS HAD ONE.
+   *
+   * What stood here until 2026-08-31 was: "SMS sent or received through Dentally is
+   * also included, marked Dentally; its letters, email and scanned documents are not,
+   * because Dentally does not return them."
+   *
+   * The clause after the semicolon was an assertion about the CONNECTION, made once
+   * and never re-checked, and read-only probes on 2026-08-31 broke two thirds of it:
+   *
+   *   DOCUMENTS  /v1/patient_documents answers 200 on a per-patient read with the key
+   *              the practice already holds. Eight real rows across four patients.
+   *              "Dentally does not return them" was simply untrue.
+   *   EMAIL      /v1/emails answers 200 too. It is not that Dentally refuses to return
+   *              email; it is that it returned NONE — zero rows on every patient and
+   *              in both of its two mandatory buckets. A different fact, and the
+   *              difference is exactly the one this file exists to keep straight.
+   *   SCANNED    still not reachable, and now on evidence rather than on assumption:
+   *              every one of those eight documents was a signed iPad form, no scanned
+   *              upload appeared on any patient, and /v1/documents and
+   *              /v1/patient_files both 404.
+   *
+   * This is the same defect as the tab's earlier "Dentally does not expose its
+   * correspondence" (false: /v1/sms) and as the clinical-notes read pointed at an
+   * invented /v1/patient_notes path. The replacement therefore does what the scope
+   * block's own header already demands: it states what is ON THIS SCREEN and what was
+   * MEASURED, and it does not claim anything permanent about what Dentally can do.
+   */
   scopeWithDentally:
     "Every message this platform has sent to this patient: " +
     "recall, reactivation, appointment confirmations and changes, treatment follow-ups, aftercare " +
@@ -463,9 +491,65 @@ export const CORRESPONDENCE_COPY = {
     "The one exception is a message sent to a number that could not be matched to this record, which " +
     "stays in the Conversations inbox under that number. Their " +
     "own replies are here too, with the two exceptions noted below this list. " +
-    "SMS sent or received through Dentally is also included, marked Dentally; its letters, email and " +
-    "scanned documents are not, because Dentally does not return them. Nothing on this screen is written " +
-    "back into Dentally, so a colleague working in Dentally sees only Dentally's own messages.",
+    "SMS sent or received through Dentally is also included, marked Dentally. Nothing on this screen is " +
+    "written back into Dentally, so a colleague working in Dentally sees only Dentally's own messages.",
+  /**
+   * What the screen says once the DOCUMENTS read is switched on. Appended to the scope
+   * band rather than folded into the sentence above, so the claim is made only in the
+   * state that delivers it: a scope sentence promising documents while the read is off
+   * is the same failure as the one it replaced, pointing the other way.
+   */
+  scopeDocuments:
+    "The forms Dentally holds for this patient are listed here too, each with the date it was filed and " +
+    "whether it was signed. Opening one fetches it from Dentally at the moment you click, because the " +
+    "links Dentally gives out expire the same day.",
+  /**
+   * Scanned paper. Shown BESIDE the documents, not instead of them, and it is a
+   * category B sentence: a thing we genuinely cannot reach, named so a reader does not
+   * take the document list for the whole of Dentally's correspondence page.
+   *
+   * The practice owner showed old scanned uploads on Dentally's own screen — medical
+   * history scans marked "MH", hospital letters. None of them is reachable: every
+   * document the connection returned was a signed iPad form, across four patients and
+   * eight complete reads, and the two other paths that might have held them
+   * (/v1/documents, /v1/patient_files) do not exist. Stated plainly rather than guessed
+   * at in either direction.
+   */
+  scannedUploadsUnreadable:
+    "Scanned paper is not shown. Dentally's own correspondence page also holds files somebody uploaded to " +
+    "the record, such as a scanned medical history or a hospital letter, and every document this connection " +
+    "returns is a form completed in the practice instead. Open this patient in Dentally to see anything that " +
+    "was scanned in.",
+  /**
+   * What the screen says once the EMAIL read is switched on and Dentally answered with
+   * nothing.
+   *
+   * THE HARDEST SENTENCE ON THIS TAB, because two true things pull opposite ways. The
+   * practice owner believes this patient has "emails we sent him" in Dentally. The
+   * connection says there are none — zero rows, every patient, both buckets. So the
+   * copy may not say "this patient has no emails" (a claim about the patient, made on
+   * a reading we have reason to doubt) and it may not say "email is not available"
+   * (untrue — the route answers). It says what was actually observed, and where to go.
+   */
+  emailsEmpty:
+    "Dentally returned no email for this patient. The email record we can read has been empty for every " +
+    "patient checked, so this is not evidence that none was sent: check Dentally itself before concluding " +
+    "this patient was never emailed.",
+  /** Category D for the email half specifically. */
+  emailsFailed:
+    "Dentally's email record could not be read just now, so any email it holds for this patient is missing " +
+    "from this list.",
+  /**
+   * ONE of the two email buckets answered. Its own sentence because "ok" would overstate
+   * and "failed" would throw away the half that worked — see readPatientDentallyEmails.
+   */
+  emailsPartial:
+    "Only part of Dentally's email record could be read just now. Dentally keeps email in two separate " +
+    "places and one of them did not answer, so emails may be missing from this list.",
+  /** Category D for the documents half specifically. */
+  documentsFailed:
+    "Dentally's documents could not be read just now, so any form it holds for this patient is missing from " +
+    "this list.",
   /**
    * THE ONE MESSAGE WE SENT THAT CAN STILL BE MISSING, named beside the list.
    *
@@ -507,6 +591,49 @@ export const CORRESPONDENCE_COPY = {
   boundedRows:
     "Bounded at the 400 most recent messages from each source, so a patient with a very long history may " +
     "not see the oldest of them here.",
+  /**
+   * THE OWNER'S COMPLAINT, ANSWERED IN WORDS RATHER THAN BY SILENCE.
+   *
+   * Comparing this tab with Dentally's he said of ours: "it only goes back to a certain
+   * date, which is only to May". The Dentally reader walked pages and stopped on the
+   * first short page with no completeness signal at all, and several Dentally endpoints
+   * silently cap per_page below what is asked for — so a page of 25 against a request
+   * for 100 read as "the end of the list" and the walk ended holding the recent quarter
+   * of the history. Rows come back newest first, so what was lost was everything older.
+   *
+   * The read is now measured against Dentally's own meta.total (see
+   * src/lib/dentally/paging.ts). This sentence is what a walk that still could not
+   * finish says out loud — because a history quietly missing everything before May
+   * tells a reader, by saying nothing, that nothing was said before May.
+   */
+  dentallyHistoryIncomplete:
+    "This is not the whole of Dentally's history for this patient. The read reached its limit before it " +
+    "reached the end, so older entries are missing from this list. Open this patient in Dentally to see the " +
+    "rest.",
+  /**
+   * Entries that arrived with no readable date.
+   *
+   * They are shown in their own group at the foot rather than sorted in, because an
+   * empty timestamp sorts before every real one and would render an undated document at
+   * the TOP of the record as the oldest thing on it — a statement about when a patient
+   * signed something, produced by a missing field.
+   */
+  undatedEntries:
+    "These arrived without a date this platform could read, so they cannot be placed in the list above. They " +
+    "are shown here rather than dropped.",
+  /**
+   * Rows the email read could not parse AT ALL.
+   *
+   * Never rounded to zero and never dropped. No email row has ever been observed from
+   * this practice, so the field names the reader looks for are predictions; a row that
+   * matches none of them is far more likely to be a real email we guessed the shape of
+   * wrongly than a defect in Dentally. Saying "there is something here we could not
+   * read" is the only honest rendering, and it is what tells somebody to go and fix the
+   * mapping.
+   */
+  emailsUnreadable:
+    "Some emails could not be read. Dentally returned them in a form this platform does not recognise, so " +
+    "they are counted here rather than shown or dropped. Open this patient in Dentally to read them.",
   /** Category D for the Dentally half specifically: a read we have, that failed. */
   dentallyFailed:
     "Dentally's own SMS history could not be read just now, so anything sent from Dentally itself is missing " +
