@@ -1,5 +1,6 @@
 import { DentallyError } from "@/lib/dentally/client";
-import { isDentallyWriteEnabled, dentallyAgentClient, buildManualBookingPayload } from "@/lib/dentally/write";
+import { buildManualBookingPayload } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import { draftOutreach } from "@/lib/coordinator/draft";
 import {
   approveTouch,
@@ -15,6 +16,7 @@ import type {
   TreatmentOpportunity,
 } from "@/lib/coordinator/types";
 import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import type { AuthedUser } from "@/lib/auth/session";
 import { requireCapability } from "@/lib/auth/capability-guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -203,7 +205,7 @@ async function handleSend(body: Record<string, unknown>): Promise<Response> {
   return Response.json({ ok: true });
 }
 
-async function handleBook(body: Record<string, unknown>): Promise<Response> {
+async function handleBook(body: Record<string, unknown>, auth: AuthedUser | null): Promise<Response> {
   const opportunityId = body.opportunityId;
   const start = body.start;
 
@@ -214,18 +216,32 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
     return badRequest("start is required");
   }
 
+  const opportunity = await getOpportunity(opportunityId);
+  if (!opportunity) {
+    return Response.json({ error: "Opportunity not found" }, { status: 404 });
+  }
+
   // Manual bookings go through the SAME gate as the agent's writes: no real
   // appointment can be created until the write path is deliberately enabled.
-  if (!isDentallyWriteEnabled()) {
+  //
+  // Asked THROUGH the gate, and asked AFTER the opportunity is loaded so the
+  // recorded attempt names the site and the patient it was about. It used to be
+  // asked of the environment directly and one line earlier, which returned this
+  // same 503 and left no trace that the practice had tried to book anybody.
+  const refused = await precheckDentallyWrite({
+    ctx: {
+      source: "coordinator",
+      siteId: opportunity.siteId,
+      actor: auth?.id ?? null,
+      patientId: opportunity.dentallyPatientId,
+    },
+    kind: "appointment.create",
+  });
+  if (refused) {
     return Response.json(
       { error: "Booking into Dentally is not switched on yet. Ask your administrator to enable it." },
       { status: 503 },
     );
-  }
-
-  const opportunity = await getOpportunity(opportunityId);
-  if (!opportunity) {
-    return Response.json({ error: "Opportunity not found" }, { status: 404 });
   }
 
   // Whitelisted payload: patient_id comes from OUR opportunity record, never the body.
@@ -233,7 +249,15 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
   if ("error" in built) return badRequest(built.error);
 
   try {
-    const { appointment } = await dentallyAgentClient().createAppointment(built.payload);
+    const { appointment } = await dentallyWrite.createAppointment(
+      {
+        source: "coordinator",
+        siteId: opportunity.siteId,
+        actor: auth?.id ?? null,
+        patientId: opportunity.dentallyPatientId,
+      },
+      built.payload,
+    );
     await insertTouch({
       opportunityId: opportunity.id,
       siteId: opportunity.siteId,
@@ -317,7 +341,7 @@ export async function POST(
     case "send":
       return handleSend(body);
     case "book":
-      return handleBook(body);
+      return handleBook(body, auth);
     default:
       return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
   }

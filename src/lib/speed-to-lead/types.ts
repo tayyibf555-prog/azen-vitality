@@ -18,6 +18,20 @@ export interface LeadConsent {
   email?: boolean;
   whatsapp?: boolean;
   marketing?: boolean;
+  /**
+   * WHERE THIS CONSENT CAME FROM, in one word, stored beside the flags.
+   *
+   * Added by ruling W1-B/4 (3 Sep 2026) for the abandoned-booking rescue, whose
+   * basis is narrower than an enquiry's: the patient typed their number into our
+   * booking form under microcopy saying the practice may text them about that
+   * booking. That covers exactly ONE transactional follow-up about that booking.
+   * It is not marketing consent and it never becomes marketing consent.
+   *
+   * Optional, because the leads that predate this carry no source and reading one
+   * back must not fail. Absent means "an ordinary enquiry", which is what every
+   * other intake path is.
+   */
+  source?: "booking-form";
 }
 
 /** The full speed_to_lead_lead row. */

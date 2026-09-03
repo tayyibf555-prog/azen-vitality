@@ -1,5 +1,14 @@
 import type { Role } from "@/lib/types";
 import type { Tier } from "@/lib/practice-brain/types";
+import {
+  TOOL_CATALOG,
+  accessMaxTier,
+  catalogAllows,
+  clearanceForRole,
+  type CopilotAccess,
+  type CopilotToolName,
+  type RoleClearance,
+} from "./clearance";
 
 // ===========================================================================
 // WHO MAY ASK THE CO-PILOT, AND WHAT IT MAY REACH FOR THEM.
@@ -48,12 +57,13 @@ import type { Tier } from "@/lib/practice-brain/types";
 /**
  * How much of the co-pilot a session may reach.
  *
- * - `full`    — the owner surface, byte-for-byte what it was: every tool, tier-4
- *               knowledge, unprojected results.
- * - `manager` — the practice manager: the operational read tools only.
- * - `none`    — no co-pilot at all. The route answers 403 before a turn starts.
+ * THE LEVELS AND THE DOMAINS THEY HOLD NOW LIVE IN clearance.ts, which is the
+ * single exhaustive table; this module is what COMPOSES that table with the
+ * session (role in, names out) and with the shapes the dispatch needs. The type
+ * is re-exported here because a dozen callers already import `CopilotAccess`
+ * from "./scope" and the location of a type is not worth a churn commit.
  */
-export type CopilotAccess = "full" | "manager" | "none";
+export type { CopilotAccess, CopilotToolName, RoleClearance };
 
 /**
  * Role -> access. A `satisfies Record<Role, ...>` map rather than a switch, so a
@@ -64,14 +74,30 @@ export type CopilotAccess = "full" | "manager" | "none";
 const ACCESS_BY_ROLE = {
   agency_admin: "full",
   client_owner: "full",
-  // THE POINT OF THIS LANE. The practice manager tier.
+  // THE POINT OF THE MANAGER LANE. The practice manager tier.
   client_coordinator: "manager",
-  // Deliberately none, and not an oversight. A clinician has the diary and the
-  // patient database in their own screens; a co-pilot that reads across the
-  // practice is a different thing, and neither role has ever had it. Widening
-  // either is a written decision, made here, with its own tests.
-  client_clinician: "none",
-  client_staff: "none",
+  // THE TWO NEW ROWS, AND WHAT THEY DO AND DO NOT MEAN.
+  //
+  // Both used to be "none": a clinician and a staff member had no co-pilot at
+  // all, and widening either was called out as "a written decision, made here,
+  // with its own tests". The Dental OS charter is that written decision (section
+  // 2, W1-E: "a role -> tool-catalog map for owner / practice manager /
+  // clinician / staff", and second-opinion mode is FOR the clinician), so the
+  // rows are now named levels with their own catalogs and their own tests.
+  //
+  // WHAT THIS DOES NOT DO IS LET THEM IN. Reaching /api/copilot needs THREE
+  // things and this is only the third:
+  //   1. the nav module lock — "co-pilot" is in neither CLINICIAN_SLUGS nor
+  //      STAFF_SLUGS, so `requireModuleApiAccess(auth, "co-pilot")` refuses both
+  //      roles at the route today;
+  //   2. the capability `system.copilot.ask`, whose default holders are owner,
+  //      agency and the coordinator (capabilities/defaults.ts COPILOT_ACCESS);
+  //   3. this map, which decides what a session that got through 1 and 2 reaches.
+  // So both rows are DECLARED, TESTED AND INERT until an owner decision widens
+  // (1) and (2). That ordering is on purpose: the safe thing to have written in
+  // advance is the narrow catalog, not the open door.
+  client_clinician: "clinician",
+  client_staff: "staff",
 } as const satisfies Record<Role, CopilotAccess>;
 
 /**
@@ -135,17 +161,16 @@ export function copilotAccessForRole(role: Role | null | undefined): CopilotAcce
  *                          argued tool by tool. The manager keeps every one of
  *                          these actions in the module screens that own them,
  *                          behind those modules' own guards and kill switches.
+ *
+ * NO LONGER HAND-WRITTEN. The six names are DERIVED from clearance.ts — the
+ * manager holds the read domains {patients, diary, leads, knowledge} and no act
+ * domain at all, and these are exactly the tools that fall out of that. The list
+ * is still exported, still asserted name-by-name in scope.test.ts, and still the
+ * thing the non-widening snapshot pins; what changed is that a tool written next
+ * year lands on it only if somebody files it under a domain she holds, rather
+ * than by being added to a second list somebody forgot.
  */
-export const MANAGER_COPILOT_TOOLS: readonly string[] = [
-  "appointments",
-  "search_patients",
-  "patient_record",
-  "search_knowledge",
-  "list_recent_assessment_leads",
-  "list_speed_to_lead",
-] as const;
-
-const MANAGER_TOOL_SET: ReadonlySet<string> = new Set(MANAGER_COPILOT_TOOLS);
+export const MANAGER_COPILOT_TOOLS: readonly string[] = TOOL_CATALOG.manager;
 
 /**
  * May this access level run this tool? The single predicate both the schema
@@ -155,11 +180,10 @@ const MANAGER_TOOL_SET: ReadonlySet<string> = new Set(MANAGER_COPILOT_TOOLS);
  * `full` returns true for any name — that is exactly today's behaviour (an
  * unrecognised name falls to the dispatch's `default:` and answers "unknown
  * tool"), so the owner's path through this function is a no-op by construction.
+ * Every other level is a strict allow-list over the derived catalog.
  */
 export function copilotToolAllowed(access: CopilotAccess, name: string): boolean {
-  if (access === "full") return true;
-  if (access === "manager") return MANAGER_TOOL_SET.has(name);
-  return false;
+  return catalogAllows(access, name);
 }
 
 /**
@@ -187,17 +211,42 @@ export function copilotToolsFor<T extends { name: string }>(
  * src/lib/practice-brain/clearance.ts already decides what each role may see
  * everywhere else in the platform, and scope.test.ts asserts that the tier this
  * function hands the co-pilot NEVER EXCEEDS the tier that function hands the same
- * role. Retyping them here rather than importing keeps this module free of the
- * practice-brain's own dependency graph; the test is what stops the two drifting.
+ * role. Stated in clearance.ts alongside the domains rather than in a second map
+ * here, so a level's tier and a level's tools are read and edited together; the
+ * test is what stops it drifting from `maxTierForRole`.
  */
-const TIER_BY_ACCESS: Record<CopilotAccess, Tier> = {
-  full: 4,
-  manager: 2,
-  none: 1,
-};
-
 export function copilotKnowledgeTier(access: CopilotAccess): Tier {
-  return TIER_BY_ACCESS[access];
+  return accessMaxTier(access);
+}
+
+/**
+ * THE WHOLE CLEARANCE MODEL, ONE ROW PER LOGIN — the table a person reads when
+ * they ask "what can the receptionist see".
+ *
+ * `reachableToday` is the honest half: a row can be fully specified, fully
+ * tested and still refused at the door, because reaching the co-pilot at all
+ * needs the nav module lock and the `system.copilot.ask` capability as well as
+ * this map. Derived from `CLINICIAN_SLUGS` / `STAFF_SLUGS` semantics rather than
+ * imported, because importing nav.ts here would drag lucide-react and a
+ * server-only transitive into a module whose entire value is that it is pure;
+ * clearance.test.ts imports both and asserts they agree.
+ */
+const REACHABLE_TODAY = new Set<Role>([
+  "agency_admin",
+  "client_owner",
+  "client_coordinator",
+  // SWITCHED ON by the coordinator's ruling of 3 Sep 2026: "co-pilot" is now in
+  // CLINICIAN_SLUGS and STAFF_SLUGS and both roles hold `system.copilot.ask`.
+  // Every row of the clearance model is now live, which is what makes
+  // clearance.test.ts's agreement check between this set and the REAL
+  // `canRoleAccessModule` worth having rather than decorative.
+  "client_clinician",
+  "client_staff",
+]);
+
+export function copilotClearanceForRole(role: Role): RoleClearance {
+  const access = copilotAccessForRole(role);
+  return clearanceForRole(role, access, REACHABLE_TODAY.has(role));
 }
 
 // ---------------------------------------------------------------------------
@@ -288,11 +337,35 @@ export function projectPatientRecord(
  * was refused — a refusal that enumerates the owner's toolbox is a smaller leak
  * of the same kind.
  */
-export function copilotToolRefusal(): string {
+const MANAGER_REFUSAL =
+  "That is not available on this login. Financial figures, business reports and marketing performance, the system controls, and sending anything to a patient are the practice owner's view. Tell the manager plainly that you cannot see it and that the owner can, and do not try another way to get at it.";
+
+/**
+ * PER-LEVEL REFUSAL WORDING, and it is not decoration.
+ *
+ * A refusal is copy a person reads, and the manager's sentence is wrong for the
+ * other two: telling a nurse that "business reports and marketing performance
+ * are the owner's view" answers a question she did not ask and describes a
+ * toolbox she should not be thinking about at all. Each sentence names only the
+ * door that was closed and where the answer actually lives for THAT person.
+ *
+ * The default (no argument) is the manager's, byte-for-byte, so every existing
+ * caller and every existing test keeps the string it had.
+ */
+const REFUSAL_BY_ACCESS: Record<CopilotAccess, string> = {
+  full: MANAGER_REFUSAL,
+  manager: MANAGER_REFUSAL,
+  clinician:
+    "That is not part of this login. This co-pilot answers about your patients, your diary and how the practice does things, and it takes no actions. The practice's money, its reports and its marketing sit with the practice owner, and anything that has to be sent to a patient is sent from Conversations by the front desk. Say so plainly and do not look for another way to it.",
+  staff:
+    "That is not part of this login. This co-pilot answers about your own work only: your shifts, your holiday and your documents. Anything about patients, the diary or the practice is not something you can see here, and the practice manager can help with it. Say so plainly and do not look for another way to it.",
+  none: MANAGER_REFUSAL,
+};
+
+export function copilotToolRefusal(access?: CopilotAccess): string {
   return JSON.stringify({
     denied: true,
     error: "out_of_scope",
-    message:
-      "That is not available on this login. Financial figures, business reports and marketing performance, the system controls, and sending anything to a patient are the practice owner's view. Tell the manager plainly that you cannot see it and that the owner can, and do not try another way to get at it.",
+    message: access ? REFUSAL_BY_ACCESS[access] : MANAGER_REFUSAL,
   });
 }

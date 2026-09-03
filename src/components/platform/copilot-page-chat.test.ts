@@ -17,6 +17,9 @@ import {
   COPILOT_STARTERS,
   COPILOT_UNREACHABLE_REPLY,
   copilotStartersFor,
+} from "@/components/platform/copilot-thread";
+import { COPILOT_TOOL_NAMES } from "@/lib/copilot/clearance";
+import {
   postCopilotTurn,
   type CopilotMessage,
 } from "./copilot-thread";
@@ -449,11 +452,14 @@ describe("the co-pilot page, scoped to the practice manager", () => {
     expect(count(ownerHtml, "<button")).toBe(COPILOT_STARTERS.length);
   });
 
-  it("every starter still names the narrowest co-pilot that can answer it", () => {
-    // Guards the guard: a starter added without a `minAccess` would be handed to
-    // everybody, which is the deny-by-default rule broken in the UI layer.
+  it("every starter names a REAL tool, so the button and the server cannot drift", () => {
+    // Guards the guard, and it now guards a stronger thing than it did. A starter
+    // used to carry a hand-kept `minAccess` RANK, which could be right on the day
+    // it was written and wrong the day a tool moved. It now names the tool it
+    // runs, and the offer is derived from the clearance model — so this only has
+    // to check that the name is real.
     for (const starter of COPILOT_STARTERS) {
-      expect(["manager", "full"], `${starter.id} has no minAccess`).toContain(starter.minAccess);
+      expect(COPILOT_TOOL_NAMES, `${starter.id} names no real tool`).toContain(starter.needsTool);
     }
   });
 
@@ -468,12 +474,32 @@ describe("the co-pilot page, scoped to the practice manager", () => {
   });
 });
 
-describe("a role with no co-pilot at all", () => {
-  it("is never offered the owner's money starters by the Cmd-J panel", () => {
-    // The clinician and staff logins get a 403 from /api/copilot, but the shell
-    // mounts the Cmd-J panel for every role. The narrower list is the harmless
-    // direction; the owner's would show them four buttons about the money.
-    expect(copilotStartersFor("none")).toEqual(copilotStartersFor("manager"));
-    expect(copilotStartersFor("none")).not.toEqual(COPILOT_STARTERS);
+describe("the narrower co-pilots are offered only what they can answer", () => {
+  it("a login with no co-pilot at all is offered NOTHING by the Cmd-J panel", () => {
+    // It used to fall to the manager's two, on the reasoning that the narrower
+    // list is the harmless direction. Deriving the offer from the clearance model
+    // makes it narrower still and exactly right: `none` holds no tool, so it is
+    // shown no button, on the one surface it can reach (the shell mounts the
+    // Cmd-J panel for every role).
+    expect(copilotStartersFor("none")).toEqual([]);
+  });
+
+  it("a member of staff is never shown the diary, which is not theirs to read", () => {
+    // The regression the derivation exists to prevent: under the old `minAccess`
+    // rank, "everything except full" would have handed a receptionist the diary
+    // button on the day the staff level was added, and it would have fetched a
+    // refusal.
+    expect(copilotStartersFor("staff")).toEqual([]);
+  });
+
+  it("a clinician is shown the diary starters and neither money one", () => {
+    const shown = copilotStartersFor("clinician").map((s) => s.id);
+    expect(shown).toEqual(["diary", "noshow"]);
+    expect(shown).not.toContain("outstanding");
+    expect(shown).not.toContain("overview");
+  });
+
+  it("the manager's two are unchanged by the derivation", () => {
+    expect(copilotStartersFor("manager").map((s) => s.id)).toEqual(["diary", "noshow"]);
   });
 });

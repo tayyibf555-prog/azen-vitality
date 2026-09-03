@@ -18,6 +18,7 @@ import { checkAgentReply } from "@/lib/agent/guardrail";
 import { consumeBudget } from "@/lib/rate-budget";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import type { CloserStep, TouchChannel } from "./types";
+import { MAX_TREATMENT_CHARS, sanitiseFreeText } from "@/lib/agent/free-text";
 
 // ---------------------------------------------------------------------------
 // Fact projection.
@@ -81,7 +82,6 @@ function round2(n: number): number {
  * it means a multi-sentence injection is reduced to a short, single-clause
  * fragment before the model is ever shown it.
  */
-const MAX_TREATMENT_CHARS = 60;
 
 /**
  * Reduce a Dentally-sourced free-text field to something plan-title shaped before
@@ -100,21 +100,13 @@ const MAX_TREATMENT_CHARS = 60;
  * PURE. A short, ordinary title passes through unchanged.
  */
 export function sanitiseTreatmentName(raw: string): string {
-  let s = (raw ?? "")
-    // Strip C0 controls, DEL and the C1 control block, then collapse every whitespace
-    // run to one space. The C1 range (U+0080-U+009F) matters: JS \s does NOT include
-    // NEL (U+0085), so without this range a C1 control jammed into a "title" survives
-    // the whitespace collapse and reaches the prompt as an invisible separator.
-    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  // Cut at the first sentence terminator that is followed by more text. A real
-  // title is a noun phrase and carries none; an injected instruction is several
-  // sentences, and this severs the payload after the first.
-  const cut = s.search(/[.!?:;]\s/);
-  if (cut >= 0) s = s.slice(0, cut).trim();
-  if (s.length > MAX_TREATMENT_CHARS) s = s.slice(0, MAX_TREATMENT_CHARS).trim();
-  return s;
+  // Delegates to the shared implementation. It used to be written out here, and
+  // then written out a second time in src/lib/collection/draft.ts, while six
+  // lifecycle drafters and the booking agent's own prompt had no sanitiser at all.
+  // Two copies of a rule and six places that never heard of it is how a rule dies,
+  // so there is now one function and every drafter calls it. The behaviour is
+  // unchanged: same three passes, same 60-character cap.
+  return sanitiseFreeText(raw, MAX_TREATMENT_CHARS);
 }
 
 /**

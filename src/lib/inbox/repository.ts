@@ -239,6 +239,16 @@ const TOUCH_SOURCES: TouchSource[] = [
     patient: { via: "parent", parentTable: "postop_target", parentKey: "target_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
   },
   {
+    // The pre-visit questionnaire link. `actorCol` is NULL and it is the only
+    // outbound source here with no actor at all, which is truthful rather than a
+    // gap: this module has no approval step (see the header of migration 0097), so
+    // there is no person to name. A column filled with "system" or with the cron's
+    // name would put a fabricated actor on a patient's correspondence record.
+    name: "previsit", table: "previsit_touch", siteCol: "site_id", directionCol: "direction",
+    statusCol: "status", actorCol: null, sentAtCol: "sent_at",
+    patient: { via: "parent", parentTable: "previsit_target", parentKey: "target_id", idCol: "dentally_patient_id", nameCol: "patient_name" },
+  },
+  {
     name: "reviews", table: "review_touch", siteCol: "site_id", directionCol: "direction",
     statusCol: "status", actorCol: "approved_by", sentAtCol: "sent_at",
     patient: { via: "parent", parentTable: "review_request", parentKey: "request_id", idCol: "dentally_patient_id", nameCol: "patient_name" },

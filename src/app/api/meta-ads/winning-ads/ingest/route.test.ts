@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 // The winning-ads ingest route. Owner-or-cron auth, an honest no-op when APIFY_TOKEN
 // is not set, and a rank+upsert pass over whatever the Apify source returns. Ingest
@@ -40,6 +40,28 @@ const rawAd = (id: string, text: string, start: string) => ({
   start_date_formatted: start,
   end_date_formatted: "2026-08-21 00:00:00",
   snapshot: { cta_type: "LEARN_MORE", display_format: "IMAGE", body: { text } },
+});
+
+// ---------------------------------------------------------------------------
+// THE PROCESS CLOCK IS PINNED, AND THAT IS THE POINT OF THIS BLOCK.
+//
+// This file was a TIME BOMB: it passed on today's calendar and went red on a
+// shifted one, and the failure read as a logic regression rather than as a stale
+// fixture. Found by running the whole suite under a shifted process clock
+// (+3h/+1d/+3d/+4d/+30d/+90d/+181d/+2y/+10y) and diffing against a real-clock
+// baseline — the only method that finds these, because grepping for hard-coded
+// dates matches a third of the suite and misses the ones that matter.
+//
+// Only `Date` is faked. Faking all timers hangs the async route and agent paths
+// these tests drive; this is the pattern from src/lib/agent/booking-duration.test.ts.
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-20T09:00:00.000Z"));
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 beforeEach(() => {

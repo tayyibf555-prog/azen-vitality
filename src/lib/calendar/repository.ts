@@ -370,15 +370,6 @@ export async function enqueueOutbox(input: {
   return { id: (data as { id: string }).id };
 }
 
-export async function markTouchSent(touchId: string): Promise<void> {
-  const db = serviceClient();
-  const { error } = await db
-    .from("diary_touch")
-    .update({ status: "sent", sent_at: new Date().toISOString() })
-    .eq("id", touchId);
-  if (error) throw error;
-}
-
 export interface QueuedOutbox {
   id: string;
   touchId: string;

@@ -6,6 +6,7 @@ import { updateOutboxStatusByMessageId as updateCoordinatorStatus } from "@/lib/
 import { updateOutboxStatusByMessageId as updateCloserStatus } from "@/lib/closer/repository";
 import { updateOutboxStatusByMessageId as updateCollectionStatus } from "@/lib/collection/repository";
 import { updateOutboxStatusByMessageId as updatePostopStatus } from "@/lib/postop/repository";
+import { updateOutboxStatusByMessageId as updatePrevisitStatus } from "@/lib/triage/repository";
 import { updateOutboxStatusByMessageId as updateReviewsStatus } from "@/lib/reviews/repository";
 import { updateAttemptStatusByMessageId as updateSpeedToLeadStatus } from "@/lib/speed-to-lead/repository";
 
@@ -78,6 +79,7 @@ export async function POST(request: Request): Promise<Response> {
       updateCloserStatus(sid, mapped),
       updateCollectionStatus(sid, mapped),
       updatePostopStatus(sid, mapped),
+      updatePrevisitStatus(sid, mapped),
       updateReviewsStatus(sid, mapped),
       updateSpeedToLeadStatus(sid, mapped),
     ]);

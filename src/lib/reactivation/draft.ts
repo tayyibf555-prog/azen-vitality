@@ -6,6 +6,7 @@ import { gbp } from "@/lib/utils";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
+import { sanitiseName, sanitiseTreatment } from "@/lib/agent/free-text";
 
 const REASON_GUIDANCE: Record<ReactivationReason, string> = {
   lapsed:
@@ -49,9 +50,11 @@ export function buildDraftPrompt(
   const user = [
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
-    `Patient: ${t.patientName}`,
+    // SANITISED: name and treatment are Dentally free text (see
+    // src/lib/agent/free-text.ts). `reason` is our own enum, so it is not.
+    `Patient: ${sanitiseName(t.patientName)}`,
     `Reason: ${t.reason}`,
-    `Treatment: ${t.treatment ?? "none on file"}`,
+    `Treatment: ${t.treatment ? sanitiseTreatment(t.treatment) : "none on file"}`,
     `Recoverable value (GBP): ${t.recoverableValue}`,
     `Last visit: ${t.lastVisitAt ?? "unknown"}`,
     `Recall due: ${t.recallDueAt ?? "n/a"}`,

@@ -54,9 +54,28 @@ const UNKNOWN: AgentContext = {
   ],
 };
 
-/** buildSystemPrompt output on the commit before this feature. Byte-exact. */
+/**
+ * buildSystemPrompt output with NO reply context resolved. Byte-exact.
+ *
+ * WHAT THIS PIN IS FOR, AND WHAT IT IS NOT FOR. It exists so that switching
+ * `booking-reply-context` off is an EXACT revert: with no context resolved the
+ * agent must be byte-for-byte the assistant it was before that feature existed.
+ * It is not a freeze on the prompt itself — it is a device that makes any change
+ * to the prompt deliberate, reviewed and recorded rather than incidental.
+ *
+ * UPDATED ONCE, on purpose. Ruling W1-B/3 (3 Sep 2026) added free-text.ts's
+ * FREE_TEXT_IS_DATA line to the KNOWN-patient branch: the patient name and the
+ * treatment on file are Dentally free text, and this is the one prompt in the
+ * platform that drives tools (book, reschedule, cancel, register a patient). The
+ * sanitiser strips the SHAPE of an injected instruction; that line strips its
+ * AUTHORITY. The `unknown` hash is unchanged, because the unrecognised-number
+ * branch interpolates no treatment and the line is not added there.
+ *
+ * A future change to these bytes needs the same treatment: a ruling, a reason,
+ * and this comment extended. Do not silently re-baseline them.
+ */
 const PRE_FEATURE_SHA256 = {
-  known: "3e7d1c1145b7b0d8a151f0dcf18608a2c7ae6c2f5f4a5f0d48dfb2f221b5f246",
+  known: "e82347362accd044d4d24cd35d3953d905fc67b9d6c4dc5b0bf48b8b63bb74c8",
   unknown: "b0d75e857b82e80672cc4be64ee9337e581a9e14596854d0380b6488cf261ca4",
 };
 

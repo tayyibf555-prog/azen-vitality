@@ -42,9 +42,26 @@ vi.mock("@/lib/dentally/read", () => ({
   dentallyReadKey: () => "test-key",
 }));
 vi.mock("@/lib/dentally/write", () => ({
-  dentallyAgentClient: () => ({ createPatient: (...a: unknown[]) => createPatient(...a) }),
+  dentallyAgentClient: () => {
+    throw new Error("create_patient must go through the write gate, never a client of its own");
+  },
   isDentallyWriteEnabled: () => isDentallyWriteEnabled(),
 }));
+// THE WRITE GATE STANDS BETWEEN THIS TOOL AND DENTALLY (W1-A). The real class is
+// kept via importOriginal so `err instanceof DentallyWriteRefused` in tools.ts
+// matches the object this mock throws; only the five doors are stubbed, and the
+// `createPatient` spy every assertion below already uses is what they call. The
+// gate's OWN behaviour (mode, master switch, ledger) is tested in
+// src/lib/dentally/write-gate.test.ts, not re-tested here.
+vi.mock("@/lib/dentally/write-gate", async (importOriginal) => {
+  const real = await importOriginal<Record<string, unknown>>();
+  return {
+    ...real,
+    dentallyWrite: {
+      createPatient: async (_ctx: unknown, payload: unknown) => createPatient(payload),
+    },
+  };
+});
 vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: (...a: unknown[]) => logCopilotAction(...a) }));
 
 import { makeCopilotDispatch } from "./tools";
@@ -419,5 +436,62 @@ describe("create_patient honesty (errors, never a misleading dry run)", () => {
     expect(out.created).toBe(true);
     expect(out.dryRun).toBe(false);
     expect(out.note).not.toMatch(/test mode/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE WRITE GATE (W1-A). Every outbound Dentally write in the platform goes
+  // through it, and the source crawl in write-gate-sites.test.ts enforces that
+  // the five client write methods are named in write-gate.ts and nowhere else.
+  // These two pin the co-pilot's END of that contract: it goes through the door,
+  // and it reports a refusal at the door as a refusal rather than as a failure.
+  // -------------------------------------------------------------------------
+  it("writes through the GATE and never through a client of its own", async () => {
+    // The `dentallyAgentClient` mock at the top of this file THROWS, so a
+    // regression that reached for its own client would fail loudly here rather
+    // than quietly writing to Dentally outside the ledger and the master switch.
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(true);
+    expect(createPatient).toHaveBeenCalledTimes(1);
+  });
+
+  it("names itself as the 'copilot' write source, so the ledger does not misdescribe it", async () => {
+    // The source decides which kill switch governs the write and what a practice
+    // reads in Sync status. Using `onboarding` would have put "registering a
+    // completed form" against something an owner typed into a chat.
+    const seen: unknown[] = [];
+    const gate = await import("@/lib/dentally/write-gate");
+    const spy = vi
+      .spyOn(gate.dentallyWrite, "createPatient")
+      .mockImplementation(async (ctx: unknown, payload: unknown) => {
+        seen.push(ctx);
+        return createPatient(payload) as Promise<{ patient: { id: string } }>;
+      });
+    await dispatch("create_patient", { ...GOOD, confirm: true });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ source: "copilot", siteId: "site-cc", clientId: "vitality" });
+    spy.mockRestore();
+  });
+
+  it("reports a gate REFUSAL as a refusal, never as a Dentally failure", async () => {
+    // The gate throws rather than returning a "nothing happened" value, and the
+    // two must never look alike to the owner: "your write-back switch is off" and
+    // "Dentally rejected the details" call for completely different actions.
+    const gate = await import("@/lib/dentally/write-gate");
+    const spy = vi.spyOn(gate.dentallyWrite, "createPatient").mockImplementation(async () => {
+      throw new gate.DentallyWriteRefused(
+        "master_off",
+        "Your Dentally write-back switch is off in System controls, so nothing was sent.",
+      );
+    });
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.reason).toBe("writes_disabled");
+    expect(out.blockedReason).toBe("master_off");
+    expect(out.message).toMatch(/write-back switch is off/i);
+    // NOT reported as a Dentally rejection, which would send the owner to check
+    // the patient's date of birth for a problem that is a switch.
+    expect(out.message).not.toMatch(/Dentally rejected/i);
+    expect(out.status).toBeUndefined();
+    spy.mockRestore();
   });
 });

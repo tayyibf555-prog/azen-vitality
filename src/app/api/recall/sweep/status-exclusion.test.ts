@@ -13,9 +13,17 @@ vi.mock("@/lib/cron-lock", () => ({
   acquireCronLock: vi.fn(async () => true),
   releaseCronLock: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: vi.fn(async () => true) }));
+vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: vi.fn(async () => true) ,
+  // Ruling W1-B/1: the sweep now reads isSystemEnabledForSend (fail-closed once
+  // messaging is live), and liveSwitch re-reads it every ten rows. Same verdict as
+  // isSystemEnabled above, so these cases keep meaning exactly what they meant.
+  isSystemEnabledForSend: vi.fn(async () => true)}));
 vi.mock("@/lib/patient-status/repository", () => ({
   loadExcludedTargetKeys: vi.fn(async () => h.excludedKeys),
+  // Ruling W1-B/2: loadExcludedTargetKeys REFUSES when the override table is
+  // unreadable and messaging is live. This fake never refuses, so the guard reads
+  // false; the refusal itself is proved in src/lib/agent-wiring/scenarios.test.ts.
+  isExclusionsUnavailable: () => false,
   excludedTargetKey: (siteId: string, patientId: string) => `${siteId}::${patientId}`,
 }));
 vi.mock("@/lib/recall/draft", () => ({ draftRecall: vi.fn(async () => ({ body: "Hello from Vitality" })) }));

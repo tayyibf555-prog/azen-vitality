@@ -10,6 +10,10 @@ import { getPatientRecordInScope } from "@/lib/patient/record";
 import { getOverride } from "@/lib/patient-status/repository";
 import { numberHealthFor, type NumberHealth } from "@/lib/messaging/number-health";
 import { getPatientCorrespondence } from "@/lib/inbox/correspondence";
+import { getSessionUser } from "@/lib/auth/session";
+import { listResponsesForPatient } from "@/lib/triage/repository";
+import { projectSummary } from "@/lib/triage/summary";
+import type { TriageResponse } from "@/lib/triage/types";
 import { listPatientAudit, type PatientAuditEntry } from "@/lib/patient/profile-audit";
 import { listTargets as listRecallTargets, listTouches as listRecallTouches } from "@/lib/recall/repository";
 import { generateTasksWithHealth } from "@/lib/task-queue/generate";
@@ -29,6 +33,7 @@ import { TabPerio } from "./tab-perio";
 import { TabRecalls } from "./tab-recalls";
 import { TabTasks } from "./tab-tasks";
 import { RecordSummary } from "./record-summary";
+import { PreVisitSummaryPanel } from "./previsit-summary-panel";
 
 /**
  * One tab's content, resolved server-side.
@@ -159,7 +164,35 @@ export async function RecordTabContent({
   }
 
   if (slug === "appointments") {
-    return <TabAppointments appointments={detail.appointments} reads={reads} />;
+    // THE PRE-VISIT SUMMARY sits above the appointment list, and this is where it
+    // belongs rather than on a twelfth record tab: what the patient said was asked
+    // BEFORE an appointment and is read BEFORE one, and a tab that exists for a
+    // fifth of patients is a tab that mostly says "nothing here".
+    //
+    // WHAT THE VIEWER MAY READ IS DECIDED SERVER-SIDE, HERE. projectSummary takes
+    // the session's role and returns `clinical: null` for a viewer who may not read
+    // the symptom half, so those answers never enter the render tree at all rather
+    // than being hidden with CSS. A null user is the unenforced pilot and reads as
+    // permitted, matching every other guard in this codebase.
+    //
+    // A FAILED READ IS NOT AN ABSENCE. `null` from the catch means we could not
+    // look, and the panel says so; an empty list means the patient has none, and
+    // the panel renders nothing at all.
+    const viewer = await getSessionUser();
+    const previsit = await listResponsesForPatient([siteId], patient.id, 1).then(
+      (rows) => ({ ok: true, rows }),
+      () => ({ ok: false, rows: [] as TriageResponse[] }),
+    );
+    const latest = previsit.rows[0] ?? null;
+    return (
+      <div className="space-y-4">
+        <PreVisitSummaryPanel
+          failed={!previsit.ok}
+          summary={latest ? projectSummary(latest, viewer?.role ?? null) : null}
+        />
+        <TabAppointments appointments={detail.appointments} reads={reads} />
+      </div>
+    );
   }
 
   if (slug === "recalls") {

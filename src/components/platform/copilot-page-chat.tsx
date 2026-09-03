@@ -99,9 +99,32 @@ const COPILOT_MANAGER_COPY = {
     "Ask about a patient, the diary, new enquiries and leads, or how the practice does something. I read the practice's own records to answer. Financial figures, reports and marketing sit with the practice owner, and I cannot message anyone from here.",
 } as const;
 
-/** The copy for this access level: the owner's, with the two claims corrected. */
+/**
+ * The clinician's, and the staff member's. Same rule as the manager's: a page
+ * that promises what the server will refuse is the defect, so the promise moves
+ * with the access level.
+ */
+const COPILOT_CLINICIAN_COPY = {
+  subtitle: "Your patients, your diary, and a second opinion on a named patient.",
+  emptyBody:
+    "Ask about a patient, the diary, or how the practice does something. Name a patient and I will set out what their record shows and what is worth weighing, as decision support: not a diagnosis, and never an instruction to treat. The practice's money, reports and marketing sit with the practice owner, and I cannot message anyone or change the diary from here.",
+} as const;
+
+const COPILOT_STAFF_COPY = {
+  subtitle: "Your own work: your shifts, your holiday and your documents.",
+  emptyBody:
+    "Ask when you are working, what holiday you have booked, or what is in your staff file. This login shows your own work only, so anything about patients, the diary or the practice is one for the practice manager.",
+} as const;
+
+/** The copy for this access level: the owner's, with the untrue claims corrected. */
 export function copilotPageCopyFor(access: CopilotAccess = "full") {
-  return access === "full" ? COPILOT_PAGE_COPY : { ...COPILOT_PAGE_COPY, ...COPILOT_MANAGER_COPY };
+  if (access === "full") return COPILOT_PAGE_COPY;
+  if (access === "clinician") return { ...COPILOT_PAGE_COPY, ...COPILOT_CLINICIAN_COPY };
+  if (access === "staff") return { ...COPILOT_PAGE_COPY, ...COPILOT_STAFF_COPY };
+  // "manager" and "none" share the narrower manager copy. `none` never reaches
+  // this page, and falling to the SMALLER promise is the harmless direction —
+  // exactly the reasoning `projectPatientRecord` uses for its unreachable branch.
+  return { ...COPILOT_PAGE_COPY, ...COPILOT_MANAGER_COPY };
 }
 
 /** How tall the composer may grow before it scrolls internally, in pixels. */

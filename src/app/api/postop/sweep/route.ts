@@ -7,7 +7,11 @@ import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { SITES, getSite, dentallySiteId } from "@/lib/mock/clients";
 import { isSuppressed } from "@/lib/messaging/suppression";
-import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import {
+  loadExcludedTargetKeys,
+  excludedTargetKey,
+  isExclusionsUnavailable,
+} from "@/lib/patient-status/repository";
 import { classifyProcedure } from "@/lib/postop/flag";
 import { postopCheckInBody, projectPostopFacts, checkPostopMessage } from "@/lib/postop/copy";
 import { decideSend, dueAtFor } from "@/lib/postop/schedule";
@@ -278,7 +282,18 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       statuses: ["pending"],
       limit: config.maxExaminedPerRun,
     });
-    const excludedKeys = await loadExcludedTargetKeys();
+    // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE DRAFTED (ruling W1-B/2, 3 Sep 2026).
+    // loadExcludedTargetKeys now REFUSES rather than returning an empty set when it
+    // cannot read the override table and messaging is live, so a patient a human
+    // marked inactive can never be drafted because of a database blip.
+    let excludedKeys: Set<string>;
+    try {
+      excludedKeys = await loadExcludedTargetKeys();
+    } catch (err) {
+      if (!isExclusionsUnavailable(err)) throw err;
+      console.error("[postop] exclusion list unreadable while messaging is live; skipping this tick", err);
+      return Response.json({ ok: true, skipped: "exclusions unavailable" });
+    }
 
     let drafted = 0;
     let waiting = 0;

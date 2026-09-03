@@ -13,8 +13,13 @@ import type { TouchChannel, TreatmentOpportunity } from "@/lib/coordinator/types
 import { SITES } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
-import { isSystemEnabled } from "@/lib/systems/repository";
-import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import { liveSwitch } from "@/lib/systems/live-switch";
+import {
+  loadExcludedTargetKeys,
+  excludedTargetKey,
+  isExclusionsUnavailable,
+} from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -47,7 +52,14 @@ async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
-  if (!(await isSystemEnabled("vitality", "treatment-coordinator"))) {
+  // FAIL-CLOSED WHEN LIVE (ruling W1-B/1, 3 Sep 2026). This used to be
+  // isSystemEnabled, which resolves a toggle-read ERROR to "enabled" for a
+  // default-ON system and then let the whole batch draft. isSystemEnabledForSend
+  // keeps that behaviour while MESSAGING_DRY_RUN is on, so development against a
+  // partial database still works, and fails CLOSED once messaging is live: a
+  // switch we cannot read is treated as off. A skipped tick is a delay; a batch
+  // sent against an unknown switch is an incident.
+  if (!(await isSystemEnabledForSend("vitality", "treatment-coordinator"))) {
     return Response.json({ ok: true, skipped: "system off" });
   }
 
@@ -70,7 +82,18 @@ async function handleWithDentallyPriority(request: Request) {
   // Platform admin status: patients marked inactive / do_not_contact are excluded from
   // coordinator follow-ups. Loaded ONCE per sweep and checked per opportunity before
   // drafting, so no Anthropic draft is spent and nothing is queued.
-  const excludedKeys = await loadExcludedTargetKeys();
+  // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE DRAFTED (ruling W1-B/2, 3 Sep 2026).
+  // loadExcludedTargetKeys throws once messaging is LIVE and it cannot read the
+  // override table, so a patient a human marked inactive can never be drafted
+  // because of a database blip. It still returns an empty set under dry-run.
+  let excludedKeys: Set<string>;
+  try {
+    excludedKeys = await loadExcludedTargetKeys();
+  } catch (err) {
+    if (!isExclusionsUnavailable(err)) throw err;
+    console.error("[coordinator] exclusion list unreadable while messaging is live; skipping this tick", err);
+    return Response.json({ ok: true, skipped: "exclusions unavailable" });
+  }
 
   let swept = 0;
   let drafted = 0;
@@ -79,7 +102,13 @@ async function handleWithDentallyPriority(request: Request) {
   let skipped = 0;
   let suppressed = 0;
 
+  // The switch is re-read every ten rows for the rest of this run (ruling
+  // W1-B/5): a long sweep must not keep drafting after the owner has switched
+  // the system off. See src/lib/systems/live-switch.ts.
+  const gate = liveSwitch("vitality", "treatment-coordinator");
+
   for (const o of opportunities) {
+    if (!(await gate.stillOn())) break;
     swept += 1;
 
     // Platform admin status excludes this patient: skip before any draft.

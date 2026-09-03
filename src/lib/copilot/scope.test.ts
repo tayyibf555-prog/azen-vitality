@@ -97,6 +97,13 @@ const DENIED_TO_MANAGER: Record<string, string> = {
   create_meta_campaign: "assembles paid advertising with a budget",
   publish_meta_campaign: "takes paid advertising live",
   create_patient: "writes a real person into the practice's Dentally book",
+  // ADDED WITH THE CLEARANCE MODEL, and both are denials the manager would not
+  // have thought to ask for — which is exactly why they are named here rather
+  // than left to fall out of a filter.
+  second_opinion:
+    "clinical decision support on a named patient: a clinical read, and the manager is not the clinician",
+  my_work:
+    "the caller's own rota, holiday and staff file: she has the whole rota module, so this would widen the pinned six for nothing",
 };
 
 describe("1. who gets which co-pilot", () => {
@@ -108,8 +115,14 @@ describe("1. who gets which co-pilot", () => {
       agency_admin: "full",
       client_owner: "full",
       client_coordinator: "manager",
-      client_clinician: "none",
-      client_staff: "none",
+      // THE TWO ROWS THE DENTAL OS CHARTER ADDED. Both used to be "none". They
+      // are now named levels with their own catalogs (clearance.ts) — and both
+      // are still refused at the route, by the nav module lock and by the
+      // capability default, neither of which this lane touched. A level is what
+      // you may reach ONCE YOU ARE IN; it is not the door. `clearance.test.ts`
+      // asserts that door is still shut.
+      client_clinician: "clinician",
+      client_staff: "staff",
     });
   });
 
@@ -554,7 +567,9 @@ describe("6. the route wires all three halves of the scope", () => {
   });
 
   it("passes the access into the dispatch and the prompt", () => {
-    expect(routeSrc).toMatch(/makeCopilotDispatch\([^)]*access\)/);
+    // The dispatch now takes a fifth argument (the self-service thunk), so the
+    // access is no longer the last thing before the closing bracket.
+    expect(routeSrc).toMatch(/makeCopilotDispatch\([^;]*?\baccess\b/);
     expect(routeSrc).toMatch(/buildCopilotSystemPrompt\(\{[^}]*access[^}]*\}\)/);
   });
 
@@ -576,6 +591,27 @@ describe("6. the route wires all three halves of the scope", () => {
     );
     expect(shellSrc).toMatch(/copilotAccessForRole\(sessionUser\?\.role\)/);
     expect(shellSrc).toMatch(/<PlatformShortcuts copilotAccess=\{copilotAccess\} \/>/);
+  });
+
+  it("resolves the self-service staff row from the SESSION, and passes no staff id", () => {
+    // `my_work` answers about the person asking, and this is the one place their
+    // staff row is resolved. `resolveSelfStaff` takes (clientId, auth) and nothing
+    // else, so there is no argument in the route for a request body to reach.
+    expect(routeSrc).toMatch(/resolveSelfStaff\(\s*client\.id\s*,\s*auth\s*,/);
+    expect(routeSrc).toMatch(/resolveStaff:/);
+    // Nothing about a staff id is read off the request.
+    expect(routeSrc).not.toMatch(/body\.staffId|body\.staff\b|searchParams\.get\("staffId"\)/);
+  });
+
+  it("reads the approved authorities server-side and hands the prompt a rendered string", () => {
+    // The repository is server-only and prompt.ts is pure, so the read has to
+    // happen here. And it must never be fatal: an unreadable list falls back to
+    // the platform's default posture (practice data only), which is what an empty
+    // brief produces.
+    expect(routeSrc).toMatch(/authoritiesBrief\(await listActiveAuthorities\(client\.id\)\)/);
+    expect(routeSrc).toMatch(/let authorities = "";/);
+    expect(routeSrc).toMatch(/catch \(err\)[\s\S]{0,200}console\.warn/);
+    expect(routeSrc).toMatch(/buildCopilotSystemPrompt\(\{[^}]*authorities[^}]*\}\)/);
   });
 
   it("keeps the module lock and the per-person capability in front of it", () => {

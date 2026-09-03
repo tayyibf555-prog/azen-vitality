@@ -59,6 +59,7 @@ const fakes = vi.hoisted(() => {
       coordinator: makeModule(),
       closer: makeModule(),
       postop: makeModule(),
+      previsit: makeModule(),
       collection: makeModule(),
       reviews: makeModule(),
       outreach: makeModule(),
@@ -91,6 +92,7 @@ vi.mock("@/lib/noshow/repository", () => repoMock("noshow"));
 vi.mock("@/lib/coordinator/repository", () => repoMock("coordinator"));
 vi.mock("@/lib/closer/repository", () => repoMock("closer"));
 vi.mock("@/lib/postop/repository", () => repoMock("postop"));
+vi.mock("@/lib/triage/repository", () => repoMock("previsit"));
 vi.mock("@/lib/collection/repository", () => repoMock("collection"));
 vi.mock("@/lib/reviews/repository", () => repoMock("reviews"));
 vi.mock("@/lib/outreach/repository", () => repoMock("outreach"));
@@ -132,7 +134,7 @@ vi.mock("@/lib/messaging/frequency", () => ({
 import { POST } from "./route";
 
 // "diary" is the reschedule notice raised when an appointment is moved.
-const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "postop", "collection", "reviews", "outreach"] as const;
+const ALL_SOURCES = ["diary", "reactivation", "recall", "noshow", "coordinator", "closer", "postop", "previsit", "collection", "reviews", "outreach"] as const;
 const fetchSpy = vi.fn(async () => { throw new Error("network egress attempted in test"); });
 
 function seed(module: (typeof ALL_SOURCES)[number], overrides: Partial<FakeRow> = {}): FakeRow {

@@ -27,7 +27,8 @@
 // ===========================================================================
 
 import { DentallyError, type DentallyClient } from "@/lib/dentally/client";
-import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { dentallyAgentClient } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import { authEnforced, requireClientAccess, requireSiteAccess, requireUser } from "@/lib/auth/guard";
 import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
@@ -357,7 +358,17 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
   // gate shut it hands back a perfectly working client pointed at whatever
   // DENTALLY_BASE_URL says, which in the pilot is the mock. Constructing it first
   // and checking afterwards is how a "disabled" write path quietly writes.
-  if (!isDentallyWriteEnabled()) return json({ ok: false, error: WRITE_GATE_OFF }, 503);
+  //
+  // ASKED THROUGH THE GATE, so a move attempted while write-back is off is
+  // recorded rather than vanishing into a 503. Everything about the ordering is
+  // unchanged: still before any client is constructed, still before the day is
+  // read, and the message the diary shows is the same one.
+  const writeRefused = await precheckDentallyWrite({
+    ctx: { source: "diary", siteId: body.siteId, clientId: site.clientId, actor: user?.id ?? null },
+    kind: "appointment.update",
+    appointmentId,
+  });
+  if (writeRefused) return json({ ok: false, error: WRITE_GATE_OFF }, 503);
 
   const siteUuid = dentallySiteId(body.siteId);
   const client = dentallyAgentClient();
@@ -691,7 +702,22 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
 
   let writeThrew: unknown = null;
   try {
-    await client.updateAppointment(appointmentId, payload);
+    await dentallyWrite.updateAppointment(
+      {
+        source: "diary",
+        siteId: body.siteId,
+        clientId: site.clientId,
+        // The OPAQUE id only: the diary's own move audit names the person
+        // (actorEmail above); the Dentally sync ledger holds no personal data.
+        actor: actor.actorId,
+        patientId: current.patientId,
+        // The SAME client every read in this move used, so the write and the
+        // read-back below cannot be talking to two different Dentally instances.
+        client,
+      },
+      appointmentId,
+      payload,
+    );
   } catch (err) {
     // A DentallyError with status 0 is the 15 second timeout, and the write MAY
     // still have landed. Every other throw could equally have landed after the

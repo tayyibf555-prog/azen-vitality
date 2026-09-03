@@ -1,9 +1,6 @@
 import { DentallyError } from "@/lib/dentally/client";
-import {
-  isDentallyWriteEnabled,
-  dentallyAgentClient,
-  buildManualBookingPayload,
-} from "@/lib/dentally/write";
+import { buildManualBookingPayload } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import {
   getTarget,
   getCadenceByTarget,
@@ -89,18 +86,31 @@ async function handleCancel(body: Record<string, unknown>, auth: AuthedUser | nu
   // through the same gate as every other write: the dedicated write client, only
   // when the write path is deliberately enabled. It must never be attempted with
   // the read key or outside the gate.
+  //
+  // THE GATE IS ASKED UNCONDITIONALLY, and that is the change: this used to be
+  // wrapped in `if (isDentallyWriteEnabled())`, so a cancellation made while
+  // write-back was off left no trace of the practice having cancelled anything
+  // in Dentally. Now the gate files the attempt (blocked / writes_disabled) and
+  // refuses; `dentallyCancelled` stays false exactly as before, so the patient
+  // is never told a diary slot was released that was not.
   let dentallyCancelled = false;
-  if (isDentallyWriteEnabled()) {
-    try {
-      await dentallyAgentClient().cancelAppointment(target.appointmentId);
-      dentallyCancelled = true;
-    } catch (err) {
-      console.error(
-        `[noshow] cancel: Dentally cancelAppointment(${target.appointmentId}) failed; ` +
-          "our side is marked cancelled but the slot is NOT offered to the waitlist",
-        err,
-      );
-    }
+  try {
+    await dentallyWrite.cancelAppointment(
+      {
+        source: "noshow",
+        siteId: target.siteId,
+        actor: auth?.id ?? null,
+        patientId: target.dentallyPatientId,
+      },
+      target.appointmentId,
+    );
+    dentallyCancelled = true;
+  } catch (err) {
+    console.error(
+      `[noshow] cancel: Dentally cancelAppointment(${target.appointmentId}) failed or was refused; ` +
+        "our side is marked cancelled but the slot is NOT offered to the waitlist",
+      err,
+    );
   }
 
   // Stop the reminders either way: staff have told us this patient is not coming.
@@ -152,7 +162,17 @@ async function handleBook(body: Record<string, unknown>, auth: AuthedUser | null
 
   // Manual bookings go through the SAME gate as the agent's writes: no real
   // appointment can be created until the write path is deliberately enabled.
-  if (!isDentallyWriteEnabled()) return writesOff();
+  //
+  // Asked THROUGH the gate rather than of the env directly, so the attempt is
+  // recorded before the refusal is returned. A receptionist clicking "Book" while
+  // write-back is off used to get this 503 and leave no trace anywhere; now the
+  // click is a blocked row on the Dentally sync screen and the message they see
+  // is unchanged.
+  const refused = await precheckDentallyWrite({
+    ctx: { source: "noshow", siteId: target.siteId, actor: auth?.id ?? null, patientId: target.dentallyPatientId },
+    kind: "appointment.create",
+  });
+  if (refused) return writesOff();
 
   // Whitelisted payload, exactly like the recall / reactivation / coordinator book
   // actions: patient_id comes from OUR target record and nothing is forwarded from
@@ -176,7 +196,10 @@ async function handleBook(body: Record<string, unknown>, auth: AuthedUser | null
   if ("error" in built) return badRequest(built.error);
 
   try {
-    const { appointment } = await dentallyAgentClient().createAppointment(built.payload);
+    const { appointment } = await dentallyWrite.createAppointment(
+      { source: "noshow", siteId: target.siteId, actor: auth?.id ?? null },
+      built.payload,
+    );
     // The old appointment is settled: stop its confirmations so the patient is not
     // reminded about a time they have just moved away from.
     await setTargetStatus(targetId, "confirmed");

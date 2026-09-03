@@ -5,7 +5,11 @@ import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { SITES, getSite } from "@/lib/mock/clients";
 import { listOutstandingDetailed, listPatients, type PatientRecord } from "@/lib/dentally/read";
-import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import {
+  loadExcludedTargetKeys,
+  excludedTargetKey,
+  isExclusionsUnavailable,
+} from "@/lib/patient-status/repository";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import {
   decideCollectionAction,
@@ -145,16 +149,31 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     const candidates = read.rows.slice(0, config.maxExaminedPerRun);
     const patientIds = candidates.map((r) => r.patientId);
 
-    const [patients, states, inbound, excludedKeys] = await Promise.all([
-      // The same cached book the debtors scan itself resolves names from, so this is
-      // not a second walk of the patient index. It is the only source of the CONSENT
-      // flags: an OutstandingRecord carries a name and a balance and nothing about
-      // whether the patient agreed to be contacted.
-      listPatients(siteIds),
-      listStatesByPatient(patientIds),
-      listInboundBodiesByPatient(patientIds),
-      loadExcludedTargetKeys(),
-    ]);
+    // The exclusion read REFUSES rather than returning an empty set when messaging is
+    // live and the override table is unreadable (ruling W1-B/2, 3 Sep 2026). A
+    // rejection inside Promise.all rejects the whole array, so the catch goes round
+    // the destructuring: exclusions unknown means nobody is drafted this tick. That
+    // matters most here — this is the agent that tells patients they owe money.
+    let patients: Awaited<ReturnType<typeof listPatients>>;
+    let states: Awaited<ReturnType<typeof listStatesByPatient>>;
+    let inbound: Awaited<ReturnType<typeof listInboundBodiesByPatient>>;
+    let excludedKeys: Set<string>;
+    try {
+      [patients, states, inbound, excludedKeys] = await Promise.all([
+        // The same cached book the debtors scan itself resolves names from, so this is
+        // not a second walk of the patient index. It is the only source of the CONSENT
+        // flags: an OutstandingRecord carries a name and a balance and nothing about
+        // whether the patient agreed to be contacted.
+        listPatients(siteIds),
+        listStatesByPatient(patientIds),
+        listInboundBodiesByPatient(patientIds),
+        loadExcludedTargetKeys(),
+      ]);
+    } catch (err) {
+      if (!isExclusionsUnavailable(err)) throw err;
+      console.error("[collection] exclusion list unreadable while messaging is live; skipping this tick", err);
+      return Response.json({ ok: true, skipped: "exclusions unavailable" });
+    }
     const byId = new Map<string, PatientRecord>(patients.map((p) => [p.id, p]));
 
     const link = paymentLink();

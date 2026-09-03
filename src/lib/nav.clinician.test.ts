@@ -169,6 +169,103 @@ const ADDED_MANAGER_COPILOT: Record<string, string[]> = {
   client_coordinator: ["co-pilot"],
 };
 
+/**
+ * W1-C: the pre-visit triage module.
+ *
+ * A NEW named delta rather than an edit to any layer beneath it, which is this
+ * file's own rule: "a delta folded into the layer beneath it stops being a
+ * decision anybody can read."
+ *
+ * WHO GETS IT AND WHY. The page is the ADMIN surface for the module — the two
+ * editable question banks, the per-treatment interest lists, and the
+ * implant-interest list. The owner runs the banks; the practice manager (a
+ * client_coordinator here) runs the interest lists, because following up a
+ * patient who asked to hear about whitening is exactly her job and it sits
+ * beside Leads, which she already has.
+ *
+ * WHO DOES NOT, AND THIS IS THE PART WORTH READING. The CLINICIAN is deliberately
+ * absent. What a clinician needs from this module is the pre-visit SUMMARY on the
+ * patient record ("this is what the patient shared"), and that is gated on
+ * "patients" — a slug they already hold. Adding this slug to CLINICIAN_SLUGS
+ * would hand them the editor that decides what every patient in the practice is
+ * asked, which is a practice-policy decision and not a clinical one.
+ *
+ * client_staff is absent for the ordinary reason: STAFF_SLUGS is two entries.
+ */
+const ADDED_PREVISIT: Record<string, string[]> = {
+  agency_admin: ["pre-visit-triage"],
+  client_owner: ["pre-visit-triage"],
+  client_coordinator: ["pre-visit-triage"],
+};
+
+/**
+ * ADDED, W1-D — the two staff-facing desk modules: the equipment register and
+ * its desk, and the IT desk.
+ *
+ * Their own map rather than a line appended to an earlier one, for the reason
+ * this whole file is built the way it is: a delta folded into the layer beneath
+ * it stops being a decision anybody can read.
+ *
+ * WHO GETS THEM. The owner, the agency and the PRACTICE MANAGER. The equipment
+ * register is the practice manager's document in every practice that keeps one,
+ * and front-desk IT problems land on her too; gating either on OWNER_ROLES would
+ * lock out the primary user, which is the mistake Staff rota made and had to
+ * undo.
+ *
+ * WHO DOES NOT. The clinician and the staff role, both by their own allow-lists,
+ * which run first. That is a deliberate and slightly uncomfortable line for the
+ * IT desk in particular — a nurse who cannot print is exactly the person it would
+ * help — and it is drawn here on purpose: widening either allow-list is a
+ * decision to take on written instruction, not one to make in passing while
+ * shipping a module. The lane's brief says owner + manager, so it is owner +
+ * manager.
+ */
+const ADDED_DESKS: Record<string, string[]> = {
+  agency_admin: ["equipment", "it-desk"],
+  client_owner: ["equipment", "it-desk"],
+  client_coordinator: ["equipment", "it-desk"],
+};
+
+/**
+ * WIDENED, Dental OS W1-E — the co-pilot, for the two allow-list roles.
+ *
+ * Its own map rather than a line appended to the maps above, for the reason each
+ * of those states about itself: a delta folded into the layer beneath it stops
+ * being reviewable as a delta, and the whole value of this file is that every
+ * widening is readable as its own decision with its own reason.
+ *
+ * THE DECISION. Taken on the programme coordinator's written ruling of
+ * 3 Sep 2026, on the Dental OS mandate that the co-pilot serves every staff
+ * clearance. The lane built the clinician and staff catalogs first and left them
+ * inert precisely so that switching them on could be one reviewed line rather
+ * than a design exercise under time pressure.
+ *
+ * WHY THIS IS A DOOR AND NOT A ROOM. `canRoleAccessModule` decides whether a
+ * login may reach /c/<client>/co-pilot at all. What it is ANSWERED with is
+ * decided server-side per turn from the SESSION's role, three independent times
+ * (src/lib/copilot/clearance.ts): the tool schema the model is shown, the gate
+ * checked before any tool runs, and the projection applied on the way out.
+ *
+ *   client_clinician  six READ tools — their patients, their diary, the
+ *                     practice's general knowledge at tier 1, their own work, and
+ *                     second-opinion decision support on a named patient — and NO
+ *                     act domain. A clinician does not send to a patient from
+ *                     here (ruling 1 of the same message).
+ *   client_staff      ONE tool, `my_work`, about the person signed in. It takes
+ *                     no staff id and resolves the record from the session, so it
+ *                     cannot be pointed at a colleague. No patient, no diary, no
+ *                     money.
+ *
+ * `indexRedirectFor` is untouched: a client_staff login still lands on My work
+ * before any dashboard read runs, so the takings are still never fetched for it.
+ */
+const WIDENED_COPILOT_ALL_CLEARANCES: Record<string, string[]> = {
+  agency_admin: [],
+  client_owner: [],
+  client_coordinator: [],
+  client_clinician: ["co-pilot"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<string, string[]> = {
   agency_admin: ["practice-brain"],
@@ -189,6 +286,9 @@ describe("1. the existing three roles are byte-identical apart from the named de
         ...ADDED_TONIGHT[role],
         ...ADDED_CAMPAIGN_6[role],
         ...ADDED_MANAGER_COPILOT[role],
+        ...ADDED_PREVISIT[role],
+        ...ADDED_DESKS[role],
+        ...WIDENED_COPILOT_ALL_CLEARANCES[role],
       ];
       expect(sorted(navSlugs(role))).toEqual(sorted(expected));
     },
@@ -202,6 +302,9 @@ describe("1. the existing three roles are byte-identical apart from the named de
         ...ADDED_TONIGHT[role],
         ...ADDED_CAMPAIGN_6[role],
         ...ADDED_MANAGER_COPILOT[role],
+        ...ADDED_PREVISIT[role],
+        ...ADDED_DESKS[role],
+        ...WIDENED_COPILOT_ALL_CLEARANCES[role],
         ...EXTRA_ALLOWED_NOT_IN_NAV[role],
       ];
       expect(sorted(allowedSlugs(role))).toEqual(sorted(expected));
@@ -290,7 +393,7 @@ describe("6. CLINICIAN_SLUGS contains only real modules", () => {
     }
   });
 
-  it("names the exact six modules a clinician gets", () => {
+  it("names the exact seven modules a clinician gets", () => {
     // WAS FIVE. "my-work" was added in campaign 6 and this pin moved with it,
     // deliberately: the clinician's allow-list is the tightest in the platform and a
     // silent addition to it is exactly what this assertion exists to catch, so the
@@ -301,8 +404,18 @@ describe("6. CLINICIAN_SLUGS contains only real modules", () => {
     // staff. Every tab of it is scoped to the CALLER'S OWN staff record resolved from
     // the session, so it grants no data the clinician did not already hold — unlike
     // "calendar" or "patients", which are practice-wide.
+    //
+    // NOW SEVEN. "co-pilot" was added on the programme coordinator's written
+    // ruling of 3 Sep 2026 (Dental OS, lane W1-E), and the same reasoning applies
+    // as for my-work: it grants a second way to ask about data this role already
+    // holds. A clinician's co-pilot is six READ tools — the patients and diary
+    // their own screens already show, the practice's general knowledge at tier 1,
+    // their own work, and second-opinion decision support on a named patient —
+    // with NO act domain at all, so it cannot send, book, cancel or create
+    // anything. That catalog is enforced server-side on every turn and is pinned
+    // in src/lib/copilot/clearance.test.ts, not here.
     expect(sorted([...CLINICIAN_SLUGS])).toEqual(
-      sorted(["", "calendar", "patients", "absence", "staff-check-in", "my-work"]),
+      sorted(["", "calendar", "patients", "absence", "staff-check-in", "my-work", "co-pilot"]),
     );
   });
 });

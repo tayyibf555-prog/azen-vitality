@@ -88,6 +88,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   coordinator: "Treatment follow-up",
   closer: "Treatment plan follow-up",
   postop: "Aftercare check-in",
+  previsit: "Pre-visit questions",
   reviews: "Review request",
   collection: "Balance reminder",
   outreach: "Campaign",

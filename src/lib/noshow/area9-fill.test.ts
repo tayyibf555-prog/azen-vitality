@@ -31,6 +31,21 @@ const store = vi.hoisted(() => ({
 
 function id(p: string): string { store.seq += 1; return `${p}-${store.seq}`; }
 
+// fill.ts now reads the owner kill switch itself (see the header comment on
+// offerSlotToNextCandidate). These cases are about the ORCHESTRATION with the
+// system switched on, so the toggle table is faked as empty — no row, and
+// 'no-show-defence' is a default-ON slug, so that reads as enabled. The switch's
+// own behaviour is proved separately in src/lib/agent-wiring/scenarios.test.ts.
+vi.mock("@/lib/supabase/server", () => ({
+  serviceClient: () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+      }),
+    }),
+  }),
+}));
+
 vi.mock("./repository", () => ({
   listOffersForSlot: vi.fn(async (freedAppointmentId: string) =>
     store.offers.filter((o) => o.freedAppointmentId === freedAppointmentId),
@@ -101,6 +116,7 @@ vi.mock("./repository", () => ({
 
 import { offerSlotToNextCandidate } from "./fill";
 import * as repo from "./repository";
+import { readFileSync } from "node:fs";
 
 const SITE = "site-cc";
 const SLOT: FreedSlot = {
@@ -275,9 +291,7 @@ describe("offerSlotToNextCandidate — dry-run safe + idempotent sender path", (
     const called = (repo as Record<string, unknown>);
     expect(typeof called.enqueueOutbox).toBe("function");
     // Static guard on the source: no markTouchSent reference in fill.ts.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require("node:fs") as typeof import("node:fs");
-    const src = fs.readFileSync(new URL("./fill.ts", import.meta.url), "utf8");
+    const src = readFileSync(new URL("./fill.ts", import.meta.url), "utf8");
     expect(src).not.toMatch(/markTouchSent/);
     expect(src).toMatch(/enqueueOutbox/);
   });

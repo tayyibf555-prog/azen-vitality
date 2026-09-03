@@ -4,7 +4,8 @@ import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { getSubmission, setStatus } from "@/lib/onboarding/repository";
 import { searchPatients, type PatientRecord } from "@/lib/dentally/read";
-import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { dentallyAgentClient } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import { DentallyError } from "@/lib/dentally/client";
 import { REGISTER_WRITES_OFF } from "@/lib/onboarding/register-result";
 import { toE164, normaliseEmail } from "@/lib/messaging/phone";
@@ -331,7 +332,19 @@ export async function POST(request: Request): Promise<Response> {
   // without a write — and BEFORE dentallyAgentClient(), which is the first line that
   // could reach Dentally. Same shape as recall/[action], reactivation/[action],
   // coordinator/[action] and noshow/[action].
-  if (!isDentallyWriteEnabled()) {
+  //
+  // ASKED THROUGH THE GATE, so the attempt is recorded before the refusal is
+  // returned. A receptionist pressing "Register in Dentally" while write-back is
+  // off used to get this 503 and leave no trace that the practice had tried to
+  // put a real person on the books; the attempt is now a blocked row on the
+  // Dentally sync screen, and the message and status code are unchanged. The
+  // submission's own status is still not flipped, so the row stays available to
+  // retry once write-back is on.
+  const refused = await precheckDentallyWrite({
+    ctx: { source: "onboarding", siteId: resolvedSiteId, actor: auth?.id ?? null },
+    kind: "patient.create",
+  });
+  if (refused) {
     return Response.json({ ok: false, error: REGISTER_WRITES_OFF }, { status: 503 });
   }
 
@@ -370,7 +383,10 @@ export async function POST(request: Request): Promise<Response> {
   let newId: string;
   try {
     const dentally = dentallyAgentClient();
-    const { patient } = await dentally.createPatient(built.payload);
+    const { patient } = await dentallyWrite.createPatient(
+      { source: "onboarding", siteId: resolvedSiteId, actor: auth?.id ?? null, client: dentally },
+      built.payload,
+    );
     newId = String(patient.id);
   } catch (err) {
     // ANY Dentally failure is surfaced HONESTLY and NEVER auto-retried. A 403 most

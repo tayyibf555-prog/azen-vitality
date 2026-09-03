@@ -27,14 +27,16 @@ export const NOW = new Date("2026-06-18T09:00:00Z");
  * N15, Romford Road "DO NOT USE") are deliberately NOT mapped, so their data is
  * dropped and never enters Vitality's view.
  */
-// publicPhone is null on all three until the owner supplies the real numbers. It
+// publicPhone: the three numbers below are the sites' own phone_number values read
+// from Dentally's /v1/sites (read-only probe, 3 Sep 2026) - the practice's published
+// numbers, not guesses. Any future site starts null until its number is confirmed. It
 // is the number a PATIENT is told to ring, so it is never guessed: the diary's
 // reschedule text refuses to draft without it and the confirmation dialog says so
 // before anyone commits the move.
 export const SITES: Site[] = [
-  { id: "site-cc", clientId: "vitality", name: "N15 Vitality Dental", dentallyId: "3286d822-68c5-48ff-b1a2-065780dfcd15", timezone: "Europe/London", openingHours: VITALITY_HOURS, publicPhone: null },
-  { id: "site-rv", clientId: "vitality", name: "N17 Dental", dentallyId: "c9b87b78-96e6-4f3d-aa8b-e1b953ae79cf", timezone: "Europe/London", openingHours: VITALITY_HOURS, publicPhone: null },
-  { id: "site-ng", clientId: "vitality", name: "Romford Road", dentallyId: "5855c8c1-2c3b-46c3-8c0f-36a9a774d2e6", timezone: "Europe/London", openingHours: VITALITY_HOURS, publicPhone: null },
+  { id: "site-cc", clientId: "vitality", name: "N15 Vitality Dental", dentallyId: "3286d822-68c5-48ff-b1a2-065780dfcd15", timezone: "Europe/London", openingHours: VITALITY_HOURS, publicPhone: "020 8808 8484" },
+  { id: "site-rv", clientId: "vitality", name: "N17 Dental", dentallyId: "c9b87b78-96e6-4f3d-aa8b-e1b953ae79cf", timezone: "Europe/London", openingHours: VITALITY_HOURS, publicPhone: "020 8264 1000" },
+  { id: "site-ng", clientId: "vitality", name: "Romford Road", dentallyId: "5855c8c1-2c3b-46c3-8c0f-36a9a774d2e6", timezone: "Europe/London", openingHours: VITALITY_HOURS, publicPhone: "020 8478 6029" },
 ];
 
 export const CLIENTS: Client[] = [

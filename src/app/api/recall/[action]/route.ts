@@ -1,5 +1,6 @@
 import { DentallyError } from "@/lib/dentally/client";
-import { isDentallyWriteEnabled, dentallyAgentClient, buildManualBookingPayload } from "@/lib/dentally/write";
+import { dentallyAgentClient, buildManualBookingPayload } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/booking/slots";
 import { londonDayKey } from "@/lib/time/london";
 import { draftRecall } from "@/lib/recall/draft";
@@ -22,6 +23,7 @@ import {
 import type { RecallTarget } from "@/lib/recall/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { requireUser, requireSiteAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import type { AuthedUser } from "@/lib/auth/session";
 import { requireCapability } from "@/lib/auth/capability-guard";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
@@ -297,23 +299,41 @@ async function handlePauseResume(body: Record<string, unknown>, resume: boolean)
   return Response.json({ ok: true });
 }
 
-async function handleBook(body: Record<string, unknown>): Promise<Response> {
+async function handleBook(body: Record<string, unknown>, auth: AuthedUser | null): Promise<Response> {
   const targetId = body.targetId;
   const start = body.start;
   if (typeof targetId !== "string" || targetId === "") return badRequest("targetId is required");
   if (typeof start !== "string" || start === "") return badRequest("start is required");
 
+  const target = await getTarget(targetId);
+  if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
+
   // Manual bookings go through the SAME gate as the agent's writes: no real
   // appointment can be created until the write path is deliberately enabled.
-  if (!isDentallyWriteEnabled()) {
+  //
+  // Asked THROUGH the gate now, and asked AFTER the target is loaded so the
+  // recorded attempt names the site and the patient it was about. It used to be
+  // asked of the environment directly, one step earlier: the receptionist got
+  // this same 503 and nothing anywhere recorded that the practice had tried to
+  // put an appointment into Dentally. The gate files the attempt first
+  // (blocked / writes_disabled) and the message they see is unchanged. It still
+  // runs BEFORE the live availability read below, so a refused click costs no
+  // Dentally quota.
+  const refused = await precheckDentallyWrite({
+    ctx: {
+      source: "recall",
+      siteId: target.siteId,
+      actor: auth?.id ?? null,
+      patientId: target.dentallyPatientId,
+    },
+    kind: "appointment.create",
+  });
+  if (refused) {
     return Response.json(
       { error: "Booking into Dentally is not switched on yet. Ask your administrator to enable it." },
       { status: 503 },
     );
   }
-
-  const target = await getTarget(targetId);
-  if (!target) return Response.json({ error: "Target not found" }, { status: 404 });
 
   // Whitelisted payload: patient_id comes from OUR target record, never the body.
   // Validated first so a body missing the end time or the clinician is refused
@@ -353,7 +373,18 @@ async function handleBook(body: Record<string, unknown>): Promise<Response> {
   if ("error" in confirmed) return badRequest(confirmed.error);
 
   try {
-    const { appointment } = await dentally.createAppointment(confirmed.payload);
+    const { appointment } = await dentallyWrite.createAppointment(
+      {
+        source: "recall",
+        siteId: target.siteId,
+        actor: auth?.id ?? null,
+        patientId: target.dentallyPatientId,
+        // The SAME client the availability read above used, so the slot the write
+        // takes and the slot the guard proved open are in one Dentally instance.
+        client: dentally,
+      },
+      confirmed.payload,
+    );
     const cadence = await getCadenceByTarget(targetId);
     if (cadence) {
       await updateCadence(cadence.id, { status: "converted", endedAt: new Date().toISOString() });
@@ -442,7 +473,7 @@ export async function POST(
     case "resume":
       return handlePauseResume(body, true);
     case "book":
-      return handleBook(body);
+      return handleBook(body, auth);
     default:
       return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
   }

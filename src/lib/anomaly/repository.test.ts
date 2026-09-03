@@ -217,12 +217,15 @@ describe("the watch registries cannot silently fall behind the platform", () => 
     }
   });
 
-  it("claims not_before_at on exactly the two tables that have it", () => {
-    // Migrations 0063 (diary) and 0091 (post-op). Selecting the column on any
-    // other table would fail the read outright.
+  it("claims not_before_at on exactly the three tables that have it", () => {
+    // Migrations 0063 (diary), 0091 (post-op) and 0097 (pre-visit). Selecting the
+    // column on any other table would fail the read outright, and OMITTING it on
+    // one that has it is the opposite defect: a row deliberately parked until
+    // 08:00 would be counted as jammed and raise an alert at breakfast.
     expect(OUTBOX_WATCHES.filter((w) => w.hasNotBefore).map((w) => w.table).sort()).toEqual([
       "diary_outbox",
       "postop_outbox",
+      "previsit_outbox",
     ]);
   });
 

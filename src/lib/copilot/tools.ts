@@ -33,7 +33,13 @@ import {
   dentallyFromEnv,
   type PatientRecord,
 } from "@/lib/dentally/read";
-import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { isDentallyWriteEnabled } from "@/lib/dentally/write";
+// THE WRITE GATE (W1-A). Every outbound Dentally write in the platform goes
+// through it: it resolves live-vs-dry-run, honours the master write-back switch
+// and the asking module's own kill switch, and RECORDS AN INTENT for every call
+// including the ones it refuses. Imported, never reimplemented — the source
+// crawl in write-gate-sites.test.ts is what keeps that true.
+import { DentallyWriteRefused, dentallyWrite } from "@/lib/dentally/write-gate";
 import { DentallyError } from "@/lib/dentally/client";
 import { normaliseGender, ageFromDob } from "@/lib/patient/demographics";
 // The ONE live-calibrated derivation of a new Dentally patient, shared with the
@@ -112,11 +118,27 @@ import { logCopilotAction } from "./actions";
 // which fields of a patient record) live in scope.ts; this file only obeys them.
 import {
   type CopilotAccess,
+  type CopilotToolName,
   copilotKnowledgeTier,
   copilotToolAllowed,
   copilotToolRefusal,
   projectPatientRecord,
 } from "./scope";
+// SECOND-OPINION MODE. The whole output contract — the decision-support label,
+// the refusals, the sanitiser and the derived considerations — is pure and lives
+// in second-opinion.ts. This file fetches the record and hands it over; it does
+// not decide what a second opinion looks like.
+import { buildSecondOpinion, secondOpinionRefusal } from "./second-opinion";
+// THE TIER>=2 ECHO FLOOR. The knowledge tree is written for the team; the send
+// tools reach patients; one turn can legitimately do both. See knowledge-echo.ts.
+import { KNOWLEDGE_ECHO_REFUSAL, makeKnowledgeEchoGuard } from "./knowledge-echo";
+// SELF-SERVICE READS for `my_work`. The same three repositories My work's own
+// routes read, narrowed AT THE QUERY to one staff id — and that staff id is
+// resolved from the SESSION by the route and handed in, never taken from the
+// tool input. There is no staff parameter on `my_work` for a model to fill in.
+import { listShifts } from "@/lib/rota/repository";
+import { listAbsence } from "@/lib/absence/repository";
+import { listStaffDocuments } from "@/lib/hr/document-repository";
 
 // The co-pilot's "today" must be the REAL current day in the practice's timezone,
 // not the frozen mock clock: once live against real Dentally, a hardcoded date
@@ -125,7 +147,13 @@ import {
 const todayIso = () => londonDayKey(new Date());
 const siteName = (id: string) => getSite(id)?.name ?? id;
 
-export const COPILOT_TOOLS: Anthropic.Tool[] = [
+// THE TYPE IS THE LOCK, IN THE OTHER DIRECTION. `CopilotToolName` is the union
+// declared in clearance.ts, where every tool is filed under exactly one domain.
+// Intersecting it here means a tool ADDED TO THIS ARRAY with a name nobody has
+// placed in the clearance model does not compile — so "who may run this" is
+// answered before the tool exists, rather than by whoever notices later.
+// (Still assignable to `Anthropic.Tool[]`, so every caller is unchanged.)
+export const COPILOT_TOOLS: (Anthropic.Tool & { name: CopilotToolName })[] = [
   {
     name: "patient_record",
     description:
@@ -405,6 +433,40 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
       required: ["leadId"],
     },
   },
+  {
+    name: "second_opinion",
+    description:
+      "SECOND OPINION on one named patient, for a clinician. Reads that patient's record (clinical notes, treatment plans and whether they were accepted, and their appointment history, including cancellations and did-not-attends) and returns DECISION SUPPORT: what the record shows, what is worth weighing, and what this platform cannot see. It is not a diagnosis, not a treatment plan and not an instruction to treat, and every result says so. You MUST name a patient: with no name, or with a name that matches nobody or several people, it refuses and asks. Never use it to answer a general clinical question with no patient behind it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        patient: {
+          type: "string",
+          description: "The patient's name or phone number, enough to identify exactly one patient in the site currently in view. Never invent one, and never pass a description of a case instead of a person.",
+        },
+      },
+      required: ["patient"],
+    },
+  },
+  {
+    name: "my_work",
+    description:
+      "The person asking about THEIR OWN work: their published shifts, their holiday requests and their own staff documents. It answers only about whoever is signed in — it takes no staff name and no staff id, and there is no way to ask it about a colleague. Use it for 'when am I working', 'what shifts have I got', 'how much holiday have I booked', 'what is in my staff file'. It shows published rotas only, because a draft rota is a manager still thinking.",
+    input_schema: {
+      type: "object",
+      properties: {
+        section: {
+          type: "string",
+          enum: ["rota", "holiday", "documents"],
+          description: "Which part of their own work to read. Defaults to 'rota'.",
+        },
+        days: {
+          type: "number",
+          description: "How many days ahead to cover for the rota, counting today as day 1. Defaults to 28; the maximum is 62.",
+        },
+      },
+    },
+  },
 ];
 
 function patientSummary(p: PatientRecord) {
@@ -552,12 +614,38 @@ async function findLikelyExistingPatient(
  *   2. `search_knowledge` reads at the manager's clearance tier, not tier 4;
  *   3. `patient_record` is money-projected before it leaves the tool.
  */
+/**
+ * The SELF-SERVICE SEAM, handed in rather than reached for.
+ *
+ * `my_work` answers about the person asking, and the one way that stays true is
+ * for this file to have no way of asking about anybody else. So the dispatch
+ * takes a THUNK the route builds from the verified session
+ * (`resolveSelfStaff(clientId, auth, ...)`, src/lib/self-service/read.ts) and
+ * never a staff id: there is no parameter here for a tool input to reach, no
+ * lookup by name, and nothing an injected note could steer.
+ *
+ * It is a thunk and not a resolved value so the lookup costs nothing on the
+ * turns that do not use it, which is nearly all of them — an owner asking about
+ * the diary must not pay for a staff-row query.
+ */
+export interface CopilotSelfService {
+  /** The caller's OWN staff row, resolved from the session. Null when unlinked. */
+  resolveStaff: () => Promise<{ id: string; name: string } | null>;
+}
+
 export function makeCopilotDispatch(
   siteIds: string[],
   clientId: string,
   actor = "owner",
   access: CopilotAccess = "full",
+  self?: CopilotSelfService,
 ) {
+  // ONE PER SESSION, not per call and not per process. It has to outlive a single
+  // dispatch (the search and the send are different calls in the same turn) and
+  // must NOT outlive the session, or it becomes a process-wide cache of one
+  // practice's confidential knowledge sitting in a serverless instance.
+  const knowledgeEcho = makeKnowledgeEchoGuard();
+
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
     // ---------------------------------------------------------------------
     // THE GATE. First statement, before anything is parsed, read or awaited.
@@ -587,7 +675,7 @@ export function makeCopilotDispatch(
         body: null,
         status: `blocked:out_of_scope:${access}`,
       });
-      return copilotToolRefusal();
+      return copilotToolRefusal(access);
     }
 
     try {
@@ -716,6 +804,10 @@ export function makeCopilotDispatch(
           // at her own clearance (see copilotKnowledgeTier). This line is the
           // "employee scoping is handled later" the owner co-pilot shipped with.
           const results = await searchKnowledge(clientId, q, copilotKnowledgeTier(access));
+          // REMEMBER WHAT WAS HANDED OVER, so the send path can refuse to echo it.
+          // Recorded from the RESULT rather than from the request, so it covers
+          // exactly the words the model actually received.
+          knowledgeEcho.remember(results.map((r) => ({ tier: r.node.tier, body: r.node.body, snippet: r.snippet })));
           return JSON.stringify({
             count: results.length,
             knowledge: results.map((r) => ({
@@ -740,6 +832,32 @@ export function makeCopilotDispatch(
           }
           if (channel === "email" && !subject) {
             return JSON.stringify({ sent: false, error: "An email needs a subject." });
+          }
+
+          // THE TIER>=2 ECHO FLOOR, and it is checked HERE — before the recipient
+          // is even looked up — for two reasons. It applies to the PREVIEW as well
+          // as the commit, so the owner is never shown a draft containing the
+          // practice's internal wording and asked to approve it; and a refusal
+          // that has not yet touched the patient database is a refusal with no
+          // side effects to unwind. Subject included: an email subject line is a
+          // send too.
+          const echoed = knowledgeEcho.echoedRun(channel === "email" ? `${subject} ${message}` : message);
+          if (echoed) {
+            await logCopilotAction({
+              clientId,
+              siteId: null,
+              actor,
+              action: name,
+              targetRef: null,
+              targetName: null,
+              channel,
+              // The BODY is not logged. Writing the confidential run into an audit
+              // row to record that it must not leave the practice is the same
+              // mistake in a smaller box.
+              body: null,
+              status: "blocked:knowledge_echo",
+            });
+            return JSON.stringify({ sent: false, reason: "knowledge_echo", message: KNOWLEDGE_ECHO_REFUSAL });
           }
 
           // Resolve the recipient by server-side search, not a truncatable full scan:
@@ -1742,13 +1860,22 @@ export function makeCopilotDispatch(
           // honest error read-back, and the booking-create write posture (the gated
           // dentallyAgentClient + internal->Dentally site mapping).
 
-          // (0) THE WRITE GATE, FIRST, BEFORE ANY VALIDATION OR NETWORK CALL. Every
-          // appointment route in this codebase (booking/create, coordinator, reactivation,
-          // recall) refuses outright on !isDentallyWriteEnabled() before touching Dentally
-          // at all; create_patient previously fell through to dentallyAgentClient(), which
-          // defaults to the READ key/URL when writes are disabled and still issues a real
-          // POST, then reported the result as "test mode" regardless of what actually
-          // happened. Refuse honestly here instead: no dedupe search, no create attempt.
+          // (0) THE EARLY REFUSAL, ON THE PREVIEW ONLY.
+          //
+          // This guard exists because create_patient used to fall through to
+          // `dentallyAgentClient()`, which defaults to the READ key/URL when writes are
+          // disabled and still issued a real POST, then reported "test mode" regardless
+          // of what actually happened. Refusing here instead means no dedupe search and
+          // no create attempt on a path that cannot write.
+          //
+          // KEPT AHEAD OF THE WRITE GATE, and the trade is on the record. W1-A's gate
+          // would also refuse this (recording a `dry_run` intent as it does so), and a
+          // ledger row is genuinely worth having. It is not worth what it costs HERE: the
+          // gate refuses at the point of writing, which is after the dedupe search, so
+          // buying the row means issuing a live Dentally patient lookup on a path that
+          // was never going to write. Refusing first keeps the stronger property — while
+          // writes are off this tool touches Dentally not at all — and the practice loses
+          // one intent row it can already infer from the co-pilot's own audit log.
           if (!isDentallyWriteEnabled()) {
             return JSON.stringify({
               created: false,
@@ -2022,10 +2149,33 @@ export function makeCopilotDispatch(
 
           let newId: string;
           try {
-            const client = dentallyAgentClient();
-            const { patient } = await client.createPatient(built.payload);
+            // THROUGH THE GATE, not through a client of our own. It resolves the mode,
+            // honours the master dentally-write-back switch, and files an intent for this
+            // creation whether or not it happens — so the practice can see what the
+            // co-pilot would have written even while write-back is off.
+            const { patient } = await dentallyWrite.createPatient(
+              { source: "copilot", siteId, clientId, actor, },
+              built.payload,
+            );
             newId = String(patient.id);
           } catch (err) {
+            // A REFUSAL IS NOT A DENTALLY FAILURE, and must never be reported as one.
+            // The gate throws rather than returning a "nothing happened" value (a silent
+            // zero would be read by every existing call site as a completed write), and
+            // each reason is a different sentence for the owner: the switch is off, the
+            // key is read-only, the practice turned write-back off in System controls.
+            if (err instanceof DentallyWriteRefused) {
+              await logCopilotAction({ ...audit, targetRef: null, status: `blocked:${err.reason}` });
+              return JSON.stringify({
+                created: false,
+                reason: "writes_disabled",
+                blockedReason: err.reason,
+                ...readback,
+                message:
+                  `I did not create ${name}: ${err.message} ` +
+                  "What they would have been created with is recorded in Sync status, so nothing is lost. Do not try another way to add them.",
+              });
+            }
             // ANY Dentally failure is surfaced HONESTLY and NEVER auto-retried. A 403 most
             // likely means the write key is not permitted to create patients; a 422 means
             // Dentally rejected the details. The raw error body is never relayed verbatim.
@@ -2563,6 +2713,164 @@ export function makeCopilotDispatch(
             note: dryRun
               ? `Re-sent first contact to ${lead.name}, recorded in test mode (dry run): it was not delivered to them. It will go out for real once the practice switches messaging live.`
               : `Re-sent first contact to ${lead.name}.`,
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // SECOND-OPINION MODE (clinician). The record, and the SHAPE of a reply
+        // that is decision support rather than an instruction to treat.
+        //
+        // The whole contract is in second-opinion.ts and every exit from this
+        // case goes through one of its two builders, so there is no path out of
+        // here that is not labelled. That is deliberate: an early return with a
+        // hand-written message would be the one unlabelled reply.
+        // -------------------------------------------------------------------
+        case "second_opinion": {
+          const q = String(input.patient ?? "").trim();
+          // REFUSE WITHOUT A NAMED PATIENT. Not a soft "I need more detail": a
+          // general clinical question answered here would be answered from the
+          // model's training, which is exactly what this mode exists to prevent.
+          if (q.length < 2) return JSON.stringify(secondOpinionRefusal("no_patient_named"));
+
+          // Site-scoped by construction: `siteIds` is the session's view scope,
+          // so "in scope" is not a check this case has to remember to make.
+          const matches = await searchPatients(siteIds, q);
+          if (matches.length === 0) return JSON.stringify(secondOpinionRefusal("patient_not_found"));
+          if (matches.length > 1) {
+            return JSON.stringify(
+              secondOpinionRefusal("ambiguous_patient", {
+                matches: matches.slice(0, 10).map(patientSummary),
+              }),
+            );
+          }
+
+          const p = matches[0];
+          const detail = await getPatientDetail(p.id, p.siteId);
+          // "Could not be read" and "there is nothing there" are different
+          // clinical statements, and the second one is the dangerous one to make
+          // by accident. A missing detail refuses rather than reasoning over an
+          // empty record.
+          if (!detail) return JSON.stringify(secondOpinionRefusal("record_unreadable"));
+
+          return JSON.stringify(
+            buildSecondOpinion({
+              patient: {
+                id: p.id,
+                name: p.name,
+                site: siteName(p.siteId),
+                status: p.active ? "active" : p.archivedReason ?? "inactive",
+                dateOfBirth: p.dateOfBirth,
+                lastVisit: p.lastVisitAt,
+                recallDue: p.recallDueAt,
+              },
+              notes: detail.notes,
+              plans: detail.plans,
+              appointments: detail.appointments,
+              reads: detail.reads,
+              todayIso: todayIso(),
+            }),
+          );
+        }
+
+        // -------------------------------------------------------------------
+        // MY WORK (staff, clinician). The caller's OWN rota, holiday and file.
+        //
+        // Every read below is narrowed AT THE QUERY to the one staff id the
+        // session resolved to, so a failure to filter cannot leak the team's
+        // week — there is no unfiltered result to forget to narrow. And the
+        // rota read is `publishedOnly`, because a draft rota is a manager
+        // thinking out loud and showing one to the person who would have to
+        // work it is worse than showing none.
+        // -------------------------------------------------------------------
+        case "my_work": {
+          const staff = self ? await self.resolveStaff() : null;
+          if (!staff) {
+            // 409-shaped, not "you have nothing". "We cannot work out which staff
+            // record is yours" and "you have no shifts" are opposite statements,
+            // and the remedy for the first is a link a manager makes.
+            return JSON.stringify({
+              found: false,
+              unlinked: true,
+              message:
+                "This login is not linked to a staff record yet, so there is nothing of theirs to show. Say that plainly and that the practice manager can link it in Rota, Staff. Do not answer with an empty list as though they had no shifts.",
+            });
+          }
+
+          const section = ["rota", "holiday", "documents"].includes(String(input.section))
+            ? String(input.section)
+            : "rota";
+
+          if (section === "holiday") {
+            const rows = await listAbsence(clientId, { staffId: staff.id });
+            return JSON.stringify({
+              staff: staff.name,
+              section,
+              count: rows.length,
+              holiday: rows.slice(0, 40).map((a) => ({
+                kind: a.kind,
+                from: a.startDate,
+                to: a.endDate,
+                status: a.status,
+                note: a.note,
+              })),
+            });
+          }
+
+          if (section === "documents") {
+            const result = await listStaffDocuments(clientId, staff.id);
+            // `ready:false` means the vault's migration has not been applied here.
+            // Reported as such rather than as an empty file.
+            if (!result.ready) {
+              return JSON.stringify({
+                staff: staff.name,
+                section,
+                available: false,
+                message:
+                  "The staff document vault is not switched on for this practice yet, so there is nothing to list. Say that rather than saying their file is empty.",
+              });
+            }
+            return JSON.stringify({
+              staff: staff.name,
+              section,
+              count: result.documents.length,
+              // The LIST, never a link: a document URL is minted by its own route
+              // behind its own guard, and a co-pilot answer is not that route.
+              documents: result.documents.slice(0, 50).map((d) => ({
+                label: d.label,
+                kind: d.kind,
+                addedAt: d.createdAt,
+                // The one field of a staff file people actually ask about ("is my
+                // DBS still in date"). `storagePath` is deliberately NOT here: a
+                // document is fetched through its own route, behind its own
+                // guard, and a co-pilot answer is not that route.
+                expiresOn: d.expiresOn ?? null,
+              })),
+            });
+          }
+
+          const days = Math.min(Math.max(Number(input.days) || 28, 1), 62);
+          const from = todayIso();
+          const to = londonDayKey(new Date(Date.parse(`${from}T12:00:00Z`) + (days - 1) * 86_400_000));
+          const shifts = await listShifts(clientId, from, to, {
+            staffIds: [staff.id],
+            publishedOnly: true,
+          });
+          return JSON.stringify({
+            staff: staff.name,
+            section: "rota",
+            from,
+            to,
+            count: shifts.length,
+            publishedOnly: true,
+            shifts: shifts.map((sh) => ({
+              date: sh.shiftDate,
+              start: sh.startTime,
+              end: sh.endTime,
+              role: sh.role,
+              site: siteName(sh.siteId),
+              status: sh.status,
+              note: sh.note ?? null,
+            })),
           });
         }
 

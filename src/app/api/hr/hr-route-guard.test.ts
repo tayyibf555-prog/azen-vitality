@@ -272,7 +272,17 @@ describe("the self-service seam is CLOSED, and what replaced the module gate hol
     // "my-work" is held by BOTH new roles, so a gate naming it would have compiled,
     // read as a lock and done nothing. That is why the answer was no gate plus a
     // proof, and not a different gate.
-    expect([...STAFF_SLUGS].sort()).toEqual(["", "my-work"]);
+    // NARROWED to the fact this test actually rests on. It used to snapshot the
+    // WHOLE of STAFF_SLUGS, which made it fire on W1-E/2 (the coordinator's ruling
+    // of 3 Sep 2026 adding "co-pilot" for every clearance) — a change with nothing
+    // to do with HR, on a route this lane never touched. A test that pins more
+    // than its own claim reports other people's decisions as its own regressions.
+    //
+    // What the seam argument needs is the two lines below: "my-work" is held by
+    // BOTH new roles, so a gate naming it would have compiled, read as a lock and
+    // done nothing. That is still exactly true, and the set membership is pinned
+    // where it belongs, in src/lib/nav.staff.test.ts.
+    expect(STAFF_SLUGS.has("my-work")).toBe(true);
     expect(canRoleAccessModule("client_clinician", "my-work")).toBe(true);
     expect(canRoleAccessModule("client_staff", "my-work")).toBe(true);
     // ...while "staff-hr" — the gate that was there — refuses them both, which is

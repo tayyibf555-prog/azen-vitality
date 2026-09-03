@@ -2,6 +2,10 @@ import { listAbandonedHolds, markHoldExpired, type BookingHold } from "./holds";
 import { findOpenLeadByAddress, insertLead } from "@/lib/speed-to-lead/repository";
 import type { LeadConsent } from "@/lib/speed-to-lead/types";
 import { londonDateTimeLabel } from "@/lib/time/london";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
+
+/** The single pilot client, matching every other sweep in this tree. */
+const CLIENT_ID = "vitality";
 
 // Lazy conversion of abandoned booking holds into speed-to-lead leads.
 //
@@ -37,6 +41,36 @@ export interface AbandonedConversionResult {
  * small summary for the sweep's response.
  */
 export async function convertAbandonedHolds(now: Date = new Date()): Promise<AbandonedConversionResult> {
+  // ===========================================================================
+  // TWO SWITCHES, BOTH REQUIRED (ruling W1-B/4, 3 Sep 2026).
+  //
+  // The rescue used to be stopped by `speed-to-lead` alone, because that is the
+  // sweep that hosts it and the machinery it feeds. But what it rescues is an
+  // abandoned ONLINE BOOKING, and an owner who has switched online booking off
+  // has switched off the very flow this text invites the patient back into. The
+  // message would read as "come and finish the booking you started" about a page
+  // that now refuses bookings.
+  //
+  // So it needs BOTH. The guard lives here rather than in the sweep for the same
+  // reason the waitlist-fill guard lives in fill.ts: this function is the only
+  // thing that turns a hold into a lead, and a guard written in the caller is a
+  // guard the next caller will not have.
+  //
+  // FAIL DIRECTION: isSystemEnabledForSend for both — fail-open under dry-run so
+  // development keeps working, fail-CLOSED once messaging is live.
+  // ===========================================================================
+  const [leadsOn, bookingOn] = await Promise.all([
+    isSystemEnabledForSend(CLIENT_ID, "speed-to-lead"),
+    isSystemEnabledForSend(CLIENT_ID, "online-booking"),
+  ]);
+  if (!leadsOn || !bookingOn) {
+    console.warn(
+      `[booking] abandoned-hold rescue skipped: speed-to-lead=${leadsOn ? "on" : "off"}, ` +
+        `online-booking=${bookingOn ? "on" : "off"}. Both are required.`,
+    );
+    return { checked: 0, converted: 0, deduped: 0 };
+  }
+
   const nowMs = now.getTime();
   const olderThanIso = new Date(nowMs - ABANDON_AFTER_MS).toISOString();
   const freshestIso = new Date(nowMs - MAX_HOLD_AGE_MS).toISOString();
@@ -75,7 +109,21 @@ async function convertOne(hold: BookingHold, now: Date): Promise<"converted" | "
   const slotLabel = londonDateTimeLabel(hold.slotStart);
   const treatmentInterest = `${hold.treatment} — wanted ${slotLabel}`;
 
-  const consent: LeadConsent = { sms: true, email: !!hold.email, whatsapp: false, marketing: false };
+  // THE BASIS IS NARROW AND IT IS WRITTEN DOWN (ruling W1-B/4, 3 Sep 2026).
+  // `marketing: false` is not a default here, it is the point: the patient typed
+  // their number into our booking form under microcopy about THAT booking, which
+  // covers one transactional follow-up and nothing else. `source: "booking-form"`
+  // records which basis this is, so a later reader does not have to infer it from
+  // the lead's source column. The 3-touch nurture cadence excludes this source at
+  // both of its selection queries (see listNurtureDue), so "at most one rescue
+  // message" is enforced by the query, not by a comment.
+  const consent: LeadConsent = {
+    sms: true,
+    email: !!hold.email,
+    whatsapp: false,
+    marketing: false,
+    source: "booking-form",
+  };
 
   await insertLead({
     siteId: hold.siteId,

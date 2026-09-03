@@ -80,6 +80,9 @@ export const OUTBOX_WATCHES: readonly OutboxWatch[] = [
   { source: "closer", table: "closer_outbox", slug: "treatment-closer", href: "treatment-coordinator", hasNotBefore: false },
   { source: "collection", table: "collection_outbox", slug: "balance-reminders", href: null, hasNotBefore: false },
   { source: "postop", table: "postop_outbox", slug: "postop-checkin", href: null, hasNotBefore: true },
+  // hasNotBefore: the pre-visit outbox carries not_before_at (its quiet-hours
+  // clamp), so a row waiting for 08:00 must not be counted as jammed.
+  { source: "previsit", table: "previsit_outbox", slug: "pre-visit-triage", href: "pre-visit-triage", hasNotBefore: true },
   { source: "reviews", table: "review_outbox", slug: "reviews", href: "reviews", hasNotBefore: false },
   { source: "outreach", table: "outreach_outbox", slug: "outreach", href: "outreach", hasNotBefore: false },
 ];

@@ -2,13 +2,26 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Power } from "lucide-react";
-import { PageHeader, SectionCard, StatCard } from "@/components/primitives";
+import { PageHeader, SectionCard, StatCard, Tabs } from "@/components/primitives";
+import { SyncStatusView } from "./sync-status-view";
 import { cn } from "@/lib/utils";
 
 // Owner-only master control panel: one on/off switch per automated system. OFF is
 // a full kill switch (the server halts the system's sweeps, sends, agent replies
 // and public intake, and the module is hidden). Reads/writes /api/systems, which
 // is owner-gated. Optimistic toggles with revert-on-failure.
+//
+// SECOND TAB: DENTALLY SYNC. The switches on the first tab decide what each
+// system is allowed to DO; the second says what any of it actually reaches the
+// practice's Dentally account, which is the other half of the same question and
+// the one an owner asks first. It lives here rather than on a module of its own
+// because both trees render this component — /c/[client]/controls for the
+// practice owner and /owner/[client]/controls for the agency — while the owner
+// tree resolves a single dynamic module segment and cannot route a nested page.
+// (/c/[client]/controls/sync is the deep link, and renders the same view.)
+//
+// Tabs mounts only the ACTIVE panel, so the sync read costs nothing until
+// somebody opens it.
 
 interface SystemRow {
   slug: string;
@@ -81,20 +94,12 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
     items: (rows ?? []).filter((r) => r.group === g),
   })).filter((g) => g.items.length > 0);
 
-  return (
+  const systemsPanel = (
     <>
-      <PageHeader
-        title="System controls"
-        description="Your master on/off for every automated system. Turning one off is a full kill switch: it hides the module and stops all of its work, so nothing sends until you switch it back on."
-        stats={
-          rows ? (
-            <>
-              <StatCard label="Systems running" value={`${running} of ${total}`} dot="bg-status-green" />
-              {offCount > 0 ? <StatCard label="Switched off" value={offCount} dot="bg-status-amber" /> : null}
-            </>
-          ) : undefined
-        }
-      />
+      <p className="mb-5 max-w-3xl text-[13px] text-muted">
+        Turning one off is a full kill switch: it hides the module and stops all of its work, so nothing sends and
+        nothing is written to Dentally until you switch it back on.
+      </p>
 
       {rowError ? (
         <p className="rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">{rowError}</p>
@@ -151,6 +156,29 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
           ))}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <>
+      <PageHeader
+        title="System controls"
+        description="Your master on/off for every automated system, and the record of what this platform writes back to Dentally."
+        stats={
+          rows ? (
+            <>
+              <StatCard label="Systems running" value={`${running} of ${total}`} dot="bg-status-green" />
+              {offCount > 0 ? <StatCard label="Switched off" value={offCount} dot="bg-status-amber" /> : null}
+            </>
+          ) : undefined
+        }
+      />
+      <Tabs
+        tabs={[
+          { key: "systems", label: "Systems", content: systemsPanel },
+          { key: "sync", label: "Dentally sync", content: <SyncStatusView clientSlug={clientSlug} /> },
+        ]}
+      />
     </>
   );
 }

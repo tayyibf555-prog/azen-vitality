@@ -83,10 +83,21 @@ vi.mock("@/lib/mock/clients", () => ({
   getSites: () => [{ id: "site-cc", clientId: "vitality", name: "Vitality Dental Care N15" }],
 }));
 
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabledStrict: async () => true }));
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabledStrict: async () => true,
+  // The WriteGate reads the fail-OPEN one while writes are only simulated.
+  isSystemEnabled: async () => true,
+}));
 
 vi.mock("@/lib/dentally/write", () => ({
   isDentallyWriteEnabled: () => true,
+  // Added when the WriteGate landed. The gate resolves the target host through
+  // the same predicate the client factory uses, so a partial mock of this module
+  // has to carry it — and `true` is the posture these tests are ABOUT: a
+  // production deployment whose base URL is the live practice book. That is
+  // exactly when "writes are off" has to mean nothing happens at all, rather
+  // than a write landing in a local mock.
+  targetsRealDentally: () => true,
   dentallyAgentClient: () => ({
     listAppointments: async (a: { fromDate?: string }) => ({
       appointments: h.book.get(a.fromDate ?? "") ?? [],

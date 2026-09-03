@@ -183,6 +183,28 @@ function deadFetch(): typeof fetch {
 
 const realFetch = globalThis.fetch;
 
+// ---------------------------------------------------------------------------
+// THE PROCESS CLOCK IS PINNED, AND THAT IS THE POINT OF THIS BLOCK.
+//
+// This file was a TIME BOMB: it passed on today's calendar and went red on a
+// shifted one, and the failure read as a logic regression rather than as a stale
+// fixture. Found by running the whole suite under a shifted process clock
+// (+3h/+1d/+3d/+4d/+30d/+90d/+181d/+2y/+10y) and diffing against a real-clock
+// baseline — the only method that finds these, because grepping for hard-coded
+// dates matches a third of the suite and misses the ones that matter.
+//
+// Only `Date` is faked. Faking all timers hangs the async route and agent paths
+// these tests drive; this is the pattern from src/lib/agent/booking-duration.test.ts.
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-20T14:00:00.000Z"));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
   process.env.DENTALLY_API_KEY = "zzv-round3";
   process.env.DENTALLY_BASE_URL = "http://dentally.invalid/api/mock-dentally";

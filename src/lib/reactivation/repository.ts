@@ -439,21 +439,6 @@ export async function enqueueOutbox(input: {
   return rowToOutbox(data as OutboxRow);
 }
 
-export async function markTouchSent(touchId: string): Promise<void> {
-  const db = serviceClient();
-  const nowIso = new Date().toISOString();
-  const { error: tErr } = await db
-    .from("reactivation_touch")
-    .update({ status: "sent", sent_at: nowIso })
-    .eq("id", touchId);
-  if (tErr) throw tErr;
-  const { error: oErr } = await db
-    .from("reactivation_outbox")
-    .update({ status: "sent", provider: "stub", sent_at: nowIso })
-    .eq("touch_id", touchId);
-  if (oErr) throw oErr;
-}
-
 // ---------------------------------------------------------------------------
 // Outbox drain + inbound correlation (messaging layer).
 // ---------------------------------------------------------------------------

@@ -102,13 +102,23 @@ vi.mock("@/lib/mock/clients", () => ({
 }));
 
 vi.mock("@/lib/systems/repository", () => ({
+  isSystemExplicitlyDisabled: async () => false,
   // The move path deliberately uses the STRICT reader, which fails closed
   // whatever MESSAGING_DRY_RUN says. See src/lib/systems/repository.ts.
   isSystemEnabledStrict: async () => h.systemEnabled,
+  // The WriteGate reads the fail-OPEN one while writes are only simulated.
+  isSystemEnabled: async () => h.systemEnabled,
 }));
 
 vi.mock("@/lib/dentally/write", () => ({
   isDentallyWriteEnabled: () => h.writeEnabled,
+  // Added when the WriteGate landed. The gate resolves the target host through
+  // the same predicate the client factory uses, so a partial mock of this module
+  // has to carry it — and `true` is the posture these tests are ABOUT: a
+  // production deployment whose base URL is the live practice book. That is
+  // exactly when "writes are off" has to mean nothing happens at all, rather
+  // than a write landing in a local mock.
+  targetsRealDentally: () => true,
   dentallyAgentClient: () => ({
     listAppointments: async (a: { fromDate?: string }) => {
       if (h.listThrows) throw new Error("dentally is down");

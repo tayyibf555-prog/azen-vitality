@@ -304,6 +304,51 @@ const WIDENED: Record<string, Capability[]> = {
     // by a permission nobody knew to set. Capability and route guard compose:
     // holding this key is necessary and not sufficient.
     "people.absence.request",
+    // THE CO-PILOT, FOR EVERY CLEARANCE (Dental OS, lane W1-E, on the programme
+    // coordinator's written ruling of 3 Sep 2026). DERIVED, not typed: the key's
+    // provenance is { base: "module", slug: "co-pilot" }, and the co-pilot slug
+    // joined CLINICIAN_SLUGS / STAFF_SLUGS in that lane, so the default holder set
+    // follows the module by construction (section 3 re-derives it).
+    //
+    // WHY IT IS NOT A HOLE — the same argument the manager's entry makes above,
+    // and it is stronger here, not weaker. Holding this means "you may ASK the
+    // co-pilot". What the co-pilot will DO for the asker is decided per-turn from
+    // the SESSION's role by `copilotAccessForRole` and re-checked by the dispatch
+    // on every single call (src/lib/copilot/clearance.ts):
+    //
+    //   a CLINICIAN is handed six READ tools — their patients, their diary, the
+    //   practice's general knowledge at tier 1, their own work, and second-opinion
+    //   decision support on a named patient — and NO act domain whatsoever. Ruling
+    //   1 of the same message: a clinician does not send to a patient from the
+    //   co-pilot this wave. There is no send tool in their schema and the dispatch
+    //   refuses one if the model invents the name.
+    "system.copilot.ask",
+  ],
+  client_staff: [
+    // THE CO-PILOT, FOR EVERY CLEARANCE (Dental OS, lane W1-E, on the programme
+    // coordinator's written ruling of 3 Sep 2026). DERIVED, not typed: the key's
+    // provenance is { base: "module", slug: "co-pilot" }, and the co-pilot slug
+    // joined CLINICIAN_SLUGS / STAFF_SLUGS in that lane, so the default holder set
+    // follows the module by construction (section 3 re-derives it).
+    //
+    // WHY IT IS NOT A HOLE — the same argument the manager's entry makes above,
+    // and it is stronger here, not weaker. Holding this means "you may ASK the
+    // co-pilot". What the co-pilot will DO for the asker is decided per-turn from
+    // the SESSION's role by `copilotAccessForRole` and re-checked by the dispatch
+    // on every single call (src/lib/copilot/clearance.ts):
+    //
+    //   a MEMBER OF STAFF is handed exactly ONE tool, `my_work`, which answers
+    //   about the person signed in. It takes no staff id, no name and no email —
+    //   the record is resolved from the session by `resolveSelfStaff` — so there
+    //   is nothing for a model, or an injected note, to point at a colleague. She
+    //   reaches no patient, no diary, no money and no report.
+    //
+    // AND THE REDIRECT STILL HOLDS. `indexRedirectFor` forwards a client_staff
+    // login off the dashboard index to My work BEFORE any dashboard read runs, so
+    // the practice's takings are not fetched for that role. It keys off the ROLE,
+    // not off the nav allow-list, so granting the co-pilot slug does not touch it
+    // (pinned in src/lib/copilot/clearance.test.ts).
+    "system.copilot.ask",
   ],
 };
 
@@ -368,11 +413,12 @@ describe("1. the four existing roles are unchanged apart from the named deltas",
     expect(TIGHTENED.agency_admin.concat(TIGHTENED.client_owner, TIGHTENED.client_clinician)).toEqual([]);
   });
 
-  it("the widenings are one key each, on two roles, and neither is sufficient on its own", () => {
-    // The two roles that gained anything, named exactly. The two that did not are
-    // asserted empty, so a third widening cannot arrive unannounced.
-    expect(WIDENED.client_clinician).toEqual(["people.absence.request"]);
+  it("the widenings are named per role, and none is sufficient on its own", () => {
+    // The roles that gained anything, named exactly. The two that did not are
+    // asserted empty, so a further widening cannot arrive unannounced.
+    expect(WIDENED.client_clinician).toEqual(["people.absence.request", "system.copilot.ask"]);
     expect(WIDENED.client_coordinator).toEqual(["system.copilot.ask"]);
+    expect(WIDENED.client_staff).toEqual(["system.copilot.ask"]);
     expect(WIDENED.agency_admin.concat(WIDENED.client_owner)).toEqual([]);
     // The capability is necessary, not sufficient: APPROVER_ROLES is what the
     // route checks and the clinician is not in it. If that ever changes, this
@@ -384,6 +430,11 @@ describe("1. the four existing roles are unchanged apart from the named deltas",
     // capability would stop being a scoped grant and this fails.
     expect(copilotAccessForRole("client_coordinator")).toBe("manager");
     expect(copilotAccessForRole("client_owner")).toBe("full");
+    // And the same line for the two roles the 3 Sep ruling let in. THIS is what
+    // makes a now-universal key a scoped grant rather than a universal act: if
+    // either were ever mapped to "full" or "manager", it fails here.
+    expect(copilotAccessForRole("client_clinician")).toBe("clinician");
+    expect(copilotAccessForRole("client_staff")).toBe("staff");
   });
 
   it("no role lost anything that is not in TIGHTENED", () => {
@@ -419,6 +470,11 @@ describe("2. the fifth role gets exactly two capabilities, both self-service", (
     expect(sorted(ROLE_DEFAULTS.client_staff)).toEqual([
       "people.absence.request",
       "people.clock.self",
+      // ADDED on the coordinator's ruling of 3 Sep 2026. It belongs on this closed
+      // list rather than beside it: asking the co-pilot IS a third thing a staff
+      // login can now do. What it CANNOT do is unchanged and is asserted right
+      // below — the key buys a turn, and that turn reaches one tool about herself.
+      "system.copilot.ask",
     ]);
   });
 
@@ -522,9 +578,21 @@ describe("3. every default is DERIVED from the guard it claims to come from", ()
 // leak would show up in first — is re-asserted here from the capability side.
 // ===========================================================================
 describe("4. the capability layer did not leak into module access", () => {
-  it("the clinician's allow-list is still exactly the six modules", () => {
+  it("the clinician's allow-list is exactly seven modules, the seventh named", () => {
     expect(sorted(CLINICIAN_SLUGS)).toEqual(
-      sorted(["", "calendar", "patients", "absence", "staff-check-in", "my-work"]),
+      sorted([
+        "",
+        "calendar",
+        "patients",
+        "absence",
+        "staff-check-in",
+        "my-work",
+        // ADDED on the coordinator's ruling of 3 Sep 2026 (Dental OS W1-E). The
+        // co-pilot, scoped to the clinician catalog: their patients, their diary,
+        // tier-1 knowledge, their own work and second-opinion decision support.
+        // No money, no leads, no marketing, and no action of any kind.
+        "co-pilot",
+      ]),
     );
   });
 
@@ -535,8 +603,11 @@ describe("4. the capability layer did not leak into module access", () => {
     for (const slug of denied) expect(canRoleAccessModule("client_clinician", slug)).toBe(false);
   });
 
-  it("the staff allow-list is still two entries and holds neither the diary nor the patients", () => {
-    expect(sorted(STAFF_SLUGS)).toEqual(["", "my-work"]);
+  it("the staff allow-list is three entries and STILL holds neither the diary nor the patients", () => {
+    // The third entry is the co-pilot (coordinator's ruling, 3 Sep 2026), and the
+    // two assertions under it are the reason adding it was safe: the surface she
+    // gained answers about HERSELF, and the two she must never have are unmoved.
+    expect(sorted(STAFF_SLUGS)).toEqual(["", "co-pilot", "my-work"]);
     expect(canRoleAccessModule("client_staff", "calendar")).toBe(false);
     expect(canRoleAccessModule("client_staff", "patients")).toBe(false);
   });

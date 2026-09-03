@@ -30,7 +30,26 @@ function user(role: Role): AuthedUser {
   return { id: `user-${role}`, name: "Test", email: "t@example.com", role, clientId: "vitality", siteIds: ["site-cc"] };
 }
 
-/** The modules a clinician session could reach through the API before this guard. */
+/**
+ * The modules a clinician session could reach through the API before this guard.
+ *
+ * "co-pilot" CAME OFF THIS LIST on W1-E/2, the programme coordinator's written
+ * ruling of 3 Sep 2026: the Dental OS mandate is that the co-pilot serves every
+ * staff clearance, so both allow-list roles now hold the slug.
+ *
+ * It is the only entry that has ever left, and the reason it could is that the
+ * co-pilot is the one module on this list whose CONTENTS are scoped server-side
+ * per role rather than being the same surface for everyone who reaches it. The
+ * other fourteen are all-or-nothing: reaching /api/inbox/reply at all means being
+ * able to text any patient in the practice. Reaching /api/copilot means getting
+ * whatever `copilotAccessForRole` decides for your session, re-derived on every
+ * turn — six read tools and no act for a clinician, ONE tool about themselves for
+ * a member of staff (src/lib/copilot/clearance.ts, which enumerates every role
+ * against every tool).
+ *
+ * So this list is now fourteen, and a fifteenth leaving it needs the same kind of
+ * written ruling and the same kind of note.
+ */
 const DENIED_TO_CLINICIAN = [
   "conversations", // POST /api/inbox/reply — texting any patient in the practice
   "recall",
@@ -42,7 +61,6 @@ const DENIED_TO_CLINICIAN = [
   "payments",
   "settings",
   "controls",
-  "co-pilot",
   "onboarding",
   "reviews",
   "speed-to-lead",
@@ -69,16 +87,24 @@ describe("requireModuleApiAccess admits the clinician its own six modules", () =
     expect(requireModuleApiAccess(user("client_clinician"), slug)).toBe(null);
   });
 
-  it("is exactly six, and exactly these (a silent widening fails here)", () => {
+  it("is exactly seven, and exactly these (a silent widening fails here)", () => {
     // WAS FIVE until campaign 6 added "my-work", the staff self-service surface, to
     // CLINICIAN_SLUGS. Moved by hand and with a reason, which is what this pin is
     // for: a clinician is a member of staff, and every tab of my-work is scoped to
     // the caller's OWN staff record, so it hands over no practice-wide data the way
     // "calendar" and "patients" do.
+    //
+    // NOW SEVEN: "co-pilot" was added on W1-E/2, the coordinator's written ruling of
+    // 3 Sep 2026. The same argument as my-work, one step further on — a clinician's
+    // co-pilot reaches the patients and the diary their OWN nav already grants them,
+    // plus tier-1 practice knowledge, their own work, and second-opinion decision
+    // support on a named patient. It holds no act domain at all, so it cannot send,
+    // book, cancel or create anything (ruling 1 of the same message).
     expect([...CLINICIAN_SLUGS].sort()).toEqual([
       "",
       "absence",
       "calendar",
+      "co-pilot",
       "my-work",
       "patients",
       "staff-check-in",
@@ -101,9 +127,15 @@ describe("requireModuleApiAccess denies the FIFTH role everything outside two sl
     },
   );
 
-  it("allows exactly the Overview and My work", () => {
+  it("allows exactly the Overview, My work and the co-pilot", () => {
     expect(requireModuleApiAccess(user("client_staff"), "")).toBe(null);
     expect(requireModuleApiAccess(user("client_staff"), "my-work")).toBe(null);
+    // ADDED on W1-E/2 (coordinator's ruling, 3 Sep 2026). Reaching /api/copilot is
+    // not reaching the practice: the route re-derives the level from the session
+    // and a staff session is handed ONE tool, `my_work`, which takes no staff id
+    // and resolves the record from the session. Pinned by enumeration over the
+    // whole toolbox in src/lib/copilot/battery.test.ts.
+    expect(requireModuleApiAccess(user("client_staff"), "co-pilot")).toBe(null);
   });
 
   it("refuses an unknown slug, so a typo is not an open door for it either", () => {

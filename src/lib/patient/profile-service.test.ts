@@ -13,9 +13,27 @@ const h = vi.hoisted(() => ({
   applyStatusChange: vi.fn(),
 }));
 
+// The WriteGate consults the OWNER's master Dentally write-back switch, and then
+// the switch on the module that is writing. Both readers are stubbed ON here:
+// this file's subject is what its own module does with the answer, and the
+// switches have their own tests in src/lib/systems/repository.test.ts and
+// src/lib/dentally/write-gate.test.ts.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: async () => true,
+  isSystemEnabledStrict: async () => true,
+  isSystemExplicitlyDisabled: async () => false,
+}));
+
 vi.mock("@/lib/dentally/write", () => ({
   isDentallyWriteEnabled: () => h.writeEnabled,
   dentallyAgentClient: () => ({ getPatient: h.getPatient, updatePatient: h.updatePatient }),
+  // Added when the WriteGate landed. The gate resolves the target host through
+  // the same predicate the client factory uses, so a partial mock of this module
+  // has to carry it — and `true` is the posture these tests are ABOUT: a
+  // production deployment whose base URL is the live practice book. That is
+  // exactly when "writes are off" has to mean nothing happens at all, rather
+  // than a write landing in a local mock.
+  targetsRealDentally: () => true,
 }));
 vi.mock("@/lib/patient-status/service", () => ({ applyStatusChange: h.applyStatusChange }));
 vi.mock("./profile-audit", () => ({ insertProfileAudit: h.insertProfileAudit }));

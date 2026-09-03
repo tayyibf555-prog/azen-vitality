@@ -28,8 +28,12 @@ import { SITES, dentallySiteId } from "@/lib/mock/clients";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { mapWithConcurrency } from "@/lib/async/pool";
-import { isSystemEnabled } from "@/lib/systems/repository";
-import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import {
+  loadExcludedTargetKeys,
+  excludedTargetKey,
+  isExclusionsUnavailable,
+} from "@/lib/patient-status/repository";
 import { enrolmentBudget } from "@/lib/enrolment/budget";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
@@ -751,7 +755,10 @@ async function handleWithDentallyPriority(request: Request) {
     // budget would let the run enrol three times the day's allowance. Everything
     // is skipped while the owner has reactivation switched off.
     const now = new Date();
-    const systemEnabled = await isSystemEnabled("vitality", "reactivation");
+    // FAIL-CLOSED WHEN LIVE (ruling W1-B/1, 3 Sep 2026): a toggle-read error must
+    // not enrol a single patient into a cadence for a system that may be off.
+    // The read-only mirroring above is untouched by this and keeps running.
+    const systemEnabled = await isSystemEnabledForSend("vitality", "reactivation");
     const [dailyLimit, usedToday, dueCadences] = systemEnabled
       ? await Promise.all([
           getDailyContactLimit("vitality"),
@@ -772,7 +779,21 @@ async function handleWithDentallyPriority(request: Request) {
       excludedKeys: new Set<string>(),
     };
     if (allowance.remaining > 0) {
-      allowance.excludedKeys = await loadExcludedTargetKeys();
+      // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE ENROLLED (ruling W1-B/2). Unlike the
+      // sweeps this does NOT abort the route: the read-only Dentally mirroring below
+      // is what keeps the dashboard current, and the catalog promises it keeps running
+      // whatever the messaging systems are doing. So the ENROLMENT budget drops to
+      // zero for this tick and the mirror carries on.
+      try {
+        allowance.excludedKeys = await loadExcludedTargetKeys();
+      } catch (err) {
+        if (!isExclusionsUnavailable(err)) throw err;
+        console.error(
+          `[sync-reactivation] exclusion list unreadable while messaging is live; enrolling nobody this tick`,
+          err,
+        );
+        allowance.remaining = 0;
+      }
     }
     const enrolBudget = allowance.remaining;
 

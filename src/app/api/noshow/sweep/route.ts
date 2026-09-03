@@ -20,8 +20,13 @@ import type { NoshowTarget, NoshowCadence } from "@/lib/noshow/types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
-import { isSystemEnabled } from "@/lib/systems/repository";
-import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import { liveSwitch } from "@/lib/systems/live-switch";
+import {
+  loadExcludedTargetKeys,
+  excludedTargetKey,
+  isExclusionsUnavailable,
+} from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +43,14 @@ async function handleWithDentallyPriority(request: Request) {
   const unauth = cronUnauthorized(request);
   if (unauth) return unauth;
 
-  if (!(await isSystemEnabled("vitality", "no-show-defence"))) {
+  // FAIL-CLOSED WHEN LIVE (ruling W1-B/1, 3 Sep 2026). This used to be
+  // isSystemEnabled, which resolves a toggle-read ERROR to "enabled" for a
+  // default-ON system and then let the whole batch draft. isSystemEnabledForSend
+  // keeps that behaviour while MESSAGING_DRY_RUN is on, so development against a
+  // partial database still works, and fails CLOSED once messaging is live: a
+  // switch we cannot read is treated as off. A skipped tick is a delay; a batch
+  // sent against an unknown switch is an incident.
+  if (!(await isSystemEnabledForSend("vitality", "no-show-defence"))) {
     return Response.json({ ok: true, skipped: "system off" });
   }
 
@@ -58,7 +70,18 @@ async function handleWithDentallyPriority(request: Request) {
   // no-show confirmations too. Loaded ONCE per sweep and checked per target before
   // drafting. Skipped (not exhausted) so reminders resume if the override is lifted while
   // the appointment is still upcoming; a passed appointment exhausts the cadence anyway.
-  const excludedKeys = await loadExcludedTargetKeys();
+  // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE DRAFTED (ruling W1-B/2, 3 Sep 2026).
+  // loadExcludedTargetKeys throws once messaging is LIVE and it cannot read the
+  // override table, so a patient a human marked inactive can never be drafted
+  // because of a database blip. It still returns an empty set under dry-run.
+  let excludedKeys: Set<string>;
+  try {
+    excludedKeys = await loadExcludedTargetKeys();
+  } catch (err) {
+    if (!isExclusionsUnavailable(err)) throw err;
+    console.error("[noshow] exclusion list unreadable while messaging is live; skipping this tick", err);
+    return Response.json({ ok: true, skipped: "exclusions unavailable" });
+  }
 
   // A) Due confirmations / reminders, in TWO passes (see lib/noshow/ramp.ts).
   //
@@ -121,7 +144,13 @@ async function handleWithDentallyPriority(request: Request) {
   //     exactly the state listDueCadences selects on, so the next tick takes them.
   const sendCap = noshowSendCap();
   const { send, deferred } = applySendCap(orderBySoonestAppointment(sendable), sendCap);
+  // The switch is re-read every ten rows for the rest of this run (ruling
+  // W1-B/5): a long sweep must not keep drafting after the owner has switched
+  // the system off. See src/lib/systems/live-switch.ts.
+  const gate = liveSwitch("vitality", "no-show-defence");
+
   for (const { cadence, target, step } of send) {
+    if (!(await gate.stillOn())) break;
     // A transient DB/LLM error on one message must not abort the rest of the run.
     try {
       const appointmentStart = new Date(target.appointmentStartAt);

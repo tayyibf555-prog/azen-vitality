@@ -178,6 +178,86 @@ const WIDENED_MANAGER_COPILOT: Partial<Record<(typeof EXISTING_ROLES)[number], s
   client_coordinator: ["co-pilot"],
 };
 
+/**
+ * ADDED, W1-C — the pre-visit triage module (a brand new CLIENT_NAV entry).
+ *
+ * Its own map rather than a line appended to ADDED above, for the reason this
+ * whole file is built the way it is: a delta folded into the layer beneath it
+ * stops being a decision anybody can read.
+ *
+ * The page is the module's ADMIN surface — the two editable question banks, the
+ * per-treatment interest lists and the implant-interest list — so it goes to the
+ * owner, the agency and the practice manager, who runs the interest follow-ups.
+ *
+ * BOTH ALLOW-LIST ROLES ARE ABSENT, and the clinician's absence is a decision
+ * rather than an oversight. What a clinician needs from this module is the
+ * pre-visit summary on the PATIENT RECORD, which is gated on "patients" — a slug
+ * they already hold. Putting this slug in CLINICIAN_SLUGS would hand them the
+ * editor that decides what every patient in the practice is asked.
+ */
+const ADDED_PREVISIT: Partial<Record<(typeof EXISTING_ROLES)[number], string[]>> = {
+  agency_admin: ["pre-visit-triage"],
+  client_owner: ["pre-visit-triage"],
+  client_coordinator: ["pre-visit-triage"],
+};
+
+/**
+ * ADDED, W1-D — the equipment module and the IT desk (two brand new CLIENT_NAV
+ * entries).
+ *
+ * Owner, agency and the practice manager, who keeps the equipment register and
+ * fields the front-desk IT problems.
+ *
+ * BOTH ALLOW-LIST ROLES ARE ABSENT, and for the IT desk that is the line worth
+ * reading twice: a nurse who cannot print is precisely the person it would help,
+ * and she still does not get it, because widening STAFF_SLUGS is a decision taken
+ * on written instruction rather than in passing. The lane's brief says owner +
+ * manager. If the practice later wants the receptionist to have the IT desk, that
+ * is one line in STAFF_SLUGS and this map, made deliberately.
+ */
+const ADDED_DESKS: Partial<Record<(typeof EXISTING_ROLES)[number], string[]>> = {
+  agency_admin: ["equipment", "it-desk"],
+  client_owner: ["equipment", "it-desk"],
+  client_coordinator: ["equipment", "it-desk"],
+};
+
+/**
+ * WIDENED, Dental OS W1-E — the co-pilot, for the two allow-list roles.
+ *
+ * Its own map rather than a line appended to the maps above, for the reason each
+ * of those states about itself: a delta folded into the layer beneath it stops
+ * being reviewable as a delta, and the whole value of this file is that every
+ * widening is readable as its own decision with its own reason.
+ *
+ * THE DECISION. Taken on the programme coordinator's written ruling of
+ * 3 Sep 2026, on the Dental OS mandate that the co-pilot serves every staff
+ * clearance. The lane built the clinician and staff catalogs first and left them
+ * inert precisely so that switching them on could be one reviewed line rather
+ * than a design exercise under time pressure.
+ *
+ * WHY THIS IS A DOOR AND NOT A ROOM. `canRoleAccessModule` decides whether a
+ * login may reach /c/<client>/co-pilot at all. What it is ANSWERED with is
+ * decided server-side per turn from the SESSION's role, three independent times
+ * (src/lib/copilot/clearance.ts): the tool schema the model is shown, the gate
+ * checked before any tool runs, and the projection applied on the way out.
+ *
+ *   client_clinician  six READ tools — their patients, their diary, the
+ *                     practice's general knowledge at tier 1, their own work, and
+ *                     second-opinion decision support on a named patient — and NO
+ *                     act domain. A clinician does not send to a patient from
+ *                     here (ruling 1 of the same message).
+ *   client_staff      ONE tool, `my_work`, about the person signed in. It takes
+ *                     no staff id and resolves the record from the session, so it
+ *                     cannot be pointed at a colleague. No patient, no diary, no
+ *                     money.
+ *
+ * `indexRedirectFor` is untouched: a client_staff login still lands on My work
+ * before any dashboard read runs, so the takings are still never fetched for it.
+ */
+const WIDENED_COPILOT_ALL_CLEARANCES: Partial<Record<(typeof EXISTING_ROLES)[number], string[]>> = {
+  client_clinician: ["co-pilot"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<(typeof EXISTING_ROLES)[number], string[]> = {
   agency_admin: ["practice-brain"],
@@ -192,6 +272,9 @@ function expected(role: (typeof EXISTING_ROLES)[number]): string[] {
     ...ADDED[role],
     ...(WIDENED[role] ?? []),
     ...(WIDENED_MANAGER_COPILOT[role] ?? []),
+    ...(ADDED_PREVISIT[role] ?? []),
+    ...(ADDED_DESKS[role] ?? []),
+    ...(WIDENED_COPILOT_ALL_CLEARANCES[role] ?? []),
   ];
 }
 
@@ -254,9 +337,12 @@ describe("2. the staff role is denied every slug outside its allow-list", () => 
     }
   });
 
-  it("names the exact two modules a staff login gets", () => {
-    expect(sorted([...STAFF_SLUGS])).toEqual(["", "my-work"]);
-    expect(STAFF_SLUGS.size).toBe(2);
+  it("names the exact three modules a staff login gets", () => {
+    // Two until the coordinator's ruling of 3 Sep 2026 added the co-pilot, scoped
+    // to a ONE-TOOL catalog that answers about the person signed in. The count is
+    // asserted as well as the members so a fourth cannot arrive unnoticed.
+    expect(sorted([...STAFF_SLUGS])).toEqual(["", "co-pilot", "my-work"]);
+    expect(STAFF_SLUGS.size).toBe(3);
   });
 
   it("is a subset of CLIENT_MODULE_SLUGS, so neither entry is a typo", () => {
@@ -281,18 +367,27 @@ describe("3. the staff role never reaches the diary or the patient database", ()
 
   it("the two allow-lists are genuinely different sets", () => {
     expect(sorted([...CLINICIAN_SLUGS])).not.toEqual(sorted([...STAFF_SLUGS]));
-    // They overlap on exactly the two surfaces both roles legitimately share.
+    // They overlap on exactly the three surfaces both roles legitimately share.
+    // "co-pilot" joined the overlap on the 3 Sep ruling and is the interesting
+    // one: the SLUG is shared and the CATALOG is not — a clinician gets six read
+    // tools there and a member of staff gets one. That is the whole design, and
+    // it is why a shared slug is not a shared surface.
     const shared = [...STAFF_SLUGS].filter((s) => CLINICIAN_SLUGS.has(s));
-    expect(sorted(shared)).toEqual(["", "my-work"]);
+    expect(sorted(shared)).toEqual(["", "co-pilot", "my-work"]);
   });
 });
 
 describe("4. the staff role is denied every owner-only module and the owner shell extras", () => {
-  // "co-pilot" stays on this list after the manager-co-pilot lane made it shared
-  // with the practice manager, and the claim below is unchanged and still true:
-  // this test is about the STAFF role, and the staff allow-list has never held it.
-  // The owner control on each line still holds too.
-  const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "co-pilot", "settings", "controls", "permissions"];
+  // "co-pilot" CAME OFF this list on the coordinator's ruling of 3 Sep 2026. It
+  // had survived the manager-co-pilot lane because that lane only added the
+  // practice manager; the Dental OS ruling gives every clearance a co-pilot, each
+  // with its own server-side catalog. What a staff login reaches there is ONE
+  // tool about herself (src/lib/copilot/clearance.ts), which is asserted in that
+  // lane rather than here — this list is about modules, not about their contents.
+  //
+  // Everything else on it is unmoved, and the eight remaining lines are the
+  // reason removing one entry is not the start of a slide.
+  const OWNER_ONLY = ["roi", "reports", "meta-ads", "usps", "compliance", "settings", "controls", "permissions"];
 
   it.each(OWNER_ONLY)("cannot reach '%s'", (slug) => {
     expect(canRoleAccessModule("client_staff", slug)).toBe(false);
@@ -352,10 +447,15 @@ describe("6. navForRole / categoriesForRole for the staff role", () => {
     }
   });
 
-  it("the sidebar rail shows the staff role exactly one area, holding exactly its two modules", () => {
+  it("the sidebar rail shows the staff role its own two areas and nothing more", () => {
+    // One area until the co-pilot joined the allow-list; it lives in the
+    // "operations" group of CLIENT_NAV, so the rail now shows two. Both are
+    // asserted whole, so a third area, or a stray extra module inside either,
+    // fails here rather than appearing quietly in a receptionist's sidebar.
     const cats = categoriesForRole("client_staff");
-    expect(cats.map((c) => c.key)).toEqual(["home"]);
+    expect(cats.map((c) => c.key)).toEqual(["home", "operations"]);
     expect(cats[0].items.map((i) => i.slug)).toEqual(["", "my-work"]);
+    expect(cats[1].items.map((i) => i.slug)).toEqual(["co-pilot"]);
   });
 });
 

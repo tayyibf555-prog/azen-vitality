@@ -1,5 +1,6 @@
 import "server-only";
-import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { dentallyAgentClient } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import { applyStatusChange } from "@/lib/patient-status/service";
 import { invalidateFundingCache } from "@/lib/calendar/funding-source";
 import { insertProfileAudit } from "./profile-audit";
@@ -94,14 +95,35 @@ export async function applyProfileEdit(input: {
   /** The snapshot the caller's form was loaded with, for the concurrency check. */
   expected: PatientProfile;
   reason?: string | null;
+  /** For the profile AUDIT, which is a staff-facing record and names the person. */
   actorEmail?: string | null;
+  /**
+   * The OPAQUE user id, for the Dentally sync ledger.
+   *
+   * A separate field from actorEmail on purpose. The audit trail is the
+   * practice's own record of who changed a patient's details and has to name a
+   * person; the sync ledger is a technical record of what was sent to Dentally
+   * and holds no personal data at all, staff included. One field used for both
+   * would have put a work email in the second.
+   */
+  actorId?: string | null;
 }): Promise<ApplyProfileOutcome> {
   const { siteId, patientId, changes, expected } = input;
   const reason = input.reason?.trim() ? input.reason.trim() : null;
   const actorEmail = input.actorEmail ?? null;
+  const actorId = input.actorId ?? null;
 
   // 1. The gate, before anything else. Never POST when it is shut.
-  if (!isDentallyWriteEnabled()) {
+  //
+  // ASKED THROUGH THE GATE, so a manager's refused save is recorded as an
+  // attempt rather than vanishing into a message. Still before the Dentally
+  // re-read below, so a refused save costs no quota, and the wording the manager
+  // sees is unchanged.
+  const refused = await precheckDentallyWrite({
+    ctx: { source: "patient-admin", siteId, actor: actorId, patientId },
+    kind: "patient.update",
+  });
+  if (refused) {
     return { ok: false, code: "write_disabled", message: OFF_MESSAGE };
   }
 
@@ -141,7 +163,11 @@ export async function applyProfileEdit(input: {
   let result: ProfileWriteResult = "synced";
   if (Object.keys(payload).length > 0) {
     try {
-      await dentallyAgentClient().updatePatient(patientId, payload);
+      await dentallyWrite.updatePatient(
+        { source: "patient-admin", siteId, actor: actorId },
+        patientId,
+        payload,
+      );
     } catch (err) {
       console.error(`[patient-profile] updatePatient failed for ${patientId}`, err);
       result = "failed";

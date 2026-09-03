@@ -69,6 +69,13 @@ import {
   markOutboxBlocked as markPostopBlocked,
 } from "@/lib/postop/repository";
 import {
+  listQueuedOutbox as listPrevisitQueued,
+  claimOutbox as claimPrevisit,
+  recordOutboxSent as recordPrevisitSent,
+  markOutboxFailed as markPrevisitFailed,
+  markOutboxBlocked as markPrevisitBlocked,
+} from "@/lib/triage/repository";
+import {
   listQueuedOutbox as listReviewsQueued,
   claimOutbox as claimReviews,
   recordOutboxSent as recordReviewsSent,
@@ -152,6 +159,24 @@ const SOURCES: OutboxSource[] = [
   // anything else. Its own listQueuedOutbox additionally honours quiet hours.
   { name: "diary", list: listDiaryQueued, claim: claimDiary, recordSent: recordDiarySent, markFailed: markDiaryFailed, markBlocked: markDiaryBlocked, transactional: true },
   { name: "noshow", list: listNoshowQueued, claim: claimNoshow, recordSent: recordNoshowSent, markFailed: markNoshowFailed, markBlocked: markNoshowBlocked, transactional: true },
+  // The pre-visit questionnaire link drains THIRD, immediately after the two
+  // appointment-critical confirmations and ahead of everything discretionary, and
+  // it IS transactional. Both halves of that are decisions.
+  //
+  // WHY THIRD RATHER THAN FIRST. A diary move and a no-show confirmation are about
+  // WHETHER the patient turns up at the right hour; this is about being ready for
+  // them when they do. If only one message may reach somebody today, it is one of
+  // those two.
+  //
+  // WHY TRANSACTIONAL. The exemption from the once-per-day cap exists for messages
+  // a patient is EXPECTING about an appointment they booked, and this is one: it
+  // is sent because they have a visit tomorrow, it refers to that visit, and it is
+  // useless afterwards. Marking it outreach would mean a patient who had a recall
+  // text that morning silently never receives the form for tomorrow's appointment,
+  // and the sweep would not re-draft it because the appointment does not come round
+  // again. It still STAMPS the day, so same-day outreach (recall, reactivation, the
+  // coordinator, reviews) yields to it rather than piling on.
+  { name: "previsit", list: listPrevisitQueued, claim: claimPrevisit, recordSent: recordPrevisitSent, markFailed: markPrevisitFailed, markBlocked: markPrevisitBlocked, transactional: true },
   { name: "recall", list: listRecallQueued, claim: claimRecall, recordSent: recordRecallSent, markFailed: markRecallFailed, markBlocked: markRecallBlocked },
   { name: "reactivation", list: listReactivationQueued, claim: claimReactivation, recordSent: recordReactivationSent, markFailed: markReactivationFailed, markBlocked: markReactivationBlocked },
   { name: "coordinator", list: listCoordinatorQueued, claim: claimCoordinator, recordSent: recordCoordinatorSent, markFailed: markCoordinatorFailed, markBlocked: markCoordinatorBlocked },

@@ -4,7 +4,11 @@ import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { SITES, getSite } from "@/lib/mock/clients";
 import { listOpportunities } from "@/lib/coordinator/repository";
-import { loadExcludedTargetKeys, excludedTargetKey } from "@/lib/patient-status/repository";
+import {
+  loadExcludedTargetKeys,
+  excludedTargetKey,
+  isExclusionsUnavailable,
+} from "@/lib/patient-status/repository";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { listActiveUspTexts } from "@/lib/usp/repository";
 import { decideCloserAction, type CloserOpportunityFacts } from "@/lib/closer/cadence";
@@ -93,12 +97,26 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     const ranked = opportunities.slice(0, config.maxExaminedPerRun);
     const ids = ranked.map((o) => o.id);
 
-    const [states, inbound, excludedKeys, usps] = await Promise.all([
-      listStatesByOpportunity(ids),
-      listInboundBodiesByOpportunity(ids),
-      loadExcludedTargetKeys(),
-      listActiveUspTexts(CLIENT_ID),
-    ]);
+    // The exclusion read REFUSES rather than returning an empty set when messaging
+    // is live and the override table is unreadable (ruling W1-B/2, 3 Sep 2026). A
+    // rejection inside Promise.all rejects the whole array, so the catch goes round
+    // the destructuring: exclusions unknown means nobody is drafted this tick.
+    let states: Awaited<ReturnType<typeof listStatesByOpportunity>>;
+    let inbound: Awaited<ReturnType<typeof listInboundBodiesByOpportunity>>;
+    let excludedKeys: Set<string>;
+    let usps: Awaited<ReturnType<typeof listActiveUspTexts>>;
+    try {
+      [states, inbound, excludedKeys, usps] = await Promise.all([
+        listStatesByOpportunity(ids),
+        listInboundBodiesByOpportunity(ids),
+        loadExcludedTargetKeys(),
+        listActiveUspTexts(CLIENT_ID),
+      ]);
+    } catch (err) {
+      if (!isExclusionsUnavailable(err)) throw err;
+      console.error("[closer] exclusion list unreadable while messaging is live; skipping this tick", err);
+      return Response.json({ ok: true, skipped: "exclusions unavailable" });
+    }
 
     const link = bookingLink();
     let examined = 0;

@@ -44,6 +44,12 @@ const TABLE_COLUMNS: Record<string, string[]> = {
   postop_touch: ["id", "target_id", "site_id", "channel", "direction", "body", "status", "actioned_by", "created_at", "sent_at"],
   postop_target: ["id", "site_id", "dentally_patient_id", "appointment_id", "patient_name", "status"],
 
+  // NOTE: no actor column at all. The pre-visit link has no approval step (see
+  // migration 0097), so there is no person to name and the source declares
+  // actorCol: null rather than inventing one.
+  previsit_touch: ["id", "target_id", "site_id", "channel", "direction", "body", "status", "created_at", "sent_at"],
+  previsit_target: ["id", "site_id", "dentally_patient_id", "appointment_id", "patient_name", "fork", "status"],
+
   review_touch: ["id", "request_id", "site_id", "step", "channel", "direction", "body", "drafted_by", "status", "approved_by", "created_at", "sent_at"],
   review_request: ["id", "site_id", "dentally_appointment_id", "dentally_patient_id", "patient_name", "channel", "status"],
 
@@ -130,7 +136,7 @@ beforeEach(() => {
 });
 
 describe("every module the platform can message from", () => {
-  it("reads a message from ALL twelve sources for one patient", async () => {
+  it("reads a message from ALL thirteen sources for one patient", async () => {
     seed({
       agent_conversation: [{ id: "c1", site_id: SITE, dentally_patient_id: PATIENT, patient_name: "Sarah", channel: "sms", updated_at: "2026-06-01T09:00:00Z" }],
       agent_message: [{ id: "m1", conversation_id: "c1", role: "patient", body: "agent-msg", created_at: "2026-06-01T09:00:00Z" }],
@@ -151,6 +157,9 @@ describe("every module the platform can message from", () => {
       postop_target: [{ id: "po1", site_id: SITE, dentally_patient_id: PATIENT, patient_name: "Sarah" }],
       postop_touch: [{ id: "t6", target_id: "po1", site_id: SITE, channel: "sms", direction: "outbound", body: "postop-msg", status: "sent", actioned_by: "Blerta", created_at: "2026-06-07T09:00:00Z", sent_at: null }],
 
+      previsit_target: [{ id: "pv1", site_id: SITE, dentally_patient_id: PATIENT, patient_name: "Sarah", fork: "brief" }],
+      previsit_touch: [{ id: "t11", target_id: "pv1", site_id: SITE, channel: "sms", direction: "outbound", body: "previsit-msg", status: "sent", created_at: "2026-06-13T09:00:00Z", sent_at: null }],
+
       review_request: [{ id: "rr1", site_id: SITE, dentally_patient_id: PATIENT, patient_name: "Sarah" }],
       review_touch: [{ id: "t7", request_id: "rr1", site_id: SITE, channel: "sms", direction: "outbound", body: "reviews-msg", status: "sent", approved_by: null, created_at: "2026-06-08T09:00:00Z", sent_at: null }],
 
@@ -168,11 +177,11 @@ describe("every module the platform can message from", () => {
 
     const read = await getThreadForPatient([SITE], PATIENT);
     expect(read.failedSourceNames, "a source errored against the real schema").toEqual([]);
-    expect(read.totalSources).toBe(12);
+    expect(read.totalSources).toBe(13);
     const sources = (read.thread?.messages ?? []).map((m) => m.source).sort();
     expect(sources).toEqual([
       "agent", "closer", "collection", "coordinator", "diary", "noshow",
-      "outreach", "postop", "reactivation", "recall", "reviews", "speed-to-lead",
+      "outreach", "postop", "previsit", "reactivation", "recall", "reviews", "speed-to-lead",
     ]);
   });
 
@@ -331,7 +340,7 @@ describe("scoping and failure reporting", () => {
     const read = await getThreadForPatient([SITE], PATIENT);
     expect(read.thread).toBeNull();
     expect(read.failedSources).toBe(read.totalSources);
-    expect(read.failedSourceNames).toHaveLength(12);
+    expect(read.failedSourceNames).toHaveLength(13);
   });
 
   it("distinguishes a genuine empty from a failure", async () => {

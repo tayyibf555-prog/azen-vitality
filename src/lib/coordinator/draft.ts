@@ -4,6 +4,7 @@ import type { TouchChannel, TreatmentOpportunity } from "./types";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
+import { sanitiseName, sanitiseTreatment } from "@/lib/agent/free-text";
 
 export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel, usps?: string[]) {
   const system = [
@@ -29,8 +30,11 @@ export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel,
 
   const user = [
     `Channel: ${channel}`,
-    `Patient: ${o.patientName}`,
-    `Treatment: ${o.treatment}`,
+    // SANITISED. Both are free text a human typed into Dentally, so both are the
+    // drafter's injection surface. See src/lib/agent/free-text.ts; an ordinary name
+    // or plan title passes through byte for byte.
+    `Patient: ${sanitiseName(o.patientName)}`,
+    `Treatment: ${sanitiseTreatment(o.treatment)}`,
     `Planned value (GBP): ${o.plannedValue}`,
     `Remaining treatment value (GBP): ${o.amountOutstanding}`,
     `Accepted at: ${o.acceptedAt}`,

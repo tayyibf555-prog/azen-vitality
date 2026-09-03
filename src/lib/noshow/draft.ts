@@ -4,6 +4,7 @@ import type { NoshowTarget } from "./types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getSite } from "@/lib/mock/clients";
+import { sanitiseName, sanitisePractitioner } from "@/lib/agent/free-text";
 
 const PURPOSE_TONE: Record<NoshowStep["purpose"], string> = {
   confirm: "This is the first confirmation request, a couple of days before. Ask warmly if they can still make it.",
@@ -49,9 +50,10 @@ export function buildNoshowPrompt(t: NoshowTarget, channel: TouchChannel, step: 
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
     `Practice: ${practiceName}`,
-    `Patient: ${t.patientName}`,
+    // SANITISED: both names are Dentally free text (src/lib/agent/free-text.ts).
+    `Patient: ${sanitiseName(t.patientName)}`,
     `Appointment: ${whenLabel(t.appointmentStartAt)}`,
-    t.practitioner ? `With: ${t.practitioner}` : "",
+    t.practitioner ? `With: ${sanitisePractitioner(t.practitioner)}` : "",
   ]
     .filter(Boolean)
     .join("\n");

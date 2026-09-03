@@ -1,5 +1,6 @@
 import { uspPromptLine } from "@/lib/usp/prompt";
 import type { AgentContext } from "./types";
+import { FREE_TEXT_IS_DATA, sanitiseName, sanitiseTreatment } from "./free-text";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -22,8 +23,22 @@ export function buildSystemPrompt(ctx: AgentContext): string {
 
   if (known) {
     lines.push(
-      `Patient: ${ctx.patientName}. This number matches a patient on our records, so you can greet them by name.`,
-      `Treatment on file: ${ctx.treatment ?? "not specified"}.`,
+      // SANITISED. Both values are free text a human typed into Dentally, and this
+      // is the one prompt in the platform that drives TOOLS — book, reschedule,
+      // cancel, register a patient — so a plan "title" carrying instructions has
+      // the most to gain here and the most damage to do. src/lib/agent/free-text.ts
+      // strips the SHAPE of an instruction, and for an ordinary name or title it is
+      // the identity function, so the prompt is byte-for-byte what it was
+      // (reply-context-prompt.test.ts pins exactly that with a hash).
+      //
+      // AND THE DATA BOUNDARY IS SAID OUT LOUD (ruling W1-B/3, 3 Sep 2026). The
+      // sanitiser strips the SHAPE of an instruction; this strips its AUTHORITY.
+      // Either alone is weaker than both. It was raised as an owner decision rather
+      // than taken by a lane, because it changes what the live 24/7 agent is told —
+      // and it was granted.
+      FREE_TEXT_IS_DATA,
+      `Patient: ${sanitiseName(ctx.patientName)}. This number matches a patient on our records, so you can greet them by name.`,
+      `Treatment on file: ${ctx.treatment ? sanitiseTreatment(ctx.treatment) : "not specified"}.`,
     );
     if (ctx.lastVisitAt) lines.push(`Last visit or checkup: ${formatDate(ctx.lastVisitAt)}.`);
     if (ctx.recallDueAt) lines.push(`Recall due: ${formatDate(ctx.recallDueAt)}.`);
@@ -32,7 +47,9 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     );
   } else {
     lines.push(
-      `Caller: ${ctx.patientName}. This number does NOT match anyone on our records.`,
+      // Sanitised for the same reason as the known branch. An unknown caller's
+      // "name" is whatever an earlier turn or an enquiry form supplied.
+      `Caller: ${sanitiseName(ctx.patientName)}. This number does NOT match anyone on our records.`,
       "Treat this as a brand new enquiry. Be welcoming. Do not pretend to know them or guess any history.",
       // Our records will not accept a new patient without a title and a date of birth
       // as well as a name, so the model is told to collect all of it BEFORE calling the
@@ -54,6 +71,16 @@ export function buildSystemPrompt(ctx: AgentContext): string {
     lines.push(
       "",
       "WHAT THEY TOLD US when they enquired (their smile assessment answers):",
+      // DELIBERATELY NOT SANITISED, and that is the stronger position rather than a
+      // gap. answerLines (src/lib/smile-assessment/summary.ts) resolves each stored
+      // answer through the quiz bank's own option labels and emits `${q.prompt} =>
+      // ${label}` — our question, our label. A response that matches no option is
+      // dropped, so no free text the patient typed can reach here at all. This is
+      // the catalogue-lookup pattern src/lib/agent/free-text.ts recommends over
+      // sanitising, and running the sanitiser over it would cut a legitimate
+      // "...when would you like to start? => As soon as possible" at the question
+      // mark. If a free-text question is ever added to the bank, this line has to
+      // change with it.
       ...ctx.assessmentAnswers.map((l) => `- ${l}`),
       "Use this to be relevant, for example matching their timeline and how ready they are to book. Do not recite these answers back to them, do not mention the questionnaire unless they bring it up, and never repeat anything about money or how they would pay.",
     );

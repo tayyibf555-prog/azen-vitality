@@ -6,6 +6,7 @@ import {
   dentallyAgentClient,
   buildManualBookingPayload,
 } from "@/lib/dentally/write";
+import { dentallyWrite } from "@/lib/dentally/write-gate";
 // REUSED on purpose: this is the client-scoped PUBLIC-funnel page token (the
 // hour-rotating HMAC the Smile Assessment page fetches from
 // /api/smile-assessment/token). The booking page is reached from that same
@@ -348,7 +349,12 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
           console.error(`[booking/create] refused an incomplete registration: ${built.reason}`);
           return bad(BOOKING_FAILED, 502);
         }
-        const { patient } = await dentally.createPatient(built.payload);
+        const { patient } = await dentallyWrite.createPatient(
+          // The SAME client the slot revalidation above used, so availability and
+          // the write can never be talking to two different Dentally instances.
+          { source: "online-booking", siteId, client: dentally },
+          built.payload,
+        );
         patientId = String(patient.id);
         patientCreated = true;
       }
@@ -380,7 +386,10 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         console.error(`[booking/create] refused an invalid write: ${built.error}`);
         return bad(BOOKING_FAILED, 502);
       }
-      await dentally.createAppointment(built.payload);
+      await dentallyWrite.createAppointment(
+        { source: "online-booking", siteId, patientId, client: dentally },
+        built.payload,
+      );
     } catch (err) {
       // Any Dentally failure (422 included): friendly, never the error body.
       //

@@ -18,6 +18,7 @@ import {
 import { availabilityRowsWithinDays } from "@/lib/calendar/availability";
 import { londonDayKey } from "@/lib/time/london";
 import { isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { dentallyWrite, type DentallyWriteContext } from "@/lib/dentally/write-gate";
 // The ONE live-calibrated derivation of a new Dentally patient, shared with the
 // booking funnel, the owner co-pilot and the onboarding worklist. See patient-payload.ts.
 import {
@@ -381,6 +382,29 @@ export interface ToolDeps {
 }
 
 /**
+ * The gate context for every Dentally write this agent makes.
+ *
+ * ONE helper rather than four inline objects, so the three things that are true
+ * of all four writes are stated once: they come from the booking agent (which is
+ * the kill switch that governs them), the actor is the agent rather than a
+ * person, and the client is HANDED to the gate rather than resolved by it.
+ *
+ * That last one is not a convenience. find_slots and the write share ONE client
+ * on purpose (see ToolDeps.dentally), so availability and the booking always hit
+ * the same Dentally instance and the agent can never book a slot it proved open
+ * somewhere else. Letting the gate build its own client would quietly undo that.
+ */
+function agentWriteContext(deps: ToolDeps, patientId?: string): DentallyWriteContext {
+  return {
+    source: "booking-agent",
+    siteId: deps.context.siteId,
+    actor: "agent:booking-agent",
+    patientId: patientId || deps.context.patientId || null,
+    client: deps.dentally,
+  };
+}
+
+/**
  * The four write tools, and the honest refusal each returns when writes are off.
  *
  * Pure and exported so the exact words are testable — they are read by a language
@@ -732,7 +756,7 @@ export function makeDispatch(deps: ToolDeps) {
               "That time has just been taken. Apologise, call find_slots again and offer the patient the times it returns.",
           });
         }
-        const { appointment } = await deps.dentally.createAppointment({
+        const { appointment } = await dentallyWrite.createAppointment(agentWriteContext(deps, patientId), {
           patient_id: patientId,
           start_time: live.start,
           finish_time: live.finish,
@@ -793,7 +817,7 @@ export function makeDispatch(deps: ToolDeps) {
           String(owned.practitioner_id ?? "");
         const reschedulePatch: Record<string, unknown> = { start_time: input.newSlotStart, finish_time: finish };
         if (newPractitionerId) reschedulePatch.practitioner_id = newPractitionerId;
-        const { appointment } = await deps.dentally.updateAppointment(appointmentId, reschedulePatch);
+        const { appointment } = await dentallyWrite.updateAppointment(agentWriteContext(deps), appointmentId, reschedulePatch);
         return JSON.stringify({
           rescheduled: true,
           appointmentId: appointment.id,
@@ -806,7 +830,7 @@ export function makeDispatch(deps: ToolDeps) {
         if (!(await ownsAppointment(appointmentId))) {
           return JSON.stringify({ error: "I could not find that appointment on your record." });
         }
-        const { appointment } = await deps.dentally.cancelAppointment(appointmentId);
+        const { appointment } = await dentallyWrite.cancelAppointment(agentWriteContext(deps), appointmentId);
         return JSON.stringify({ cancelled: true, appointmentId: appointment.id, state: appointment.state ?? "cancelled" });
       }
       case "register_patient": {
@@ -886,7 +910,7 @@ export function makeDispatch(deps: ToolDeps) {
           });
         }
 
-        const { patient } = await deps.dentally.createPatient(built.payload);
+        const { patient } = await dentallyWrite.createPatient(agentWriteContext(deps), built.payload);
         registeredPatientId = patient.id;
         return JSON.stringify({ registered: true, patientId: patient.id });
       }

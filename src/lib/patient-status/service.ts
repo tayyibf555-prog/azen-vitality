@@ -1,7 +1,7 @@
 import "server-only";
 import { getOverride, insertAudit, markOverrideSynced, upsertOverride } from "./repository";
 import type { DentallySyncResult, PatientAdminStatus } from "./types";
-import { dentallyAgentClient, isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 import { addAdminDoNotContact, clearAdminDoNotContact } from "@/lib/messaging/suppression";
 
 // The orchestrator behind PATCH /api/patients/:id/status. Owns the precedence and the
@@ -36,12 +36,27 @@ function patientRef(patientId: string): string {
  *   - 'synced' on a successful PUT /v1/patients/:id { active },
  *   - 'failed' when the write was attempted and errored (caught; override still applies).
  */
-async function syncToDentally(patientId: string, status: PatientAdminStatus): Promise<DentallySyncResult> {
+async function syncToDentally(
+  patientId: string,
+  status: PatientAdminStatus,
+  ctx: { siteId: string; actorId: string | null },
+): Promise<DentallySyncResult> {
   if (status === "do_not_contact") return "unsupported";
-  if (!isDentallyWriteEnabled()) return "skipped";
+  // ASKED THROUGH THE GATE, so a status change made while write-back is off is
+  // recorded as an attempt instead of vanishing behind a 'skipped'. The result
+  // the caller and the audit see is unchanged: 'skipped', the override still
+  // applies, and nothing was sent.
+  const refused = await precheckDentallyWrite({
+    ctx: { source: "patient-status", siteId: ctx.siteId, actor: ctx.actorId, patientId },
+    kind: "patient.update",
+  });
+  if (refused) return "skipped";
   try {
-    const client = dentallyAgentClient();
-    await client.updatePatient(patientId, { active: status === "active" });
+    await dentallyWrite.updatePatient(
+      { source: "patient-status", siteId: ctx.siteId, actor: ctx.actorId },
+      patientId,
+      { active: status === "active" },
+    );
     return "synced";
   } catch (err) {
     console.error(`[patient-status] Dentally updatePatient failed for ${patientId}; override still applied here`, err);
@@ -60,11 +75,15 @@ export async function applyStatusChange(input: {
   patientId: string;
   status: PatientAdminStatus;
   reason?: string | null;
+  /** For the status AUDIT, which is a staff record and names the person. */
   actorEmail?: string | null;
+  /** The OPAQUE user id, for the Dentally sync ledger. See profile-service. */
+  actorId?: string | null;
 }): Promise<ApplyStatusResult> {
   const { siteId, patientId, status } = input;
   const reason = input.reason?.trim() ? input.reason.trim() : null;
   const actorEmail = input.actorEmail ?? null;
+  const actorId = input.actorId ?? null;
 
   // 1. Remember the prior status for the audit's from->to.
   const current = await getOverride(siteId, patientId);
@@ -84,7 +103,7 @@ export async function applyStatusChange(input: {
   }
 
   // 4. Attempt to reflect active/inactive in Dentally, and record whether it landed.
-  const dentally = await syncToDentally(patientId, status);
+  const dentally = await syncToDentally(patientId, status, { siteId, actorId });
   if (dentally === "synced") {
     await markOverrideSynced(siteId, patientId);
   }

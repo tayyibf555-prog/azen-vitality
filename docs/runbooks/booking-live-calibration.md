@@ -335,3 +335,52 @@ our own table, so an abandoned hold is harmless and becomes a callback lead.
   `src/app/api/mock-dentally/v1/patients/patients-create-parity.test.ts`.
 - Background: `DENTALLY.md`, and the memories `dentally-createpatient-422`,
   `dentally-readonly-key-is-not-readonly`, `prod-live-state-audit`.
+
+---
+
+## 5. Since this runbook was written: every write goes through ONE gate
+
+Added by the Dentally write-back lane (W1-A). Nothing in sections 1–4 changes; what
+changes is that the write in section 4 is no longer invisible until somebody reads a
+server log.
+
+**The gate — `src/lib/dentally/write-gate.ts`.** All five supported writes (patient
+create/update, appointment create/update/cancel) now go through `dentallyWrite.*`,
+and a source crawl (`write-gate-sites.test.ts`) fails the build if any file in `src/`
+calls a client write method directly. For each call it:
+
+1. resolves the mode — LIVE only when `isDentallyWriteEnabled()` (the exact string
+   `"true"` **and** `DENTALLY_WRITE_API_KEY` **and** `DENTALLY_WRITE_BASE_URL`);
+   `"TRUE"`, `"1"`, `"yes"` and `" true"` are all dry runs;
+2. checks the **owner's kill switch for the module that is writing** — so switching
+   Recall or Online booking off in System controls now stops its Dentally writes,
+   not only its messages (`DENTALLY_WRITE_SOURCES` maps source → slug; a source with
+   no switch has to say in writing why, and a test enforces it);
+3. **records an intent** in `dentally_write_intent` (migration 0096) whatever
+   happens;
+4. performs the write, or refuses it — and a gate call returns a response ONLY when
+   a write actually happened. Every other outcome throws.
+
+**While the gate is off** and the base URL points at `api.dentally.co`, the client is
+never even built: the intent is filed as `dry_run` and the caller is refused. Against
+the local mock the write still happens (dev is unaffected) and is still filed as
+`dry_run` — a write to the mock is never recorded as `sent`.
+
+**Where to look after the section-4 write.** System controls → **Dentally sync**
+(`/c/<client>/controls/sync`, owner + agency). It shows the write mode, the host the
+write was aimed at, what does and does not flow back, and every intent with its
+outcome. The section-4 write should appear there as one `sent` row carrying
+Dentally's own id — which is a better record for the next person than a log line.
+
+**What the ledger deliberately does NOT hold.** The payload summary is built on an
+allow-list: ids, times, duration, the whitelisted reason and the boolean flags keep
+their values; every other field contributes its NAME only. So a row can say a
+registration carried a `first_name`, a `date_of_birth` and a `mobile_phone` without
+holding one character of any of them. Error text is truncated and stripped of
+anything shaped like an email address or a phone number before it is stored.
+
+**Still owed.** Migration 0096 is written and NOT applied — until a human applies it
+the ledger records nothing (every insert is fail-soft and cannot affect a booking),
+and the Sync Status page says so in words rather than showing an empty table as if it
+were an answer. The `queued` status has no producer yet: replaying months of
+accumulated intent into a real diary is a decision for the owner, not a build step.

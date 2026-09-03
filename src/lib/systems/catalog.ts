@@ -124,6 +124,31 @@ export const SYSTEMS: SystemDef[] = [
     defaultEnabled: false,
   },
   {
+    // The pre-appointment questionnaire + treatment-interest capture. It has a
+    // CLIENT_NAV page of its own (the question-bank editor, the interest lists and
+    // the mining list), so it is not headless.
+    //
+    // DEFAULT-OFF, and it needs to be for two independent reasons rather than the
+    // usual one. It is a new outbound surface, like the closer and post-op: the
+    // absence of a toggle row must never be why a patient receives the first text
+    // from a system nobody switched on. AND it is a surface that ASKS A PATIENT
+    // QUESTIONS ABOUT THEIR MOUTH, where which questions depends on a fork resolved
+    // from their payment plan — so switching it on is a decision the practice takes
+    // with its contract in mind, not a build step. Migration 0097 also seeds an
+    // explicit disabled row for 'vitality'; the two are deliberately independent,
+    // because a seed only covers the clients and the databases it was applied to.
+    //
+    // Switching it OFF halts the sweep, the queue AND the public form: an already
+    // sent link stops opening, so a flip is a complete revert rather than a stop
+    // with a live form still collecting answers behind it.
+    slug: "pre-visit-triage",
+    label: "Pre-visit questions",
+    group: "Patient lifecycle",
+    halts:
+      "No pre-visit questionnaires are sent, any queued ones stop sending, and links already sent stop opening. Answers already given are kept.",
+    defaultEnabled: false,
+  },
+  {
     slug: "no-show-defence",
     label: "No-show defence",
     group: "Patient lifecycle",
@@ -307,6 +332,85 @@ export const SYSTEMS: SystemDef[] = [
     group: "Operations",
     halts: "The compliance workspace is hidden.",
   },
+  {
+    // DEFAULT-OFF, and for the anomaly-alerts reason rather than the sending one:
+    // it messages nobody, but it ANSWERS A MEMBER OF STAFF STANDING AT A MACHINE,
+    // and an answer given before the practice has loaded its own manuals is an
+    // answer from nothing. It ships off so the register and the manuals go in
+    // first and somebody reads what it says before anyone relies on it.
+    // Migration 0098 also seeds an explicit disabled row for 'vitality'; the two
+    // are deliberately independent, because a seed only covers the clients and
+    // the databases it was applied to.
+    //
+    // Switching it OFF halts the AGENT only — the chat refuses and no model call
+    // is made. The register and the manuals stay reachable and editable, because
+    // they are the management surface for this system and they have to be
+    // loadable BEFORE it is switched on. That is why the slug is in
+    // NAV_SWITCH_EXEMPT_SLUGS (src/lib/nav.ts), exactly like Segment outreach.
+    slug: "equipment",
+    label: "Equipment desk",
+    group: "Operations",
+    halts:
+      "The equipment desk stops answering questions. The asset register and the uploaded manuals stay readable and editable.",
+    defaultEnabled: false,
+  },
+  {
+    // DEFAULT-OFF for the same reason as the equipment desk, plus one of its own:
+    // its whole job at the end of a playbook is to hand somebody the practice's
+    // IT contact, and until that contact has been set the hand-off has nowhere to
+    // go. Migration 0099 also seeds an explicit disabled row for 'vitality'.
+    //
+    // Switching it OFF halts the AGENT only. The playbooks and the IT contact
+    // stay readable, because a receptionist may need both at the exact moment the
+    // owner has the agent switched off.
+    slug: "it-desk",
+    label: "IT desk",
+    group: "Operations",
+    halts:
+      "The IT desk stops answering questions. The troubleshooting playbooks and the practice's IT contact stay readable.",
+    defaultEnabled: false,
+  },
+  {
+    // THE MASTER SWITCH OVER EVERYTHING THIS PLATFORM WRITES BACK TO DENTALLY.
+    //
+    // Headless: it is not a module, it is a lever ABOVE nine of them. Every
+    // outbound Dentally write — a new appointment, a move, a cancellation, a new
+    // patient, an edit — passes the WriteGate (src/lib/dentally/write-gate.ts),
+    // and the gate checks THIS switch before it checks the switch on the module
+    // that asked. So an owner who wants everything to stop reaching their
+    // Dentally book flips one control rather than finding nine.
+    //
+    // IT COMPOSES WITH THE ENVIRONMENT, IT DOES NOT REPLACE IT. The agency arms
+    // the deployment (DENTALLY_WRITE_ENABLED + a write key + an explicit write
+    // base URL) and the owner arms the practice (this switch). Both must be on
+    // before one write leaves this platform, and either one alone stops all of
+    // them. That is deliberate: neither party can turn on writes to 51,000 live
+    // patient records without the other.
+    //
+    // DEFAULT-OFF, twice, per the platform's own rule for anything that acts on a
+    // patient: `defaultEnabled: false` here means the ABSENCE of a row is OFF for
+    // every client in every environment, and migration 0096 also seeds an
+    // explicit disabled row for 'vitality'. The two are independent, because a
+    // seed covers only the clients and the databases it was applied to.
+    //
+    // THE ONE PLACE ITS ABSENCE IS NOT READ AS OFF is a deployment where writes
+    // are only SIMULATED — no write key, so nothing can reach a real book anyway.
+    // There the gate treats a missing row as on, so a developer's machine and the
+    // local mock keep working; the moment the deployment is armed for real, a
+    // missing or unreadable row is a refusal. See isSystemExplicitlyDisabled in
+    // src/lib/systems/repository.ts, which exists for exactly this switch.
+    //
+    // Switching it OFF stops the WRITES. It does not touch the read-only Dentally
+    // sync, so the diary, the patient list and the money screens stay current —
+    // and every write it stops is recorded on the Dentally sync screen, so the
+    // practice can see what did not go across.
+    slug: "dentally-write-back",
+    label: "Dentally write-back",
+    group: "Operations",
+    halts:
+      "Nothing this platform does is written back to Dentally: no appointments are created, moved or cancelled there, and no patient records are created or edited there. Everything still works here, and the Dentally sync screen records what was held back.",
+    defaultEnabled: false,
+  },
 ];
 
 /** Slug -> SystemDef, for quick lookups and to validate a toggle request. */
@@ -333,6 +437,7 @@ export const DRAIN_SOURCE_TO_SLUG: Record<string, string> = {
   closer: "treatment-closer",
   collection: "balance-reminders",
   postop: "postop-checkin",
+  previsit: "pre-visit-triage",
   reviews: "reviews",
   outreach: "outreach",
 };

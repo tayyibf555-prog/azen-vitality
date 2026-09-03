@@ -221,6 +221,11 @@ const EXEMPT: Record<string, Exemption> = {
   "onboarding/submit": { kind: "public", reason: "public new-patient onboarding form submit" },
   "onboarding/upload": { kind: "public", reason: "public onboarding document upload" },
   "medical-history/public-submit": { kind: "public", reason: "public patient-facing medical-history questionnaire submit (token-verified)" },
+  "previsit/submit": {
+    kind: "public",
+    reason:
+      "public patient-facing pre-visit questionnaire submit. No session exists (a patient with a link is the caller). Authorisation is a server-minted 22-character bearer stored under a unique index on the one appointment it belongs to; the site, the patient and the question FORK are all read off that row and never from the body, so a caller can neither address another patient nor ask to be given the other bank. Guards are a payload cap, a per-IP and a per-token api_budget ceiling, a strict kill-switch check, and a single-use conditional claim; a bad token, an unknown token, a spent link and a switched-off system all answer the same 403",
+  },
   "fp17/submit": { kind: "public", reason: "public FP17/PR consent + exemption declaration submit, token-bound + budget-guarded" },
   "smile-assessment/token": { kind: "public", reason: "public quiz: mints the session token" },
   "smile-assessment/next": { kind: "public", reason: "public quiz: serves the next question" },
@@ -250,6 +255,8 @@ const EXEMPT: Record<string, Exemption> = {
   "noshow/sweep": { kind: "cron", reason: "no-show defence sweep" },
   "outreach/sweep": { kind: "cron", reason: "segment outreach sweep" },
   "postop/sweep": { kind: "cron", reason: "post-op check-in sweep (flags + drafts only, never queues)" },
+  "previsit/sweep": { kind: "cron", reason: "pre-visit questionnaire sweep (flags upcoming appointments, queues one scanned fixed-template link each)" },
+  "previsit/mining-sweep": { kind: "cron", reason: "implant-interest mining pass (read-only Dentally, bounded and resumable; writes only its own candidate + coverage tables)" },
   "collection/sweep": { kind: "cron", reason: "outstanding-balance sweep (verifies + drafts only, never queues)" },
   "reactivation/sweep": { kind: "cron", reason: "reactivation sweep" },
   "recall/sweep": { kind: "cron", reason: "recall sweep" },
@@ -542,6 +549,48 @@ describe("every signed-in-reachable API route locks its module against the clini
  * is left, and the structural check further down proves it. Anything NOT in this
  * list still has to name a slug the clinician is denied.
  */
+/**
+ * MODULES EVERY AUTHENTICATED ROLE MAY REACH, where the real boundary is somewhere
+ * else and is NAMED.
+ *
+ * "co-pilot" joined this set on W1-E/2 — the programme coordinator's written
+ * ruling of 3 Sep 2026, that the co-pilot serves every staff clearance. Adding
+ * the slug to CLINICIAN_SLUGS and STAFF_SLUGS made
+ * `requireModuleApiAccess(auth, "co-pilot")` admit all five roles, which is
+ * exactly the "compiles, reads as a lock, does nothing" shape the assertion below
+ * exists to catch. The assertion was right to fire.
+ *
+ * THE SECURITY BOUNDARY HAS MOVED, and this is where that is written down. For
+ * the co-pilot it is now `ACCESS_BY_ROLE` in src/lib/copilot/scope.ts and the
+ * catalog it indexes in src/lib/copilot/clearance.ts: a session's role decides,
+ * server-side and on every single turn, which tool SCHEMAS it is shown, which
+ * tool calls the dispatch will run, and what is projected out of a result. That
+ * boundary is enumerated role-by-tool over the whole toolbox in
+ * src/lib/copilot/battery.test.ts and src/lib/copilot/clearance.test.ts.
+ *
+ * SO THIS IS NOT A HOLE IN THE SWEEP. An entry here does not exempt a route from
+ * having a lock; it requires the route to name a SECOND one that provably denies,
+ * and the branch above checks the route's source really carries it. A route that
+ * guards a universal module and nothing else fails, loudly, with its own name.
+ */
+const UNIVERSAL_MODULES = new Set<string>(["co-pilot"]);
+
+/**
+ * The guard that actually denies, per route that guards a universal module.
+ *
+ *   copilot              `requireCapability("system.copilot.ask")` — revocable per
+ *                        person, so an owner can take the co-pilot off one named
+ *                        login; and beneath it `copilotAccessForRole` refuses an
+ *                        unknown or unmapped role outright with "none".
+ *   authorities/[action] `requireOwnerRole` — deciding which outside sources the
+ *                        co-pilot may lean on puts words into every answer it
+ *                        gives the whole practice, so it stays the principal's.
+ */
+const UNIVERSAL_MODULE_SECOND_LOCK: Record<string, string> = {
+  copilot: 'requireCapability(auth, "system.copilot.ask")',
+  "authorities/[action]": "requireOwnerRole(auth)",
+};
+
 const RECORD_TIER_GUARDS = new Set<string>([
   "calendar/day",
   "dentally/patients",
@@ -581,6 +630,17 @@ describe("a module guard that names the wrong slug is worse than none", () => {
     // A real slug, so a typo ("conversation") cannot pass as a lock — an unknown slug
     // is allow-by-default for the three open roles and would read as protected.
     expect(NAV_SLUGS.has(slug) || EXTRA_OWNER_ONLY_SLUGS.has(slug)).toBe(true);
+
+    // THE UNIVERSAL-MODULE EXEMPTION, and it demands MORE than the rule it
+    // replaces rather than less. See UNIVERSAL_MODULES below.
+    if (UNIVERSAL_MODULES.has(slug)) {
+      const src = routeSource(route);
+      const second = UNIVERSAL_MODULE_SECOND_LOCK[route];
+      expect(second, `${route} guards the universal module "${slug}" and names no second lock`).toBeTruthy();
+      expect(src, `${route} does not carry its declared second lock ${second}`).toContain(second);
+      return;
+    }
+
     // NOT INERT. A guard naming a slug EVERY role may have compiles, reads as a lock
     // and does nothing, which is the failure mode this assertion exists for.
     const denied = ALL_ROLES.filter((role) => !canRoleAccessModule(role, slug));
@@ -994,7 +1054,12 @@ describe("the clinician exemptions name their roles, and deny every other role p
     // above collapse and every one of the thirteen fails — which is the intent.
     expect(STAFF_SLUGS.has("patients")).toBe(false);
     expect(STAFF_SLUGS.has("calendar")).toBe(false);
-    expect([...STAFF_SLUGS].sort()).toEqual(["", "my-work"]);
+    // The third entry arrived on W1-E/2 (coordinator's ruling, 3 Sep 2026): the
+    // co-pilot, switched on for every clearance. It changes NOTHING this block
+    // rests on — the two facts above are what the derived denial sets are built
+    // from, and the co-pilot reaches neither the diary nor the patient database
+    // for a staff session (one tool, `my_work`, about the person signed in).
+    expect([...STAFF_SLUGS].sort()).toEqual(["", "co-pilot", "my-work"]);
   });
 });
 

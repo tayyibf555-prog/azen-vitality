@@ -8,6 +8,7 @@ import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
 import { checkAgentReply } from "@/lib/agent/guardrail";
+import { sanitiseName, sanitisePractitioner, sanitiseReason } from "@/lib/agent/free-text";
 
 const PURPOSE_TONE: Record<CadenceStep["purpose"], string> = {
   nudge: "This is a first, warm invitation. Keep it short and friendly.",
@@ -43,8 +44,12 @@ export function buildOutreachPrompt(
   variant: Variant,
   usps?: string[],
 ) {
-  const withClinician = campaign.practitionerName
-    ? `We would love to see them with ${campaign.practitionerName}. Mention ${campaign.practitionerName} by name warmly as the person they would see.`
+  // SANITISED, and this is the SYSTEM half of the prompt, so it matters more than
+  // the user half: an unsanitised clinician "name" here writes an instruction into
+  // the model's own rules rather than into the data it is given.
+  const clinician = sanitisePractitioner(campaign.practitionerName);
+  const withClinician = clinician
+    ? `We would love to see them with ${clinician}. Mention ${clinician} by name warmly as the person they would see.`
     : "Invite them to book in with the practice.";
 
   const system = [
@@ -69,10 +74,17 @@ export function buildOutreachPrompt(
   const user = [
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
-    `Patient: ${target.name}`,
+    // SANITISED. `matchedReason` is built from a Dentally APPOINTMENT REASON, which
+    // is the freest text in the practice's book, and "do not quote verbatim" is a
+    // quoting instruction rather than a data boundary. See src/lib/agent/free-text.ts.
+    `Patient: ${sanitiseName(target.name)}`,
     `Invitation is for: ${angle(campaign, variant)}`,
-    campaign.practitionerName ? `Clinician to see: ${campaign.practitionerName}` : `Clinician: not specified`,
-    target.matchedReason ? `Context (do not quote verbatim): last relevant visit was ${target.matchedReason}` : "",
+    campaign.practitionerName
+      ? `Clinician to see: ${sanitisePractitioner(campaign.practitionerName)}`
+      : `Clinician: not specified`,
+    target.matchedReason
+      ? `Context (do not quote verbatim): last relevant visit was ${sanitiseReason(target.matchedReason)}`
+      : "",
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -95,7 +107,11 @@ export function outreachFallbackBody(
   const what = angle(campaign, variant);
   const site = getSite(target.siteId);
   const practice = site?.name ?? "the practice";
-  const withClinician = campaign.practitionerName ? ` with ${campaign.practitionerName}` : "";
+  // Sanitised too, and here it goes STRAIGHT TO A PATIENT: this is the templated
+  // fallback used when the model is unavailable, so nothing downstream would trim
+  // a pathological clinician name before it was sent.
+  const clinician = sanitisePractitioner(campaign.practitionerName);
+  const withClinician = clinician ? ` with ${clinician}` : "";
 
   if (step.purpose === "final") {
     return (

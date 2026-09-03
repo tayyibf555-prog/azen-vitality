@@ -6,6 +6,7 @@ import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
+import { sanitiseName } from "@/lib/agent/free-text";
 
 const RECALL_TYPE_GUIDANCE: Record<RecallType, string> = {
   dentist:
@@ -54,7 +55,8 @@ export function buildRecallPrompt(
   const user = [
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
-    `Patient: ${t.patientName}`,
+    // SANITISED: the name is Dentally free text (src/lib/agent/free-text.ts).
+    `Patient: ${sanitiseName(t.patientName)}`,
     `Recall type: ${t.recallType}`,
     `Recall due: ${t.dueAt} (${overdue})`,
     `Last visit: ${t.lastVisitAt ?? "unknown"}`,

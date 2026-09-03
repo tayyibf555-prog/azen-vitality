@@ -11,6 +11,7 @@ import {
   CalendarPlus,
   CalendarRange,
   ClipboardCheck,
+  ClipboardList,
   Clock,
   FileCheck,
   FileText,
@@ -19,6 +20,7 @@ import {
   HeartPulse,
   Home,
   KeyRound,
+  Laptop,
   LayoutDashboard,
   LayoutTemplate,
   ListChecks,
@@ -41,6 +43,7 @@ import {
   UserRound,
   Users,
   Wallet,
+  Wrench,
   Zap,
 } from "lucide-react";
 
@@ -100,6 +103,22 @@ export const CLINICIAN_SLUGS = new Set<string>([
   // grant that reads as a grant and does nothing. It adds no data the clinician
   // did not already have: every tab is scoped to the caller's OWN staff record.
   "my-work",
+  // ADDED (Dental OS, W1-E, on the programme coordinator's written ruling of
+  // 3 Sep 2026): the co-pilot. The mandate is that it serves EVERY clearance,
+  // and the clearance model (src/lib/copilot/clearance.ts) had the clinician and
+  // staff catalogs built, tested and deliberately inert until this ruling.
+  //
+  // THIS LINE IS THE DOOR, NOT THE ROOM. What each of them reaches once inside is
+  // decided server-side on every single turn by `copilotAccessForRole`, three
+  // independent times (the schema the model is shown, the gate before a tool
+  // runs, and the projection on the way out). Adding the slug here cannot widen
+  // any of that.
+  //
+  // THE CLINICIAN'S ROOM: their patients, their diary, the practice's general
+  // knowledge at tier 1, their own work, and second-opinion decision support on a
+  // named patient. Six read tools and NO act domain at all — ruling 1 of the same
+  // message is that a clinician does not send to a patient from here, this wave.
+  "co-pilot",
 ]);
 
 /**
@@ -131,6 +150,24 @@ export const CLINICIAN_SLUGS = new Set<string>([
 export const STAFF_SLUGS = new Set<string>([
   "", // the Overview index — where /c/[client] lands them, as it lands every role
   "my-work", // their rota, their holiday, their documents, their signatures
+  // ADDED (Dental OS, W1-E, on the programme coordinator's written ruling of
+  // 3 Sep 2026): the co-pilot. The mandate is that it serves EVERY clearance,
+  // and the clearance model (src/lib/copilot/clearance.ts) had the clinician and
+  // staff catalogs built, tested and deliberately inert until this ruling.
+  //
+  // THIS LINE IS THE DOOR, NOT THE ROOM. What each of them reaches once inside is
+  // decided server-side on every single turn by `copilotAccessForRole`, three
+  // independent times (the schema the model is shown, the gate before a tool
+  // runs, and the projection on the way out). Adding the slug here cannot widen
+  // any of that.
+  //
+  // THE STAFF ROOM IS ONE TOOL: `my_work`, the same question My work answers on
+  // screen, asked in words. It reaches no patient, no diary, no money and no
+  // colleague — the tool takes no staff id and the record is resolved from the
+  // session — so this grants a receptionist a second way to ask about herself and
+  // nothing whatsoever besides. `indexRedirectFor` is untouched: a staff login
+  // still lands on My work and the dashboard's numbers are never fetched for it.
+  "co-pilot",
 ]);
 
 export interface NavGroup {
@@ -366,6 +403,20 @@ export const CLIENT_NAV: NavGroup[] = [
         note: "Smart confirmations and reminders driven off the live Dentally diary and appointment state machine.",
       },
       {
+        slug: "pre-visit-triage",
+        label: "Pre-visit questions",
+        icon: ClipboardList,
+        status: "live",
+        // Owner, agency AND the practice manager. The page is the ADMIN surface:
+        // the question banks, the interest lists and the implant-interest list.
+        // The clinician is deliberately NOT here and is denied by CLINICIAN_SLUGS:
+        // what a clinician needs is the SUMMARY on the patient record, which is
+        // gated on "patients" (a slug they do hold), not the editor that decides
+        // what every patient in the practice is asked.
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "A short questionnaire the patient answers on their phone before their appointment, sent with the reminder. Their answers reach the clinician on the patient record. It also asks which treatments they would like to hear about, and every yes lands on a list the practice can follow up. Two question lists are kept here and both are editable; which one a patient is asked is decided automatically and is never shown to them.",
+      },
+      {
         slug: "reviews",
         label: "Reviews",
         icon: Star,
@@ -476,6 +527,34 @@ export const CLIENT_NAV: NavGroup[] = [
         // response, so a coordinator with the module does not thereby see pay.
         roles: [...OWNER_ROLES, "client_coordinator"],
         note: "The employee file: contact and emergency details, employment dates, holiday entitlement, the document vault (right to work, DBS, GDC registration, indemnity, contracts) with expiry tracking, and the practice policies each person has signed. Employee personal data under UK GDPR: access is logged and pay is a separate permission.",
+      },
+      {
+        slug: "equipment",
+        label: "Equipment",
+        icon: Wrench,
+        status: "live",
+        // Owner, agency AND the practice manager (coordinator). The equipment
+        // register is the practice manager's document in every practice that has
+        // one — she is the person who keeps it, imports it, and gets asked when
+        // the autoclave stops. Gating it on OWNER_ROLES would lock out its
+        // primary user, the mistake Staff rota made and had to undo. The
+        // clinician and staff roles are denied by their own allow-lists, which
+        // run before this array.
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "The practice's equipment register — item, make, model, serial, site, room, supplier and service dates — imported from your existing spreadsheet or added by hand, with each machine's manual uploaded and made searchable. The equipment desk answers questions about registered equipment from those manuals, and hands over to the supplier's engineer when the manual's troubleshooting runs out. It never advises on defeating a safety interlock, on electrical work, or on running a machine past its service date. Switched off until turned on in System controls; the register stays editable either way.",
+      },
+      {
+        slug: "it-desk",
+        label: "IT desk",
+        icon: Laptop,
+        status: "live",
+        // Same reasoning as Equipment: front-desk IT problems land on the
+        // practice manager, so she gets the module. Setting the IT CONTACT is
+        // separately owner-only inside the module (enforced in the route with
+        // requireOwnerRole), because who the practice escalates to is a decision
+        // that changes what every member of staff is told to do.
+        roles: [...OWNER_ROLES, "client_coordinator"],
+        note: "A first responder for the practice's day-to-day IT: the internet and network, printers and scanning, being locked out, getting into Dentally, and the iPads and form kiosks. It walks staff through the practice's troubleshooting playbooks one step at a time and escalates to the practice's named IT contact when they run out. It never handles a password, never weakens antivirus, a firewall or two-factor sign-in, and has no way to reach or control any computer. Switched off until turned on in System controls; the playbooks stay readable either way.",
       },
       {
         slug: "daily-brief",
@@ -633,7 +712,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     // submissions is a reception task, and Patients is where a receptionist looks.
     // NHS declarations (fp17) sits alongside it for the same reason — reviewing
     // captured consent + exemption declarations is front-desk records work.
-    slugs: ["patients", "payments", "onboarding", "fp17", "recall", "reactivation", "treatment-coordinator", "no-show-defence", "reviews"],
+    slugs: ["patients", "payments", "onboarding", "fp17", "recall", "reactivation", "treatment-coordinator", "no-show-defence", "pre-visit-triage", "reviews"],
   },
   {
     key: "messages",
@@ -662,6 +741,8 @@ export const NAV_CATEGORIES: NavCategory[] = [
       "hours",
       "staff-hr",
       "compliance",
+      "equipment",
+      "it-desk",
       "reports",
       "co-pilot",
       "controls",
@@ -691,8 +772,16 @@ export const NAV_HIDDEN_SLUGS = new Set<string>(["daily-brief", "task-queue", "n
  * sends + sweep (enforced in the sweep + drain), but must NOT hide the page where the
  * owner reviews campaigns and turns it back on. The Launch action there is separately
  * gated in-page, so an off switch means "cannot launch", not "cannot reach".
+ *
+ * EQUIPMENT and IT-DESK are here for the same reason, and it is sharper for them.
+ * Both seed OFF, and each page is where the thing that has to exist BEFORE the
+ * agent is switched on gets loaded: the asset register and its manuals, and the
+ * practice's named IT contact. Hiding the page while the switch is off would
+ * leave an owner with a system they cannot prepare and therefore cannot sensibly
+ * turn on. Their switch halts the CHAT — enforced in the routes, which refuse
+ * before any model call is made — never the page.
  */
-export const NAV_SWITCH_EXEMPT_SLUGS = new Set<string>(["outreach"]);
+export const NAV_SWITCH_EXEMPT_SLUGS = new Set<string>(["outreach", "equipment", "it-desk"]);
 
 export interface ResolvedNavCategory {
   key: string;

@@ -1,4 +1,5 @@
 import { serviceClient } from "@/lib/supabase/server";
+import { isDryRun } from "@/lib/messaging/types";
 import {
   excludesFromTargeting,
   isPatientAdminStatus,
@@ -192,12 +193,42 @@ export function excludedTargetKey(siteId: string, patientId: string): string {
  * from targeting (inactive or do_not_contact), across ALL sites. Loaded ONCE per sweep
  * tick (the sweeps span sites), then checked per candidate with excludedTargetKey().
  *
- * Fail-open by design: a read error logs loudly and returns an empty set so a background
- * sweep keeps running. do_not_contact patients are still blocked at the send choke point
- * by their message_suppression rows (belt-and-braces); only an override-inactive patient
- * whose Dentally flag is still active could slip through during such a blip, which the
- * loud log surfaces. This mirrors getChannelPref's "read failed; ignore" posture.
+ * FAIL DIRECTION, AND IT CHANGED (ruling W1-B/2, 3 Sep 2026).
+ *
+ * It used to be fail-OPEN in every case: a read error logged loudly and returned an
+ * empty set, and the sweep drafted for everybody. The reasoning was that
+ * do_not_contact patients are blocked a second time at the send choke point by
+ * their message_suppression rows, so the only person who could slip through was an
+ * override-INACTIVE patient — someone a human deliberately took out of targeting.
+ * That is not a small residue. Nothing else protects them, and "we could not read
+ * the exclusion list, so we messaged everyone" is the wrong sentence to have to say
+ * about a patient who asked to be left alone.
+ *
+ * So: once messaging is LIVE an unreadable exclusion list is a REFUSAL, and this
+ * throws ExclusionsUnavailableError. Exclusions unknown means nobody may be
+ * drafted; the caller skips the tick and the next one retries. While
+ * MESSAGING_DRY_RUN is on it keeps the old behaviour — loud log, empty set — so
+ * local development against a partial database still works. That gives `inactive`
+ * exactly the protection `do_not_contact` already had from suppression.
+ *
+ * A skipped tick is a delay. A batch drafted against an unknown exclusion list is
+ * an incident.
  */
+export class ExclusionsUnavailableError extends Error {
+  constructor(readonly cause: unknown) {
+    super(
+      "the patient targeting-exclusion list could not be read, and messaging is live; " +
+        "nobody may be drafted this tick",
+    );
+    this.name = "ExclusionsUnavailableError";
+  }
+}
+
+/** Whether an unknown error is the exclusion refusal, for a caller's catch block. */
+export function isExclusionsUnavailable(err: unknown): err is ExclusionsUnavailableError {
+  return err instanceof ExclusionsUnavailableError;
+}
+
 export async function loadExcludedTargetKeys(): Promise<Set<string>> {
   try {
     const db = serviceClient();
@@ -214,7 +245,18 @@ export async function loadExcludedTargetKeys(): Promise<Set<string>> {
     }
     return set;
   } catch (err) {
-    console.error("[patient-status] loadExcludedTargetKeys failed; targeting proceeds without overrides this tick", err);
+    if (!isDryRun()) {
+      console.error(
+        "[patient-status] loadExcludedTargetKeys failed and messaging is LIVE; refusing the tick " +
+          "rather than drafting for patients who may be marked inactive or do-not-contact",
+        err,
+      );
+      throw new ExclusionsUnavailableError(err);
+    }
+    console.error(
+      "[patient-status] loadExcludedTargetKeys failed; dry-run, so targeting proceeds without overrides this tick",
+      err,
+    );
     return new Set();
   }
 }

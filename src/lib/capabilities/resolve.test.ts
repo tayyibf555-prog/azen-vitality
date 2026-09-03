@@ -282,13 +282,33 @@ describe("8. anti-vacuity — the catalog is real", () => {
     }
   });
 
-  it("the universal keys are named, and there are only two", () => {
+  it("the universal keys are named, and there are only three", () => {
     // A capability every role holds decides nothing on its own, so there had
-    // better be a reason. There are exactly two, and both are self-service:
-    // everybody who works here may ask for time off and may clock themselves in.
-    // (Both remain useful as REVOKES — an owner can take either away from one
-    // person.) A third has to be argued for HERE.
+    // better be a reason. There are exactly three, and all three are self-service
+    // or scope-decided-elsewhere. A fourth has to be argued for HERE.
+    //
+    //   people.absence.request  everybody who works here may ask for time off,
+    //   people.clock.self       and may clock themselves in.
+    //   system.copilot.ask      everybody may ASK the co-pilot (Dental OS W1-E, on
+    //                           the coordinator's ruling of 3 Sep 2026). This one
+    //                           is the reason the sentence above says "decides
+    //                           nothing on its own" and means it: holding it gets
+    //                           you a turn, and `copilotAccessForRole` decides
+    //                           per-turn, from the SESSION, what that turn may
+    //                           reach — six read tools and no act for a clinician,
+    //                           ONE tool about themselves for a member of staff.
+    //                           A universal key whose ANSWER is role-scoped is a
+    //                           different animal from a universal key that grants
+    //                           a universal act, and the difference is enforced in
+    //                           src/lib/copilot/clearance.ts, not here.
+    //
+    // All three remain useful as REVOKES — an owner can take any of them away
+    // from one named person on People & logins.
     const universal = CAPABILITY_KEYS.filter((k) => ALL_ROLES.every((r) => ROLE_DEFAULTS[r].has(k)));
-    expect(universal.sort()).toEqual(["people.absence.request", "people.clock.self"]);
+    expect(universal.sort()).toEqual([
+      "people.absence.request",
+      "people.clock.self",
+      "system.copilot.ask",
+    ]);
   });
 });

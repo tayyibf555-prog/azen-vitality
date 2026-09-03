@@ -4,6 +4,8 @@
 
 import { draftSlotOffer } from "./draft";
 import { pickCandidate } from "./waitlist";
+import { getSite } from "@/lib/mock/clients";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
 import type { FreedSlot } from "./types";
 import {
   approveTouch,
@@ -35,6 +37,43 @@ export async function offerSlotToNextCandidate(
   slot: FreedSlot,
   now: Date = new Date(),
 ): Promise<{ waitlistId: string } | null> {
+  // ===========================================================================
+  // THE KILL SWITCH LIVES HERE, NOT IN THE CALLERS, AND THAT IS THE FIX.
+  //
+  // This function is the ONLY thing in the platform that queues a waitlist slot
+  // offer, and the owner's own words for the no-show switch are "Appointment
+  // confirmations, reminders and waitlist fill stop." It had four call sites and
+  // the guard was written three times:
+  //
+  //   src/app/api/noshow/sweep/route.ts     isSystemEnabled, top of the run
+  //   src/app/api/noshow/[action]/route.ts  systemOff(), per request
+  //   src/lib/noshow/inbound.ts             gated by the inbound webhook
+  //   src/app/api/sync/noshow/route.ts      NOTHING. No toggle read in the file.
+  //
+  // The fourth is not a hypothetical. The Dentally reconciliation pass calls this
+  // for every appointment that was cancelled at the desk, so with the system
+  // switched OFF it still drafted an offer, wrote a noshow_touch and left a real
+  // patient SMS sitting in noshow_outbox. The shared drain would not send it while
+  // the switch stayed off — but rows survive for MAX_ROW_AGE_MS (48 hours), so an
+  // owner who switched the system off and back on within two days got a burst of
+  // offers for slots they had already dealt with by hand.
+  //
+  // A fourth copy of the guard would have closed today's hole and left the shape
+  // intact for the fifth caller. The guard belongs to the SEND, so it lives with
+  // the send. FAIL DIRECTION: isSystemEnabledForSend, i.e. fail-open only while
+  // MESSAGING_DRY_RUN is on and fail-CLOSED once messaging is live — the same
+  // posture as every other send choke point. A slot that goes unoffered during a
+  // toggle-table blip is re-offered by the next sweep tick; a text sent for a
+  // system the owner switched off cannot be recalled.
+  // ===========================================================================
+  const clientId = getSite(slot.siteId)?.clientId;
+  if (clientId && !(await isSystemEnabledForSend(clientId, "no-show-defence"))) {
+    console.warn(
+      `[noshow] waitlist fill skipped for site ${slot.siteId}: the no-show defence system is switched off`,
+    );
+    return null;
+  }
+
   // Never offer a slot that no longer exists in time. A cancellation can arrive
   // after the appointment has already started, and an offer's TTL can outlive a
   // near-term slot, so both the inbound and sweep re-offer paths can reach here

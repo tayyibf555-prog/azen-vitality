@@ -14,6 +14,8 @@ import { OutreachCampaignsView } from "@/components/client/outreach/campaigns-vi
 import { RoiView } from "@/components/client/roi/roi-view";
 import { ReportsView } from "@/components/client/reports/reports-view";
 import { ComplianceView } from "@/components/client/compliance/compliance-view";
+import { EquipmentView } from "@/components/client/equipment/equipment-view";
+import { ItDeskView } from "@/components/client/itdesk/it-desk-view";
 import { RotaView } from "@/components/client/rota/rota-view";
 import { AbsenceView } from "@/components/client/absence/absence-view";
 import { StaffCheckInView } from "@/components/client/staff-check-in/staff-check-in-view";
@@ -22,6 +24,7 @@ import { HoursView } from "@/components/client/hr/hours-view";
 import { MyWorkView } from "@/components/client/my-work/my-work-view";
 import { PeopleLogins } from "@/components/client/permissions/people-logins";
 import { PermissionsView } from "@/components/client/permissions/permissions-view";
+import { PreVisitTriageView } from "@/components/client/previsit/previsit-view";
 import { ReviewsView } from "@/components/client/reviews/reviews-view";
 import { UspsView } from "@/components/client/usps/usps-view";
 import { SpeedToLeadView } from "@/components/client/speed-to-lead/speed-to-lead-view";
@@ -32,6 +35,7 @@ import { DailyBriefView } from "@/components/client/daily-brief/daily-brief-view
 import { AgentView } from "@/components/client/agent/agent-view";
 import { InboxView } from "@/components/client/inbox/inbox-view";
 import { CopilotView } from "@/components/client/copilot/copilot-view";
+import { AuthoritiesPanel } from "@/components/client/copilot/authorities-panel";
 import { PatientsView } from "@/components/client/patients/patients-view";
 import { CalendarView } from "@/components/client/calendar/calendar-view";
 import { PaymentsView } from "@/components/client/payments/payments-view";
@@ -106,6 +110,14 @@ export default async function OwnerModulePage({
     return <ComplianceView clientSlug={client} />;
   }
 
+  if (module === "equipment") {
+    return <EquipmentView clientSlug={client} />;
+  }
+
+  if (module === "it-desk") {
+    return <ItDeskView clientSlug={client} />;
+  }
+
   if (module === "rota") {
     return <RotaView clientSlug={client} />;
   }
@@ -164,6 +176,14 @@ export default async function OwnerModulePage({
     return <ReviewsView clientSlug={client} />;
   }
 
+  // Pre-visit questions: the question banks, the treatment-interest lists and the
+  // implant-interest list. The view resolves the session itself to decide whether
+  // to render the OWNER-only bank editor, so the same component serves the owner
+  // shell and the /c shell without a second copy.
+  if (module === "pre-visit-triage") {
+    return <PreVisitTriageView clientSlug={client} />;
+  }
+
   if (module === "speed-to-lead") {
     return <SpeedToLeadView clientSlug={client} />;
   }
@@ -200,7 +220,30 @@ export default async function OwnerModulePage({
   }
 
   if (module === "co-pilot") {
-    return <CopilotView clientSlug={client} />;
+    // BOTH TREES OR NEITHER. The owner-route module-coverage rule is that a
+    // module wired into /c and not into this if-chain renders a placeholder here;
+    // the same trap applies one level down, to what a module's page CONTAINS. The
+    // /c page grew the approved-authorities panel and this arm did not, so the
+    // agency's own view of the co-pilot silently lost the control that decides
+    // which outside sources every answer may lean on.
+    //
+    // NO ROLE CHECK HERE, and that is not an omission: this whole tree is
+    // guarded at the layout by `guardPage({ roles: ["agency_admin",
+    // "client_owner"] })`, so a practice manager cannot reach this file at all.
+    // The /c page needs its own check because `requireModuleAccess("co-pilot")`
+    // admits her there. Either way the real lock is the route
+    // (/api/authorities/[action] re-derives the role from the session on every
+    // call); these lines decide what is drawn.
+    return (
+      <div className="flex flex-col gap-3 lg:h-full lg:min-h-0">
+        <div className="min-h-0 flex-1">
+          <CopilotView clientSlug={client} />
+        </div>
+        <div className="shrink-0">
+          <AuthoritiesPanel clientSlug={client} />
+        </div>
+      </div>
+    );
   }
 
   if (module === "practice-brain") {

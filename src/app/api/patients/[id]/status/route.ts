@@ -56,6 +56,9 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       status,
       reason,
       actorEmail: gate.auth?.email ?? null,
+      // The OPAQUE id, for the Dentally sync ledger, which holds no personal
+      // data — staff included. The email above is for the practice's own audit.
+      actorId: gate.auth?.id ?? null,
     });
     void recordUsage("patients", "status_change", {
       clientId: getSite(gate.siteId)?.clientId ?? "unknown",

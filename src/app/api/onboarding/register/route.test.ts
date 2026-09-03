@@ -42,6 +42,22 @@ vi.mock("@/lib/dentally/read", () => ({
 vi.mock("@/lib/dentally/write", () => ({
   dentallyAgentClient: () => ({ createPatient: (...a: unknown[]) => h.createPatient(...a) }),
   isDentallyWriteEnabled: () => h.isDentallyWriteEnabled(),
+  // Added when the WriteGate landed. The gate resolves the target host through
+  // the same predicate the client factory uses, so a partial mock of this module
+  // has to carry it — and `true` is the posture these tests are ABOUT: a
+  // production deployment whose base URL is the live practice book. That is
+  // exactly when "writes are off" has to mean nothing happens at all, rather
+  // than a write landing in a local mock.
+  targetsRealDentally: () => true,
+}));
+// The WriteGate consults the owner's kill switch for the module that is writing
+// ('onboarding' here). Both readers are stubbed ON: this file's subject is the
+// registration path, and the switch has its own tests in
+// src/lib/systems/repository.test.ts and src/lib/dentally/write-gate.test.ts.
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemExplicitlyDisabled: async () => false,
+  isSystemEnabled: async () => true,
+  isSystemEnabledStrict: async () => true,
 }));
 
 // The PER-PERSON gate, faked at the seam. Its own behaviour — the 403, and the

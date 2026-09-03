@@ -10,7 +10,11 @@ vi.mock("@/lib/cron-lock", () => ({
   acquireCronLock: vi.fn(async () => true),
   releaseCronLock: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: vi.fn(async () => true) }));
+vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: vi.fn(async () => true) ,
+  // Ruling W1-B/1: the sweep now reads isSystemEnabledForSend (fail-closed once
+  // messaging is live), and liveSwitch re-reads it every ten rows. Same verdict as
+  // isSystemEnabled above, so these cases keep meaning exactly what they meant.
+  isSystemEnabledForSend: vi.fn(async () => true)}));
 vi.mock("@/lib/reactivation/draft", () => ({
   draftReactivation: vi.fn(async () => ({ body: "Hello from Vitality", rationale: "r" })),
 }));

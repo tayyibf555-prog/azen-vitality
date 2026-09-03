@@ -149,6 +149,52 @@ export async function isSystemEnabledStrict(clientId: string, slug: string): Pro
 }
 
 /**
+ * Is there a row that EXPLICITLY disables this system? Absence is NOT a
+ * disablement here, whatever the slug's catalog default says.
+ *
+ * A THIRD fail-mode in a file that documents two, and it exists for exactly one
+ * switch: the master Dentally write-back lever ('dentally-write-back').
+ *
+ * That switch is `defaultEnabled: false`, which is right and non-negotiable for a
+ * deployment that is ARMED for real writes — nobody's missing row may be the
+ * reason 51,000 live patient records become writable. But the same rule read on a
+ * developer's machine, or on any deployment with no write key, would disable a
+ * switch that is guarding nothing: the environment is not armed, so no write can
+ * reach a real book regardless, and reading the absent row as OFF would simply
+ * stop the local mock working for everybody.
+ *
+ * So the gate asks a DIFFERENT question depending on what is at stake. While
+ * writes are only simulated it asks this one — "has somebody actually turned it
+ * off?" — and while they are LIVE it asks isSystemEnabledStrict, where a missing
+ * row and an unreadable table both mean off. The severity of the answer matches
+ * the severity of the consequence, which is the whole reason this is a separate
+ * function rather than a flag on an existing one.
+ *
+ * Never throws: a read error means "no explicit disablement seen", which is the
+ * fail-OPEN direction, and it is only ever consulted where nothing can reach a
+ * real patient record anyway.
+ */
+export async function isSystemExplicitlyDisabled(clientId: string, slug: string): Promise<boolean> {
+  try {
+    const { data, error } = await serviceClient()
+      .from(TABLE)
+      .select("enabled")
+      .eq("client_id", clientId)
+      .eq("module_slug", slug)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? !data.enabled : false; // no row => nobody has turned it off
+  } catch (err) {
+    console.error(
+      `[systems] isSystemExplicitlyDisabled(${clientId}, ${slug}) failed; treating it as NOT explicitly off ` +
+        "(only consulted where writes are simulated, so nothing can reach a real record)",
+      err,
+    );
+    return false;
+  }
+}
+
+/**
  * The set of DISABLED system slugs for a client, in one query. Used by the drain
  * (and any batch consumer) so it can skip disabled systems without a read per
  * source. Never throws: on error returns an empty set (all enabled).

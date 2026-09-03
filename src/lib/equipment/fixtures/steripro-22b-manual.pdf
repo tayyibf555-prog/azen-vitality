@@ -1,0 +1,103 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Length 643 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+56 720 Td
+(SteriPro 22B Vacuum Autoclave) Tj
+T* (Operator Manual - Model SP-22B) Tj
+T* () Tj
+T* (1. INTENDED USE) Tj
+T* (The SteriPro 22B is a class B vacuum steam steriliser for dental) Tj
+T* (instruments. It has a 22 litre chamber and four validated cycles.) Tj
+T* () Tj
+T* (2. SAFETY) Tj
+T* (WARNING: The chamber door interlock must never be defeated. The) Tj
+T* (chamber is a pressure vessel and opening it under pressure will) Tj
+T* (cause serious scalding injury.) Tj
+T* (WARNING: Isolate the unit at the wall before removing any panel.) Tj
+T* (Servicing behind the rear panel is for a qualified engineer only.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 692 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+56 720 Td
+(3. DAILY OPERATION) Tj
+T* (3.1 Fill the clean water reservoir to the MAX line with distilled) Tj
+T* (water only. Tap water will scale the heater and void the warranty.) Tj
+T* (3.2 Empty the waste reservoir at the start of every session.) Tj
+T* (3.3 Load instruments in the trays supplied, hinged instruments open,) Tj
+T* (with a 10 mm gap between pouches so steam can circulate.) Tj
+T* (3.4 Select the cycle: 134 C Universal for wrapped loads, 134 C Fast) Tj
+T* (for unwrapped solid instruments, 121 C Delicate for handpieces.) Tj
+T* (3.5 Confirm the printout shows the plateau held for the full) Tj
+T* (sterilisation hold time before releasing the load.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 841 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+56 720 Td
+(4. TROUBLESHOOTING) Tj
+T* (E01 - Water low. Refill the clean reservoir and restart the cycle.) Tj
+T* (E02 - Waste full. Drain the waste reservoir using the front tap.) Tj
+T* (E04 - Door not sealed. Reseat the load, check nothing fouls the) Tj
+T* (gasket, wipe the gasket with a damp lint free cloth and retry.) Tj
+T* (E07 - Vacuum test failed. Run the leak test with an empty chamber) Tj
+T* (after a cold start. If it fails twice, call the service engineer.) Tj
+T* (E11 - Temperature sensor fault. Stop using the unit and call the) Tj
+T* (service engineer. Do not attempt to recalibrate the sensor.) Tj
+T* () Tj
+T* (5. SERVICE) Tj
+T* (Annual pressure vessel inspection and a service every 12 months or) Tj
+T* (1000 cycles, whichever is sooner. Record every service in the) Tj
+T* (practice equipment log.) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000917 00000 n 
+0000001043 00000 n 
+0000001785 00000 n 
+0000001911 00000 n 
+0000002802 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+2928
+%%EOF

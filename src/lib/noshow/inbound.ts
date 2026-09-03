@@ -22,6 +22,7 @@ import {
   updateCadence,
 } from "./repository";
 import { offerSlotToNextCandidate } from "./fill";
+import { dentallyWrite } from "@/lib/dentally/write-gate";
 
 // Anchored to the start so "no problem" / "not sure" do not read as a cancel.
 function isYes(body: string): boolean {
@@ -212,7 +213,17 @@ export async function handleNoshowInbound(input: {
       let dentallyCancelled = false;
       if (target && writesEnabled) {
         try {
-          await input.dentally.cancelAppointment(target.appointmentId);
+          await dentallyWrite.cancelAppointment(
+            {
+              source: "noshow",
+              siteId: target.siteId,
+              actor: "agent:no-show-defence",
+              patientId: target.dentallyPatientId,
+              // The webhook's own client, shared with this handler's reads.
+              client: input.dentally,
+            },
+            target.appointmentId,
+          );
           dentallyCancelled = true;
         } catch {
           // Fall through to the reception handoff reply below.

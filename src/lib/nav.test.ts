@@ -8,6 +8,8 @@ import {
   NAV_SWITCH_EXEMPT_SLUGS,
   EXTRA_OWNER_ONLY_SLUGS,
   categoriesForRole,
+  CLINICIAN_SLUGS,
+  STAFF_SLUGS,
 } from "./nav";
 
 // "co-pilot" LEFT this list in the manager-co-pilot lane (Wave 3 #5): the module
@@ -98,7 +100,7 @@ describe("sidebar categories (rail + panel nav)", () => {
     for (const c of cats) for (const i of c.items) expect(i.label.length).toBeGreaterThan(0);
   });
 
-  it("gives the coordinator exactly seven Operations modules: the workforce block, Getting started and the scoped co-pilot", () => {
+  it("gives the coordinator exactly nine Operations modules: the workforce block, the two desks, Getting started and the scoped co-pilot", () => {
     const cats = categoriesForRole("client_coordinator");
     const keys = cats.map((c) => c.key);
     // The everyday categories survive.
@@ -136,6 +138,19 @@ describe("sidebar categories (rail + panel nav)", () => {
     //               strips money out of the patient record. The page and the API
     //               route are shared; what they will DO for her is not.
     //
+    // ADDED, W1-D, two modules:
+    //
+    //   "equipment" the asset register and the equipment desk. The register is
+    //               the practice manager's document in every practice that keeps
+    //               one — she imports it, she keeps it, and she is who gets asked
+    //               when the autoclave stops.
+    //   "it-desk"   the front-desk IT first responder. The same reasoning: the
+    //               printer, the internet and the locked-out login land on her.
+    //               SETTING the escalation contact stays owner-only, inside the
+    //               module and at its route (requireOwnerRole), because who the
+    //               practice escalates to changes what every member of staff is
+    //               told to do.
+    //
     // Nothing else moved: everything still absent from this list (compliance,
     // reports, controls, permissions, settings) remains owner-only, and the
     // assertion is still an exact toEqual in NAV_CATEGORIES order, so the NEXT
@@ -147,6 +162,8 @@ describe("sidebar categories (rail + panel nav)", () => {
       "staff-check-in",
       "hours",
       "staff-hr",
+      "equipment",
+      "it-desk",
       "co-pilot",
     ]);
   });
@@ -227,22 +244,26 @@ describe("canRoleAccessModule", () => {
     }
   });
 
-  it("co-pilot is shared with the practice manager, and with nobody else new", () => {
-    // THE MODULE-LEVEL HALF of Wave 3 #5, stated exactly. Reaching the page and the
-    // API route is now open to the coordinator; what the co-pilot DOES for her is
-    // decided per-tool in src/lib/copilot/scope.ts, which has its own leak battery.
-    expect(canRoleAccessModule("client_owner", "co-pilot")).toBe(true);
-    expect(canRoleAccessModule("agency_admin", "co-pilot")).toBe(true);
-    expect(canRoleAccessModule("client_coordinator", "co-pilot")).toBe(true);
-    // And the two allow-list roles are untouched: their branches run FIRST in both
-    // predicates and neither allow-list contains "co-pilot".
-    expect(canRoleAccessModule("client_clinician", "co-pilot")).toBe(false);
-    expect(canRoleAccessModule("client_staff", "co-pilot")).toBe(false);
-    // The grant is an explicit `roles` array, not the allow-by-default fallthrough:
-    // a slug with no array is open to all three non-clinician roles by accident, and
-    // this one is open on purpose.
+  it("co-pilot is reachable by every clearance, by TWO different mechanisms", () => {
+    // THE MODULE-LEVEL HALF of the Dental OS mandate that the co-pilot serves every
+    // staff clearance (coordinator's written ruling, 3 Sep 2026). Reaching the page
+    // and the API route is open to all five; what the co-pilot DOES for each is
+    // decided per-turn from the SESSION in src/lib/copilot/clearance.ts, which has
+    // its own enumeration battery and its own non-widening snapshot.
+    for (const role of ["client_owner", "agency_admin", "client_coordinator", "client_clinician", "client_staff"] as const) {
+      expect(canRoleAccessModule(role, "co-pilot"), role).toBe(true);
+    }
+    // AND THE TWO MECHANISMS ARE NOT THE SAME MECHANISM, which is the thing worth
+    // pinning. The three open roles are admitted by the item's explicit `roles`
+    // array; the two allow-list roles are admitted by their OWN allow-lists, whose
+    // branches run FIRST in both predicates and return. So the array stays exactly
+    // as the manager lane left it — widening it would be a second, redundant grant
+    // and would quietly change what "this array is the grant" means for every other
+    // module that carries one.
     const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "co-pilot");
     expect(item?.roles).toEqual(["agency_admin", "client_owner", "client_coordinator"]);
+    expect(CLINICIAN_SLUGS.has("co-pilot")).toBe(true);
+    expect(STAFF_SLUGS.has("co-pilot")).toBe(true);
   });
 
   it("allows shared modules for every role", () => {

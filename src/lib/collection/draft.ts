@@ -45,6 +45,7 @@ import { checkAgentReply } from "@/lib/agent/guardrail";
 import { consumeBudget } from "@/lib/rate-budget";
 import { penceToPounds, type VerifiedBalance } from "./balance";
 import type { CollectionStep, TouchChannel } from "./types";
+import { sanitiseFreeText as sharedSanitiseFreeText } from "@/lib/agent/free-text";
 
 // ---------------------------------------------------------------------------
 // Fact projection.
@@ -85,14 +86,10 @@ export type FactsProjection =
  * PURE. An ordinary name passes through unchanged.
  */
 export function sanitiseFreeText(raw: string, maxChars: number): string {
-  let s = (raw ?? "")
-    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const cut = s.search(/[.!?:;]\s/);
-  if (cut >= 0) s = s.slice(0, cut).trim();
-  if (s.length > maxChars) s = s.slice(0, maxChars).trim();
-  return s;
+  // Re-exported from the shared implementation (src/lib/agent/free-text.ts) so
+  // this module's callers and its own tests keep their import, while there is only
+  // one copy of the algorithm in the tree. Behaviour is unchanged.
+  return sharedSanitiseFreeText(raw, maxChars);
 }
 
 const MAX_NAME_CHARS = 80;

@@ -8,7 +8,8 @@ import {
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
-import type { CopilotAccess } from "@/lib/copilot/scope";
+import type { CopilotAccess, CopilotToolName } from "@/lib/copilot/scope";
+import { catalogAllows } from "@/lib/copilot/clearance";
 
 // ---------------------------------------------------------------------------
 // ONE TRANSPORT, TWO SURFACES.
@@ -59,7 +60,7 @@ export interface CopilotStarter {
    * have rendered for her as buttons that fetch a refusal. Worse than useless: a
    * dead button is also an advertisement for what she cannot have.
    */
-  minAccess: CopilotAccess;
+  needsTool: CopilotToolName;
 }
 
 export const COPILOT_STARTERS: CopilotStarter[] = [
@@ -71,8 +72,7 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: CalendarDays,
     popupTint: "bg-blue-dark/10 text-blue-dark",
     pageTint: "bg-tint-blue text-status-blue ring-1 ring-tint-blue-line",
-    // The diary. Everybody who has the co-pilot at all has `appointments`.
-    minAccess: "manager",
+    needsTool: "appointments",
   },
   {
     id: "outstanding",
@@ -82,8 +82,7 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: PoundSterling,
     popupTint: "bg-emerald-500/10 text-emerald-600",
     pageTint: "bg-tint-green text-status-green ring-1 ring-tint-green-line",
-    // `outstanding_balances`. Money, so the owner only.
-    minAccess: "full",
+    needsTool: "outstanding_balances",
   },
   {
     id: "noshow",
@@ -93,8 +92,7 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: AlertTriangle,
     popupTint: "bg-amber-500/10 text-amber-600",
     pageTint: "bg-tint-amber text-status-amber ring-1 ring-tint-amber-line",
-    // Answered from the diary the manager can already read. No money in it.
-    minAccess: "manager",
+    needsTool: "appointments",
   },
   {
     id: "overview",
@@ -104,28 +102,31 @@ export const COPILOT_STARTERS: CopilotStarter[] = [
     icon: TrendingUp,
     popupTint: "bg-violet-500/10 text-violet-600",
     pageTint: "bg-tint-royal text-status-royal ring-1 ring-tint-royal-line",
-    // `practice_overview`, whose own hint says "money owed and recovery".
-    minAccess: "full",
+    needsTool: "practice_overview",
   },
 ];
 
 /**
  * The starters a given co-pilot can actually answer.
  *
- * Defaults to the owner's, so every existing caller and every existing test
- * renders the same four buttons it always did.
+ * DERIVED FROM THE CLEARANCE MODEL, not from a hand-kept `minAccess` rank. Each
+ * starter names the TOOL it runs and is offered only when that access level may
+ * actually run it, so the buttons and the server cannot drift: a starter whose
+ * tool is later moved to a narrower domain stops being offered on the same
+ * commit, with no second list to remember.
  *
- * "none" takes the NARROWER branch rather than a third one, exactly as
- * `projectPatientRecord` does and for the same reason. A role with no co-pilot
- * never reaches the page (requireModuleAccess 404s it) and gets a 403 from the
- * route on any question, so the only way here is the Cmd-J panel, which the shell
- * mounts for every role. Falling to the smaller list there is the harmless
- * direction; falling to the owner's would be the one that shows a clinician four
- * buttons describing the practice's money.
+ * The rank it replaces was not merely tidier-in-the-abstract. "Everything except
+ * full" was the right answer for exactly two levels, and it silently became the
+ * WRONG one the day the model grew a `staff` level: a receptionist would have
+ * been shown "What's in today's diary?", a button whose tool she does not hold,
+ * on the one surface she can reach (the Cmd-J panel, which the shell mounts for
+ * every role). Now she is shown none, because she holds none.
+ *
+ * Defaults to the owner's, so every existing caller renders the four it always
+ * did — `catalogAllows("full", ...)` is true by construction.
  */
 export function copilotStartersFor(access: CopilotAccess = "full"): CopilotStarter[] {
-  if (access === "full") return COPILOT_STARTERS;
-  return COPILOT_STARTERS.filter((s) => s.minAccess !== "full");
+  return COPILOT_STARTERS.filter((s) => catalogAllows(access, s.needsTool));
 }
 
 /**

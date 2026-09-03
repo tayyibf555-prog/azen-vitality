@@ -145,6 +145,11 @@ const DESTRUCTIVE_EXEMPT: Record<string, DestructiveExemption> = {
   "onboarding/submit": { kind: "public", reason: "public new-patient onboarding form submit" },
   "onboarding/upload": { kind: "public", reason: "public onboarding document upload" },
   "medical-history/public-submit": { kind: "public", reason: "patient-facing medical-history submit, token-verified" },
+  "previsit/submit": {
+    kind: "public",
+    reason:
+      "patient-facing pre-visit questionnaire submit. No session exists (a patient with a link is the caller), so the authorisation is a BEARER: a 22-character CSPRNG id stored under a unique index on the one appointment it belongs to, without which a caller cannot address any row at all. Everything that decides what is written comes off that row and never off the body — the site, the patient, and the FORK that decides which question bank applies, which is the contractual guard as well as the IDOR one. Answers are accepted only for keys the SAME projection the page rendered from produced, so a symptom key posted against a short-bank target is dropped rather than stored. It is single-use (a conditional claim, so a double submit writes nothing twice), and bounded by a payload cap, a per-IP api_budget ceiling, a per-TOKEN api_budget ceiling and a strict kill-switch check",
+  },
   "fp17/submit": { kind: "public", reason: "public FP17/PR declaration submit, token-bound + budget-guarded" },
   "smile-assessment/next": { kind: "public", reason: "public quiz: serves the next question" },
   "smile-assessment/submit": { kind: "public", reason: "public quiz submit, signed submit token" },
@@ -173,6 +178,8 @@ const DESTRUCTIVE_EXEMPT: Record<string, DestructiveExemption> = {
   "noshow/sweep": { kind: "cron", reason: "the no-show defence sweep, run by the scheduler" },
   "outreach/sweep": { kind: "cron", reason: "the segment-outreach sweep, run by the scheduler" },
   "postop/sweep": { kind: "cron", reason: "the post-op check-in sweep, run by the scheduler; it flags procedures and writes DRAFTS, never an outbox row" },
+  "previsit/sweep": { kind: "cron", reason: "the pre-visit questionnaire sweep, run by the scheduler; it flags upcoming appointments and queues one fixed-template link each, and every body it queues has passed the module's own compliance scan first" },
+  "previsit/mining-sweep": { kind: "cron", reason: "the implant-interest mining pass, run by the scheduler; read-only against Dentally, bounded and resumable, and it writes only its own candidate + coverage tables, never a patient record, a message or an outbox row" },
   "collection/sweep": { kind: "cron", reason: "the outstanding-balance sweep, run by the scheduler; it verifies balances and writes DRAFTS, never an outbox row" },
   "reactivation/sweep": { kind: "cron", reason: "the reactivation sweep, run by the scheduler" },
   "recall/sweep": { kind: "cron", reason: "the recall concierge sweep, run by the scheduler" },

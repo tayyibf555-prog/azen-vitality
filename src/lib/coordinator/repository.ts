@@ -352,21 +352,6 @@ export async function approveTouch(
   return data ? rowToTouch(data as TouchRow) : null;
 }
 
-export async function markTouchSent(touchId: string): Promise<void> {
-  const db = serviceClient();
-  const nowIso = new Date().toISOString();
-  const { error: touchError } = await db
-    .from("coordinator_touch")
-    .update({ status: "sent", sent_at: nowIso })
-    .eq("id", touchId);
-  if (touchError) throw touchError;
-  const { error: outboxError } = await db
-    .from("outbox")
-    .update({ status: "sent", provider: "stub", sent_at: nowIso })
-    .eq("touch_id", touchId);
-  if (outboxError) throw outboxError;
-}
-
 // ---------------------------------------------------------------------------
 // Outbox.
 // ---------------------------------------------------------------------------

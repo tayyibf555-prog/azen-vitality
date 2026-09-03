@@ -513,21 +513,6 @@ export async function hasPendingOutboxForTouch(touchId: string): Promise<boolean
   return (data?.length ?? 0) > 0;
 }
 
-export async function markTouchSent(touchId: string): Promise<void> {
-  const db = serviceClient();
-  const nowIso = new Date().toISOString();
-  const { error: tErr } = await db
-    .from("recall_touch")
-    .update({ status: "sent", sent_at: nowIso })
-    .eq("id", touchId);
-  if (tErr) throw tErr;
-  const { error: oErr } = await db
-    .from("recall_outbox")
-    .update({ status: "sent", provider: "stub", sent_at: nowIso })
-    .eq("touch_id", touchId);
-  if (oErr) throw oErr;
-}
-
 export interface QueuedOutbox {
   id: string;
   touchId: string;

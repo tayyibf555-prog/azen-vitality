@@ -98,7 +98,25 @@ const PAY_ACCESS: readonly Role[] = ["agency_admin", "client_owner"];
  * nothing to do with it — and the first time the two lists diverge the comment
  * would be a lie.
  */
-const COPILOT_ACCESS: readonly Role[] = ["agency_admin", "client_owner", "client_coordinator"];
+const COPILOT_ACCESS: readonly Role[] = [
+  "agency_admin",
+  "client_owner",
+  "client_coordinator",
+  // WIDENED (Dental OS, W1-E, on the coordinator's written ruling of 3 Sep 2026).
+  //
+  // The reason PAY_ACCESS gives for being its own list is exactly why this one
+  // could move without dragging anything with it: holding `system.copilot.ask`
+  // means "may ASK the co-pilot", and it has never meant "may read what the owner
+  // reads". `copilotAccessForRole` (src/lib/copilot/scope.ts) hands each of these
+  // two a catalog of its own — the clinician six read tools at practice-brain tier
+  // 1 with no act domain, the staff member ONE tool about themselves — and the
+  // dispatch re-derives that from the session on every call.
+  //
+  // So this is a widening of WHO MAY ASK, and deliberately not of what any answer
+  // contains. Named in non-widening.test.ts with this reason.
+  "client_clinician",
+  "client_staff",
+];
 
 /** The roles that reach a module today, spelled out per slug this file depends on. */
 const MODULE_HOLDERS: Record<string, readonly Role[]> = {

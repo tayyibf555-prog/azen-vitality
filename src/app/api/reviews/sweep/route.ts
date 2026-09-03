@@ -1,7 +1,8 @@
 import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import { liveSwitch } from "@/lib/systems/live-switch";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { getClient, getSite } from "@/lib/mock/clients";
 import { draftReviewRequest } from "@/lib/reviews/draft";
@@ -40,7 +41,11 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
   if (unauth) return unauth;
 
   // Owner kill switch: if the reviews system is toggled off, skip this sweep.
-  if (!(await isSystemEnabled("vitality", "reviews"))) {
+  // FAIL-CLOSED WHEN LIVE (ruling W1-B/1, 3 Sep 2026). Was isSystemEnabled, which
+  // resolves a toggle-read ERROR to "enabled" for a default-ON system and then let
+  // the whole batch run. The ForSend variant keeps that behaviour under dry-run and
+  // fails CLOSED once messaging is live.
+  if (!(await isSystemEnabledForSend("vitality", "reviews"))) {
     return Response.json({ ok: true, skipped: "system off" });
   }
 
@@ -65,7 +70,11 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     let sent = 0;
     let suppressed = 0;
 
+    // Re-read the switch every ten rows for the rest of the run (ruling W1-B/5).
+    const gate = liveSwitch("vitality", "reviews");
+
     for (const req of due) {
+      if (!(await gate.stillOn())) break;
       // Re-check the opt-out at send time: a patient may have replied STOP between
       // attendance and the scheduled send.
       if (await isSuppressed(req.siteId, req.channel, patientRef(req))) {

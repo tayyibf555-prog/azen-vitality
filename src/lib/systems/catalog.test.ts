@@ -54,6 +54,14 @@ const HEADLESS_SYSTEM_SLUGS = new Set([
   // The alerts render inside Notifications, which is a passive surface with no
   // switch of its own, so the alerting system has no nav slug either.
   "anomaly-alerts",
+  // "dentally-write-back" is headless because it is not a module at all: it is
+  // the MASTER lever over what every other module writes back to Dentally. There
+  // is no page to hide — the modules it governs keep their own pages and keep
+  // working — so it has no nav slug, and its switch lives in the systems control
+  // panel beside the modules it sits above. What it halts is visible on the
+  // Dentally sync screen (/c/<client>/controls/sync), which lists every write it
+  // held back.
+  "dentally-write-back",
 ]);
 
 /**

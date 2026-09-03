@@ -39,6 +39,13 @@ vi.mock("@/lib/dentally/write", async (importOriginal) => {
     // what this test is checking.
     buildManualBookingPayload: actual.buildManualBookingPayload,
     isDentallyWriteEnabled: () => h.writeEnabled,
+    // Added when the WriteGate landed. The gate resolves the target host through
+    // the same predicate the client factory uses, so a partial mock of this module
+    // has to carry it — and `true` is the posture these tests are ABOUT: a
+    // production deployment whose base URL is the live practice book. That is
+    // exactly when "writes are off" has to mean nothing happens at all, rather
+    // than a write landing in a local mock.
+    targetsRealDentally: () => true,
     dentallyAgentClient: () => ({
       cancelAppointment: (...a: unknown[]) => h.cancelAppointment(...a),
       createAppointment: (...a: unknown[]) => h.createAppointment(...a),
@@ -78,7 +85,12 @@ vi.mock("@/lib/auth/capability-guard", () => ({
   hasCapability: async () => true,
 }));
 
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => true }));
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemExplicitlyDisabled: async () => false,
+  isSystemEnabled: async () => true,
+  // The WriteGate reads the STRICT one once writes are live.
+  isSystemEnabledStrict: async () => true,
+}));
 
 import { POST } from "./route";
 
