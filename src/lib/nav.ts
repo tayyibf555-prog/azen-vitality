@@ -119,6 +119,34 @@ export const CLINICIAN_SLUGS = new Set<string>([
   // named patient. Six read tools and NO act domain at all — ruling 1 of the same
   // message is that a clinician does not send to a patient from here, this wave.
   "co-pilot",
+  // ADDED (Dental OS, W2-A/1, on the programme coordinator's written ruling of
+  // 3 Sep 2026): the equipment desk and the IT desk.
+  //
+  // THE RULING, in its own terms: "the IT desk and the equipment READ surfaces
+  // widen to ALL five clearances, including clinician and client_staff (a dental
+  // nurse is client_staff, and 'the autoclave is beeping' / 'I'm locked out' are
+  // her questions; neither module holds patient data; both gates refuse
+  // credentials and safety bypasses)."
+  //
+  // WHAT IT DOES NOT WIDEN, and this is the half that has to be enforced rather
+  // than trusted, because the API layer takes its answer from THIS set:
+  //   equipment  the register READ, the manual search and the chat. The CSV
+  //              import, adding or editing an item and uploading a manual stay
+  //              owner + practice manager, enforced per action by
+  //              requireApproverRole in src/app/api/equipment/[action]/route.ts
+  //              and .../equipment/manual/route.ts.
+  //   it-desk    the chat and the playbooks. Setting the practice's IT contact
+  //              stays owner-only (requireOwnerRole in the route), because who
+  //              the practice escalates to changes what every member of staff is
+  //              told to do.
+  //
+  // Both slugs therefore become modules NO role is denied, which makes their
+  // `requireModuleApiAccess` guard inert on its own — the exact shape the API
+  // coverage sweep exists to catch. They are declared in that sweep's
+  // UNIVERSAL_MODULES with the second lock each route carries, so the sweep
+  // demands MORE of them than it did before rather than less.
+  "equipment",
+  "it-desk",
 ]);
 
 /**
@@ -168,6 +196,38 @@ export const STAFF_SLUGS = new Set<string>([
   // nothing whatsoever besides. `indexRedirectFor` is untouched: a staff login
   // still lands on My work and the dashboard's numbers are never fetched for it.
   "co-pilot",
+  // ADDED (Dental OS, W2-A/1, on the programme coordinator's written ruling of
+  // 3 Sep 2026): the equipment desk and the IT desk.
+  //
+  // THE RULING, in its own terms: "the IT desk and the equipment READ surfaces
+  // widen to ALL five clearances, including clinician and client_staff (a dental
+  // nurse is client_staff, and 'the autoclave is beeping' / 'I'm locked out' are
+  // her questions; neither module holds patient data; both gates refuse
+  // credentials and safety bypasses)."
+  //
+  // WHAT IT DOES NOT WIDEN, and this is the half that has to be enforced rather
+  // than trusted, because the API layer takes its answer from THIS set:
+  //   equipment  the register READ, the manual search and the chat. The CSV
+  //              import, adding or editing an item and uploading a manual stay
+  //              owner + practice manager, enforced per action by
+  //              requireApproverRole in src/app/api/equipment/[action]/route.ts
+  //              and .../equipment/manual/route.ts.
+  //   it-desk    the chat and the playbooks. Setting the practice's IT contact
+  //              stays owner-only (requireOwnerRole in the route), because who
+  //              the practice escalates to changes what every member of staff is
+  //              told to do.
+  //
+  // Both slugs therefore become modules NO role is denied, which makes their
+  // `requireModuleApiAccess` guard inert on its own — the exact shape the API
+  // coverage sweep exists to catch. They are declared in that sweep's
+  // UNIVERSAL_MODULES with the second lock each route carries, so the sweep
+  // demands MORE of them than it did before rather than less.
+  //
+  // `indexRedirectFor` is UNTOUCHED by this too. A staff login still lands on My
+  // work; these two modules are reached from the nav, not from the landing, so
+  // the practice dashboard's money and diary are still never fetched for them.
+  "equipment",
+  "it-desk",
 ]);
 
 export interface NavGroup {
@@ -780,8 +840,37 @@ export const NAV_HIDDEN_SLUGS = new Set<string>(["daily-brief", "task-queue", "n
  * leave an owner with a system they cannot prepare and therefore cannot sensibly
  * turn on. Their switch halts the CHAT — enforced in the routes, which refuse
  * before any model call is made — never the page.
+ *
+ * PRE-VISIT-TRIAGE JOINED THEM (Dental OS wave 2, and it is the same ruling
+ * applied to the module it was written for). The programme coordinator's wave-1
+ * ruling reads: "NAV_SWITCH_EXEMPT for equipment + it-desk APPROVED: the switch
+ * halts the chat, not the page (register/manuals preparable before switch-on)."
+ * Pre-visit questions is that case exactly, and worse for being left out:
+ *
+ *   - It seeds OFF twice over (`defaultEnabled: false` in the catalog AND a
+ *     disabled row in migration 0097), so on every practice, in every database,
+ *     the module was missing from the sidebar on day one.
+ *   - Its page IS the preparation surface. The two question banks are what the
+ *     practice must read and edit BEFORE switching the system on — the owner's
+ *     own instruction is "review the two question lists, then switch on" — and
+ *     the switch was hiding the only screen where that is possible.
+ *   - The page sends NOTHING. It is the bank editor, the treatment-interest
+ *     lists and the implant-interest list: three reads and one owner-only save
+ *     (/api/previsit/bank, guarded independently). What the switch halts — the
+ *     sweep, the outbox and the public form at /pv — is enforced in those
+ *     routes and is untouched by this set, which only ever decides sidebar
+ *     visibility.
+ *
+ * So this line makes the nav agree with the routes: reachable while off, and
+ * still incapable of sending a thing. `nav.os-coherence.test.ts` names the
+ * delta and pins that every wave-1 preparation surface is exempt.
  */
-export const NAV_SWITCH_EXEMPT_SLUGS = new Set<string>(["outreach", "equipment", "it-desk"]);
+export const NAV_SWITCH_EXEMPT_SLUGS = new Set<string>([
+  "outreach",
+  "equipment",
+  "it-desk",
+  "pre-visit-triage",
+]);
 
 export interface ResolvedNavCategory {
   key: string;

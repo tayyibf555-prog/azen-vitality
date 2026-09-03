@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
@@ -8,10 +10,13 @@ import {
   canReadClinicalSummary,
   projectSummary,
 } from "./summary";
+import { INTEREST_QUESTION_KEY, TRIAGE_BANK } from "./bank";
 import { FORBIDDEN_PATIENT_WORDS } from "./forbidden";
+import { UNKNOWN_ANSWER_KIND, readStoredAnswers } from "./kind";
+import type { CustomQuestionIndex } from "./kind";
 import { PreVisitSummaryPanel } from "@/components/client/patients/record/previsit-summary-panel";
 import type { Role } from "@/lib/types";
-import type { TriageResponse } from "./types";
+import type { TriageQuestionKind, TriageResponse } from "./types";
 
 // ===========================================================================
 // THE DENTIST'S PRE-VISIT SUMMARY, and the role decision inside it.
@@ -32,12 +37,12 @@ function response(over: Partial<TriageResponse> = {}): TriageResponse {
     dentallyPatientId: "p1",
     fork: "full",
     answers: [
-      { key: "attending", value: "yes" },
-      { key: "health-changed", value: "no" },
-      { key: "visit-reason", value: "something-bothering" },
-      { key: "concern-words", value: "the back one on the left has been grumbling" },
-      { key: "pain-now", value: "8" },
-      { key: "gums-bleed", value: "yes" },
+      { key: "attending", value: "yes", kind: "logistics" },
+      { key: "health-changed", value: "no", kind: "logistics" },
+      { key: "visit-reason", value: "something-bothering", kind: "symptom" },
+      { key: "concern-words", value: "the back one on the left has been grumbling", kind: "symptom" },
+      { key: "pain-now", value: "8", kind: "symptom" },
+      { key: "gums-bleed", value: "yes", kind: "symptom" },
     ],
     interest: [
       { treatment: "whitening", answer: "yes" },
@@ -96,12 +101,12 @@ describe("who may read what the patient said about their mouth", () => {
   it("the discomfort flag is a threshold on the patient's OWN scale, not a grading", () => {
     expect(DISCOMFORT_NOTICE_THRESHOLD).toBe(7);
     const below = projectSummary(
-      response({ answers: [{ key: "pain-now", value: String(DISCOMFORT_NOTICE_THRESHOLD - 1) }] }),
+      response({ answers: [{ key: "pain-now", value: String(DISCOMFORT_NOTICE_THRESHOLD - 1), kind: "symptom" }] }),
       "client_owner",
     );
     expect(below.discomfortReported).toBe(false);
     const at = projectSummary(
-      response({ answers: [{ key: "pain-now", value: String(DISCOMFORT_NOTICE_THRESHOLD) }] }),
+      response({ answers: [{ key: "pain-now", value: String(DISCOMFORT_NOTICE_THRESHOLD), kind: "symptom" }] }),
       "client_owner",
     );
     expect(at.discomfortReported).toBe(true);
@@ -149,7 +154,10 @@ describe("the projection itself", () => {
   it("keeps an answer whose question the practice has since deleted", () => {
     // What the patient told us is a fact, and it must not disappear because the
     // owner edited the bank afterwards.
-    const summary = projectSummary(response({ answers: [{ key: "custom-gone", value: "something" }] }), "client_owner");
+    const summary = projectSummary(
+      response({ answers: [{ key: "custom-gone", value: "something", kind: "logistics" }] }),
+      "client_owner",
+    );
     const all = [...summary.logistics.lines, ...(summary.clinical?.lines ?? [])];
     expect(all.map((l) => l.key)).toContain("custom-gone");
   });
@@ -167,11 +175,187 @@ describe("the projection itself", () => {
 
   it("never puts the interest grid itself among the answers", () => {
     const summary = projectSummary(
-      response({ answers: [{ key: "interest-grid", value: "x" }, { key: "attending", value: "yes" }] }),
+      response({
+        answers: [
+          { key: "interest-grid", value: "x", kind: "interest" },
+          { key: "attending", value: "yes", kind: "logistics" },
+        ],
+      }),
       "client_owner",
     );
     const all = [...summary.logistics.lines, ...(summary.clinical?.lines ?? [])];
     expect(all.map((l) => l.key)).not.toContain("interest-grid");
+  });
+});
+
+// ===========================================================================
+// THE QUESTION'S KIND, AND THE DEFECT THAT MADE THIS BLOCK NECESSARY.
+//
+// The manager/clinician split is made on one field: an answer's KIND. The
+// projection used to read that field out of the SHIPPED bank and, for a key it
+// could not find, fall back to `logistics` — the class every role reads. An
+// OWNER-AUTHORED question (`custom-...`) is by definition not in the shipped bank,
+// so a custom question the owner classified `symptom` put the patient's own words
+// on the front desk's screen. Exactly what ruling W1-C/2 forbids.
+//
+// The fix is two independent parts and each is named below: the kind now TRAVELS
+// WITH THE ANSWER (stamped at submit, required on the type), and an answer whose
+// kind nothing can name resolves to `symptom` — restricted — never `logistics`.
+// ===========================================================================
+describe("an owner-authored question's KIND decides who reads it", () => {
+  const OWN_WORDS = "my jaw clicks every morning and it is getting worse";
+
+  /** A question the PRACTICE wrote, classified `symptom` in the owner editor. */
+  function withCustomSymptom(kindOnTheAnswer: TriageQuestionKind): TriageResponse {
+    return response({
+      answers: [
+        { key: "attending", value: "yes", kind: "logistics" },
+        { key: "custom-jaw", value: OWN_WORDS, kind: kindOnTheAnswer },
+      ],
+    });
+  }
+
+  const authoredAsSymptom: CustomQuestionIndex = new Map([
+    ["custom-jaw", { label: "Anything else about your jaw?", kind: "symptom" as const }],
+  ]);
+
+  it("a custom SYMPTOM question is restricted from the manager and shown to the clinician", () => {
+    const resp = withCustomSymptom("symptom");
+
+    const clinician = projectSummary(resp, "client_clinician", authoredAsSymptom);
+    expect(clinician.clinical?.lines.map((l) => l.answer)).toContain(OWN_WORDS);
+    expect(clinician.clinical?.lines.find((l) => l.key === "custom-jaw")?.question).toBe(
+      "Anything else about your jaw?",
+    );
+
+    const manager = projectSummary(resp, "client_coordinator", authoredAsSymptom);
+    expect(manager.clinical, "the manager was handed a clinical section").toBeNull();
+    expect(
+      JSON.stringify(manager),
+      "the patient's own words reached the practice manager",
+    ).not.toContain(OWN_WORDS);
+    // She is still told there is something for a clinician to read.
+    expect(manager.flaggedForClinician).toBe(1);
+    expect(manager.logistics.lines.map((l) => l.key)).toEqual(["attending"]);
+  });
+
+  it("the stamped kind alone is enough — no bank config, no leak", () => {
+    // The practice deleted the question after the patient answered it, so nothing
+    // in any config can still say what it was. This is the case the old code got
+    // wrong in the most invisible way, and the reason the kind is persisted.
+    const manager = projectSummary(withCustomSymptom("symptom"), "client_coordinator");
+    expect(manager.clinical).toBeNull();
+    expect(JSON.stringify(manager)).not.toContain(OWN_WORDS);
+    expect(manager.flaggedForClinician).toBe(1);
+  });
+
+  it("and the stamp is READ, not merely defaulted over: a deleted LOGISTICS question stays the manager's", () => {
+    // The other direction, and the one that proves the stamp is load-bearing
+    // rather than decorative. The practice wrote "Do you need step-free access?",
+    // classified it logistics, a patient answered it and the owner then deleted
+    // the question. No config can name it any more. The manager is the person who
+    // acts on that answer, so it must NOT be swept into the restricted half — and
+    // the ONLY thing that can still say so is the kind stored on the answer.
+    const summary = projectSummary(
+      response({
+        answers: [{ key: "custom-access", value: "step-free access please", kind: "logistics" }],
+      }),
+      "client_coordinator",
+    );
+    expect(summary.logistics.lines.map((l) => l.key)).toEqual(["custom-access"]);
+    expect(summary.logistics.lines[0].answer).toBe("step-free access please");
+    expect(summary.flaggedForClinician).toBe(0);
+  });
+
+  it("the practice's CURRENT classification also restricts, whatever the answer was stamped", () => {
+    // The owner re-classified an existing question as a symptom question. The
+    // answers already stored say `logistics`; most-restrictive wins.
+    const manager = projectSummary(withCustomSymptom("logistics"), "client_coordinator", authoredAsSymptom);
+    expect(manager.clinical).toBeNull();
+    expect(JSON.stringify(manager)).not.toContain(OWN_WORDS);
+  });
+
+  it("an answer of UNKNOWN kind is restricted, never logistics", () => {
+    // THE FAIL DIRECTION, stated on its own. Nothing knows what this question was:
+    // not the shipped bank, not the stored answer, not the practice's config.
+    expect(UNKNOWN_ANSWER_KIND).toBe("symptom");
+    const [unknown] = readStoredAnswers([{ key: "custom-mystery", value: OWN_WORDS }]);
+    expect(unknown.kind, "an unstamped stored answer did not fail to symptom").toBe("symptom");
+
+    const manager = projectSummary(
+      response({ answers: [{ key: "attending", value: "yes", kind: "logistics" }, unknown] }),
+      "client_coordinator",
+    );
+    expect(manager.clinical).toBeNull();
+    expect(JSON.stringify(manager)).not.toContain(OWN_WORDS);
+    expect(manager.flaggedForClinician).toBe(1);
+    expect(manager.logistics.lines.map((l) => l.key)).toEqual(["attending"]);
+  });
+
+  it("a junk kind in the jsonb column is unknown, and unknown is restricted", () => {
+    for (const junk of ["", "LOGISTICS", "clinical", 7, null, {}]) {
+      const [row] = readStoredAnswers([{ key: "custom-x", value: OWN_WORDS, kind: junk }]);
+      expect(row.kind, `${JSON.stringify(junk)} was accepted as a kind`).toBe("symptom");
+    }
+  });
+
+  // THE SHIPPED BANKS ARE UNCHANGED. The fix must not re-classify a single question
+  // the practice already has, in either direction: a bank question's kind is
+  // in-code and is not a thing a stored row may contradict.
+  it("every SHIPPED question still lands in the section its own bank kind names", () => {
+    for (const q of TRIAGE_BANK) {
+      if (q.key === INTEREST_QUESTION_KEY) continue; // its own renderer
+      const summary = projectSummary(
+        response({ answers: [{ key: q.key, value: "3", kind: q.kind }] }),
+        "client_owner",
+      );
+      const inClinical = summary.clinical?.lines.some((l) => l.key === q.key) ?? false;
+      const inLogistics = summary.logistics.lines.some((l) => l.key === q.key);
+      expect(inClinical, `${q.key} (${q.kind}) is in the wrong half`).toBe(q.kind === "symptom");
+      expect(inLogistics, `${q.key} (${q.kind}) is in the wrong half`).toBe(q.kind !== "symptom");
+    }
+  });
+
+  it("a tampered stored kind cannot DOWNGRADE a shipped symptom question", () => {
+    const manager = projectSummary(
+      response({ answers: [{ key: "concern-words", value: OWN_WORDS, kind: "logistics" }] }),
+      "client_coordinator",
+    );
+    expect(manager.clinical).toBeNull();
+    expect(JSON.stringify(manager)).not.toContain(OWN_WORDS);
+  });
+});
+
+describe("the screens that read a summary resolve the practice's own questions", () => {
+  const REPO = process.cwd();
+
+  it("the patient RECORD goes through previsitSummaryFor, not the bare projection", () => {
+    // The defect was a caller forgetting the third argument. The record screen is
+    // the surface ruling W1-C/2 is about, so it is pinned by name: it must call the
+    // resolving entry point, and must not call the pure projection directly.
+    const src = readFileSync(
+      join(REPO, "src/components/client/patients/record/record-tab-content.tsx"),
+      "utf8",
+    );
+    expect(src).toContain('from "@/lib/triage/summary-read"');
+    expect(src).toMatch(/previsitSummaryFor\(\{/);
+    expect(src).toContain("clientId: client.id");
+    expect(src, "the record screen calls the unresolved projection").not.toMatch(
+      /projectSummary\(/,
+    );
+  });
+
+  it("an unreadable bank config degrades to restricted rather than to a blank screen", () => {
+    // customQuestionsFor swallows the read failure and returns an empty index; with
+    // an empty index the projection still has the stamped kind, and an answer with
+    // no usable kind is a symptom. Asserted on the projection, which is the thing
+    // that would leak.
+    const manager = projectSummary(
+      response({ answers: readStoredAnswers([{ key: "custom-unresolvable", value: "aching" }]) }),
+      "client_coordinator",
+    );
+    expect(manager.clinical).toBeNull();
+    expect(JSON.stringify(manager)).not.toContain("aching");
   });
 });
 

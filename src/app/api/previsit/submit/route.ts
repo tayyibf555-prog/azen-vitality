@@ -7,7 +7,12 @@ import { isTriageLinkTokenShaped } from "@/lib/triage/link";
 import { projectBank } from "@/lib/triage/project";
 import { getBank, getTargetByLinkToken, recordResponse } from "@/lib/triage/repository";
 import { SCALE_MAX, SCALE_MIN, TRIAGE_SYSTEM_SLUG } from "@/lib/triage/types";
-import type { InterestAnswer, InterestTreatmentKey, TriageAnswer } from "@/lib/triage/types";
+import type {
+  InterestAnswer,
+  InterestTreatmentKey,
+  TriageAnswer,
+  TriageQuestionKind,
+} from "@/lib/triage/types";
 
 export const dynamic = "force-dynamic";
 
@@ -195,7 +200,10 @@ export async function POST(request: Request): Promise<Response> {
  */
 function parseAnswers(
   raw: unknown,
-  allowed: ReadonlyMap<string, { type: string; options?: readonly { value: string }[] }>,
+  allowed: ReadonlyMap<
+    string,
+    { type: string; kind: TriageQuestionKind; options?: readonly { value: string }[] }
+  >,
 ): TriageAnswer[] | null {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw) || raw.length > MAX_ANSWERS) return null;
@@ -225,7 +233,14 @@ function parseAnswers(
     }
 
     seen.add(key);
-    out.push({ key, value });
+    // THE KIND IS STAMPED HERE, from the projection — never from the body, which
+    // cannot name one and would not be believed if it could. This is the only
+    // moment at which a question the PRACTICE wrote can be classified at all: the
+    // owner's config says what it is now, and the summary has to know what it was
+    // even after the question is deleted. An unstamped answer resolves to `symptom`
+    // downstream (src/lib/triage/kind.ts), so forgetting is safe but lossy —
+    // hence `kind` being required on TriageAnswer rather than optional.
+    out.push({ key, value, kind: q.kind });
   }
   return out;
 }

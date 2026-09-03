@@ -3,6 +3,7 @@ import { requireUser, requireClientAccess, requireOwnerRole } from "@/lib/auth/g
 import { requireCapability } from "@/lib/auth/capability-guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import { SYSTEMS, isControllableSystem } from "@/lib/systems/catalog";
+import { vocabularyFor } from "@/lib/systems/vocabulary";
 import { getSystemStates, setSystemEnabled } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
@@ -34,14 +35,22 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const states = await getSystemStates(client.id);
     const byState = new Map(states.map((s) => [s.slug, s]));
-    // Merge catalog (label/group/halts) with the stored state (enabled/when/who).
+    // Merge catalog (label/group/halts) with the stored state (enabled/when/who)
+    // and the switch-on vocabulary (what starts, what it needs first, what to do
+    // first). The vocabulary is derived server-side rather than imported by the
+    // panel because it is built from the agent roster, which carries a source
+    // path for every agent and has no business in a browser bundle.
     const systems = SYSTEMS.map((s) => {
       const st = byState.get(s.slug);
+      const vocab = vocabularyFor(s.slug);
       return {
         slug: s.slug,
         label: s.label,
         group: s.group,
         halts: s.halts,
+        starts: vocab?.starts ?? null,
+        needsFirst: vocab?.needsFirst ?? [],
+        firstStep: vocab?.firstStep ?? null,
         enabled: st?.enabled ?? true,
         updatedAt: st?.updatedAt ?? null,
         updatedBy: st?.updatedBy ?? null,

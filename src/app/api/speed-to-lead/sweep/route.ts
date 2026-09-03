@@ -11,6 +11,7 @@ import { nurtureSweep } from "@/lib/speed-to-lead/nurture";
 import { convertAbandonedHolds } from "@/lib/booking/abandoned-holds";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import { liveSwitch } from "@/lib/systems/live-switch";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -72,7 +73,29 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
 
   let contacted = 0;
   let claimedBy = 0;
+
+  // THE OWNER'S SWITCH, RE-READ INSIDE THE BATCH (ruling W1-B/5, 3 Sep 2026).
+  // This handler may run for 300 seconds and calls the model to DRAFT a first
+  // contact for every lead it claims, so the check at the top of the run is not
+  // enough: an owner who switches speed-to-lead off mid-batch would otherwise
+  // keep paying for drafts, and keep texting, until the batch ran out. The
+  // shared gate re-reads the switch every ten rows and never resumes inside the
+  // same tick — see src/lib/systems/live-switch.ts for why the rule lives there
+  // and not in each loop.
+  //
+  // THIS ROUTE IS THE ABANDONED-BOOKING RESCUE'S SWEEP TOO. The rescue has no
+  // sweep of its own (src/lib/agent-wiring/roster.ts: its guard IS this file),
+  // so without the gate here the one agent the ruling's five named routes do not
+  // cover would have kept drafting for the rest of the run.
+  const gate = liveSwitch("vitality", "speed-to-lead");
+
   for (const lead of stale) {
+    // Consulted BEFORE the claim, deliberately: a lead claimed and then abandoned
+    // sits at 'contacting' until resetStaleContacting rescues it ten minutes
+    // later. Checking first leaves every un-drafted lead exactly as it was, at
+    // 'new', for the next tick.
+    if (!(await gate.stillOn())) break;
+
     // Atomically claim the lead ('new' → 'contacting') before contacting it. This
     // closes the race with the in-request intake contact: if intake is still in
     // flight on this brand-new lead, the claim fails (intake already advanced it
@@ -105,12 +128,22 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
   // bounded (per-tick send cap + scan limit inside nurtureSweep): a failure here
   // cannot stop the uncontacted-lead pass above, which is this route's actual job.
   // The kill-switch check at the top of this handler already gates it (fail-closed).
-  let nurture: Awaited<ReturnType<typeof nurtureSweep>> | { error: string };
-  try {
-    nurture = await nurtureSweep(new Date(now));
-  } catch (err) {
-    nurture = { error: err instanceof Error ? err.message : String(err) };
-    console.error("[sweep] nurture pass threw; continuing", err);
+  //
+  // AND SO DOES THE MID-RUN GATE ABOVE. Ruling W1-B/5 stops the DRAFTING, not
+  // merely the first-contact loop, and a nurture touch is a model-drafted message
+  // like any other; once the switch has been read as off, this pass must not
+  // start. (Its own exposure is separately bounded: NURTURE_PER_TICK_CAP is ten
+  // sends a tick, the same ten-row bound the ruling asks for.)
+  let nurture: Awaited<ReturnType<typeof nurtureSweep>> | { error: string } | { skipped: string };
+  if (gate.switchedOffMidRun) {
+    nurture = { skipped: "system switched off mid-run" };
+  } else {
+    try {
+      nurture = await nurtureSweep(new Date(now));
+    } catch (err) {
+      nurture = { error: err instanceof Error ? err.message : String(err) };
+      console.error("[sweep] nurture pass threw; continuing", err);
+    }
   }
 
   return Response.json({
@@ -120,6 +153,9 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     claimed: claimedBy,
     contacted,
     abandonedConverted,
+    // Honest signal for ops: this run stopped early because the owner switched
+    // the system off while it was working, not because there was nothing to do.
+    switchedOffMidRun: gate.switchedOffMidRun,
     nurture,
   });
   } finally {

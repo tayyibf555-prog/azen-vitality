@@ -40,6 +40,54 @@ describe("buildCopilotSystemPrompt", () => {
 });
 
 // ===========================================================================
+// RULING W2-A/1 (3 Sep 2026): THE TWO DESKS REACH EVERY CLEARANCE.
+//
+// The prompt is not the enforcement — the clearance model and each desk's own
+// gate are — but a login that is TOLD what it may reach answers gracefully
+// instead of emitting a call that gets refused, and a login told the safety
+// rules relays them instead of summarising them away. These pin the sentences
+// that must not vanish from the two narrowest prompts.
+// ===========================================================================
+describe("the desks, in the prompts of the two logins the ruling widened", () => {
+  it("a member of staff is told about both desks AND still told they see no patient", () => {
+    const staff = buildCopilotSystemPrompt({ label: "X", isAllSites: false, access: "staff" });
+    expect(staff).toMatch(/equipment_lookup/);
+    expect(staff).toMatch(/it_desk/);
+    expect(staff).toMatch(/my_work/);
+    // The safety half, which is what made the widening safe.
+    expect(staff).toMatch(/Never tell anyone it is fine to keep using a machine that is out of test/i);
+    expect(staff).toMatch(/Never handle a password, PIN or access code/i);
+    expect(staff).toMatch(/Relay a refusal exactly as it stands/i);
+    // ...and the absences did NOT move.
+    expect(staff).toMatch(/Patients, the diary, money, the practice's performance/);
+    expect(staff).toMatch(/Neither desk knows anything about a patient/i);
+    expect(staff).not.toMatch(/patient_record|search_patients|appointments|outstanding_balances/);
+  });
+
+  it("a clinician is told about both desks and that the judgement is never theirs", () => {
+    const clinician = buildCopilotSystemPrompt({ label: "X", isAllSites: false, access: "clinician" });
+    expect(clinician).toMatch(/equipment_lookup/);
+    expect(clinician).toMatch(/it_desk/);
+    expect(clinician).toMatch(/never yours/i);
+    expect(clinician).toMatch(/never invent a contact name or number/i);
+    // The clinician's own absences are untouched by the ruling.
+    expect(clinician).toMatch(/MONEY, in any form/);
+    expect(clinician).not.toMatch(/diary_write|interest_lists|agent_status|sync_status/);
+  });
+
+  it("the two desks are named for every login that holds them, and for no login that does not", () => {
+    // The owner and the manager were given them first; the ruling added the other
+    // two. `none` gets no prompt worth checking (the route refuses first), so the
+    // four that can ask are the four asserted.
+    for (const access of ["full", "manager", "clinician", "staff"] as const) {
+      const prompt = buildCopilotSystemPrompt({ label: "X", isAllSites: false, access });
+      expect(prompt, `${access} is not told about the equipment desk`).toMatch(/equipment_lookup/);
+      expect(prompt, `${access} is not told about the IT desk`).toMatch(/it_desk/);
+    }
+  });
+});
+
+// ===========================================================================
 // THE APPROVED-AUTHORITIES SEAM, AS THE PROMPT SEES IT.
 //
 // The seam's own rules (the size ceiling, the copyright refusal, the bound, the

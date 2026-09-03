@@ -118,6 +118,12 @@ const CONFIRM_COMMIT_TOOLS = new Set([
   "publish_meta_campaign",
   "create_patient",
   "nudge_lead",
+  // ADDED BY WAVE 2, LANE A. The co-pilot's diary write books, moves and cancels
+  // in the practice's real Dentally diary. It carries its own two-step confirm
+  // (a preview without `confirm`, a commit with it), and this set is the half
+  // that makes the two steps two TURNS: a confirm set in the same message as the
+  // request is inert, so a model cannot compress "book her in" into a booking.
+  "diary_write",
 ]);
 
 // A patient must give a clear affirmative before the agent is allowed to WRITE an

@@ -116,24 +116,55 @@ describe("4. neither desk is a sending surface", () => {
   });
 });
 
-describe("5. the role lock: owner and practice manager, nobody else", () => {
-  it.each(SLUGS)("%s admits the owner, the agency and the practice manager", (slug) => {
-    for (const role of ["agency_admin", "client_owner", "client_coordinator"] as const) {
+describe("5. the role lock: every clearance reaches the desks, and the WRITES do not", () => {
+  // WIDENED, and this section was rewritten rather than relaxed. It used to read
+  // "owner and practice manager, nobody else", which was the lane's brief. The
+  // programme coordinator's written ruling of 3 Sep 2026 (Dental OS, W2-A/1)
+  // replaced it: "the IT desk and the equipment READ surfaces widen to ALL five
+  // clearances, including clinician and client_staff (a dental nurse is
+  // client_staff, and 'the autoclave is beeping' / 'I'm locked out' are her
+  // questions; neither module holds patient data; both gates refuse credentials
+  // and safety bypasses)."
+  //
+  // The lock did not go away; it moved off the MODULE and onto the ACTION, which
+  // is where it always belonged. Reading the register and asking the desk are
+  // everybody's. Rewriting the register the practice shows CQC, and naming the
+  // company the whole practice is told to ring, are not.
+  it.each(SLUGS)("%s admits every clearance", (slug) => {
+    for (const role of [
+      "agency_admin",
+      "client_owner",
+      "client_coordinator",
+      "client_clinician",
+      "client_staff",
+    ] as const) {
       expect(canRoleAccessModule(role, slug), `${role} -> ${slug}`).toBe(true);
     }
   });
 
-  it.each(SLUGS)("%s refuses the clinician and the staff role", (slug) => {
-    for (const role of ["client_clinician", "client_staff"] as const) {
-      expect(canRoleAccessModule(role, slug), `${role} -> ${slug}`).toBe(false);
-    }
-  });
-
-  it.each(SLUGS)("%s has a CLIENT_NAV entry whose roles array says the same thing", (slug) => {
-    // The predicate above reads the nav, so this asserts the nav entry itself is
-    // the shape the predicate is reading rather than the two agreeing by accident.
+  it.each(SLUGS)("%s keeps its CLIENT_NAV roles array, which now governs three roles of five", (slug) => {
+    // The array is UNCHANGED and that is deliberate: the two widened roles are
+    // deny-by-default and reach these modules through CLINICIAN_SLUGS and
+    // STAFF_SLUGS, whose branches return before this array is read. Editing the
+    // array instead would have been a change to the shared allow-list the other
+    // three roles depend on, and could not have been proven non-widening.
     const item = CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === slug);
     expect(item, slug).toBeDefined();
     expect(item?.roles?.sort()).toEqual(["agency_admin", "client_coordinator", "client_owner"]);
+  });
+
+  it("the equipment WRITES and the IT contact are where the lock went", () => {
+    // Named here because this file is where a reader looks for "who may do what
+    // on the desks"; proved from the route sources in nav.staff.test.ts section 8
+    // and behaviourally in the two route suites (a staff POST to import → 403,
+    // a staff POST to ask → 200).
+    const equipment = readFileSync(srcPath("app/api/equipment/[action]/route.ts"), "utf8");
+    expect(equipment).toContain("REGISTER_WRITE_ACTIONS");
+    expect(equipment).toContain("requireApproverRole(auth)");
+    expect(readFileSync(srcPath("app/api/equipment/manual/route.ts"), "utf8")).toContain(
+      "requireApproverRole(auth)",
+    );
+    const itdesk = readFileSync(srcPath("app/api/itdesk/[action]/route.ts"), "utf8");
+    expect(itdesk).toContain("requireOwnerRole(auth)");
   });
 });

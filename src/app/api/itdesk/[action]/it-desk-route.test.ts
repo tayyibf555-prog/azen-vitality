@@ -179,15 +179,38 @@ describe("3. the escalation contact carries a SECOND, narrower lock", () => {
 });
 
 describe("4. the module lock is at the API layer", () => {
-  it("admits owner and manager, refuses clinician and receptionist", async () => {
-    for (const user of [OWNER, MANAGER]) {
+  // INVERTED, not loosened, on the programme coordinator's written ruling of
+  // 3 Sep 2026 (Dental OS, W2-A/1): "the IT desk and the equipment READ surfaces
+  // widen to ALL five clearances, including clinician and client_staff (a dental
+  // nurse is client_staff, and 'the autoclave is beeping' / 'I'm locked out' are
+  // her questions; neither module holds patient data; both gates refuse
+  // credentials and safety bypasses)."
+  //
+  // The lock this line used to be has not gone: it moved to `set-contact`, which
+  // section 3 above proves is still owner-only for the practice manager and is
+  // proved here for the two widened roles as well. Reaching the DESK and
+  // deciding who the practice escalates TO are different questions, and only the
+  // second one was ever a role decision.
+  it("admits every clearance to the desk (W2-A/1)", async () => {
+    for (const user of [OWNER, MANAGER, CLINICIAN, RECEPTIONIST]) {
       store.user = user;
-      expect((await ask("The printer will not print.")).status).toBe(200);
+      expect((await ask("The printer will not print.")).status, `${user.role} was refused`).toBe(200);
     }
-    for (const user of [CLINICIAN, RECEPTIONIST]) {
+  });
+
+  it("and still refuses all three non-owners the IT CONTACT, which is the real lock", async () => {
+    for (const user of [MANAGER, CLINICIAN, RECEPTIONIST]) {
       store.user = user;
-      expect((await ask("The printer will not print.")).status).toBe(403);
+      const response = await POST(
+        new Request("http://t/api/itdesk/set-contact", {
+          method: "POST",
+          body: JSON.stringify({ client: "vitality", name: "Somebody Else", phone: "999" }),
+        }),
+        { params: Promise.resolve({ action: "set-contact" }) },
+      );
+      expect(response.status, `${user.role} set the IT contact`).toBe(403);
     }
+    expect(store.saved).toHaveLength(0);
   });
 
   it("refuses another practice's login, and an unknown client", async () => {

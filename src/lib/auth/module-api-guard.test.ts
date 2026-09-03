@@ -82,12 +82,12 @@ describe("requireModuleApiAccess denies the clinician everything outside its all
   });
 });
 
-describe("requireModuleApiAccess admits the clinician its own six modules", () => {
+describe("requireModuleApiAccess admits the clinician its own nine modules", () => {
   it.each([...CLINICIAN_SLUGS])("allows %s", (slug) => {
     expect(requireModuleApiAccess(user("client_clinician"), slug)).toBe(null);
   });
 
-  it("is exactly seven, and exactly these (a silent widening fails here)", () => {
+  it("is exactly nine, and exactly these (a silent widening fails here)", () => {
     // WAS FIVE until campaign 6 added "my-work", the staff self-service surface, to
     // CLINICIAN_SLUGS. Moved by hand and with a reason, which is what this pin is
     // for: a clinician is a member of staff, and every tab of my-work is scoped to
@@ -100,11 +100,22 @@ describe("requireModuleApiAccess admits the clinician its own six modules", () =
     // plus tier-1 practice knowledge, their own work, and second-opinion decision
     // support on a named patient. It holds no act domain at all, so it cannot send,
     // book, cancel or create anything (ruling 1 of the same message).
+    //
+    // NOW NINE: "equipment" and "it-desk" were added on W2-A/1, the same
+    // coordinator's written ruling of 3 Sep 2026. Neither module holds a patient
+    // row or an appointment — one is the practice's machine register and its
+    // manuals, the other a troubleshooting chat over the practice's playbooks —
+    // and the WRITE half of each stays behind a role guard in its route
+    // (requireApproverRole on the register writes and on every method of
+    // equipment/manual; requireOwnerRole on the IT contact). So what this line
+    // hands a clinician is reading and asking, not editing.
     expect([...CLINICIAN_SLUGS].sort()).toEqual([
       "",
       "absence",
       "calendar",
       "co-pilot",
+      "equipment",
+      "it-desk",
       "my-work",
       "patients",
       "staff-check-in",

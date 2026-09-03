@@ -1,6 +1,8 @@
 import type { Role } from "@/lib/types";
 import { INTEREST_TREATMENTS, TRIAGE_BANK_BY_KEY, INTEREST_QUESTION_KEY } from "./bank";
 import { FORK_LABEL, FORK_NOTE } from "./fork";
+import { resolveAnswerKind } from "./kind";
+import type { CustomQuestionIndex } from "./kind";
 import { SCALE_MAX, SCALE_MIN } from "./types";
 import type { TriageQuestionKind, TriageResponse } from "./types";
 
@@ -98,6 +100,12 @@ export function canReadClinicalSummary(role: string | null | undefined): boolean
   return CLINICAL_SET.has(role);
 }
 
+/**
+ * The practice's own questions, indexed by key. Re-exported from ./kind.ts, which
+ * owns it, so a caller of `projectSummary` has one import rather than two.
+ */
+export type { CustomQuestionIndex };
+
 /** One answer, ready to render. */
 export interface SummaryLine {
   key: string;
@@ -171,16 +179,30 @@ const DISCOMFORT_KEY = "pain-now";
 /**
  * Project a stored response into the summary a viewer with this role may read.
  *
- * `customLabels` supplies the question text for a practice's OWN questions, whose
- * labels live in the bank config rather than in the shipped bank. A custom answer
- * whose label cannot be resolved renders under its key rather than being dropped:
- * an answer the patient gave must not disappear because the practice later deleted
- * the question.
+ * `customQuestions` supplies the practice's OWN questions — the ones written in
+ * the owner editor, whose text lives in the bank config rather than in the shipped
+ * bank. It is used for two different things and only one of them is cosmetic:
+ *
+ *   THE LABEL is cosmetic. A custom answer whose label cannot be resolved renders
+ *   under its key rather than being dropped: an answer the patient gave must not
+ *   disappear because the practice later deleted the question.
+ *
+ *   THE KIND IS NOT. It decides whether the patient's words go in the half the
+ *   practice manager may read (ruling W1-C/2), so it is resolved by
+ *   `resolveAnswerKind` across the shipped bank, the kind STAMPED ON THE ANSWER at
+ *   submit, and this map — most restrictive wins, and an answer no source can name
+ *   is `symptom`. That is why this argument is still OPTIONAL: omitting it can now
+ *   only over-restrict, never under-restrict. It used to be the only source of a
+ *   custom question's kind, no caller passed it, and the missing-kind fallback was
+ *   `logistics` — so an owner-authored symptom question read out to the front desk.
+ *
+ * Server callers should prefer `previsitSummaryFor` (./summary-read.ts), which
+ * resolves this map from the practice's saved banks so the labels are real.
  */
 export function projectSummary(
   response: TriageResponse,
   viewerRole: Role | null,
-  customLabels: ReadonlyMap<string, { label: string; kind: TriageQuestionKind }> = new Map(),
+  customQuestions: CustomQuestionIndex = new Map(),
 ): PreVisitSummary {
   const logistics: SummaryLine[] = [];
   const clinical: SummaryLine[] = [];
@@ -188,9 +210,9 @@ export function projectSummary(
   for (const answer of response.answers) {
     if (answer.key === INTEREST_QUESTION_KEY) continue; // rendered by its own list
     const bank = TRIAGE_BANK_BY_KEY.get(answer.key);
-    const custom = customLabels.get(answer.key);
+    const custom = customQuestions.get(answer.key);
     const question = bank?.label ?? custom?.label ?? answer.key;
-    const kind = bank?.kind ?? custom?.kind ?? "logistics";
+    const kind = resolveAnswerKind(answer, customQuestions);
     const type = bank?.type;
     const line: SummaryLine = {
       key: answer.key,

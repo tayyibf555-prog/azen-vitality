@@ -220,6 +220,10 @@ describe("the caveats are ON THE SCREEN, not in a constant nobody renders", () =
         treatments: [...INTEREST_TREATMENTS],
         interest: [],
         interestCounts: {},
+        // The switch: this suite is about the mining caveats, and it renders the
+        // workspace as it looks with the system ON so the switched-off onboarding
+        // line (Dental OS wave 2) never stands in for a caveat it is not.
+        systemEnabled: true,
         mining: rows,
         miningTitle: MINING_TITLE,
         miningCoverage: coverageSentence({

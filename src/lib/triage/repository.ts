@@ -1,4 +1,5 @@
 import { serviceClient } from "@/lib/supabase/server";
+import { readStoredAnswers } from "./kind";
 import { mintTriageLinkToken } from "./link";
 import { usableConfig } from "./project";
 import type {
@@ -402,7 +403,12 @@ function rowToResponse(r: ResponseRow): TriageResponse {
     siteId: r.site_id,
     dentallyPatientId: r.dentally_patient_id,
     fork: r.fork as TriageFork,
-    answers: Array.isArray(r.answers) ? (r.answers as TriageAnswer[]) : [],
+    // NOT A CAST. `answers` is a jsonb column, so what comes back is whatever was
+    // written — including a row older than the `kind` field, or one edited by hand.
+    // readStoredAnswers is the one place that column becomes TriageAnswer[], and an
+    // answer whose kind it cannot read resolves to `symptom` (the RESTRICTED class,
+    // ruling W1-C/2) rather than to the class every role reads. See ./kind.ts.
+    answers: readStoredAnswers(r.answers),
     interest: Array.isArray(r.interest)
       ? (r.interest as Array<{ treatment: InterestTreatmentKey; answer: InterestAnswer }>)
       : [],

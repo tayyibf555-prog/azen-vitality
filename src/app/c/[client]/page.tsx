@@ -1,5 +1,6 @@
 import { PageHeader } from "@/components/primitives";
 import { PracticeDashboard } from "@/components/client/dashboard/practice-dashboard";
+import { OperatingSystemBand } from "@/components/client/dashboard/os-band";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import { readPracticeDashboard } from "@/lib/dashboard/read";
 import { requireIndexAccess } from "@/lib/auth/page-guard";
@@ -90,6 +91,13 @@ export default async function ClientHomePage({
         initialSiteId={selection === ALL_SITES ? null : selection}
       />
       <div className="max-w-[1400px] space-y-4">
+        {/* THE PLATFORM'S OWN STATE, between the practice's numbers and the
+            practice's worklist. The dashboard above says how the day is going;
+            this says what the platform is running while it goes; the worklist
+            below says what to do about either. It is role-filtered inside — a
+            practice manager gets her operational subset and a clinician gets no
+            band at all — so it is rendered unconditionally here. */}
+        <OperatingSystemBand clientId={client.id} clientSlug={clientSlug} tree="client" />
         <TaskQueueBoard
           plain
           clientSlug={clientSlug}

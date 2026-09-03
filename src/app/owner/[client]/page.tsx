@@ -7,6 +7,7 @@ import {
   type Column,
 } from "@/components/primitives";
 import { PracticeDashboard } from "@/components/client/dashboard/practice-dashboard";
+import { OperatingSystemBand } from "@/components/client/dashboard/os-band";
 import { TaskQueueBoard } from "@/components/client/task-queue/task-queue-board";
 import { OverviewDashboard } from "@/components/client/overview-dashboard";
 import { OwnerViewSwitch } from "@/components/owner/owner-view-switch";
@@ -163,6 +164,11 @@ export default async function OwnerHomePage({
         initialSiteId={selection === ALL_SITES ? null : selection}
       />
       <div className="max-w-[1400px] space-y-4">
+        {/* The same band, in the same position, as /c/[client]/page.tsx. Owner
+            parity means the same screen, not a subset of it: the two trees
+            render one dashboard and must not disagree about what the platform's
+            own systems are doing either. */}
+        <OperatingSystemBand clientId={client.id} clientSlug={clientSlug} tree="owner" />
         <TaskQueueBoard
           plain
           clientSlug={clientSlug}

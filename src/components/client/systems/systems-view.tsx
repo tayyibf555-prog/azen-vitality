@@ -23,18 +23,55 @@ import { cn } from "@/lib/utils";
 // Tabs mounts only the ACTIVE panel, so the sync read costs nothing until
 // somebody opens it.
 
-interface SystemRow {
+export interface SystemRow {
   slug: string;
   label: string;
   group: string;
   halts: string;
+  /**
+   * What switching it ON starts. Comes from /api/systems, which reads it from
+   * src/lib/systems/vocabulary.ts — by reference from the agent roster for every
+   * system that is an agent, so it cannot drift from the switch-on runbook.
+   * Null only for a system with no sentence written, which a test forbids.
+   */
+  starts: string | null;
+  /** What has to be in place before that first tick can work. */
+  needsFirst: string[];
   enabled: boolean;
   updatedAt: string | null;
   updatedBy: string | null;
 }
 
 // Render groups in this order; anything unexpected falls to the end.
-const GROUP_ORDER = ["Patient lifecycle", "Acquisition", "Conversational agents", "Operations"];
+//
+// "Dentally" is LAST and is a group of one: the master lever over everything
+// this platform writes back to the practice's book. It is drawn after the
+// systems it governs, immediately above the Dentally sync tab's own subject
+// matter, rather than buried in Operations between Compliance and the IT desk.
+export const GROUP_ORDER = [
+  "Patient lifecycle",
+  "Acquisition",
+  "Conversational agents",
+  "Operations",
+  "Dentally",
+];
+
+/**
+ * The one line under a system's name.
+ *
+ * EXTRACTED SO IT CAN BE TESTED, because the rule it encodes is the whole point
+ * of the change and it used to be the wrong way round: an OFF row printed what
+ * would stop if you switched it off — a fact about the state it is already in —
+ * and an ON row printed nothing but "Running.". Each row now answers the
+ * question its own state raises.
+ *
+ * The `?? halts` fallback covers a system with no switch-on sentence written.
+ * vocabulary.test.ts forbids that case, so the fallback is a belt on a screen
+ * rather than a licence to skip the sentence.
+ */
+export function systemRowSentence(row: Pick<SystemRow, "enabled" | "halts" | "starts">): string {
+  return row.enabled ? `Running. ${row.halts}` : row.starts ?? row.halts;
+}
 
 export function SystemsView({ clientSlug }: { clientSlug: string }) {
   const [rows, setRows] = useState<SystemRow[] | null>(null);
@@ -125,7 +162,19 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
       ) : (
         <div className="space-y-6">
           {groups.map(({ group, items }) => (
-            <SectionCard key={group} title={group} bodyClassName="p-0">
+            <SectionCard
+              key={group}
+              title={group}
+              // The one group that needs a line of its own: the master lever is
+              // not a module, and what it holds back is on the tab next to this
+              // one. Said once, here, rather than repeated on every row.
+              description={
+                group === "Dentally"
+                  ? "One lever above every module. Every write it holds back is listed on the Dentally sync tab."
+                  : undefined
+              }
+              bodyClassName="p-0"
+            >
               <ul className="divide-y divide-line">
                 {items.map((r) => (
                   <li key={r.slug} className="flex items-center justify-between gap-4 px-5 py-3.5">
@@ -138,10 +187,26 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
                           </span>
                         ) : null}
                       </p>
-                      <p className="mt-0.5 text-xs text-muted">
-                        {r.enabled ? "Running." : "Off. "}
-                        {!r.enabled ? r.halts : ""}
+                      {/* THE SENTENCE FOLLOWS THE SWITCH, AND IT USED TO BE THE
+                          WRONG WAY ROUND. A row that is OFF printed what would
+                          stop if you switched it off — a fact about a state it is
+                          already in — and a row that is ON printed nothing but
+                          "Running.". Each row now answers the question its own
+                          state raises: an off row says what switching it on
+                          starts, an on row says what switching it off stops. */}
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted">
+                        {systemRowSentence(r)}
                       </p>
+                      {/* `?? []` because a browser holding the new bundle can
+                          reach the previous deployment's route for a few seconds
+                          during a rollout, and a control panel is not the place
+                          to throw on a missing field. */}
+                      {!r.enabled && (r.needsFirst ?? []).length > 0 ? (
+                        <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                          <span className="font-semibold">Needs first:</span>{" "}
+                          {r.needsFirst.join(" · ")}
+                        </p>
+                      ) : null}
                     </div>
                     <SystemSwitch
                       enabled={r.enabled}

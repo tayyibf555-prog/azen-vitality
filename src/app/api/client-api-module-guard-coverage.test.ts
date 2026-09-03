@@ -573,7 +573,27 @@ describe("every signed-in-reachable API route locks its module against the clini
  * and the branch above checks the route's source really carries it. A route that
  * guards a universal module and nothing else fails, loudly, with its own name.
  */
-const UNIVERSAL_MODULES = new Set<string>(["co-pilot"]);
+/*
+ * "equipment" and "it-desk" joined this set on W2-A/1 — the programme
+ * coordinator's written ruling of 3 Sep 2026, that the IT desk and the equipment
+ * READ surfaces widen to all five clearances. A dental nurse is a
+ * `client_staff`, "the autoclave is beeping" and "I am locked out" are her
+ * questions, and neither module holds a scrap of patient data. Adding both slugs
+ * to CLINICIAN_SLUGS and STAFF_SLUGS made their `requireModuleApiAccess` guards
+ * admit every role, which is the inert-lock shape this sweep exists to catch.
+ * The assertion was right to fire, and the boundary moved rather than vanished:
+ *
+ *   equipment/[action]  REGISTER_WRITE_ACTIONS (import-preview, import, save,
+ *                       delete) clear `requireApproverRole` — owner, agency and
+ *                       the practice manager. `ask` is everybody's, which is the
+ *                       whole point of the ruling.
+ *   equipment/manual    every method is a write (upload, delete), so the approver
+ *                       guard is unconditional on the file.
+ *   itdesk/[action]     `set-contact` clears `requireOwnerRole`: who the practice
+ *                       escalates to changes what every member of staff is told
+ *                       to do. `ask` is everybody's.
+ */
+const UNIVERSAL_MODULES = new Set<string>(["co-pilot", "equipment", "it-desk"]);
 
 /**
  * The guard that actually denies, per route that guards a universal module.
@@ -589,6 +609,18 @@ const UNIVERSAL_MODULES = new Set<string>(["co-pilot"]);
 const UNIVERSAL_MODULE_SECOND_LOCK: Record<string, string> = {
   copilot: 'requireCapability(auth, "system.copilot.ask")',
   "authorities/[action]": "requireOwnerRole(auth)",
+  //   equipment/[action]  `requireApproverRole` on the four register-WRITE
+  //                       actions. The chat and the register read are open by
+  //                       ruling; importing a CSV, adding, editing and deleting
+  //                       an item are the owner's and the practice manager's,
+  //                       because the register is the document shown to CQC.
+  //   equipment/manual    the same guard, unconditional: every method here
+  //                       replaces or removes the document the desk answers the
+  //                       whole practice from.
+  //   itdesk/[action]     `requireOwnerRole` on set-contact.
+  "equipment/[action]": "requireApproverRole(auth)",
+  "equipment/manual": "requireApproverRole(auth)",
+  "itdesk/[action]": "requireOwnerRole(auth)",
 };
 
 const RECORD_TIER_GUARDS = new Set<string>([
@@ -1059,7 +1091,18 @@ describe("the clinician exemptions name their roles, and deny every other role p
     // rests on — the two facts above are what the derived denial sets are built
     // from, and the co-pilot reaches neither the diary nor the patient database
     // for a staff session (one tool, `my_work`, about the person signed in).
-    expect([...STAFF_SLUGS].sort()).toEqual(["", "co-pilot", "my-work"]);
+    // The fourth and fifth arrived on W2-A/1 (coordinator's ruling, 3 Sep 2026):
+    // the equipment desk and the IT desk, widened to every clearance because a
+    // dental nurse is a `client_staff` and "the autoclave is beeping" is her
+    // question. They change NOTHING this block rests on either: neither module
+    // touches an appointment or a patient row, both are declared in
+    // UNIVERSAL_MODULES above with the second lock each route carries, and the
+    // two facts asserted above — no "patients", no "calendar" — are still what
+    // the derived denial sets are built from.
+    //
+    // NAMED, not counted: the assertion stays an exact set, so a sixth slug is a
+    // red test and a decision, never a drift.
+    expect([...STAFF_SLUGS].sort()).toEqual(["", "co-pilot", "equipment", "it-desk", "my-work"]);
   });
 });
 

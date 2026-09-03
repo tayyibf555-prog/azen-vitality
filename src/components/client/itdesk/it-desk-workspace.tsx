@@ -7,6 +7,9 @@ import { DeskChat } from "@/components/client/desk/desk-chat";
 import { cn } from "@/lib/utils";
 import { AREA_LABELS, type Playbook, type PlaybookArea } from "@/lib/itdesk/types";
 import type { ContactForm } from "@/lib/itdesk/view";
+// One first step, shared with Home's Operating system band. See
+// src/lib/systems/first-steps.ts.
+import { firstStepFor } from "@/lib/systems/first-steps";
 
 // ===========================================================================
 // THE IT DESK'S WORKSPACE: three tabs.
@@ -41,7 +44,22 @@ export function ItDeskWorkspace({
   systemEnabled: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<TabKey>("ask");
+  // WHICH TAB A PRACTICE THAT HAS NOT SET ANYTHING UP OPENS ON.
+  //
+  // It used to be "ask", always, which meant a practice with no IT contact set
+  // landed on a chat whose entire purpose at the end of a playbook is to hand
+  // somebody a phone number it does not have — and the sentence saying so sat
+  // one tab away, unread. So an unconfigured desk opens on the thing that
+  // configures it, exactly as the equipment register does (it opens on Register
+  // when there is no equipment). A configured one is unchanged and still opens
+  // on the chat, which is what it is for.
+  //
+  // `contact`, not `form`: the prop is the server's answer, and the initial
+  // state is computed once, so a person clearing the phone field mid-edit does
+  // not throw themselves onto another tab.
+  const [tab, setTab] = useState<TabKey>(
+    contact.phone?.trim() || contact.email?.trim() ? "ask" : "contact",
+  );
   const [form, setForm] = useState<ContactForm>(contact);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -185,8 +203,9 @@ export function ItDeskWorkspace({
               Nothing has been lost — try again in a moment.
             </p>
           ) : !hasContact ? (
-            <p className="rounded-[8px] border border-line bg-tile px-3 py-2 text-[12.5px] text-navy">
-              No IT contact has been added yet. Until one is, the desk will say so plainly when it runs out of steps
+            <p className="rounded-[8px] border border-line bg-tile px-3 py-2 text-[12.5px] leading-relaxed text-navy">
+              <span className="font-semibold">No IT contact has been added yet.</span>{" "}
+              {firstStepFor("it-desk")?.step} Until one is set, the desk says so plainly when it runs out of steps
               rather than inventing a number.
             </p>
           ) : null}

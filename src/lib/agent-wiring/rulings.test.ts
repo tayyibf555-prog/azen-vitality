@@ -417,10 +417,43 @@ describe("ruling 5: a switch flipped mid-run stops the run", () => {
       "src/app/api/noshow/sweep/route.ts",
       "src/app/api/coordinator/sweep/route.ts",
       "src/app/api/reviews/sweep/route.ts",
+      // NAMED DELTA, 3 Sep 2026 (lane W2-C). The ruling enumerated five sweeps
+      // because those were the five that existed when it was written. The
+      // speed-to-lead SLA sweep is a SIXTH long-running drafting loop with the
+      // same shape — maxDuration 300, one model call per lead — and W2-C caught
+      // it drafting past a mid-run switch-off. It is added here rather than the
+      // assertion being loosened: the list grows, the rule does not bend.
+      "src/app/api/speed-to-lead/sweep/route.ts",
     ]) {
       const src = readFileSync(route, "utf8");
       expect(src, route).toContain("liveSwitch(");
       expect(src, route).toContain("gate.stillOn()");
     }
+  });
+
+  it("the speed-to-lead SLA sweep is the sixth, because the abandoned rescue rides it", async () => {
+    // WHY THIS ROUTE IS NAMED SEPARATELY. Every other sweep on the list gates its
+    // own agent. This one also hosts the abandoned-booking rescue, which has no
+    // sweep of its own — roster.ts names this very file as the rescue's guard —
+    // so an ungated loop here left the one agent the ruling's five did not cover
+    // drafting for the rest of the run. Behaviour is proven against the real
+    // route in src/app/api/speed-to-lead/sweep/switch-recheck.test.ts; what is
+    // pinned here is that the gate is consulted BEFORE the lead is claimed, so a
+    // stopped run strands nothing at 'contacting'.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("src/app/api/speed-to-lead/sweep/route.ts", "utf8");
+
+    const { AGENT_BY_KEY } = await import("@/lib/agent-wiring/roster");
+    expect(AGENT_BY_KEY.get("abandoned-booking-rescue")?.guard).toBe(
+      "src/app/api/speed-to-lead/sweep/route.ts",
+    );
+
+    const gateAt = src.indexOf("gate.stillOn()");
+    const claimAt = src.indexOf("claimLeadForContact(lead.id)");
+    expect(gateAt, "the sweep has no mid-run gate").toBeGreaterThan(-1);
+    expect(claimAt).toBeGreaterThan(-1);
+    expect(gateAt, "the sweep claims a lead before asking whether the switch is still on").toBeLessThan(
+      claimAt,
+    );
   });
 });

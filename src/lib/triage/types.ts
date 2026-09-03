@@ -279,10 +279,29 @@ export interface TriageTarget {
   updatedAt: string;
 }
 
-/** One answer as stored. `value` is always a string; the summary formats it. */
+/**
+ * One answer as stored. `value` is always a string; the summary formats it.
+ *
+ * `kind` TRAVELS WITH THE ANSWER, and it is REQUIRED rather than optional.
+ *
+ * The summary splits the answers on their kind — `symptom` is the half the
+ * practice manager may not read (ruling W1-C/2) — so the projection has to know
+ * every answer's real kind, including for a question the PRACTICE wrote in the
+ * owner editor and which no shipped bank can name. Stamping it here, from the same
+ * projection that rendered the form, is what makes that classification survive
+ * into the summary and keep surviving after the owner has deleted the question.
+ *
+ * Required at the type level ON PURPOSE: a caller that stores an answer without
+ * saying what kind of question it was is a compile error, not a row that later
+ * defaults to the unrestricted class. What is stored can still be missing or junk
+ * (it is a jsonb column), which is the OTHER half of the rule — see
+ * `readStoredAnswers` and `UNKNOWN_ANSWER_KIND` in ./kind.ts, where an unknown
+ * kind resolves to `symptom` and never to `logistics`.
+ */
 export interface TriageAnswer {
   key: string;
   value: string;
+  kind: TriageQuestionKind;
 }
 
 /** One completed pre-visit questionnaire. */

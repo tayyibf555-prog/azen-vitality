@@ -9,6 +9,7 @@ import {
 } from "@/lib/systems/catalog";
 import { CORRESPONDENCE_SOURCE_NAMES } from "@/lib/inbox/repository";
 import { SOURCE_LABEL } from "@/lib/inbox/delivery";
+import { NAV_SWITCH_EXEMPT_SLUGS } from "@/lib/nav";
 import { TRIAGE_DRAIN_SOURCE, TRIAGE_SYSTEM_SLUG } from "./types";
 
 // ===========================================================================
@@ -99,6 +100,64 @@ describe("the kill switch reaches every surface this module has", () => {
     expect(gate).toBeGreaterThan(0);
     expect(enqueue).toBeGreaterThan(0);
     expect(gate, "the kill switch must be checked before anything is queued").toBeLessThan(enqueue);
+  });
+});
+
+// ===========================================================================
+// WHAT THE SWITCH DOES *NOT* HALT — ruling W2-C/4 (3 Sep 2026).
+//
+// "The `pre-visit-triage` kill switch halts SENDING and the PATIENT-FACING form,
+// not the owner's preparation. The owner bank editor + /api/previsit/bank + the
+// /c/[client]/pre-visit-triage page are switch-EXEMPT by ruling (same posture as
+// equipment/it-desk NAV_SWITCH_EXEMPT — the banks are preparable before
+// switch-on); add them to the named exemption list with the citation, not as a
+// silent omission."
+//
+// The exemption is the same shape as W1-D's for equipment and IT desk, and the
+// argument is sharper here: the module seeds OFF twice over, and its page IS the
+// preparation surface — the owner's own instruction is "review the two question
+// lists, then switch on". A switch that hid that screen would leave an owner with
+// a system they cannot prepare and therefore cannot sensibly turn on.
+//
+// AN EXEMPTION IS ONLY SAFE IF THE EXEMPT SURFACES CANNOT SEND, so that is
+// asserted here too rather than assumed. Everything that reaches a patient — the
+// sweep, the outbox, the public page, the public submit — is gated above, and the
+// two exempt surfaces are three reads and one owner-only save.
+// ===========================================================================
+describe("the switch halts sending and the patient's form, NEVER the owner's preparation (W2-C/4)", () => {
+  it("the module is on the named nav exemption list, not silently omitted", () => {
+    expect(
+      NAV_SWITCH_EXEMPT_SLUGS.has(TRIAGE_SYSTEM_SLUG),
+      "pre-visit-triage is missing from NAV_SWITCH_EXEMPT_SLUGS, so an owner cannot reach the banks to prepare them",
+    ).toBe(true);
+  });
+
+  it("the owner's page is role-gated and NOT switch-gated", () => {
+    const src = sourceOf("src/app/c/[client]/pre-visit-triage/page.tsx");
+    expect(src).toContain('requireModuleAccess("pre-visit-triage")');
+    expect(
+      src,
+      "the preparation page checks the kill switch, so the banks cannot be reviewed before switch-on",
+    ).not.toContain("isSystemEnabled");
+  });
+
+  it("/api/previsit/bank is OWNER-gated and NOT switch-gated", () => {
+    const src = sourceOf("src/app/api/previsit/bank/route.ts");
+    expect(src).toContain("requireOwnerRole(");
+    expect(src, "the bank editor's own route is switch-gated").not.toContain("isSystemEnabled");
+  });
+
+  it("...and neither exempt surface can send a thing while the system is off", () => {
+    // This is what makes the exemption a scoped one rather than a hole: the route
+    // reaches no outbox, mints no link, and queues nothing.
+    const src = sourceOf("src/app/api/previsit/bank/route.ts");
+    for (const sending of ["enqueueSend", "mintTriageLinkToken", "previsit_outbox", "previsit_touch"]) {
+      expect(src, `the bank route reaches ${sending}`).not.toContain(sending);
+    }
+    const page = sourceOf("src/app/c/[client]/pre-visit-triage/page.tsx");
+    for (const sending of ["enqueueSend", "mintTriageLinkToken"]) {
+      expect(page, `the preparation page reaches ${sending}`).not.toContain(sending);
+    }
   });
 });
 

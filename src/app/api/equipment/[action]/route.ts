@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import { runAgentTurn } from "@/lib/agent/run";
-import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess, requireApproverRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import type { Client as PracticeClient } from "@/lib/types";
 import { getClient, getSites } from "@/lib/mock/clients";
@@ -38,10 +38,20 @@ export const maxDuration = 60;
 // AUTHORISATION, and every action carries all of it:
 //   requireUser            somebody is signed in
 //   requireClientAccess    they belong to this practice
-//   requireModuleApiAccess they hold the 'equipment' module — which, because the
-//                          nav entry names owner + agency + practice manager, is
-//                          the whole of the owner/manager restriction, enforced
-//                          at the API layer and not merely on the page.
+//   requireModuleApiAccess they hold the 'equipment' module — which, on the
+//                          programme coordinator's ruling of 3 Sep 2026 (W2-A/1),
+//                          is now EVERY authenticated role: a dental nurse asking
+//                          "the autoclave is beeping" is what this module is for,
+//                          and it holds no patient data.
+//   requireApproverRole    ON THE WRITING ACTIONS ONLY, and this is the lock the
+//                          module gate stopped being. The register READ, the
+//                          manual search and the chat are everybody's; importing
+//                          a CSV, adding, editing or deleting an item are the
+//                          owner's and the practice manager's, because the
+//                          register is the document the practice shows CQC and a
+//                          nurse correcting a serial number by hand is not what
+//                          the widening was for. Enforced here, per action, not
+//                          on the page.
 //
 // THE KILL SWITCH IS ON `ask` ONLY, and that is deliberate. 'equipment' is
 // declared defaultEnabled:false, so an absent toggle row AND an unreadable
@@ -158,6 +168,26 @@ export async function POST(
   if (gate.denied) return gate.denied;
   const { auth, client } = gate;
   const actor = auth?.id ?? "owner";
+
+  // THE WRITE LOCK, and it stands between the module gate and every action that
+  // changes the register.
+  //
+  // It is a SET rather than a check inside each case, because the failure mode
+  // being guarded against is a sixth action added below without one: a list a
+  // reader can see at the top of the dispatch is checked by eye every time
+  // somebody edits it, and a call buried in a case body is not. `import-preview`
+  // is in it even though it writes nothing — it parses the CSV that the very next
+  // request writes, and splitting the two halves of one flow across two
+  // clearances is how a nurse ends up staring at a preview she cannot apply.
+  //
+  // `requireApproverRole` = agency admin + practice owner + practice manager
+  // (APPROVER_ROLES, src/lib/absence/rules.ts). It is a no-op when no session is
+  // enforced, exactly like every other guard in this codebase.
+  const REGISTER_WRITE_ACTIONS = new Set(["import-preview", "import", "save", "delete"]);
+  if (REGISTER_WRITE_ACTIONS.has(action)) {
+    const writeDenied = requireApproverRole(auth);
+    if (writeDenied) return writeDenied;
+  }
 
   switch (action) {
     // -----------------------------------------------------------------------

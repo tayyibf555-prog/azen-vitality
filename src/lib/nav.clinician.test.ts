@@ -266,6 +266,52 @@ const WIDENED_COPILOT_ALL_CLEARANCES: Record<string, string[]> = {
   client_clinician: ["co-pilot"],
 };
 
+/**
+ * WIDENED, Dental OS W2-A/1 — the equipment desk and the IT desk, for the two
+ * allow-list roles.
+ *
+ * Its own map rather than a line appended to ADDED_DESKS, for the reason every
+ * layer in this file states about itself: a delta folded into the layer beneath
+ * it stops being reviewable as a delta. ADDED_DESKS records that the two modules
+ * shipped owner + agency + practice manager, and its comment says in as many
+ * words that the line was "deliberate and slightly uncomfortable for the IT desk
+ * in particular — a nurse who cannot print is exactly the person it would help"
+ * and would only move "on written instruction". This is that instruction.
+ *
+ * THE RULING (programme coordinator, 3 Sep 2026): the IT desk and the equipment
+ * READ surfaces widen to ALL five clearances, including clinician and
+ * client_staff. A dental nurse is a client_staff; "the autoclave is beeping" and
+ * "I'm locked out" are her questions; neither module holds patient data; and
+ * both agents' gates already refuse credentials and safety bypasses.
+ *
+ * WHAT THE SLUG BUYS, AND WHAT IT DOES NOT. The slug is the door.
+ *   equipment  read the register, search the manuals, ask the desk. The CSV
+ *              import and adding, editing or deleting an item clear
+ *              `requireApproverRole` per action in
+ *              src/app/api/equipment/[action]/route.ts, and every method of
+ *              .../equipment/manual/route.ts clears it unconditionally — so a
+ *              nurse can read the register the practice shows CQC and cannot
+ *              rewrite it.
+ *   it-desk    ask the desk, read the playbooks. Setting the practice's IT
+ *              contact stays `requireOwnerRole`, because who the practice
+ *              escalates to changes what every member of staff is told to do.
+ *
+ * Both slugs are consequently modules NO role is denied, which makes their
+ * module guard inert on its own. That is declared in
+ * src/app/api/client-api-module-guard-coverage.test.ts's UNIVERSAL_MODULES with
+ * the second lock each route carries, so the sweep now demands MORE of them.
+ *
+ * `indexRedirectFor` is untouched. A client_staff login still lands on My work
+ * and the practice dashboard's money and diary are still never fetched for it;
+ * these two modules are reached from the nav, not from the landing.
+ */
+const WIDENED_DESKS_ALL_CLEARANCES: Record<string, string[]> = {
+  agency_admin: [],
+  client_owner: [],
+  client_coordinator: [],
+  client_clinician: ["equipment", "it-desk"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<string, string[]> = {
   agency_admin: ["practice-brain"],
@@ -289,6 +335,7 @@ describe("1. the existing three roles are byte-identical apart from the named de
         ...ADDED_PREVISIT[role],
         ...ADDED_DESKS[role],
         ...WIDENED_COPILOT_ALL_CLEARANCES[role],
+        ...WIDENED_DESKS_ALL_CLEARANCES[role],
       ];
       expect(sorted(navSlugs(role))).toEqual(sorted(expected));
     },
@@ -305,6 +352,7 @@ describe("1. the existing three roles are byte-identical apart from the named de
         ...ADDED_PREVISIT[role],
         ...ADDED_DESKS[role],
         ...WIDENED_COPILOT_ALL_CLEARANCES[role],
+        ...WIDENED_DESKS_ALL_CLEARANCES[role],
         ...EXTRA_ALLOWED_NOT_IN_NAV[role],
       ];
       expect(sorted(allowedSlugs(role))).toEqual(sorted(expected));
@@ -393,7 +441,7 @@ describe("6. CLINICIAN_SLUGS contains only real modules", () => {
     }
   });
 
-  it("names the exact seven modules a clinician gets", () => {
+  it("names the exact nine modules a clinician gets", () => {
     // WAS FIVE. "my-work" was added in campaign 6 and this pin moved with it,
     // deliberately: the clinician's allow-list is the tightest in the platform and a
     // silent addition to it is exactly what this assertion exists to catch, so the
@@ -414,8 +462,27 @@ describe("6. CLINICIAN_SLUGS contains only real modules", () => {
     // with NO act domain at all, so it cannot send, book, cancel or create
     // anything. That catalog is enforced server-side on every turn and is pinned
     // in src/lib/copilot/clearance.test.ts, not here.
+    //
+    // NOW NINE. "equipment" and "it-desk" were added on the programme
+    // coordinator's written ruling of 3 Sep 2026 (Dental OS, W2-A/1) — see
+    // WIDENED_DESKS_ALL_CLEARANCES above for the ruling in full. Neither module
+    // holds a patient row or an appointment: one is the practice's machine
+    // register and its manuals, the other is a troubleshooting chat with the
+    // practice's playbooks in it. The write half of each stays behind
+    // requireApproverRole / requireOwnerRole in the routes, so what this line
+    // grants a clinician is reading and asking, not editing.
     expect(sorted([...CLINICIAN_SLUGS])).toEqual(
-      sorted(["", "calendar", "patients", "absence", "staff-check-in", "my-work", "co-pilot"]),
+      sorted([
+        "",
+        "calendar",
+        "patients",
+        "absence",
+        "staff-check-in",
+        "my-work",
+        "co-pilot",
+        "equipment",
+        "it-desk",
+      ]),
     );
   });
 });

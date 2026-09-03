@@ -119,8 +119,24 @@ describe("1. the tables are total", () => {
     const covered = new Set(Object.values(TOOL_DOMAIN).map((d) => d.domain));
     const unimplementedReads = READ_DOMAINS.filter((d) => !covered.has(d));
     const unimplementedActs = ACT_DOMAINS.filter((d) => !covered.has(d));
-    expect(unimplementedReads).toEqual(["reports", "agent-status", "hr", "compliance", "controls"]);
-    expect(unimplementedActs).toEqual(["diary-write", "task-create"]);
+    // WAVE 2, LANE A IS THE MECHANISM'S FIRST REAL TEST, and it passed: three of
+    // the seven declared-and-toolless domains (agent-status, controls,
+    // diary-write) got a tool this wave and every one of them landed OWNER-ONLY
+    // without anybody re-deciding, because the decision was already written down.
+    // Four remain, and they are still owner-only:
+    //   reports        business performance, ROI, UDA. No tool yet.
+    //   hr             other people's rota, hours, pay and documents.
+    //   compliance     CQC/GDC readiness, audits, the training matrix.
+    //   task-create    DELIBERATELY still toolless: the task queue is COMPUTED
+    //                  (src/lib/task-queue/generate.ts computes candidates on
+    //                  read and stores none; task_overlay persists only the
+    //                  done/snoozed/assigned state of a computed task). There is
+    //                  no authored-task write path to route a tool through, so a
+    //                  `create_task` would have had to invent a table. The domain
+    //                  stays declared so the answer for the manager is already
+    //                  written on the day one exists.
+    expect(unimplementedReads).toEqual(["reports", "hr", "compliance"]);
+    expect(unimplementedActs).toEqual(["task-create"]);
     // Held by the owner and by nobody else, so the day a tool lands in one of
     // them it lands owner-only rather than wherever it fell.
     for (const level of COPILOT_ACCESS_LEVELS) {
@@ -151,30 +167,39 @@ describe("2. the catalog is derived, and it is what it should be", () => {
     expect([...TOOL_CATALOG.full].sort()).toEqual([...COPILOT_TOOL_NAMES].sort());
   });
 
-  it("hands the manager exactly six, named", () => {
+  it("hands the manager exactly ten, named", () => {
     expect([...TOOL_CATALOG.manager].sort()).toEqual([
       "appointments",
+      "equipment_lookup",
+      "interest_lists",
+      "it_desk",
       "list_recent_assessment_leads",
       "list_speed_to_lead",
       "patient_record",
+      "previsit_summary",
       "search_knowledge",
       "search_patients",
     ]);
   });
 
-  it("hands the clinician their patients, their diary, the brain, their own work and second opinion", () => {
+  it("hands the clinician their patients, their diary, the brain, their own work, second opinion and the pre-visit answers", () => {
     expect([...TOOL_CATALOG.clinician].sort()).toEqual([
       "appointments",
+      "equipment_lookup",
+      "it_desk",
       "my_work",
       "patient_record",
+      "previsit_summary",
       "search_knowledge",
       "search_patients",
       "second_opinion",
     ]);
   });
 
-  it("hands a member of staff ONE tool, and it is their own work", () => {
-    expect([...TOOL_CATALOG.staff]).toEqual(["my_work"]);
+  it("hands a member of staff THREE tools: their own work, and the two desks", () => {
+    // ONE until ruling W2-A/1. The exact set is spelled out rather than derived,
+    // so a fourth has to be typed here by somebody who meant it.
+    expect([...TOOL_CATALOG.staff].sort()).toEqual(["equipment_lookup", "it_desk", "my_work"]);
   });
 
   it("hands 'none' nothing at all, over the whole tool list", () => {
@@ -261,8 +286,13 @@ const BEFORE: Record<string, CopilotToolName[]> = {
   none: [],
 };
 
-/** What this lane deliberately GIVES, with the reason. */
-const WIDENED: Record<string, CopilotToolName[]> = {
+/**
+ * What W1-E deliberately gave, with the reason. UNCHANGED BY WAVE 2 — this is the
+ * clearance lane's own delta and it stays exactly as that lane left it, so its
+ * claim ("the practice manager gained nothing at all") can still be read and
+ * checked a year from now rather than being absorbed into a running total.
+ */
+const WIDENED_W1E: Record<string, CopilotToolName[]> = {
   // Two new tools, and the owner holds every domain, so the owner gets both.
   full: ["second_opinion", "my_work"],
   // NOTHING. The whole claim of this lane about the practice manager.
@@ -282,6 +312,74 @@ const WIDENED: Record<string, CopilotToolName[]> = {
   staff: ["my_work"],
   none: [],
 };
+
+/**
+ * WHAT WAVE 2, LANE A DELIBERATELY GIVES. Seven tools, and the placement of every
+ * one of them was decided before the tool existed:
+ *
+ *   agent_status   read `agent-status`   — declared owner-only by W1-E and by the
+ *                                          programme decisions log. The manager
+ *                                          asking "is the recall agent running"
+ *                                          is asking about System controls, which
+ *                                          her nav does not give her either.
+ *   sync_status    read `controls`       — same ruling, same domain. It reports
+ *                                          the master Dentally write-back switch,
+ *                                          which is the definition of a control.
+ *   previsit_summary read `patients`     — one patient's record, so every login
+ *                                          that holds `patients` gets it. The
+ *                                          SYMPTOM half is projected inside the
+ *                                          tool by the triage module's own
+ *                                          CLINICAL_SUMMARY_ROLES (W1-C/2), which
+ *                                          is a narrower rule applied ON TOP of
+ *                                          this one, never instead of it.
+ *   interest_lists read `leads`          — the acquisition pipeline, which the
+ *                                          manager already holds.
+ *   equipment_lookup read `equipment`    — a NEW domain, granted to owner and
+ *                                          manager to match the module's own nav
+ *                                          entry and the charter's W1-D line.
+ *   it_desk        read `it-desk`        — a NEW domain, same two roles, same two
+ *                                          reasons.
+ *   diary_write    act `diary-write`     — declared owner-only by W1-E. The
+ *                                          riskiest tool in the wave landed in
+ *                                          the narrowest place, without a
+ *                                          judgement call being made under
+ *                                          pressure, which is what declaring the
+ *                                          domain early was for.
+ *
+ * THE CLINICIAN AND STAFF ROWS. The clinician gains `previsit_summary` and
+ * nothing else, because `patients` is a domain they already held; staff gain
+ * NOTHING, because `self` is still the only domain on their row.
+ */
+const WIDENED_W2A: Record<string, CopilotToolName[]> = {
+  full: [
+    "agent_status",
+    "sync_status",
+    "previsit_summary",
+    "interest_lists",
+    "equipment_lookup",
+    "it_desk",
+    "diary_write",
+  ],
+  manager: ["previsit_summary", "interest_lists", "equipment_lookup", "it_desk"],
+  // RULING W2-A/1 (the programme coordinator, 3 Sep 2026): the two desks widen to
+  // EVERY clearance. The clinician therefore gains three, not one.
+  clinician: ["previsit_summary", "equipment_lookup", "it_desk"],
+  // ...and the staff row, which had gained nothing from this lane, gains the two
+  // desks. It is the row the ruling was asked for: a dental nurse is a
+  // `client_staff` login and those are her two questions. She gains NO patient
+  // data, NO diary and NO knowledge — asserted by enumeration below.
+  staff: ["equipment_lookup", "it_desk"],
+  none: [],
+};
+
+/**
+ * The two deltas, composed. The equation the tests below assert is
+ * `(BEFORE - TIGHTENED) + WIDENED_W1E + WIDENED_W2A`, so each lane's own claim
+ * survives as a readable list and neither can absorb the other's widening.
+ */
+const WIDENED: Record<string, CopilotToolName[]> = Object.fromEntries(
+  COPILOT_ACCESS_LEVELS.map((level) => [level, [...WIDENED_W1E[level], ...WIDENED_W2A[level]]]),
+) as Record<string, CopilotToolName[]>;
 
 /** What this lane deliberately TAKES AWAY. Nothing, and that is asserted. */
 const TIGHTENED: Record<string, CopilotToolName[]> = {
@@ -318,11 +416,91 @@ describe("3. the non-widening snapshot", () => {
     }
   });
 
-  it("THE PRACTICE MANAGER GAINED NOTHING AT ALL", () => {
+  it("THE PRACTICE MANAGER GAINED NOTHING AT ALL FROM THE CLEARANCE LANE", () => {
     // Stated on its own line because it is the claim the owner asked for, and a
     // claim buried inside an it.each is a claim nobody reads in a failure log.
-    expect(WIDENED.manager).toEqual([]);
-    expect([...TOOL_CATALOG.manager].sort()).toEqual([...BEFORE.manager].sort());
+    // It is about W1-E and it is still true: that lane, which opened the co-pilot
+    // to two new logins, handed the practice manager not one extra tool.
+    expect(WIDENED_W1E.manager).toEqual([]);
+  });
+
+  it("and from WAVE 2, LANE A she gained exactly four, each one named", () => {
+    // The second lane DID widen her, so the claim is restated as an equation
+    // rather than quietly dropped. Four tools, every one of them a subject she
+    // already works in on a screen she already has.
+    expect([...WIDENED_W2A.manager].sort()).toEqual([
+      "equipment_lookup",
+      "interest_lists",
+      "it_desk",
+      "previsit_summary",
+    ]);
+    const before = new Set<string>(BEFORE.manager);
+    expect([...TOOL_CATALOG.manager].filter((n) => !before.has(n)).sort()).toEqual(
+      [...WIDENED_W2A.manager].sort(),
+    );
+    // AND THE DOORS THAT STAYED SHUT. Money, reports, marketing performance, the
+    // controls and every act: this lane wrote a tool in two of those subjects
+    // (agent_status and sync_status are both `controls`-adjacent, diary_write is
+    // an act) and she reached none of them.
+    for (const name of ["agent_status", "sync_status", "diary_write"] as const) {
+      expect(catalogAllows("manager", name), `manager reached ${name}`).toBe(false);
+    }
+  });
+
+  it("STAFF GAINED EXACTLY THE TWO DESKS, and the exact set is pinned", () => {
+    // The row gained nothing from W1-E and nothing from the first cut of this
+    // lane; ruling W2-A/1 gave it the two desks and NOTHING else. Stated as the
+    // equation, and then as the literal set, because this is the row where an
+    // accidental extra grant would be a patient-data leak.
+    expect([...WIDENED_W2A.staff].sort()).toEqual(["equipment_lookup", "it_desk"]);
+    expect(WIDENED_W1E.staff).toEqual(["my_work"]);
+    expect([...TOOL_CATALOG.staff].sort()).toEqual(["equipment_lookup", "it_desk", "my_work"]);
+    // AND THE DOORS THAT STAYED SHUT, over the WHOLE toolbox rather than a
+    // sample: everything that is not one of those three is denied.
+    const held = new Set<string>(TOOL_CATALOG.staff);
+    for (const name of COPILOT_TOOL_NAMES) {
+      if (held.has(name)) continue;
+      expect(catalogAllows("staff", name), `staff reached ${name}`).toBe(false);
+    }
+  });
+
+  it("THE CLINICIAN GAINED THREE, and the exact set is pinned", () => {
+    expect([...WIDENED_W2A.clinician].sort()).toEqual([
+      "equipment_lookup",
+      "it_desk",
+      "previsit_summary",
+    ]);
+    expect([...TOOL_CATALOG.clinician].sort()).toEqual([
+      "appointments",
+      "equipment_lookup",
+      "it_desk",
+      "my_work",
+      "patient_record",
+      "previsit_summary",
+      "search_knowledge",
+      "search_patients",
+      "second_opinion",
+    ]);
+    const held = new Set<string>(TOOL_CATALOG.clinician);
+    for (const name of COPILOT_TOOL_NAMES) {
+      if (held.has(name)) continue;
+      expect(catalogAllows("clinician", name), `clinician reached ${name}`).toBe(false);
+    }
+  });
+
+  it("the two desks are the ONLY domains held by every clearance that has any", () => {
+    // The shape ruling W2-A/1 created, stated once: `equipment` and `it-desk` are
+    // now universal, and nothing else is. If a future edit made `patients` or
+    // `money` universal by copying this pattern, this goes red.
+    const levels = COPILOT_ACCESS_LEVELS.filter((l) => l !== "none");
+    const universal = READ_DOMAINS.filter((d) =>
+      levels.every((l) => (ACCESS_DOMAINS[l].reads as readonly string[]).includes(d)),
+    );
+    expect(universal.sort()).toEqual(["equipment", "it-desk"]);
+    // 'none' still holds nothing at all, desks included.
+    expect(ACCESS_DOMAINS.none.reads).toEqual([]);
+    expect(catalogAllows("none", "equipment_lookup")).toBe(false);
+    expect(catalogAllows("none", "it_desk")).toBe(false);
   });
 
   it("is not vacuous: the baseline is the real nineteen and the levels really differ", () => {
@@ -380,7 +558,7 @@ describe("4. the practice manager's closed doors", () => {
   it("is never SHOWN a tool she may not run", () => {
     const shown = copilotToolsFor("manager", COPILOT_TOOLS).map((t) => t.name);
     expect(shown.sort()).toEqual([...TOOL_CATALOG.manager].sort());
-    expect(shown).toHaveLength(6);
+    expect(shown).toHaveLength(10);
     // And the schemas handed over are the REAL objects, not copies.
     for (const tool of copilotToolsFor("manager", COPILOT_TOOLS)) {
       expect(COPILOT_TOOLS).toContain(tool);
@@ -418,17 +596,20 @@ describe("5. the clinician and the member of staff", () => {
     for (const d of forbidden) {
       expect(ACCESS_DOMAINS.staff.reads as readonly string[], `staff holds ${d}`).not.toContain(d);
     }
-    expect(ACCESS_DOMAINS.staff.reads).toEqual(["self"]);
+    // Three domains since ruling W2-A/1, and the two new ones are exactly the two
+    // that hold no patient data, no diary and no figure.
+    expect([...ACCESS_DOMAINS.staff.reads].sort()).toEqual(["equipment", "it-desk", "self"]);
   });
 
-  it("a member of staff is shown exactly one tool, and it takes no staff id", () => {
+  it("a member of staff is shown three tools, and my_work still takes no staff id", () => {
     const shown = copilotToolsFor("staff", COPILOT_TOOLS);
-    expect(shown.map((t) => t.name)).toEqual(["my_work"]);
+    expect(shown.map((t) => t.name).sort()).toEqual(["equipment_lookup", "it_desk", "my_work"]);
     // THE SELF-SERVICE RULE, checked on the schema itself: a tool that accepted a
     // staff id, a name or an email would be a tool a model could be talked into
     // pointing at a colleague. There is no such property to fill in.
+    const myWork = shown.find((t) => t.name === "my_work")!;
     const props = Object.keys(
-      (shown[0].input_schema as { properties?: Record<string, unknown> }).properties ?? {},
+      (myWork.input_schema as { properties?: Record<string, unknown> }).properties ?? {},
     );
     expect(props.sort()).toEqual(["days", "section"]);
     for (const forbidden of ["staffId", "staff", "name", "email", "person", "who"]) {
@@ -492,8 +673,13 @@ describe("6. it composes with the three locks around it, and widened none of the
     for (const role of ALL_ROLES) {
       expect(ROLE_DEFAULTS[role].has("system.copilot.ask"), `${role} may not ask`).toBe(true);
     }
-    expect([...TOOL_CATALOG.staff]).toEqual(["my_work"]);
-    expect([...TOOL_CATALOG.manager].sort()).toEqual([...BEFORE.manager].sort());
+    expect([...TOOL_CATALOG.staff].sort()).toEqual(["equipment_lookup", "it_desk", "my_work"]);
+    // The manager's surface is what W1-E left plus the four wave-2 tools that
+    // were named for her, and nothing else — asserted as the equation rather than
+    // as a bare list, so a fifth cannot arrive with a green suite.
+    expect([...TOOL_CATALOG.manager].sort()).toEqual(
+      [...BEFORE.manager, ...WIDENED_W2A.manager].sort(),
+    );
     expect(TOOL_CATALOG.clinician).not.toContain("outstanding_balances");
   });
 
@@ -602,11 +788,11 @@ describe("8. the role view is the same model, read the other way round", () => {
       return `${r}|${c.access}|${c.tools.length}|tier${c.maxTier}|${c.reachableToday ? "live" : "declared"}`;
     });
     expect(table).toEqual([
-      "agency_admin|full|21|tier4|live",
-      "client_owner|full|21|tier4|live",
-      "client_coordinator|manager|6|tier2|live",
-      "client_clinician|clinician|6|tier1|live",
-      "client_staff|staff|1|tier1|live",
+      "agency_admin|full|28|tier4|live",
+      "client_owner|full|28|tier4|live",
+      "client_coordinator|manager|10|tier2|live",
+      "client_clinician|clinician|9|tier1|live",
+      "client_staff|staff|3|tier1|live",
     ]);
   });
 });

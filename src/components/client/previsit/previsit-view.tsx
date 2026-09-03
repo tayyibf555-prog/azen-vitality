@@ -6,6 +6,7 @@ import { INTEREST_TREATMENTS } from "@/lib/triage/bank";
 import { coverageSentence, exclusionSentence, MINING_CAVEATS, MINING_TITLE } from "@/lib/triage/mining";
 import { listCandidates, listCoverage } from "@/lib/triage/mining-repository";
 import { countInterestByTreatment, listInterest } from "@/lib/triage/repository";
+import { isSystemEnabled } from "@/lib/systems/repository";
 import { PreVisitWorkspace } from "./previsit-workspace";
 import type { MiningCoverage } from "@/lib/triage/mining";
 
@@ -44,11 +45,17 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
   // look broken rather than safe. The API route enforces it for real either way.
   const isOwner = user === null || user.role === "client_owner" || user.role === "agency_admin";
 
-  const [interestRows, interestCounts, candidates, coverage] = await Promise.all([
+  // The SWITCH is read alongside the lists, because on day one it is the whole
+  // explanation for why all three panels are empty: the system ships OFF and has
+  // therefore never asked anybody anything. `isSystemEnabled` is the read helper
+  // that already defaults a default-off system to off on a read failure, so an
+  // unreadable toggle shows the onboarding line rather than hiding it.
+  const [interestRows, interestCounts, candidates, coverage, systemEnabled] = await Promise.all([
     listInterest({ siteIds: scope.siteIds, limit: 400 }).catch(() => null),
     countInterestByTreatment(scope.siteIds).catch(() => null),
     listCandidates({ siteIds: scope.siteIds, limit: 300 }).catch(() => null),
     listCoverage(scope.siteIds).catch(() => null),
+    isSystemEnabled(client.id, "pre-visit-triage"),
   ]);
 
   // The COVERAGE across the sites in scope, merged into one honest window: the
@@ -95,6 +102,7 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
         miningCoverage={coverageSentence(merged)}
         miningExclusions={exclusionSentence(merged)}
         miningCaveats={[...MINING_CAVEATS]}
+        systemEnabled={systemEnabled}
       />
     </>
   );

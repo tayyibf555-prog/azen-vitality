@@ -205,7 +205,10 @@ export const AGENTS: readonly AgentDef[] = [
     firstTick:
       "A booking hold abandoned for 20 minutes becomes a lead, which the same sweep then " +
       "first-contacts like any other.",
-    bound: "At most 25 holds converted per tick.",
+    bound:
+      "At most 25 holds converted per tick, and — because the host sweep now uses the shared " +
+      "ten-row gate (ruling W1-B/5) — drafting stops within ten rows of the switch being turned " +
+      "off mid-run, rather than at the end of the batch.",
     verify: "Leads → a lead with source 'booking' and an attempt row.",
     stop: "Switch off 'speed-to-lead'.",
     gaps: [

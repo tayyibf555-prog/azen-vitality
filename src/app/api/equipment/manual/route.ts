@@ -1,4 +1,4 @@
-import { requireUser, requireClientAccess, requireModuleApiAccess } from "@/lib/auth/guard";
+import { requireUser, requireClientAccess, requireModuleApiAccess, requireApproverRole } from "@/lib/auth/guard";
 import type { AuthedUser } from "@/lib/auth/session";
 import type { Client as PracticeClient } from "@/lib/types";
 import { getClient } from "@/lib/mock/clients";
@@ -57,6 +57,17 @@ async function authorise(clientSlug: string): Promise<AuthGate> {
   // failures, because it looks fine from both sides.
   const moduleDenied = requireModuleApiAccess(auth, "equipment");
   if (moduleDenied) return { denied: moduleDenied };
+  // THE WRITE LOCK. On the ruling of 3 Sep 2026 (W2-A/1) the 'equipment' module
+  // is reachable by every authenticated role, so the module gate above no longer
+  // denies anybody and cannot be the lock on this file. EVERY method here is a
+  // write — uploading a manual, deleting one — so the guard is unconditional
+  // rather than per action, unlike the [action] route next door.
+  //
+  // `requireApproverRole` = agency admin + practice owner + practice manager.
+  // A nurse may READ a manual (the desk answers her from it) and may not replace
+  // the document the desk answers everybody from.
+  const writeDenied = requireApproverRole(auth);
+  if (writeDenied) return { denied: writeDenied };
   return { auth, client };
 }
 

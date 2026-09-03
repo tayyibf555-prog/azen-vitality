@@ -23,8 +23,19 @@ export interface SystemDef {
   slug: string;
   /** Human label (kept in step with the nav label). */
   label: string;
-  /** Panel grouping. */
-  group: "Patient lifecycle" | "Acquisition" | "Conversational agents" | "Operations";
+  /**
+   * Panel grouping.
+   *
+   * "Dentally" is a group of ONE and is meant to be. Every other group here
+   * collects systems of a kind; this one holds the master lever over what the
+   * whole platform writes back to the practice's Dentally account, and it was
+   * filed under "Operations" between Compliance and the IT desk — a switch that
+   * governs nine modules sitting in a list as though it were a tenth. It has its
+   * own heading so the question it answers ("does any of this reach Dentally?")
+   * is asked and answered in one place, next to the Dentally sync tab that
+   * records what it held back.
+   */
+  group: "Patient lifecycle" | "Acquisition" | "Conversational agents" | "Operations" | "Dentally";
   /** One line: what stops the moment this is switched OFF. Owner-facing copy. */
   halts: string;
   /**
@@ -406,7 +417,11 @@ export const SYSTEMS: SystemDef[] = [
     // practice can see what did not go across.
     slug: "dentally-write-back",
     label: "Dentally write-back",
-    group: "Operations",
+    // ITS OWN GROUP, of one (Dental OS wave 2). See the `group` field's comment:
+    // a lever ABOVE nine modules does not belong in a list of modules, and the
+    // control panel draws this group last, beside the Dentally sync tab that
+    // shows every write it held back.
+    group: "Dentally",
     halts:
       "Nothing this platform does is written back to Dentally: no appointments are created, moved or cancelled there, and no patient records are created or edited there. Everything still works here, and the Dentally sync screen records what was held back.",
     defaultEnabled: false,

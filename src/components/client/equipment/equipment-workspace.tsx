@@ -6,6 +6,12 @@ import { BookOpen, FileUp, Loader2, MessageSquare, Plus, Trash2, Upload, Wrench 
 import { DeskChat } from "@/components/client/desk/desk-chat";
 import { cn } from "@/lib/utils";
 import { CATEGORY_LABELS, type AssetCategory } from "@/lib/equipment/types";
+// THE FIRST STEP IS WRITTEN ONCE, next to the other modules' first steps, and
+// printed both here and on Home's Operating system band. Two copies of "what do
+// I do with this empty screen" is how a band and a page end up asking for
+// different things. src/lib/systems/first-steps.ts imports nothing, so this
+// costs the client bundle a handful of strings.
+import { firstStepFor } from "@/lib/systems/first-steps";
 // The row + site shapes live in a PLAIN module, imported by this client file and
 // by the server page alike. See src/lib/equipment/view.ts for why.
 import type { AssetRow, SiteOption } from "@/lib/equipment/view";
@@ -367,8 +373,9 @@ export function EquipmentWorkspace({
           ) : null}
 
           {assets.length === 0 ? (
-            <p className="rounded-[10px] border border-dashed border-line-strong px-4 py-8 text-center text-[13px] text-muted">
-              Nothing on the register yet. Add equipment above, or paste your existing spreadsheet below.
+            <p className="mx-auto max-w-xl rounded-[10px] border border-dashed border-line-strong px-4 py-8 text-center text-[13px] leading-relaxed text-muted">
+              <span className="block font-semibold text-navy">Nothing on the register yet</span>
+              <span className="mt-1 block">{firstStepFor("equipment")?.step}</span>
             </p>
           ) : (
             <div className="overflow-x-auto">

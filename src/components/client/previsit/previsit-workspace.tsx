@@ -4,6 +4,9 @@ import { ClipboardList, Sparkles, Users } from "lucide-react";
 import { DataTable, EmptyState, SectionCard, Tabs, type Column, type TabItem } from "@/components/primitives";
 import { londonDateLabel } from "@/lib/time/london";
 import type { InterestTreatment, InterestTreatmentKey } from "@/lib/triage/types";
+// One first step, shared with Home's Operating system band. See
+// src/lib/systems/first-steps.ts.
+import { firstStepFor } from "@/lib/systems/first-steps";
 import { BankEditor } from "./bank-editor";
 
 // The module's three panels, behind tabs so the screen stays one viewport.
@@ -46,6 +49,7 @@ export function PreVisitWorkspace({
   miningCoverage,
   miningExclusions,
   miningCaveats,
+  systemEnabled,
 }: {
   clientSlug: string;
   isOwner: boolean;
@@ -57,6 +61,8 @@ export function PreVisitWorkspace({
   miningCoverage: string;
   miningExclusions: string;
   miningCaveats: string[];
+  /** Whether the pre-visit system is switched on. It ships OFF. */
+  systemEnabled: boolean;
 }) {
   const tabs: TabItem[] = [
     {
@@ -98,7 +104,28 @@ export function PreVisitWorkspace({
     });
   }
 
-  return <Tabs tabs={tabs} />;
+  return (
+    <div className="space-y-4">
+      {/* THE ONBOARDING STATE, and it is the whole module's, not one panel's.
+          Pre-visit questions ships switched OFF — twice over, by the catalog
+          and by its migration — so on every practice, on day one, all three
+          panels below are correctly empty and none of them explains why. The
+          empty panels were honest and useless: they said nobody had answered,
+          which is true of a system that has never asked anybody.
+
+          It is drawn ABOVE the tabs rather than inside one, because the first
+          step spans them: read the question lists, then switch on, and the
+          interest lists fill themselves. The sentence is the shared one, so
+          Home's Operating system band asks for exactly the same thing. */}
+      {!systemEnabled ? (
+        <p className="rounded-[10px] border border-line bg-card-muted/60 px-4 py-3 text-[12.5px] leading-relaxed text-navy">
+          <span className="font-semibold">Pre-visit questions is switched off.</span>{" "}
+          {firstStepFor("pre-visit-triage")?.step} The practice owner switches it on in System controls.
+        </p>
+      ) : null}
+      <Tabs tabs={tabs} />
+    </div>
+  );
 }
 
 function InterestPanel({

@@ -23,6 +23,7 @@ import {
   STAFF_SLUGS,
   EXTRA_OWNER_ONLY_SLUGS,
   OWNER_ROLES,
+  indexRedirectFor,
 } from "./nav";
 import { requireOwnerRole, requireApproverRole, requireClinicalWriteRole } from "./auth/guard";
 import type { AuthedUser } from "./auth/session";
@@ -258,6 +259,44 @@ const WIDENED_COPILOT_ALL_CLEARANCES: Partial<Record<(typeof EXISTING_ROLES)[num
   client_clinician: ["co-pilot"],
 };
 
+/**
+ * WIDENED, Dental OS W2-A/1 — the equipment desk and the IT desk, for BOTH
+ * allow-list roles.
+ *
+ * Its own map rather than a line appended to ADDED_DESKS, for the reason every
+ * layer in this file states about itself: a delta folded into the layer beneath
+ * it stops being reviewable as a delta. ADDED_DESKS records that the two modules
+ * shipped owner + agency + practice manager and said in as many words that the
+ * line would only move "on written instruction". This is that instruction.
+ *
+ * THE RULING (programme coordinator, 3 Sep 2026): the IT desk and the equipment
+ * READ surfaces widen to ALL five clearances, including clinician and
+ * client_staff. A dental nurse IS a client_staff; "the autoclave is beeping" and
+ * "I'm locked out" are her questions; neither module holds patient data; and
+ * both agents' gates already refuse credentials and safety bypasses.
+ *
+ * WHAT THE SLUG BUYS, AND WHAT IT DOES NOT. The slug is the door.
+ *   equipment  read the register, search the manuals, ask the desk. Importing a
+ *              CSV and adding, editing or deleting an item clear
+ *              `requireApproverRole` per action in
+ *              src/app/api/equipment/[action]/route.ts, and every method of
+ *              .../equipment/manual/route.ts clears it unconditionally — so a
+ *              receptionist can read the register the practice shows CQC and
+ *              cannot rewrite it. Pinned in section 8 below.
+ *   it-desk    ask the desk, read the playbooks. Setting the practice's IT
+ *              contact stays `requireOwnerRole`.
+ *
+ * WHAT THIS FILE'S CENTRAL CLAIM SURVIVES ON. Section 3 rests on exactly two
+ * facts — STAFF_SLUGS holds neither "calendar" nor "patients" — and neither of
+ * these modules touches an appointment or a patient row. `indexRedirectFor` is
+ * untouched too: a client_staff login still lands on My work, so the practice
+ * dashboard's takings and day list are still never fetched for it. These two
+ * modules are reached from the nav, not from the landing.
+ */
+const WIDENED_DESKS_ALL_CLEARANCES: Partial<Record<(typeof EXISTING_ROLES)[number], string[]>> = {
+  client_clinician: ["equipment", "it-desk"],
+};
+
 /** practice-brain is not a CLIENT_NAV module, so it never appears in navForRole. */
 const EXTRA_ALLOWED_NOT_IN_NAV: Record<(typeof EXISTING_ROLES)[number], string[]> = {
   agency_admin: ["practice-brain"],
@@ -275,6 +314,7 @@ function expected(role: (typeof EXISTING_ROLES)[number]): string[] {
     ...(ADDED_PREVISIT[role] ?? []),
     ...(ADDED_DESKS[role] ?? []),
     ...(WIDENED_COPILOT_ALL_CLEARANCES[role] ?? []),
+    ...(WIDENED_DESKS_ALL_CLEARANCES[role] ?? []),
   ];
 }
 
@@ -337,12 +377,16 @@ describe("2. the staff role is denied every slug outside its allow-list", () => 
     }
   });
 
-  it("names the exact three modules a staff login gets", () => {
+  it("names the exact five modules a staff login gets", () => {
     // Two until the coordinator's ruling of 3 Sep 2026 added the co-pilot, scoped
-    // to a ONE-TOOL catalog that answers about the person signed in. The count is
-    // asserted as well as the members so a fourth cannot arrive unnoticed.
-    expect(sorted([...STAFF_SLUGS])).toEqual(["", "co-pilot", "my-work"]);
-    expect(STAFF_SLUGS.size).toBe(3);
+    // to a ONE-TOOL catalog that answers about the person signed in. Five since
+    // the same day's W2-A/1 ruling added the equipment desk and the IT desk —
+    // see WIDENED_DESKS_ALL_CLEARANCES above. Neither of the two new entries
+    // holds a patient row or an appointment, and the WRITE half of each is
+    // behind a role guard in its route (section 8). The count is asserted as
+    // well as the members so a sixth cannot arrive unnoticed.
+    expect(sorted([...STAFF_SLUGS])).toEqual(["", "co-pilot", "equipment", "it-desk", "my-work"]);
+    expect(STAFF_SLUGS.size).toBe(5);
   });
 
   it("is a subset of CLIENT_MODULE_SLUGS, so neither entry is a typo", () => {
@@ -372,8 +416,14 @@ describe("3. the staff role never reaches the diary or the patient database", ()
     // one: the SLUG is shared and the CATALOG is not — a clinician gets six read
     // tools there and a member of staff gets one. That is the whole design, and
     // it is why a shared slug is not a shared surface.
+    //
+    // The overlap grew to five on W2-A/1 (equipment + it-desk), and the two new
+    // members are the least interesting kind of shared surface: they are shared
+    // in full, because there is nothing role-shaped inside either of them to
+    // divide. What divides them is the WRITE guard in the route, which is a
+    // different axis from the role's allow-list and is pinned in section 8.
     const shared = [...STAFF_SLUGS].filter((s) => CLINICIAN_SLUGS.has(s));
-    expect(sorted(shared)).toEqual(["", "co-pilot", "my-work"]);
+    expect(sorted(shared)).toEqual(["", "co-pilot", "equipment", "it-desk", "my-work"]);
   });
 });
 
@@ -452,10 +502,15 @@ describe("6. navForRole / categoriesForRole for the staff role", () => {
     // "operations" group of CLIENT_NAV, so the rail now shows two. Both are
     // asserted whole, so a third area, or a stray extra module inside either,
     // fails here rather than appearing quietly in a receptionist's sidebar.
+    //
+    // Still two areas after W2-A/1: the equipment desk and the IT desk both live
+    // in "operations" beside the co-pilot, so a receptionist's rail gains two
+    // entries and no new area. Asserted in RAIL ORDER, whole, so a stray module
+    // inside either area fails here rather than appearing quietly in her sidebar.
     const cats = categoriesForRole("client_staff");
     expect(cats.map((c) => c.key)).toEqual(["home", "operations"]);
     expect(cats[0].items.map((i) => i.slug)).toEqual(["", "my-work"]);
-    expect(cats[1].items.map((i) => i.slug)).toEqual(["co-pilot"]);
+    expect(cats[1].items.map((i) => i.slug)).toEqual(["equipment", "it-desk", "co-pilot"]);
   });
 });
 
@@ -593,6 +648,90 @@ describe("10. the four new modules are wired the way the deltas claim", () => {
       expect(item!.label.length).toBeGreaterThan(0);
       expect(item!.icon).toBeDefined();
     }
+  });
+});
+
+
+describe("8. THE DESK WIDENING, named and pinned at both layers (W2-A/1)", () => {
+  // The mirror of section 7. Widening a nav allow-list is only half a decision:
+  // `requireModuleApiAccess` reads the SAME predicate, so adding "equipment" and
+  // "it-desk" to two allow-lists silently opened every method of three routes.
+  // The boundary did not disappear, it MOVED, and this is where that is proved
+  // from the route sources rather than asserted in prose.
+  const DESK_API_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "app", "api");
+
+  function deskSource(route: string): string {
+    return readFileSync(join(DESK_API_DIR, route, "route.ts"), "utf8");
+  }
+
+  it("both modules are now reachable by every clearance, which is the ruling", () => {
+    for (const slug of ["equipment", "it-desk"]) {
+      for (const role of [
+        "agency_admin",
+        "client_owner",
+        "client_coordinator",
+        "client_clinician",
+        "client_staff",
+      ] as const) {
+        expect(canRoleAccessModule(role, slug), `${role} cannot reach ${slug}`).toBe(true);
+      }
+    }
+  });
+
+  it("so the module guard alone denies nobody — which is why a second lock is required", () => {
+    // Stated as a fact rather than left implicit: this is the exact condition
+    // that makes a `requireModuleApiAccess` call inert, and the reason both
+    // slugs are declared in the API sweep's UNIVERSAL_MODULES.
+    for (const slug of ["equipment", "it-desk"]) {
+      const denied = (
+        ["agency_admin", "client_owner", "client_coordinator", "client_clinician", "client_staff"] as const
+      ).filter((role) => !canRoleAccessModule(role, slug));
+      expect(denied).toEqual([]);
+    }
+  });
+
+  it("the equipment WRITE actions are named in the route and gated on requireApproverRole", () => {
+    const src = deskSource("equipment/[action]");
+    expect(src).toContain("requireApproverRole(auth)");
+    // The exact four, read out of the route rather than remembered here: a fifth
+    // write action added to the dispatch without joining this set is the failure
+    // this looks for.
+    const set = src.match(/REGISTER_WRITE_ACTIONS = new Set\(\[([^\]]*)\]/);
+    expect(set, "the REGISTER_WRITE_ACTIONS scan went stale").toBeTruthy();
+    const actions = [...set![1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort();
+    expect(actions).toEqual(["delete", "import", "import-preview", "save"]);
+  });
+
+  it("every method of the manual route is gated, because every method is a write", () => {
+    const src = deskSource("equipment/manual");
+    expect(src).toContain("requireApproverRole(auth)");
+    // Unconditional: the guard is inside the shared `authorise` helper that both
+    // POST and DELETE call, not inside one of them.
+    const authoriseBlock = src.slice(src.indexOf("async function authorise"), src.indexOf("export async function POST"));
+    expect(authoriseBlock).toContain("requireApproverRole(auth)");
+  });
+
+  it("setting the IT contact is still owner-only", () => {
+    expect(deskSource("itdesk/[action]")).toContain("requireOwnerRole(auth)");
+  });
+
+  it("requireApproverRole really does refuse the two widened roles", () => {
+    // The predicate itself, not the route text: a token present in a file proves
+    // the call exists, and this proves the call denies.
+    for (const role of ["client_clinician", "client_staff"] as const) {
+      expect(requireApproverRole(user(role))?.status, `${role} passed the approver guard`).toBe(403);
+    }
+    for (const role of ["agency_admin", "client_owner", "client_coordinator"] as const) {
+      expect(requireApproverRole(user(role)), `${role} was refused by the approver guard`).toBeNull();
+    }
+  });
+
+  it("the staff login STILL lands on My work, not on the practice dashboard", () => {
+    // The ruling's own proviso, and the one fact about this role that nothing is
+    // allowed to move: the two new modules are reached from the nav, so the
+    // dashboard's takings and day list are still never fetched for a receptionist.
+    expect(indexRedirectFor("client_staff", "vitality")).toBe("/c/vitality/my-work");
+    expect(indexRedirectFor("client_clinician", "vitality")).toBeNull();
   });
 });
 

@@ -32,6 +32,9 @@ vi.mock("@/lib/mock/clients", () => ({
   getSites: () => [{ id: "site-cc", name: "N15 Vitality Dental" }],
 }));
 
+/** Copied from src/lib/absence/rules.ts and pinned against it in section 3 below. */
+const APPROVER_ROLES = ["agency_admin", "client_owner", "client_coordinator"] as const;
+
 vi.mock("@/lib/auth/guard", async () => {
   // THE REAL predicate, not a stub. `canRoleAccessModule` is the only thing that
   // keeps a clinician or a receptionist out of this module, and a mock that
@@ -45,6 +48,14 @@ vi.mock("@/lib/auth/guard", async () => {
         : null,
     requireModuleApiAccess: (u: User | null, slug: string) =>
       u && !canRoleAccessModule(u.role as Parameters<typeof canRoleAccessModule>[0], slug)
+        ? Response.json({ ok: false, error: "forbidden" }, { status: 403 })
+        : null,
+    // THE REAL role list, not a stub, for the same reason: on W2-A/1 the module
+    // gate stopped denying anybody and THIS became the only thing standing
+    // between a receptionist and the register the practice shows CQC. A mock
+    // that returned null would let that regress in silence.
+    requireApproverRole: (u: User | null) =>
+      u && !APPROVER_ROLES.includes(u.role as (typeof APPROVER_ROLES)[number])
         ? Response.json({ ok: false, error: "forbidden" }, { status: 403 })
         : null,
   };
@@ -217,10 +228,57 @@ describe("3. the role lock is at the API layer, not only on the page", () => {
     }
   });
 
-  it("refuses the clinician and the receptionist by direct API call", async () => {
+  // WIDENED, and this test turned over completely. Until W2-A/1 (the programme
+  // coordinator's written ruling of 3 Sep 2026) it asserted that the clinician
+  // and the receptionist were REFUSED here. The ruling is that they are not: a
+  // dental nurse is a client_staff, "the autoclave is beeping" is her question,
+  // and this module holds no patient data. The assertion is not loosened — it is
+  // INVERTED and paired with the write-lock assertions below, which are the
+  // boundary that replaced the one this line used to be.
+  it("ADMITS the clinician and the receptionist to the desk (W2-A/1)", async () => {
     for (const user of [CLINICIAN, RECEPTIONIST]) {
       store.user = user;
-      expect((await ask("What does E04 mean on the SteriPro 22B?")).status).toBe(403);
+      expect((await ask("What does E04 mean on the SteriPro 22B?")).status).toBe(200);
+    }
+  });
+
+  it("the approver list this route narrows on is the platform's, not a copy", async () => {
+    const { APPROVER_ROLES: real } = await import("@/lib/absence/rules");
+    expect([...APPROVER_ROLES]).toEqual([...real]);
+  });
+
+  it("REFUSES the clinician and the receptionist every register WRITE", async () => {
+    // The four actions that change the register the practice shows CQC. Each is
+    // asserted for both deny-by-default roles, so a fifth action added to
+    // REGISTER_WRITE_ACTIONS without a guard shows up as a 200 here.
+    for (const action of ["import-preview", "import", "save", "delete"]) {
+      for (const user of [CLINICIAN, RECEPTIONIST]) {
+        store.user = user;
+        const response = await POST(
+          new Request(`http://t/api/equipment/${action}`, {
+            method: "POST",
+            body: JSON.stringify({ client: "vitality", csv: "Item\nAutoclave", name: "Autoclave", id: "a1", rows: [] }),
+          }),
+          { params: Promise.resolve({ action }) },
+        );
+        expect(response.status, `${user.role} was allowed ${action}`).toBe(403);
+      }
+    }
+  });
+
+  it("and still ADMITS the owner and the practice manager to those writes", async () => {
+    // The control. Without it the assertion above would also pass if the write
+    // actions had simply been broken for everybody.
+    for (const user of [OWNER, MANAGER]) {
+      store.user = user;
+      const response = await POST(
+        new Request("http://t/api/equipment/import-preview", {
+          method: "POST",
+          body: JSON.stringify({ client: "vitality", csv: "Item,Serial No\nAutoclave 1,A1400273" }),
+        }),
+        { params: Promise.resolve({ action: "import-preview" }) },
+      );
+      expect(response.status, `${user.role} was refused import-preview`).toBe(200);
     }
   });
 

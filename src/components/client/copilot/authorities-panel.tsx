@@ -17,6 +17,9 @@ import {
   type ApprovedAuthority,
   type AuthorityKind,
 } from "@/lib/knowledge/types";
+// One first step, shared with Home's Operating system band, so the band and the
+// panel ask for the same thing. See src/lib/systems/first-steps.ts.
+import { firstStepFor } from "@/lib/systems/first-steps";
 
 // ===========================================================================
 // THE OWNER'S APPROVED-AUTHORITIES PANEL.
@@ -236,8 +239,9 @@ export function AuthoritiesPanel({ clientSlug }: { clientSlug: string }) {
                 <Loader2 size={13} className="animate-spin" aria-hidden /> Loading…
               </p>
             ) : rows.length === 0 ? (
-              <p className="text-[12.5px] text-faint">
-                No approved sources. The co-pilot is running on practice data only.
+              <p className="max-w-2xl text-[12.5px] leading-5 text-faint">
+                <span className="font-medium text-muted">No approved sources yet.</span>{" "}
+                {firstStepFor("authorities")?.step}
               </p>
             ) : (
               <ul className="divide-y divide-line border-y border-line">

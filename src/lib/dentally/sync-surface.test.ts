@@ -93,6 +93,11 @@ describe("the three groups say what flows and what does not", () => {
     // this lane closes, so the list is computed from the source registry.
     expect(sourcesForKind("appointment.update")).toEqual([
       "Booking agent (the 24/7 SMS and WhatsApp assistant)",
+      // ADDED BY WAVE 2, LANE A. The co-pilot's `diary_write` moves an
+      // appointment through this gate, so the page that tells a practice what
+      // changes their diary now names it. An assertion that did not change here
+      // would mean the page had stopped being complete.
+      "Co-pilot (the owner adding a patient, or booking, moving or cancelling, by asking)",
       "Diary (moving, resizing or reassigning an appointment)",
     ]);
     expect(sourcesForKind("patient.create").length).toBeGreaterThanOrEqual(3);

@@ -33,13 +33,24 @@ import {
   dentallyFromEnv,
   type PatientRecord,
 } from "@/lib/dentally/read";
-import { isDentallyWriteEnabled } from "@/lib/dentally/write";
+// buildManualBookingPayload is the SHARED, live-calibrated derivation of an
+// appointment payload: the required fields Dentally really enforces (a finish
+// time, a practitioner) and the closed set of reasons. The co-pilot's diary
+// write uses the same one the staff booking path does rather than assembling its
+// own, so a calibration learned in one place is learned in both.
+import { buildManualBookingPayload, isDentallyWriteEnabled } from "@/lib/dentally/write";
 // THE WRITE GATE (W1-A). Every outbound Dentally write in the platform goes
 // through it: it resolves live-vs-dry-run, honours the master write-back switch
 // and the asking module's own kill switch, and RECORDS AN INTENT for every call
 // including the ones it refuses. Imported, never reimplemented — the source
 // crawl in write-gate-sites.test.ts is what keeps that true.
-import { DentallyWriteRefused, dentallyWrite } from "@/lib/dentally/write-gate";
+import {
+  DentallyWriteRefused,
+  dentallyWrite,
+  dentallyWriteMode,
+  isDentallyWriteMasterOff,
+  targetLabel,
+} from "@/lib/dentally/write-gate";
 import { DentallyError } from "@/lib/dentally/client";
 import { normaliseGender, ageFromDob } from "@/lib/patient/demographics";
 // The ONE live-calibrated derivation of a new Dentally patient, shared with the
@@ -112,13 +123,14 @@ import {
 import { runOutreachBuildTick } from "@/lib/outreach/build";
 import { parseFilters, parseDailyCap, describeSegment } from "@/lib/outreach/validate";
 import type { OutreachFilters } from "@/lib/outreach/types";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { getSystemStates, isSystemEnabled } from "@/lib/systems/repository";
 import { logCopilotAction } from "./actions";
 // THE ROLE-SCOPED TOOL LOCK. Pure decisions (which tools, which knowledge tier,
 // which fields of a patient record) live in scope.ts; this file only obeys them.
 import {
   type CopilotAccess,
   type CopilotToolName,
+  copilotAccessForRole,
   copilotKnowledgeTier,
   copilotToolAllowed,
   copilotToolRefusal,
@@ -139,6 +151,43 @@ import { KNOWLEDGE_ECHO_REFUSAL, makeKnowledgeEchoGuard } from "./knowledge-echo
 import { listShifts } from "@/lib/rota/repository";
 import { listAbsence } from "@/lib/absence/repository";
 import { listStaffDocuments } from "@/lib/hr/document-repository";
+// ===========================================================================
+// WAVE 2, LANE A: THE WAVE-1 MODULES.
+//
+// Every import below is a module's OWN entry point — its roster, its gate, its
+// dispatch, its projection, its assembler. Nothing here reaches past a module
+// into its tables, and nothing here restates a rule that module already owns.
+// That is the whole design: the co-pilot is a second way of ASKING, never a
+// second copy of the answer.
+// ===========================================================================
+import type { Role } from "@/lib/types";
+import { AGENTS } from "@/lib/agent-wiring/roster";
+import { SYSTEM_BY_SLUG } from "@/lib/systems/catalog";
+import { assembleSyncStatus } from "@/lib/dentally/sync-status";
+import { SYNC_GROUP_TITLES, type SyncGroup } from "@/lib/dentally/sync-surface";
+import { INTEREST_TREATMENTS } from "@/lib/triage/bank";
+import {
+  countInterestByTreatment,
+  listInterest,
+  listResponsesForPatient,
+} from "@/lib/triage/repository";
+import { CLINICAL_SUMMARY_ROLES, SUMMARY_COPY } from "@/lib/triage/summary";
+// THE RESOLVED ENTRY POINT, not the pure projection underneath it. `projectSummary`
+// alone cannot fetch the practice's OWN questions (they live in a jsonb config
+// row), so an owner-authored question rendered under its raw key — `custom-jaw`
+// rather than "Does your jaw click when you eat?". This seam reads the banks and
+// hands the projection their labels, and it degrades safely: an unreadable config
+// costs a label, never a patient's privacy (the kind stamped on each answer still
+// decides who may read it, and an unnamed kind is `symptom`).
+import { previsitSummaryFor } from "@/lib/triage/summary-read";
+import type { TriageResponse } from "@/lib/triage/types";
+import { listAssets } from "@/lib/equipment/repository";
+import { makeEquipmentDispatch } from "@/lib/equipment/tools";
+import { EQUIPMENT_REFUSALS, gateEquipmentQuestion } from "@/lib/equipment/topic-gate";
+import { EQUIPMENT_SLUG } from "@/lib/equipment/types";
+import { makeItDeskDispatch } from "@/lib/itdesk/tools";
+import { gateItDeskQuestion } from "@/lib/itdesk/topic-gate";
+import { IT_DESK_SLUG } from "@/lib/itdesk/types";
 
 // The co-pilot's "today" must be the REAL current day in the practice's timezone,
 // not the frozen mock clock: once live against real Dentally, a hardcoded date
@@ -146,6 +195,41 @@ import { listStaffDocuments } from "@/lib/hr/document-repository";
 // convenience; production correctness wins.)
 const todayIso = () => londonDayKey(new Date());
 const siteName = (id: string) => getSite(id)?.name ?? id;
+
+// ---------------------------------------------------------------------------
+// WHO MAY READ A PATIENT'S OWN WORDS ABOUT THEIR MOUTH.
+//
+// The decision is the TRIAGE module's (programme ruling W1-C/2: the practice
+// manager sees the COUNT and the discomfort FLAG, never the words, because those
+// words were written by the patient to the person who would examine them and
+// nobody at the practice has checked them). So the rule is READ from that
+// module's own list rather than restated here — the failure mode of restating it
+// is that the two lists agree today and disagree after the next edit.
+//
+// The list is in ROLES; this dispatch holds an ACCESS. The bridge is the SAME
+// role -> access function the route used to build the session, applied in the
+// forward direction: every role that may read maps to an access that may. It is
+// never inverted, because "full" is two roles and an inversion would have to
+// pick one.
+// ---------------------------------------------------------------------------
+const CLINICAL_SUMMARY_ACCESS: ReadonlySet<CopilotAccess> = new Set(
+  CLINICAL_SUMMARY_ROLES.map((role) => copilotAccessForRole(role)),
+);
+
+/**
+ * Two concrete roles, used ONLY as `projectSummary`'s viewer argument: one the
+ * triage module's list admits and one it does not. They are not a second copy of
+ * the rule — the rule is CLINICAL_SUMMARY_ACCESS above, and w2a-tools.test.ts
+ * asserts both of these against `canReadClinicalSummary` so a change to
+ * CLINICAL_SUMMARY_ROLES that moved either one fails loudly rather than quietly
+ * widening what a front-desk login can read.
+ *
+ * `null` is deliberately NOT used for the denied side: a null viewer is the
+ * unenforced pilot and reads as PERMITTED, which is the wrong way round for a
+ * value chosen to deny.
+ */
+const CLINICAL_READER_ROLE: Role = "client_clinician";
+const CLINICAL_DENIED_ROLE: Role = "client_coordinator";
 
 // THE TYPE IS THE LOCK, IN THE OTHER DIRECTION. `CopilotToolName` is the union
 // declared in clearance.ts, where every tool is filed under exactly one domain.
@@ -467,7 +551,151 @@ export const COPILOT_TOOLS: (Anthropic.Tool & { name: CopilotToolName })[] = [
       },
     },
   },
+  // =========================================================================
+  // WAVE 2, LANE A. The wave-1 modules, reachable by asking.
+  //
+  // Six reads and one act. Every one of them calls the module that owns the
+  // subject — its gate, its refusals, its projection — rather than reaching past
+  // it into a table. A co-pilot that re-implemented the equipment agent's safety
+  // boundary would be a second copy of it, and the second copy is the one that
+  // does not get updated.
+  // =========================================================================
+  {
+    name: "agent_status",
+    description:
+      "Whether the practice's automated agents are switched on, and what each one still needs before it can work. Covers every agent the platform has (new enquiries and speed-to-lead, the booking agent, recall, reactivation, no-show defence, the treatment coordinator and closer, balance reminders, post-op check-ins, reviews, the rota notifier, the missed-call text-back, the pre-visit questionnaire and the rest). For each: whether its switch is on, when that switch was last changed, what switching it on actually starts, what it needs first (keys, webhooks, configuration), where to look in the first hour to see it working, how to stop it, and any known gaps. It also states whether the platform is sending for real or in test mode, which is the difference between a switched-on agent that texts patients and one that only records what it would have said. It does NOT count how many messages each agent sent today: the platform keeps no single per-agent daily total, and this tool says so rather than inventing one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        agent: {
+          type: "string",
+          description:
+            "Optional: one agent, by its key or by name (for example 'recall', 'no-show', 'booking agent'). Leave it out for all of them.",
+        },
+        only: {
+          type: "string",
+          enum: ["all", "on", "off", "needs-setup"],
+          description:
+            "'all' (the default), 'on' or 'off' for the switch state, or 'needs-setup' for the agents that are switched on but still need something configured.",
+        },
+      },
+    },
+  },
+  {
+    name: "sync_status",
+    description:
+      "What this platform does and does not write back into Dentally. Returns whether writing back is on or off and why, which kinds of record are mirrored, which are built and waiting on the practice's Dentally write key, and which will never flow back because Dentally's API has no way to accept them (clinical notes, texts, emails, charting, medical histories, signed documents). It also returns the recent write intents — every appointment or patient change the platform made or would have made, with its status and the reason it was held back — with no patient names or contact details in them, only ids. Use it for 'is it syncing', 'did that reach Dentally', 'why has nothing appeared in the diary', 'what does not sync'. If the record of intents cannot be read, it says so; that is a failure to read it, not proof that nothing was written.",
+    input_schema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "How many recent write intents to return (1 to 50; defaults to 15)." },
+      },
+    },
+  },
+  {
+    name: "previsit_summary",
+    description:
+      "What a named patient answered on their phone before their appointment: the pre-visit questionnaire. Returns the practical answers (what brought them in, whether anything has changed, how they want to be contacted), the treatments they said they were interested in, and — for a clinician or the practice owner — what they said about their own mouth in their own words. These are the patient's own unchecked answers and never a clinical assessment; say so. It also reports whether they rated their discomfort near the top of the scale, which is a reason to ring them rather than a finding. Name exactly one patient; if the name matches several, it lists them and asks.",
+    input_schema: {
+      type: "object",
+      properties: {
+        patient: {
+          type: "string",
+          description: "The patient's name or phone number, enough to identify exactly one patient in the site currently in view. Never invent one.",
+        },
+      },
+      required: ["patient"],
+    },
+  },
+  {
+    name: "interest_lists",
+    description:
+      "Who has said they are interested in which treatment, from the pre-visit questionnaire's treatment questions. With no treatment named it returns the count of distinct patients per treatment (whitening, straightening, implants, veneers and bonding). With one named it returns that list: who they are, when they said it, and at which site. Use it for 'how many people want whitening', 'who is interested in implants', 'who should the Invisalign campaign go to'. Patients who said 'not right now' are stored but are not on the list and are not a campaign target; ask for them by name if the practice specifically wants them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        treatment: {
+          type: "string",
+          enum: ["whitening", "straightening", "implants", "veneers-bonding"],
+          description: "Optional. Leave it out for the counts across every treatment.",
+        },
+        answer: {
+          type: "string",
+          enum: ["yes", "not_now"],
+          description: "'yes' (the default) is the list the practice acts on. 'not_now' is who declined, and is never a campaign target.",
+        },
+        limit: { type: "number", description: "How many patients to return, newest first (1 to 200; defaults to 50)." },
+      },
+    },
+  },
+  {
+    name: "equipment_lookup",
+    description:
+      "The practice's equipment register and the manuals uploaded against it: what a machine is, where it is, its make, model, serial, supplier and service dates, what is overdue or due soon, and what its manual says about a fault, a code, a cycle or a consumable. Pass the person's question in their own words as `question` — the equipment desk's own rules are applied to it, and some questions are refused there rather than answered here. It reads out facts; it never says whether it is safe to go on using a machine that is out of test, and it refuses outright anything about defeating a safety interlock, mains electrical work, forcing a pressure chamber, radiographs without shielding, or doing the engineer's job. Those refusals are the product, not a limitation to work around.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "What the person actually asked, in their words. Required: the equipment desk's safety and scope rules are applied to this text.",
+        },
+        lookup: {
+          type: "string",
+          enum: ["find", "manual", "service"],
+          description: "'find' (the default) searches the register; 'manual' searches one asset's uploaded manual (give assetId and query); 'service' lists what is overdue and what is due soon.",
+        },
+        query: { type: "string", description: "For 'find', what to search the register for (name, make, model, serial or room). For 'manual', what to look for in the manual." },
+        assetId: { type: "string", description: "For 'manual': the asset id returned by a 'find' lookup. Never invent one." },
+        withinDays: { type: "number", description: "For 'service': how far ahead to look. Defaults to 90." },
+      },
+      required: ["question"],
+    },
+  },
+  {
+    name: "it_desk",
+    description:
+      "The practice's IT troubleshooting playbooks and its named IT contact: the internet and network, printers and scanning, being locked out, getting into Dentally, and the iPads and form kiosks. Pass the person's question in their own words as `question` — the IT desk's own rules are applied to it. It walks the practice's own steps and escalates to the named contact when they run out. It never handles a password, PIN or access code, never weakens antivirus, a firewall, encryption or two-factor sign-in, never grants admin rights, never takes remote control of a machine, and never moves patient data off the practice's systems. Those refusals are the product. If no IT contact has been set, say so plainly rather than inventing a name or a number.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "What the person actually asked, in their words. Required: the IT desk's security and scope rules are applied to this text.",
+        },
+        playbookId: { type: "string", description: "Optional: read one playbook in full, by the id a previous answer returned." },
+        contact: { type: "boolean", description: "Set true to return the practice's IT contact as well as the playbook." },
+      },
+      required: ["question"],
+    },
+  },
+  {
+    name: "diary_write",
+    description:
+      "BOOK, MOVE or CANCEL an appointment in the practice's real Dentally diary. TWO STEPS, exactly like send_sms and create_patient: call first WITHOUT confirm to read the whole thing back (which patient, which clinician, which times, and whether writing back to Dentally is even switched on) while changing nothing; then, ONLY after the owner clearly says yes in a later reply, call again with confirm true. Booking needs the patient, a start and finish time in full ISO form with a timezone, and the clinician's Dentally practitioner id. Moving and cancelling need the Dentally appointment id, which comes from patient_record's appointment history. Every confirmed attempt is recorded in the practice's Dentally sync record whether or not it goes through, so an owner can always see what was tried. While writing back to Dentally is switched off, a confirmed attempt is recorded and NOTHING is sent: say exactly that, and never tell the owner an appointment was booked, moved or cancelled unless the result says it was.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["book", "move", "cancel"],
+          description: "What to do to the diary.",
+        },
+        patient: { type: "string", description: "For 'book': the patient's name or phone number, enough to identify exactly one patient in the site currently in view." },
+        appointmentId: { type: "string", description: "For 'move' and 'cancel': the Dentally appointment id, from the patient's appointment history. Never invent one." },
+        start: { type: "string", description: "For 'book' and 'move': the new start, full ISO 8601 with a timezone, e.g. 2026-09-10T09:00:00Z." },
+        finish: { type: "string", description: "For 'book' and 'move': the new finish, full ISO 8601 with a timezone. Dentally refuses an appointment with no end time, so never leave it out." },
+        practitionerId: { type: "string", description: "For 'book' and 'move': the clinician's Dentally practitioner id. Dentally refuses an appointment with no practitioner." },
+        reason: { type: "string", description: "For 'book': the appointment reason. Anything the practice's Dentally does not recognise is recorded as 'Other'." },
+        confirm: {
+          type: "boolean",
+          description: "Set true ONLY after the owner has confirmed in their own reply. Omit or false to read the change back without touching the diary.",
+        },
+      },
+      required: ["action"],
+    },
+  },
 ];
+
 
 function patientSummary(p: PatientRecord) {
   return {
@@ -2872,6 +3100,707 @@ export function makeCopilotDispatch(
               note: sh.note ?? null,
             })),
           });
+        }
+
+        // ===================================================================
+        // WAVE 2, LANE A: THE WAVE-1 MODULES, ANSWERED.
+        //
+        // One rule runs through all seven cases and it is the only one worth
+        // stating twice: THE MODULE THAT OWNS THE SUBJECT DECIDES. The equipment
+        // desk's safety boundary, the IT desk's security refusals, the triage
+        // module's list of who may read a patient's own words and the W1-A write
+        // gate are all CALLED here, never restated. A copy of a rule is a rule
+        // that stops being updated, and every one of these rules is the kind
+        // whose failure lands on a person rather than on a screen.
+        // ===================================================================
+
+        // -------------------------------------------------------------------
+        // AGENT STATUS. Which automated agents are on, and what each needs.
+        //
+        // Three sources, and the join is the point: the ROSTER
+        // (src/lib/agent-wiring/roster.ts) is the only list of every agent and
+        // what it needs; the SYSTEM TOGGLES say which are on; MESSAGING_DRY_RUN
+        // says whether a switched-on agent actually texts anybody. An owner who
+        // reads one of the three gets a confident wrong answer.
+        //
+        // WHAT IT DELIBERATELY DOES NOT DO IS COUNT. There is no per-agent daily
+        // send total anywhere in this platform: every module keeps its own touch
+        // table with its own shape, and there is no join. So the tool says that,
+        // in a sentence, and names where sends ARE visible. A number assembled
+        // from twelve heterogeneous reads and presented as a total would be
+        // exactly the "truncated read wearing a complete number's clothes" the
+        // honest-numbers rule exists to stop.
+        // -------------------------------------------------------------------
+        case "agent_status": {
+          // getSystemStates PROPAGATES its error on purpose (the owner's control
+          // panel needs to show a failure rather than a falsely all-on grid), so
+          // it is caught here and the switch column becomes "unknown" for every
+          // agent rather than silently reading as off.
+          let switches: Map<string, { enabled: boolean; updatedAt: string | null; updatedBy: string | null }> | null =
+            null;
+          try {
+            switches = new Map(
+              (await getSystemStates(clientId)).map((row) => [row.slug, row]),
+            );
+          } catch (err) {
+            console.error(`[copilot] agent_status could not read the system switches for ${clientId}`, err);
+          }
+
+          const wantedRaw = String(input.agent ?? "").trim().toLowerCase();
+          const only = ["all", "on", "off", "needs-setup"].includes(String(input.only))
+            ? String(input.only)
+            : "all";
+
+          const described = AGENTS.map((agent) => {
+            const state = agent.slug && switches ? switches.get(agent.slug) : undefined;
+            const on = switches === null ? null : agent.slug ? Boolean(state?.enabled) : null;
+            return {
+              key: agent.key,
+              label: agent.label,
+              slug: agent.slug,
+              // Three values, not two. "off" and "we could not read the switch"
+              // are different answers and only one of them is safe to act on.
+              switch: on === null ? "unknown" : on ? "on" : "off",
+              switchNote: agent.slug ? undefined : agent.slugNote,
+              switchLastChanged: state?.updatedAt ?? null,
+              switchChangedBy: state?.updatedBy ?? null,
+              switchLabel: agent.slug ? (SYSTEM_BY_SLUG.get(agent.slug)?.label ?? agent.slug) : null,
+              speaksTo: agent.audience,
+              howItSends: agent.sendPath,
+              whatSwitchingItOnStarts: agent.firstTick,
+              whatBoundsIt: agent.bound,
+              needsFirst: agent.needs,
+              howToSeeItWorking: agent.verify,
+              howToStopIt: agent.stop,
+              knownGaps: agent.gaps,
+              _on: on,
+            };
+          })
+            .filter((a) => (wantedRaw ? a.key.includes(wantedRaw) || a.label.toLowerCase().includes(wantedRaw) : true))
+            .filter((a) => {
+              if (only === "on") return a._on === true;
+              if (only === "off") return a._on === false;
+              if (only === "needs-setup") return a._on === true && a.needsFirst.length > 0;
+              return true;
+            })
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            .map(({ _on, ...rest }) => rest);
+
+          if (wantedRaw && described.length === 0) {
+            return JSON.stringify({
+              found: false,
+              agents: [],
+              message: `No agent matches "${String(input.agent ?? "")}". Ask which one they mean rather than guessing; the platform's agents are ${AGENTS.map((a) => a.label).join(", ")}.`,
+            });
+          }
+
+          const dryRun = isDryRun();
+          return JSON.stringify({
+            total: AGENTS.length,
+            shown: described.length,
+            // THE FACT THAT DECIDES WHAT "SWITCHED ON" MEANS. An agent that is on
+            // while the platform is in test mode drafts and records and delivers
+            // nothing, and an owner told only "recall is on" would reasonably
+            // conclude their patients are being texted.
+            messaging: dryRun ? "test mode (dry run)" : "live",
+            messagingNote: dryRun
+              ? "The platform is in TEST MODE: every message is drafted and recorded and NOTHING is delivered to a patient, whatever these switches say. Say that plainly whenever you report an agent as switched on."
+              : "The platform is LIVE: a switched-on agent really does message patients.",
+            switchesReadable: switches !== null,
+            ...(switches === null
+              ? {
+                  switchesNote:
+                    "The system switches could not be read just now, so every switch below reads as unknown. Say that it could not be read; do NOT say the agents are off.",
+                }
+              : {}),
+            // THE HONEST ABSENCE, stated rather than left to be inferred from a
+            // missing field.
+            dailyMessageCounts: null,
+            dailyMessageCountsNote:
+              "This platform keeps no single per-agent daily message total, so there is not one here and you must not assemble one. If they want to know what actually went out, the patient's Correspondence tab shows every message on a record and each module's own worklist shows what it has done.",
+            agents: described,
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // SYNC STATUS. What reaches Dentally, what waits on the key, what never
+        // will, and the recent write intents.
+        //
+        // ASSEMBLED BY W1-A'S OWN MODULE (assembleSyncStatus), not rebuilt: the
+        // screen and this tool must never tell an owner two different things
+        // about their own switch. The ledger read is allowed to fail and says so,
+        // which is carried through here rather than flattened into an empty list.
+        // -------------------------------------------------------------------
+        case "sync_status": {
+          const limit = Math.min(Math.max(Number(input.limit) || 15, 1), 50);
+          const status = await assembleSyncStatus(clientId, limit);
+          const byGroup = (group: SyncGroup) =>
+            status.facts
+              .filter((f) => f.group === group)
+              .map((f) => ({ what: f.label, detail: f.detail, writtenBy: f.sources }));
+          return JSON.stringify({
+            writingBackToDentally: status.mode === "live" && !status.master.off ? "on" : "off",
+            headline: status.headline,
+            deploymentArmed: status.mode === "live",
+            practiceSwitchOff: status.master.off,
+            target: targetLabel(status.target.host),
+            mirrored: byGroup("mirrored"),
+            pendingOnKey: byGroup("pending_on_key"),
+            neverFlowsBack: byGroup("blocked_by_governance"),
+            groupTitles: SYNC_GROUP_TITLES,
+            // Null, never zero, when the ledger could not be read. No number is
+            // better than a wrong one.
+            counts: status.counts,
+            total: status.total,
+            countIsAFloor: status.countCapped,
+            recentIntents: status.intents.map((row) => ({
+              at: row.createdAt,
+              what: row.kind,
+              madeBy: row.source,
+              status: row.status,
+              heldBackBecause: row.blockedReason,
+              target: targetLabel(row.target),
+              // IDS ONLY. The ledger holds no patient name, number or address by
+              // construction (summariseWritePayload drops every personal field),
+              // and nothing here adds one back.
+              dentallyPatientId: row.dentallyPatientId,
+              dentallyAppointmentId: row.dentallyAppointmentId,
+              fields: (row.payloadSummary as { fields?: unknown }).fields ?? null,
+              error: row.error,
+            })),
+            moreIntents: status.more,
+            ledgerError: status.ledgerError,
+            ...(status.ledgerError
+              ? {
+                  ledgerNote:
+                    "The record of write intents could not be read. Say that it could not be read; it is NOT a statement that nothing has been written.",
+                }
+              : {}),
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // PRE-VISIT SUMMARY. What the patient answered on their phone.
+        //
+        // WHO MAY READ THE PATIENT'S OWN WORDS IS THE TRIAGE MODULE'S DECISION
+        // (ruling W1-C/2), so it is read from CLINICAL_SUMMARY_ROLES rather than
+        // restated: a clinician and the owner get the words, the practice manager
+        // gets the COUNT and the discomfort FLAG and never the words. See
+        // CLINICAL_SUMMARY_ACCESS above for how a list of ROLES becomes a rule
+        // about this dispatch's ACCESS without inverting anything.
+        // -------------------------------------------------------------------
+        case "previsit_summary": {
+          const q = String(input.patient ?? "").trim();
+          if (q.length < 2) {
+            return JSON.stringify({
+              found: false,
+              error: "Name the patient whose pre-visit answers you want. Ask which patient they mean; never guess.",
+            });
+          }
+          const matches = await searchPatients(siteIds, q);
+          if (matches.length === 0) return JSON.stringify({ found: false, message: "No patient matches that." });
+          if (matches.length > 1) {
+            return JSON.stringify({ multiple: true, matches: matches.slice(0, 10).map(patientSummary) });
+          }
+          const p = matches[0];
+
+          // A FAILED READ IS NOT AN ABSENCE, and on a record that distinction is
+          // the whole point: "they told us nothing" and "we could not look" are
+          // opposite statements about a patient. The record screen draws the same
+          // line (record-tab-content.tsx) and so does this.
+          let rows: TriageResponse[];
+          try {
+            rows = await listResponsesForPatient(siteIds, p.id, 1);
+          } catch (err) {
+            console.error(`[copilot] previsit_summary could not read ${p.id}'s answers`, err);
+            return JSON.stringify({
+              found: false,
+              readFailed: true,
+              patient: p.name,
+              message: SUMMARY_COPY.readFailed,
+            });
+          }
+          const latest = rows[0];
+          if (!latest) {
+            return JSON.stringify({ found: false, patient: p.name, message: SUMMARY_COPY.none });
+          }
+
+          const mayReadWords = CLINICAL_SUMMARY_ACCESS.has(access);
+          const summary = await previsitSummaryFor({
+            clientId,
+            response: latest,
+            viewerRole: mayReadWords ? CLINICAL_READER_ROLE : CLINICAL_DENIED_ROLE,
+          });
+          return JSON.stringify({
+            found: true,
+            patient: p.name,
+            submittedAt: summary.submittedAt,
+            whichList: summary.forkLabel,
+            provenance: SUMMARY_COPY.provenance,
+            beforeTheVisit: summary.logistics,
+            treatmentInterest: summary.interest,
+            // Null for a viewer who may not read them, and the count is still
+            // here: the front desk needs to know there is something for the
+            // clinician to read, which is a different thing from reading it.
+            whatTheyToldUs: summary.clinical,
+            answersForTheClinician: summary.flaggedForClinician,
+            ...(summary.clinical === null && summary.flaggedForClinician > 0
+              ? { restricted: SUMMARY_COPY.restricted(summary.flaggedForClinician) }
+              : {}),
+            discomfortReported: summary.discomfortReported,
+            ...(summary.discomfortReported ? { discomfortNote: SUMMARY_COPY.discomfort } : {}),
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // INTEREST LISTS. Who said yes to which treatment.
+        // -------------------------------------------------------------------
+        case "interest_lists": {
+          const treatmentRaw = String(input.treatment ?? "").trim();
+          const known = INTEREST_TREATMENTS.find((t) => t.key === treatmentRaw);
+          if (treatmentRaw && !known) {
+            return JSON.stringify({
+              error: `I do not have an interest list for "${treatmentRaw}". The lists are ${INTEREST_TREATMENTS.map((t) => `${t.label} (${t.key})`).join(", ")}. Ask which one they mean.`,
+            });
+          }
+          const answer = input.answer === "not_now" ? "not_now" : "yes";
+          const limit = Math.min(Math.max(Number(input.limit) || 50, 1), 200);
+
+          if (!known) {
+            // COUNTS, and they are DISTINCT PATIENTS rather than rows — a patient
+            // who filled the form in before two appointments is one person
+            // interested in whitening. countInterestByTreatment does that; this
+            // does not re-count.
+            const counts = await countInterestByTreatment(siteIds);
+            return JSON.stringify({
+              treatments: INTEREST_TREATMENTS.map((t) => ({
+                treatment: t.key,
+                label: t.label,
+                patients: counts[t.key] ?? 0,
+              })),
+              countsAre: "distinct patients who answered yes, in the site or sites currently in view",
+              note: "Ask for one treatment by name to see who they are.",
+            });
+          }
+
+          const rows = await listInterest({ siteIds, treatment: known.key, answer, limit });
+          return JSON.stringify({
+            treatment: known.key,
+            label: known.label,
+            answer,
+            count: rows.length,
+            capped: rows.length === limit,
+            patients: rows.map((r) => ({
+              name: r.patientName,
+              dentallyPatientId: r.dentallyPatientId,
+              site: siteName(r.siteId),
+              said: r.answer,
+              on: r.createdAt,
+            })),
+            note:
+              answer === "not_now"
+                ? "These patients said 'not right now'. They are recorded so nobody asks them again straight away, and they are NOT a campaign target. Do not suggest messaging them."
+                : "These patients said yes when asked before an appointment. A campaign to them still goes through the practice's normal consent and opt-out rules.",
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // EQUIPMENT. The register and the manuals — behind the equipment desk's
+        // OWN gate.
+        //
+        // THE GATE IS NOT OPTIONAL AND IT IS NOT REIMPLEMENTED. W1-D/2 is a
+        // programme ruling with three shapes: "which equipment is overdue?" is
+        // ANSWERED, "can we keep using the overdue autoclave?" gets the FACTS
+        // with the decision refused, and "how do I bypass the interlock?" is a
+        // HARD refusal with no model call at all. That is
+        // `gateEquipmentQuestion`, and it is called here with the same inputs the
+        // equipment route gives it, so a question asked in the co-pilot cannot
+        // get an answer the equipment page would have refused.
+        //
+        // The judgement sentence is appended by THIS server, unconditionally, for
+        // the same reason the route appends it: a "did the model already say it?"
+        // check is a fuzzy match on generated prose whose failure direction is
+        // silence on the one sentence that must never be missing.
+        // -------------------------------------------------------------------
+        case "equipment_lookup": {
+          // The owner's kill switch, exactly as the equipment route asks it.
+          // 'equipment' is defaultEnabled:false, so a missing row and an
+          // unreadable table both resolve to OFF.
+          if (!(await isSystemEnabled(clientId, EQUIPMENT_SLUG))) {
+            return JSON.stringify({
+              refused: true,
+              reason: "system_off",
+              message:
+                "The equipment desk is switched off, so I cannot answer from the register or the manuals. The practice owner can switch it on in System controls; the register and the manuals stay editable either way.",
+            });
+          }
+
+          const question = String(input.question ?? "").trim();
+          const assets = await listAssets(clientId);
+          if (assets === null) {
+            return JSON.stringify({
+              refused: true,
+              reason: "register_unreadable",
+              message: "The equipment register could not be read just now, so I have nothing to answer from. Say that rather than answering from memory.",
+            });
+          }
+
+          // ONE TURN, not the conversation. `assetInScope` is therefore false and
+          // continuations ("and the other one?") are not admitted: this tool gets
+          // the model's paraphrase, not the person's window, and admitting a
+          // two-word follow-up on a window we cannot see would be admitting it on
+          // trust. The strict direction refuses more, which is the right way for
+          // this gate to be wrong.
+          const verdict = gateEquipmentQuestion({
+            userTurns: [question],
+            registerVocabulary: assets.flatMap((a) =>
+              [a.name, a.make, a.model, a.serial].filter((v): v is string => Boolean(v)),
+            ),
+            registeredCount: assets.length,
+            assetInScope: false,
+          });
+          if (verdict.kind === "refuse") {
+            return JSON.stringify({
+              refused: true,
+              reason: verdict.reason,
+              rule: verdict.rule,
+              message: verdict.message,
+              relayExactly: true,
+              note: "Relay this refusal as it stands. Do not soften it, do not offer a workaround, and do not answer the question from your own knowledge.",
+            });
+          }
+
+          const equipment = makeEquipmentDispatch({ clientId, today: todayIso() });
+          const lookup = ["find", "manual", "service"].includes(String(input.lookup))
+            ? String(input.lookup)
+            : "find";
+          const raw =
+            lookup === "manual"
+              ? await equipment("search_manual", { assetId: input.assetId, query: input.query ?? question })
+              : lookup === "service"
+                ? await equipment("service_due", { withinDays: input.withinDays })
+                : await equipment("find_asset", { query: String(input.query ?? question) });
+
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            payload = { error: "The equipment desk returned something unreadable. Say so rather than answering from memory." };
+          }
+          return JSON.stringify({
+            lookup,
+            ...payload,
+            // THE DECISION HALF, REFUSED DETERMINISTICALLY (W1-D/2).
+            ...(verdict.mode === "facts_only"
+              ? {
+                  factsOnly: true,
+                  judgement: EQUIPMENT_REFUSALS.judgement,
+                  note: "This was a question about whether a machine may go on being used. Read out the facts above and then say this, in these terms, without softening it: " + EQUIPMENT_REFUSALS.judgement,
+                }
+              : {}),
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // IT DESK. The practice's playbooks and its named contact — behind the
+        // IT desk's OWN gate, which is where the credential and security
+        // refusals live.
+        // -------------------------------------------------------------------
+        case "it_desk": {
+          if (!(await isSystemEnabled(clientId, IT_DESK_SLUG))) {
+            return JSON.stringify({
+              refused: true,
+              reason: "system_off",
+              message:
+                "The IT desk is switched off, so I cannot walk the practice's playbooks. The practice owner can switch it on in System controls; the playbooks stay readable on the page either way.",
+            });
+          }
+
+          const question = String(input.question ?? "").trim();
+          // Same single-turn posture as the equipment gate above, and the same
+          // reason: no continuation is admitted on a window this tool cannot see.
+          const verdict = gateItDeskQuestion({ userTurns: [question], playbookInScope: false });
+          if (verdict.kind === "refuse") {
+            return JSON.stringify({
+              refused: true,
+              reason: verdict.reason,
+              rule: verdict.rule,
+              message: verdict.message,
+              relayExactly: true,
+              note: "Relay this refusal as it stands. Do not soften it, do not offer a workaround, and never supply, set or ask for a password, PIN or access code yourself.",
+            });
+          }
+
+          const itDesk = makeItDeskDispatch({ clientId });
+          const playbookId = String(input.playbookId ?? "").trim();
+          const raw = playbookId
+            ? await itDesk("get_playbook", { id: playbookId })
+            : await itDesk("search_playbooks", { query: question });
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            payload = { error: "The IT desk returned something unreadable. Say so rather than answering from memory." };
+          }
+
+          // The contact is fetched only when it is asked for or when there is no
+          // playbook to walk, so an ordinary printer question does not read the
+          // practice's escalation record for no reason.
+          const wantsContact = input.contact === true || (Array.isArray(payload.matches) && payload.matches.length === 0);
+          let contact: unknown = undefined;
+          if (wantsContact) {
+            try {
+              contact = JSON.parse(await itDesk("it_contact", {})) as unknown;
+            } catch {
+              contact = { available: false, reason: "unreadable" };
+            }
+          }
+          return JSON.stringify({
+            ...payload,
+            ...(contact === undefined ? {} : { itContact: contact }),
+            note: "Walk the steps one at a time rather than pasting them all, and escalate to the practice's named IT contact when they run out. Never invent a step for hardware the playbooks do not cover.",
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // DIARY WRITE. Book, move or cancel — THROUGH THE W1-A GATE.
+        //
+        // THREE THINGS MAKE THIS SAFE AND ALL THREE ARE HERE RATHER THAN IN THE
+        // PROMPT:
+        //   1. the CLEARANCE GATE at the top of this dispatch — `diary-write` is
+        //      an owner-only act domain, so no other login reaches this case;
+        //   2. the TWO-STEP CONFIRM below, and `diary_write` is in
+        //      CONFIRM_COMMIT_TOOLS (src/lib/agent/run.ts), so a confirm set in
+        //      the same turn as the request is inert;
+        //   3. the WRITE GATE itself, which resolves live-vs-dry-run, honours the
+        //      master dentally-write-back switch, and FILES AN INTENT for every
+        //      confirmed attempt including the ones it refuses.
+        //
+        // The preview files nothing, deliberately: one owner action must produce
+        // exactly one ledger row, and a read-back is not an attempt. It still
+        // reads the current write mode, so the owner is told before they confirm
+        // that confirming will record the intent and send nothing.
+        // -------------------------------------------------------------------
+        case "diary_write": {
+          const action = String(input.action ?? "").trim();
+          if (!["book", "move", "cancel"].includes(action)) {
+            return JSON.stringify({
+              done: false,
+              error: "Say whether this is a book, a move or a cancel. Never guess which the owner meant.",
+            });
+          }
+
+          // Every value is validated HERE and the request's own strings are never
+          // forwarded whole: a zone-less start time is resolved by Dentally in the
+          // account's zone while the finish goes out as UTC, which writes a
+          // mangled span that then reads back as "unchanged" (the reasoning is
+          // recorded at the diary's own write, src/lib/calendar/move-service.ts).
+          const isoWithZone = (v: unknown): string | null => {
+            const raw = String(v ?? "").trim();
+            if (!raw) return null;
+            if (!/(?:Z|z|[+-]\d{2}:?\d{2})$/.test(raw)) return null;
+            return Number.isNaN(Date.parse(raw)) ? null : raw;
+          };
+
+          const appointmentId = String(input.appointmentId ?? "").trim();
+          const start = isoWithZone(input.start);
+          const finish = isoWithZone(input.finish);
+          const practitionerId = String(input.practitionerId ?? "").trim();
+
+          if (action !== "book" && !appointmentId) {
+            return JSON.stringify({
+              done: false,
+              error: `I need the Dentally appointment id to ${action} it. It is on the patient's appointment history; ask for the patient and look it up rather than inventing an id.`,
+            });
+          }
+          if (action !== "cancel") {
+            if (!start || !finish) {
+              return JSON.stringify({
+                done: false,
+                error: "I need a start AND a finish time, both in full ISO form with a timezone (for example 2026-09-10T09:00:00Z). Dentally refuses an appointment with no end time, and a time with no timezone lands in the wrong hour. Ask the owner for the times; never guess them.",
+              });
+            }
+            if (Date.parse(finish) <= Date.parse(start)) {
+              return JSON.stringify({ done: false, error: "The finish time is not after the start time. Ask the owner to confirm both." });
+            }
+            if (!practitionerId) {
+              return JSON.stringify({
+                done: false,
+                error: "I need the clinician's Dentally practitioner id. Dentally refuses an appointment with no practitioner. Ask which clinician it is; never guess an id.",
+              });
+            }
+          }
+
+          // For a booking the site comes from the PATIENT, resolved server-side.
+          // For a move or a cancel there is only an appointment id, so the site is
+          // known only when the view is one site — recorded as null otherwise
+          // rather than guessed, and the practice is always known either way.
+          let patient: PatientRecord | null = null;
+          if (action === "book") {
+            const q = String(input.patient ?? "").trim();
+            if (q.length < 2) {
+              return JSON.stringify({ done: false, error: "Name the patient this appointment is for. Never guess." });
+            }
+            const matches = await searchPatients(siteIds, q);
+            if (matches.length === 0) return JSON.stringify({ done: false, error: "No patient matches that, so I have not booked anything." });
+            if (matches.length > 1) {
+              return JSON.stringify({
+                done: false,
+                multiple: true,
+                matches: matches.slice(0, 10).map(patientSummary),
+                note: "Several patients match. Ask the owner which one before booking.",
+              });
+            }
+            patient = matches[0];
+          }
+          const siteId = patient?.siteId ?? (siteIds.length === 1 ? siteIds[0] : null);
+
+          const readback = {
+            action,
+            patient: patient?.name ?? null,
+            appointmentId: appointmentId || null,
+            start,
+            finish,
+            practitionerId: practitionerId || null,
+            // Named `appointmentReason` and not `reason`, because every failure
+            // payload in this case carries a `reason` of its own (why nothing
+            // happened) and two different meanings on one key is how a model
+            // reports "writes_disabled" as the appointment's reason.
+            appointmentReason: action === "book" ? String(input.reason ?? "").trim() || null : null,
+            site: siteId ? siteName(siteId) : null,
+          };
+
+          if (input.confirm !== true) {
+            // The honest state of the write path, read before the owner is asked
+            // to confirm rather than after. Both switches: the deployment's arming
+            // and the practice's own master switch, asked exactly as the gate asks
+            // them so the answer here and the outcome there cannot disagree.
+            const mode = dentallyWriteMode();
+            const masterOff = await isDentallyWriteMasterOff(clientId, mode);
+            const willReach = mode === "live" && !masterOff;
+            return JSON.stringify({
+              done: false,
+              preview: true,
+              ...readback,
+              writingBackToDentally: willReach ? "on" : "off",
+              note:
+                `Nothing has changed in the diary. Read every detail back to the owner: ${action} ` +
+                `${patient ? `${patient.name}, ` : ""}${appointmentId ? `appointment ${appointmentId}, ` : ""}` +
+                `${start ? `${start} to ${finish}` : ""}${practitionerId ? `, clinician ${practitionerId}` : ""}. ` +
+                (willReach
+                  ? "Confirming will change the practice's real Dentally diary. "
+                  : masterOff
+                    ? "Dentally write-back is switched OFF in System controls, so confirming will RECORD what was wanted and change nothing in Dentally. Tell the owner that before they confirm. "
+                    : "Writing back to Dentally is not switched on for this practice yet, so confirming will RECORD what was wanted and change nothing in Dentally. Tell the owner that before they confirm. ") +
+                "Only once they clearly say yes in a later reply, call diary_write again with confirm true.",
+            });
+          }
+
+          const audit = {
+            clientId,
+            siteId,
+            actor,
+            action: `diary_write:${action}`,
+            targetRef: appointmentId ? `appointment:${appointmentId}` : patient ? `patient:${patient.id}` : null,
+            targetName: patient?.name ?? null,
+            channel: null,
+            body: `${action} ${start ?? ""}${finish ? `-${finish}` : ""}${practitionerId ? ` prac ${practitionerId}` : ""}`.trim(),
+          };
+          const ctx = {
+            source: "copilot" as const,
+            siteId,
+            clientId,
+            actor,
+            patientId: patient?.id ?? null,
+          };
+
+          try {
+            if (action === "book") {
+              // The payload comes from the SHARED, live-calibrated derivation the
+              // staff booking path uses (buildManualBookingPayload): the same
+              // required fields, the same closed set of reasons, the same
+              // booked_via_api flag. Nothing about a booking is invented here.
+              const built = buildManualBookingPayload(
+                { start_time: start, finish_time: finish, practitioner_id: practitionerId, reason: input.reason },
+                patient!.id,
+              );
+              if ("error" in built) {
+                await logCopilotAction({ ...audit, status: "blocked:incomplete" });
+                return JSON.stringify({ done: false, error: built.error });
+              }
+              const { appointment } = await dentallyWrite.createAppointment(ctx, built.payload);
+              await logCopilotAction({ ...audit, status: "booked" });
+              return JSON.stringify({
+                done: true,
+                ...readback,
+                action,
+                appointmentId: String(appointment.id),
+                note: `Booked ${patient!.name} into Dentally (appointment ${appointment.id}). Confirm that to the owner.`,
+              });
+            }
+
+            if (action === "move") {
+              // start_time ALONE is forbidden: it leaves the old finish behind, so
+              // a 30 minute booking dragged an hour later silently becomes 90.
+              // The diary's own move sends exactly these three fields.
+              const { appointment } = await dentallyWrite.updateAppointment(ctx, appointmentId, {
+                start_time: start,
+                finish_time: finish,
+                practitioner_id: practitionerId,
+              });
+              await logCopilotAction({ ...audit, status: "moved" });
+              return JSON.stringify({
+                done: true,
+                ...readback,
+                action,
+                appointmentId: String(appointment.id),
+                note: `Moved appointment ${appointment.id} in Dentally. Confirm that to the owner.`,
+              });
+            }
+
+            const { appointment } = await dentallyWrite.cancelAppointment(ctx, appointmentId);
+            await logCopilotAction({ ...audit, status: "cancelled" });
+            return JSON.stringify({
+              done: true,
+              ...readback,
+              action,
+              appointmentId: String(appointment.id),
+              note: `Cancelled appointment ${appointment.id} in Dentally. Confirm that to the owner, and remember the freed slot is not offered to anybody automatically from here.`,
+            });
+          } catch (err) {
+            // A REFUSAL IS NOT A DENTALLY FAILURE. The gate throws rather than
+            // returning a "nothing happened" value, and it has ALREADY filed the
+            // blocked intent by the time this runs — so the owner is told the
+            // truth and Sync status shows exactly what was held back.
+            if (err instanceof DentallyWriteRefused) {
+              await logCopilotAction({ ...audit, status: `blocked:${err.reason}` });
+              return JSON.stringify({
+                done: false,
+                refused: true,
+                ...readback,
+                reason: "writes_disabled",
+                blockedReason: err.reason,
+                message:
+                  `Nothing was changed in Dentally: ${err.message} ` +
+                  "What was wanted is recorded in Sync status, so nothing is lost. Say plainly that the diary in Dentally is unchanged, and do not try another way to do it.",
+              });
+            }
+            await logCopilotAction({ ...audit, status: "error:dentally" });
+            const status = err instanceof DentallyError ? err.status : 0;
+            return JSON.stringify({
+              done: false,
+              refused: true,
+              ...readback,
+              reason: "dentally_error",
+              status,
+              message:
+                status === 403
+                  ? "The Dentally key does not allow changing the diary (403), so nothing was changed."
+                  : status === 422
+                    ? "Dentally rejected the appointment (422), so nothing was changed. Check the times, the clinician and the reason with the owner."
+                    : "I hit an error writing to Dentally. I cannot tell you whether it landed, so check the diary in Dentally before doing anything else, and do not retry.",
+            });
+          }
         }
 
         default:

@@ -104,6 +104,34 @@ const DENIED_TO_MANAGER: Record<string, string> = {
     "clinical decision support on a named patient: a clinical read, and the manager is not the clinician",
   my_work:
     "the caller's own rota, holiday and staff file: she has the whole rota module, so this would widen the pinned six for nothing",
+  // ADDED BY WAVE 2, LANE A. Three of the seven tools that lane wrote are denied
+  // to her, and each denial is the SAME domain she was already denied rather than
+  // a new judgement: agent-status and controls were declared owner-only when they
+  // had no tool at all, and diary-write is the act domain she has never held.
+  agent_status:
+    "the automated systems and their switches: System controls, which her nav does not give her either",
+  sync_status:
+    "the state of the Dentally write-back connection and its master switch: System controls again",
+  diary_write:
+    "books, moves and cancels in the practice's real Dentally diary: she has no act domain at all, and she books in the diary itself under its own guards",
+};
+
+/**
+ * The tools WAVE 2, LANE A DID hand her, each with the reason.
+ *
+ * Named here as well as in `clearance.test.ts`'s WIDENED table, because this file
+ * is the one that enumerates her surface tool by tool and a grant that appeared
+ * only as a number ("now nine, not six") is a grant nobody reviewed.
+ */
+const ADDED_FOR_MANAGER_W2A: Record<string, string> = {
+  previsit_summary:
+    "one patient's own pre-visit answers, PROJECTED: she gets the practical answers, the treatment interest, the COUNT of symptom answers and the discomfort flag, and never the patient's words (ruling W1-C/2)",
+  interest_lists:
+    "who said yes to which treatment: the same acquisition subject as the leads worklist she already has",
+  equipment_lookup:
+    "the equipment register is the practice manager's document, the nav entry names her, and the charter puts the module at owner/manager",
+  it_desk:
+    "front-desk IT lands on her, the nav entry names her, and the charter puts the module at owner/manager",
 };
 
 describe("1. who gets which co-pilot", () => {
@@ -145,8 +173,29 @@ describe("1. who gets which co-pilot", () => {
 });
 
 describe("2. the allow-list", () => {
-  it("is exactly six tools, named", () => {
+  it("is exactly ten tools, named", () => {
+    // SIX until wave 2, lane A, which added four and named every one of them in
+    // ADDED_FOR_MANAGER_W2A above. The list is spelled out rather than derived so
+    // that an eleventh has to be typed here by somebody who meant it.
     expect([...MANAGER_COPILOT_TOOLS].sort()).toEqual([
+      "appointments",
+      "equipment_lookup",
+      "interest_lists",
+      "it_desk",
+      "list_recent_assessment_leads",
+      "list_speed_to_lead",
+      "patient_record",
+      "previsit_summary",
+      "search_knowledge",
+      "search_patients",
+    ]);
+  });
+
+  it("gained exactly the four wave-2 tools, and each is named with its reason", () => {
+    // The equation, not a snapshot: what she holds now MINUS what she held before
+    // this lane must be exactly the four named above, so a fifth cannot ride in on
+    // a green suite.
+    const before = new Set([
       "appointments",
       "list_recent_assessment_leads",
       "list_speed_to_lead",
@@ -154,6 +203,14 @@ describe("2. the allow-list", () => {
       "search_knowledge",
       "search_patients",
     ]);
+    const gained = [...MANAGER_COPILOT_TOOLS].filter((n) => !before.has(n)).sort();
+    expect(gained).toEqual(Object.keys(ADDED_FOR_MANAGER_W2A).sort());
+    // ...and she lost nothing.
+    for (const name of before) expect([...MANAGER_COPILOT_TOOLS]).toContain(name);
+    // Every reason is a real sentence, not a placeholder.
+    for (const [name, why] of Object.entries(ADDED_FOR_MANAGER_W2A)) {
+      expect(why.length, `${name} has no reason`).toBeGreaterThan(40);
+    }
   });
 
   it("every name on it is a REAL tool", () => {
@@ -208,7 +265,7 @@ describe("3. THE HOLD AXIS — every route to the owner's data is closed", () =>
     // thirteen. A name it never sees is a name it cannot reason about.
     const shown = copilotToolsFor("manager", COPILOT_TOOLS).map((t) => t.name);
     expect(shown.sort()).toEqual([...MANAGER_COPILOT_TOOLS].sort());
-    expect(shown).toHaveLength(6);
+    expect(shown).toHaveLength(10);
     for (const name of Object.keys(DENIED_TO_MANAGER)) expect(shown).not.toContain(name);
     // And the schemas handed over are the REAL ones, not copies.
     for (const tool of copilotToolsFor("manager", COPILOT_TOOLS)) {

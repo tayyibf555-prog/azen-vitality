@@ -1,6 +1,8 @@
 import "server-only";
 import { findOrCreateConversation, appendMessage } from "@/lib/agent/repository";
 import { sendMessage } from "@/lib/messaging/send";
+import { recordContacted } from "@/lib/messaging/frequency";
+import { londonDayKey } from "@/lib/time/london";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import { validateMobile } from "@/lib/messaging/lookup";
 import { validateEmail } from "@/lib/messaging/email-lookup";
@@ -62,6 +64,9 @@ export function channelConsented(lead: SpeedToLeadLead): boolean {
  *
  * Shared by the intake route (in-request, for instant contact) and the sweep
  * (the failsafe for anything the intake missed).
+ *
+ * It does NOT consult the cross-module daily cap, and it DOES stamp it — see the
+ * ruling quoted at the send site below.
  */
 export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignContext): Promise<void> {
   // Dead-channel guard, applied FIRST so every downstream use of lead.channel
@@ -289,6 +294,33 @@ export async function contactLead(lead: SpeedToLeadLead, campaign?: CampaignCont
     await insertAttempt({ leadId: lead.id, channel: lead.channel, toAddress: to, body, status: "failed" });
     return;
   }
+
+  // ── RULING W2-C/2 (3 Sep 2026), the anti-overlap daily cap ──────────────────
+  // A speed-to-lead first contact is a REPLY to an inbound enquiry, so it sits on
+  // one side of the cap only:
+  //
+  //   IT DOES NOT CONSULT IT. A patient who has just asked us something must be
+  //   answered, whatever unsolicited text some other sweep sent them earlier the
+  //   same day. There is deliberately no wasContactedToday call anywhere above.
+  //
+  //   IT MUST STAMP IT. Once we have replied, the UNSOLICITED sweeps — recall,
+  //   reactivation, no-show, coordinator, closer, collection, post-op — hold off
+  //   for the rest of the London day, because they all read this same log before
+  //   they send (src/app/api/messaging/drain/route.ts, src/lib/messaging/
+  //   frequency.ts, message_daily_log). Without the stamp, a lead who enquired at
+  //   nine could be chased by a recall text at ten.
+  //
+  // Keyed exactly as the sweeps key it: site + the canonical address (E.164 for
+  // sms/whatsapp, lower-cased email — leads are normalised at every intake
+  // boundary by src/lib/messaging/phone.ts) + the London day. A brand-new
+  // enquirer has no patient id, and needs none: the cap has never been keyed on
+  // one.
+  //
+  // Stamped BEFORE the rest of the bookkeeping and outside its try, so a failed
+  // insertAttempt cannot cost the patient the quiet afternoon the stamp buys.
+  // recordContacted swallows its own errors (the cap is fatigue control, not a
+  // safety gate) so this can neither throw nor delay the send that already went.
+  await recordContacted(lead.siteId, to, londonDayKey(new Date()), "speed-to-lead");
 
   // Sent. From here the patient has been texted, so a bookkeeping failure must never
   // reset the lead to retryable. Advance it out of the first-contact window; if a

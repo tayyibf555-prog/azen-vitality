@@ -156,10 +156,16 @@ export const DENTALLY_WRITE_SOURCES = {
   // it does not misdescribe what the platform did.
   copilot: {
     slug: null,
-    label: "Co-pilot (the owner adding a patient by asking)",
+    label: "Co-pilot (the owner adding a patient, or booking, moving or cancelling, by asking)",
     whyNoSwitch:
-      "The same shape as patient-admin: an owner in a session, behind a two-step confirm, not an automated system. There is no sweep, no queue and no message to halt, so there is nothing for a per-module kill switch to stop, and the co-pilot is deliberately absent from the systems catalog for that reason. The locks are the module guard and the `system.copilot.ask` capability on /api/copilot, the tool's own confirm gate, and the master dentally-write-back switch that governs every source here.",
-    kinds: ["patient.create"],
+      "The same shape as patient-admin: an owner in a session, behind a two-step confirm, not an automated system. There is no sweep, no queue and no message to halt, so there is nothing for a per-module kill switch to stop, and the co-pilot is deliberately absent from the systems catalog for that reason. The locks are the module guard and the `system.copilot.ask` capability on /api/copilot, the owner-only `diary-write` clearance domain, the tool's own confirm gate, and the master dentally-write-back switch that governs every source here.",
+    // WIDENED BY WAVE 2, LANE A, from patient.create alone to the three
+    // appointment kinds as well: the co-pilot's `diary_write` tool books, moves
+    // and cancels through this gate. Declared here because the Sync Status page
+    // derives "which surfaces make this write" from this registry, and a surface
+    // that changes a practice's diary while being absent from the page they read
+    // to find out what changes their diary is the exact gap W1-A closed.
+    kinds: ["patient.create", "appointment.create", "appointment.update", "appointment.cancel"],
   },
   "patient-status": {
     slug: null,

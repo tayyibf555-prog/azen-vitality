@@ -578,7 +578,7 @@ describe("3. every default is DERIVED from the guard it claims to come from", ()
 // leak would show up in first — is re-asserted here from the capability side.
 // ===========================================================================
 describe("4. the capability layer did not leak into module access", () => {
-  it("the clinician's allow-list is exactly seven modules, the seventh named", () => {
+  it("the clinician's allow-list is exactly nine modules, each addition named", () => {
     expect(sorted(CLINICIAN_SLUGS)).toEqual(
       sorted([
         "",
@@ -592,6 +592,14 @@ describe("4. the capability layer did not leak into module access", () => {
         // tier-1 knowledge, their own work and second-opinion decision support.
         // No money, no leads, no marketing, and no action of any kind.
         "co-pilot",
+        // ADDED on the same coordinator's ruling, W2-A/1 (3 Sep 2026): the
+        // equipment desk and the IT desk widen to every clearance. Neither holds
+        // a patient row or an appointment, and — the point of THIS file — neither
+        // arrived through the capability layer: both are plain entries in
+        // CLINICIAN_SLUGS, and the assertion below still proves everything
+        // outside that set is denied.
+        "equipment",
+        "it-desk",
       ]),
     );
   });
@@ -603,11 +611,18 @@ describe("4. the capability layer did not leak into module access", () => {
     for (const slug of denied) expect(canRoleAccessModule("client_clinician", slug)).toBe(false);
   });
 
-  it("the staff allow-list is three entries and STILL holds neither the diary nor the patients", () => {
+  it("the staff allow-list is five entries and STILL holds neither the diary nor the patients", () => {
     // The third entry is the co-pilot (coordinator's ruling, 3 Sep 2026), and the
     // two assertions under it are the reason adding it was safe: the surface she
     // gained answers about HERSELF, and the two she must never have are unmoved.
-    expect(sorted(STAFF_SLUGS)).toEqual(["", "co-pilot", "my-work"]);
+    //
+    // The fourth and fifth are the equipment desk and the IT desk (W2-A/1, the
+    // same day). The same reasoning holds and the same two assertions carry it:
+    // a dental nurse IS a client_staff, "the autoclave is beeping" is her
+    // question, and neither module can reach an appointment or a patient row.
+    // Neither came from the capability layer either, which is what this file is
+    // about: they are entries in STAFF_SLUGS, and ROLE_DEFAULTS is untouched.
+    expect(sorted(STAFF_SLUGS)).toEqual(["", "co-pilot", "equipment", "it-desk", "my-work"]);
     expect(canRoleAccessModule("client_staff", "calendar")).toBe(false);
     expect(canRoleAccessModule("client_staff", "patients")).toBe(false);
   });
