@@ -27,11 +27,12 @@ import { PreVisitForm } from "@/components/previsit/previsit-form";
 // string this page can render.
 //
 // A DEAD LINK IS A 404, WHATEVER KILLED IT: a malformed token, an unknown token,
-// a spent link, a stopped target, a switched-off system, an unknown site. Same
-// page for all of them, so a probe learns nothing about whether a token named a
-// real appointment. The /pv/* path is public (the proxy gates only /agency,
-// /owner, /c/*), and force-dynamic so a freshly minted link is always honoured
-// and the kill-switch state is always fresh.
+// a spent link, a stopped target, an appointment that has already started, a
+// switched-off system, an unknown site. Same page for all of them, so a probe
+// learns nothing about whether a token named a real appointment. The /pv/* path
+// is public (the proxy gates only /agency, /owner, /c/*), and force-dynamic so a
+// freshly minted link is always honoured and the kill-switch state is always
+// fresh.
 // ===========================================================================
 
 export const dynamic = "force-dynamic";
@@ -52,6 +53,36 @@ export default async function PreVisitPage({
   // A spent link ('answered') or a retired one ('stopped') opens nothing. This is
   // what a database-backed id buys that a signed token cannot express.
   if (target.status !== "queued" && target.status !== "sent") notFound();
+
+  // THE UPPER BOUND, and status alone cannot express it. Ruling W3/5 — "a queued
+  // pre-visit link is NEVER dispatched after its appointment start ... fail
+  // closed" — was implemented on the DRAIN (repository.ts,
+  // dropRowsPastTheirAppointment), which retires a link that has not gone out
+  // yet. It cannot touch one that HAS: `sent` has no terminal transition, so a
+  // delivered link would otherwise sit live in a phone's message list for ever,
+  // and the harm that ruling's own comment names — "a live token whose form still
+  // opened and whose answers landed dated after the appointment they were asked
+  // about" — would survive on every link the practice actually sent.
+  //
+  // So the same bound is applied at the door: `now < start`, byte-for-byte the
+  // drain's comparison and decideSend's `past` drop, so all three agree about
+  // which side of the appointment we are on. Answers submitted after the visit
+  // are not late answers, they are answers to a DIFFERENT question — the first,
+  // required one is "are you still able to come to your appointment?" — and
+  // `submitted_at = now` would present them to the next clinician as the summary
+  // standing in front of the NEXT visit.
+  //
+  // FAIL CLOSED on an unparseable instant, the same direction decideSend takes
+  // for an undatable appointment: an appointment we cannot date is not an
+  // appointment we may assume is still ahead of us. `notFound()` like every other
+  // dead link, so an expired token is indistinguishable from a guessed one.
+  //
+  // The clock is read as `new Date()` rather than `Date.now()` only because the
+  // React purity rule refuses the latter inside a component; the comparison is
+  // the same one, and this page is `force-dynamic`, so there is no render to be
+  // unstable across.
+  const startMs = Date.parse(target.appointmentAt);
+  if (!Number.isFinite(startMs) || new Date().getTime() >= startMs) notFound();
 
   const site = getSite(target.siteId);
   if (!site) notFound();

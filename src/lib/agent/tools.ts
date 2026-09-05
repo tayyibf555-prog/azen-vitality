@@ -18,7 +18,10 @@ import {
 import { availabilityRowsWithinDays } from "@/lib/calendar/availability";
 import { londonDayKey } from "@/lib/time/london";
 import { isDentallyWriteEnabled } from "@/lib/dentally/write";
-import { dentallyWrite, type DentallyWriteContext } from "@/lib/dentally/write-gate";
+import { dentallyWrite, precheckDentallyWrite, type DentallyWriteContext } from "@/lib/dentally/write-gate";
+// The pure leaf the gate, the ledger and the Sync Status screen all share; a type
+// import, so nothing of the server ledger reaches this module's graph.
+import type { DentallyWriteKind } from "@/lib/dentally/write-vocabulary";
 // The ONE live-calibrated derivation of a new Dentally patient, shared with the
 // booking funnel, the owner co-pilot and the onboarding worklist. See patient-payload.ts.
 import {
@@ -382,26 +385,64 @@ export interface ToolDeps {
 }
 
 /**
- * The gate context for every Dentally write this agent makes.
+ * THE DENTALLY PATIENT ID, or null where this conversation has only a lead.
  *
- * ONE helper rather than four inline objects, so the three things that are true
- * of all four writes are stated once: they come from the booking agent (which is
- * the kill switch that governs them), the actor is the agent rather than a
- * person, and the client is HANDED to the gate rather than resolved by it.
- *
- * That last one is not a convenience. find_slots and the write share ONE client
- * on purpose (see ToolDeps.dentally), so availability and the booking always hit
- * the same Dentally instance and the agent can never book a slot it proved open
- * somewhere else. Letting the gate build its own client would quietly undo that.
+ * An unrecognised number's `context.patientId` is `lead:<their mobile>` — the
+ * conversation key, not a Dentally record — and the sync ledger's whole design is
+ * that it holds no personal data (see sanitiseActor and the payload allow-list in
+ * write-vocabulary.ts). `register_patient` hands the gate a context with no
+ * patient id of its own, which fell back to exactly that string, so every
+ * conversational registration filed a patient's MOBILE NUMBER in the ledger's
+ * dentally_patient_id column. There is no Dentally patient to name at that point,
+ * and "none" is both the honest answer and the one that keeps the column clean.
  */
-function agentWriteContext(deps: ToolDeps, patientId?: string): DentallyWriteContext {
+function dentallyPatientIdOf(id: string | null | undefined): string | null {
+  return id && !id.startsWith("lead:") ? id : null;
+}
+
+/**
+ * The gate context for every Dentally write this agent makes, WITHOUT a client.
+ *
+ * ONE helper rather than four inline objects, so the things that are true of all
+ * four writes are stated once: they come from the booking agent (which is the
+ * kill switch that governs them), the actor is the agent rather than a person,
+ * and only a real Dentally patient id is ever named.
+ */
+function agentLedgerContext(deps: ToolDeps, patientId?: string | null): DentallyWriteContext {
   return {
     source: "booking-agent",
     siteId: deps.context.siteId,
     actor: "agent:booking-agent",
-    patientId: patientId || deps.context.patientId || null,
-    client: deps.dentally,
+    patientId: dentallyPatientIdOf(patientId ?? deps.context.patientId),
   };
+}
+
+/**
+ * The same context, plus the client the write must be PERFORMED with.
+ *
+ * That is not a convenience. find_slots and the write share ONE client on purpose
+ * (see ToolDeps.dentally), so availability and the booking always hit the same
+ * Dentally instance and the agent can never book a slot it proved open somewhere
+ * else. Letting the gate build its own client would quietly undo that.
+ */
+function agentWriteContext(deps: ToolDeps, patientId?: string): DentallyWriteContext {
+  return { ...agentLedgerContext(deps, patientId), client: deps.dentally };
+}
+
+/**
+ * A model-supplied datetime, normalised, or null.
+ *
+ * The ledger's payload summary keeps the VALUE of `start_time` (it is on the
+ * non-personal allow-list, being an ISO timestamp), and the value here comes from
+ * a language model reading an inbound text message. Re-deriving it from
+ * `Date.parse` means the row can only ever hold a real instant in our own
+ * spelling: nothing a patient typed reaches the table verbatim, and a junk string
+ * is simply absent rather than stored and shown to the owner as a time.
+ */
+function isoInstantOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
 /**
@@ -457,6 +498,19 @@ export function writeDisabledResult(tool: AgentWriteTool): string {
  * the caller happened to inject, and they are the one path a language model drives.
  * Two entry points already build them (the inbound webhook and the dev harness), so
  * the check belongs here rather than in either route.
+ *
+ * AND IT RECORDS BEFORE IT REFUSES (ruling W3/16, with W1-A/1). The refusal above
+ * is right and stays exactly where it is — nothing is constructed, no availability
+ * read is spent, Dentally is not touched at all — but for a while it also meant the
+ * attempt VANISHED. A patient texting "I need to cancel Thursday" while write-back
+ * is off got a polite hand-off to a colleague and left no trace anywhere, so the
+ * owner's "what we tried to send to Dentally while write-back was off" screen
+ * showed the receptionist's cancellations and the no-show handler's, and not one of
+ * the agent's — and the day the write key arrives, nothing records that these
+ * appointments were cancelled here and not there. The ruling is explicit that the
+ * early-return trade granted to the co-pilot's create_patient was granted to that
+ * tool ONLY. Each of the four now files the attempt through the shared gate and
+ * then returns the identical refusal string it always did.
  */
 export function makeDispatch(deps: ToolDeps) {
   const writesEnabled = deps.writesEnabled ?? isDentallyWriteEnabled();
@@ -515,6 +569,82 @@ export function makeDispatch(deps: ToolDeps) {
   }
   async function ownsAppointment(appointmentId: string): Promise<boolean> {
     return (await findOwnedAppointment(appointmentId)) !== null;
+  }
+
+  /**
+   * FILE THE WRITE THIS AGENT WOULD HAVE MADE, then let the caller refuse.
+   *
+   * NO `client` IS HANDED TO THE PRECHECK, deliberately, and this is the same
+   * reasoning written out at the other patient-SMS door (src/lib/noshow/inbound.ts).
+   * The injected client exists so this agent's availability read and its booking
+   * cannot disagree about which Dentally instance they are talking to; nothing is
+   * being performed here, so there is nothing to keep in agreement. What
+   * withholding it buys is that the gate can PRE-EMPT — it cannot see an injected
+   * client's base URL, so it never refuses on one — which is what makes this row
+   * carry the same blocked reason the desk's own cancel carries
+   * (`writes_disabled`). The reason is the gate's single policy to decide
+   * (writes_disabled, master_off, system_off), never a second spelling invented at
+   * this door. Where the gate would have ALLOWED the write — a deployment pointed
+   * at the local mock — there is no refusal and so no row: this path still performs
+   * nothing, which is the pre-existing safety property (`writesEnabled`) that
+   * recording deliberately leaves exactly as it was.
+   *
+   * LEDGER-ONLY, AND IT MAY NEVER CHANGE WHAT THE PATIENT IS TOLD. The recorder is
+   * fail-soft by contract, but a contract is not a guarantee, and an error escaping
+   * here would become a 500 on a Twilio webhook — which Twilio retries, re-running
+   * the whole turn and re-sending the agent's last message. The refusal string the
+   * model reads is returned by the caller either way.
+   */
+  async function recordRefusedWrite(
+    kind: DentallyWriteKind,
+    ids: { patientId?: string | null; appointmentId?: string | null },
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await precheckDentallyWrite({
+        ctx: agentLedgerContext(deps, ids.patientId ?? null),
+        kind,
+        appointmentId: ids.appointmentId ?? null,
+        payload,
+      });
+    } catch (err) {
+      console.error(
+        `[agent] could not record the blocked Dentally ${kind} intent; the patient's reply is unaffected`,
+        err,
+      );
+    }
+  }
+
+  /**
+   * The same, for a write against an EXISTING appointment — and only once that
+   * appointment is proved to be on this patient's own record.
+   *
+   * THE OWNERSHIP CHECK COMES FIRST, and it has to. The appointment id is supplied
+   * by a language model reading an inbound text message, so recording before the
+   * check would let a crafted message write any id it liked into the practice's
+   * ledger, and the owner would read "we tried to cancel this" about an
+   * appointment nobody here ever touched. It is the same reasoning that keeps the
+   * public booking route's pre-token refusal out of the ledger (W1-A FINAL): a
+   * refusal is only recorded once the caller is entitled to the write.
+   *
+   * A FAILED READ RECORDS NOTHING. Ownership unproven is not ownership, the fail
+   * direction is closed, and the patient's reply is unchanged either way.
+   */
+  async function recordRefusedAppointmentWrite(
+    kind: "appointment.update" | "appointment.cancel",
+    appointmentId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      if ((await findOwnedAppointment(appointmentId)) === null) return;
+    } catch (err) {
+      console.warn(
+        "[agent] could not confirm the appointment is this patient's before recording a blocked intent; not recording",
+        err,
+      );
+      return;
+    }
+    await recordRefusedWrite(kind, { appointmentId }, payload);
   }
 
   return async function dispatch(name: string, input: Record<string, unknown>): Promise<string> {
@@ -667,8 +797,28 @@ export function makeDispatch(deps: ToolDeps) {
       case "book": {
         // Refuse FIRST: before the availability read, before the idempotency memo.
         // None of that work can matter when no write may follow it.
-        if (!writesEnabled) return writeDisabledResult("book");
         const patientId = registeredPatientId ?? deps.context.patientId;
+        if (!writesEnabled) {
+          // Recorded first (W3/16), and only for a patient who HAS a Dentally
+          // record. An unregistered lead's booking is refused on the very next
+          // line whatever the gate says, so filing one would put a write the
+          // platform would never have made on the owner's Sync Status screen —
+          // and would have nothing but the caller's mobile number to name it by.
+          if (!patientId.startsWith("lead:")) {
+            const wouldStartAt = isoInstantOrNull(input.slotStart);
+            await recordRefusedWrite(
+              "appointment.create",
+              { patientId },
+              {
+                patient_id: patientId,
+                ...(wouldStartAt ? { start_time: wouldStartAt } : {}),
+                reason: reasonForTreatment(typeof input.treatment === "string" ? input.treatment : ""),
+                booked_via_api: true,
+              },
+            );
+          }
+          return writeDisabledResult("book");
+        }
         if (patientId.startsWith("lead:")) {
           // Unknown caller not yet registered: force the register_patient step first.
           return JSON.stringify({ error: "Register this new patient with register_patient before booking." });
@@ -785,8 +935,16 @@ export function makeDispatch(deps: ToolDeps) {
         return JSON.stringify({ appointments: upcoming });
       }
       case "reschedule": {
-        if (!writesEnabled) return writeDisabledResult("reschedule");
         const appointmentId = String(input.appointmentId);
+        if (!writesEnabled) {
+          const wouldStartAt = isoInstantOrNull(input.newSlotStart);
+          await recordRefusedAppointmentWrite(
+            "appointment.update",
+            appointmentId,
+            wouldStartAt ? { start_time: wouldStartAt } : {},
+          );
+          return writeDisabledResult("reschedule");
+        }
         const owned = await findOwnedAppointment(appointmentId);
         if (!owned) {
           return JSON.stringify({ error: "I could not find that appointment on your record." });
@@ -825,8 +983,15 @@ export function makeDispatch(deps: ToolDeps) {
         });
       }
       case "cancel": {
-        if (!writesEnabled) return writeDisabledResult("cancel");
         const appointmentId = String(input.appointmentId);
+        if (!writesEnabled) {
+          // A patient's cancellation by text is a cancellation the practice made,
+          // and it has to leave the same trace on the Sync Status screen as the
+          // receptionist's. The payload is empty because the write itself carries
+          // none (dentallyWrite.cancelAppointment sends `{}`).
+          await recordRefusedAppointmentWrite("appointment.cancel", appointmentId, {});
+          return writeDisabledResult("cancel");
+        }
         if (!(await ownsAppointment(appointmentId))) {
           return JSON.stringify({ error: "I could not find that appointment on your record." });
         }
@@ -836,7 +1001,19 @@ export function makeDispatch(deps: ToolDeps) {
       case "register_patient": {
         // Refused before registeredPatientId is set, so a later `book` in the same
         // turn cannot proceed against an id that was never created.
-        if (!writesEnabled) return writeDisabledResult("register_patient");
+        if (!writesEnabled) {
+          // NO PAYLOAD, and that is the honest shape rather than a gap: the
+          // registration payload is not built until after this refusal, and
+          // summarising one we never built would invent it. The same call the
+          // receptionist's "Register in Dentally" button makes
+          // (app/api/onboarding/register/route.ts) files exactly this.
+          //
+          // The refusal stays AHEAD of the title/date-of-birth checks below. Moving
+          // it after them would have the agent ask a patient for their date of birth
+          // to complete a registration that cannot happen either way.
+          await recordRefusedWrite("patient.create", {}, {});
+          return writeDisabledResult("register_patient");
+        }
 
         // WHAT THIS TOOL USED TO SEND, and why it could never have worked: names, an
         // email, a mobile and a site — and none of the four fields live Dentally

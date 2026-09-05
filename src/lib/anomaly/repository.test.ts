@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
 
 // ===========================================================================
 // THE READS, AGAINST AN IN-MEMORY DATABASE RATHER THAN A MOCK.
 //
 // The queries are the thing that can break here — a forgotten site filter, a
-// missing status filter, a `not_before_at` clause dropped from the one table
-// that needs it — and a mocked query cannot break. So the real repository runs
+// missing status filter, a `not_before_at` clause dropped from a table that
+// needs it — and a mocked query cannot break. So the real repository runs
 // against a small in-memory Postgres stand-in, the same approach the closer's
 // approval-repository test takes.
 //
@@ -14,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 //      and an unreadable outbox must not look the same to the detectors.
 //   2. A CAPPED read reports `truncated`, so the alert says "at least".
 //   3. A row held back on purpose (quiet hours, an overnight post-op timing) is
-//      WAITING, not stuck, and only the two tables that carry the column are
+//      WAITING, not stuck, and only the three tables that carry the column are
 //      queried for it.
 // ===========================================================================
 
@@ -235,6 +236,162 @@ describe("the watch registries cannot silently fall behind the platform", () => 
       "postop-checkin",
       "treatment-closer",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE `not_before_at` CLAIM, DERIVED RATHER THAN REMEMBERED.
+//
+// Charter section 0 item 1: in this tree the comments ARE the calibration
+// contract, and the next engineer deciding whether a new outbox may carry
+// `not_before_at` reads the flag's docstring to find out which migrations to
+// copy. That docstring claimed the column for exactly two of them until the pin
+// above was widened to three and the sentence beside the flag was not — one
+// change, one file, a known-changed fact left wrong in one of the two places it
+// was written.
+//
+// So the count and the migration numbers are now READ OFF THE SQL rather than
+// off anybody's memory. A fourth outbox given the column, a flag set on a table
+// no migration ever gave it, or a citation that names the wrong migration turns
+// the sentence red instead of quietly stale.
+//
+// The scans flatten comment markers first: where a comment's line breaks fall is
+// a function of where the prose reached column 80 and is not a claim about
+// anything (the lesson os-band-note.test.ts records, where a phrase scan sailed
+// past the very sentence it existed to forbid because the sentence wrapped).
+// ---------------------------------------------------------------------------
+
+const REPOSITORY_SRC = "src/lib/anomaly/repository.ts";
+const REPOSITORY_TEST_SRC = "src/lib/anomaly/repository.test.ts";
+const MIGRATIONS_DIR = "supabase/migrations";
+
+const COUNT_WORDS = [
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+];
+
+/**
+ * A sentence that COUNTS the tables carrying the column: a number word, the
+ * noun, and the rest of that same sentence saying what is being counted. The
+ * qualifier is what keeps unrelated prose out — "the one table it owns", at the
+ * top of the repository, is the alert store and no business of this block's.
+ */
+const COUNT_CLAIM =
+  /\b(zero|one|two|three|four|five|six|seven|eight|nine|ten)\s+tables?\b[^.]*\b(column|have it)\b/gi;
+
+/** A comment with its markers and its wrapping taken off. */
+function flattenComments(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^\s*(\/\/|\*)\s?/, ""))
+    .join(" ")
+    .replace(/\s+/g, " ");
+}
+
+/** The `hasNotBefore` docstring as it stands in the repository, flattened. */
+function hasNotBeforeDoc(): string {
+  const src = readFileSync(REPOSITORY_SRC, "utf8");
+  const start = src.indexOf("True when the table carries");
+  expect(start, "the docstring scan went stale: its opening words moved").toBeGreaterThan(-1);
+  const end = src.indexOf("*/", start);
+  expect(end, "the docstring is never closed").toBeGreaterThan(start);
+  return flattenComments(src.slice(start, end));
+}
+
+/**
+ * Every table a migration gives `not_before_at`, mapped to the migration that
+ * gave it. Line comments are stripped before the scan: two of these migrations
+ * discuss the column in their headers, and a sentence about a column is not a
+ * column. Index statements name it too and create nothing, so a statement only
+ * counts when it also creates the table or adds the column to it.
+ */
+function tablesGrantedNotBefore(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const file of readdirSync(MIGRATIONS_DIR).sort()) {
+    if (!file.endsWith(".sql")) continue;
+    const sql = readFileSync(`${MIGRATIONS_DIR}/${file}`, "utf8").replace(/--[^\n]*/g, "");
+    for (const statement of sql.split(";")) {
+      if (!/\bnot_before_at\b/.test(statement)) continue;
+      const created = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_]+)\s*\(/i.exec(
+        statement,
+      );
+      const altered = /alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?([a-z_]+)[\s\S]*?add\s+column/i.exec(
+        statement,
+      );
+      const table = created?.[1] ?? altered?.[1];
+      if (table && !out.has(table)) out.set(table, file.slice(0, 4));
+    }
+  }
+  return out;
+}
+
+/** The tables the watch registry claims the column for, sorted. */
+function flaggedTables(): string[] {
+  return OUTBOX_WATCHES.filter((w) => w.hasNotBefore)
+    .map((w) => w.table)
+    .sort();
+}
+
+describe("the not_before_at claim the module makes about itself", () => {
+  it("the flag's own docstring counts the tables the migrations gave the column", () => {
+    const claims = [...hasNotBeforeDoc().matchAll(COUNT_CLAIM)];
+    expect(claims.length, "the docstring no longer says how many carry it").toBe(1);
+    expect(claims[0][1].toLowerCase(), `the docstring says: "${claims[0][0]}"`).toBe(
+      COUNT_WORDS[flaggedTables().length],
+    );
+  });
+
+  it("cites the migrations that actually granted the column, and no others", () => {
+    const granted = tablesGrantedNotBefore();
+    expect(granted.size, "the migration scan matched nothing at all").toBeGreaterThan(0);
+    const expected = [
+      ...new Set(
+        flaggedTables().map((table) => {
+          const migration = granted.get(table);
+          expect(migration, `no migration gives ${table} the column its watch claims`).toBeDefined();
+          return migration!;
+        }),
+      ),
+    ].sort();
+    const cited = [...new Set(hasNotBeforeDoc().match(/\b0\d{3}\b/g) ?? [])].sort();
+    expect(cited).toEqual(expected);
+  });
+
+  it("no watched outbox carries the column without the flag", () => {
+    // The other direction, and the one with teeth: a migration that hands a
+    // future outbox `not_before_at` without the flag being set makes every
+    // overnight defer look like a jam at breakfast, which is the alert this
+    // module exists to NOT raise.
+    const granted = tablesGrantedNotBefore();
+    for (const watch of OUTBOX_WATCHES) {
+      expect(
+        granted.has(watch.table),
+        `${watch.table}: the migrations and the watch disagree about the column`,
+      ).toBe(watch.hasNotBefore);
+    }
+  });
+
+  it("states that count the same way everywhere the module states it", () => {
+    // The docstring is not the only place the number is written: this file's own
+    // header and the registry pin say it too, and they drifted apart once.
+    for (const file of [REPOSITORY_SRC, REPOSITORY_TEST_SRC]) {
+      const claims = [...flattenComments(readFileSync(file, "utf8")).matchAll(COUNT_CLAIM)];
+      expect(claims.length, `${file} no longer states the count anywhere`).toBeGreaterThan(0);
+      for (const claim of claims) {
+        expect(claim[1].toLowerCase(), `a stale count in ${file}: "${claim[0]}"`).toBe(
+          COUNT_WORDS[flaggedTables().length],
+        );
+      }
+    }
   });
 });
 

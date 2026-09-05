@@ -182,7 +182,121 @@ export const EQUIPMENT_HARD_SAFETY_RULES: GateRule[] = [
 // a colleague who will guess. What is not ours is the DECISION, and that half is
 // refused deterministically: the route appends EQUIPMENT_REFUSALS.judgement to
 // every facts-only answer itself rather than trusting the model to end with it.
+//
+// AND THE FACT MAY COME FROM THE REGISTER, NOT ONLY FROM THE PERSON. The two
+// rules below need the out-of-test half spelled out in the message, and somebody
+// who is ASKING does not spell it out: "is it safe to run the Lisa MB17?" is one
+// sentence with no out-of-test word in it, and the REGISTER is the thing that
+// knows the answer is "that machine's pressure test lapsed in August". So there
+// is a third evidence path — `equipmentJudgementFromRegister` — pairing the same
+// intent with the register's own overdue list. It NARROWS an allow and never
+// creates one, and it never fires on a machine the register says is in date.
 // ---------------------------------------------------------------------------
+
+/**
+ * WHAT "OUT OF TEST" SOUNDS LIKE WHEN A NURSE TYPES IT.
+ *
+ * Written as a named constant rather than inline because the prompt's own
+ * refusal list (`prompt.ts`, WHAT YOU REFUSE, ALWAYS) names four words —
+ * service, calibration, inspection, VALIDATION — and an earlier draft of this
+ * rule carried only two of them. A boundary the prompt states and the gate
+ * cannot see is a boundary that rests on the model, which is the one thing
+ * `desk/gate.ts` exists to stop.
+ *
+ * EVERY BRANCH HERE IS PAST TENSE, AND THAT IS A CORRECTION. The W3/15 widening
+ * added `due (?:in|back|last|on)` alongside `(?:was|were) due`, and three of
+ * those four words are the ordinary English for a service that has NOT happened
+ * yet: "the next service is due in June", "the service is due on the 3rd", "the
+ * chair is due back from the engineer on Friday". Paired with the deliberately
+ * generous KEEP_USING_INTENT below — which now carries "is that ok" — an
+ * IN-DATE machine selected facts-only mode and both doors appended "Take the
+ * machine out of use and call the supplier or service engineer" to a question
+ * about a service three months away.
+ *
+ * That is not the cheap direction of error. The standing sentence only works
+ * while it means something, and the way it stops working is being printed under
+ * answers that did not need it until staff read past it — which is the day a
+ * machine really is out of test. `due last` is kept because it IS past tense;
+ * "was/were due" carries the rest ("our compressor service was due in June").
+ * The register-aware rule below is what catches the person who never states the
+ * fact at all, which is the case the widening was reaching for.
+ */
+const OUT_OF_TEST =
+  "overdue|out of date|out of test|expired|lapsed|no longer in date" +
+  "|past (?:its|the|it'?s) (?:\\w+ )?(?:service|inspection|test|date|calibration|validation|certificate|certification)" +
+  "|behind on|missed|skipped|late for|haven'?t had|hasn'?t had|not had" +
+  "|not been (?:serviced|tested|calibrated|validated|inspected)" +
+  "|(?:was|were) due|due last";
+
+/**
+ * WHAT "MAY WE GO ON USING IT ANYWAY" SOUNDS LIKE.
+ *
+ * The list is deliberately generous. This side of the rule does not select
+ * anything on its own — it can only fire when an out-of-test FACT is present as
+ * well, either because the person stated it (rule 1) or because the register
+ * says the named machine is past its date (`equipmentJudgementFromRegister`) — so a false
+ * positive costs one extra appended sentence, while a false negative costs the
+ * whole "always refused" half of W1-D/2. The phrasings W3/15 names by hand ("can
+ * we still use it", "is it safe to run", "should I keep using", "is it OK to
+ * carry on", "fine to use") are each covered below.
+ */
+const KEEP_USING_INTENT =
+  "(?:keep|carry on|still|go on|continue) (?:go\\w*|us\\w*|runn\\w*)" +
+  "|can (?:we|i) (?:still |just |really |safely |carry on |go on )?(?:use|run|keep|carry on|continue|go on)" +
+  "|should (?:we|i) (?:keep|carry on|still|go on|continue|stop|be using)" +
+  "|is (?:that|this|it) (?:ok|okay|fine|safe|a problem|alright|all right|acceptable)" +
+  "|(?:ok|okay|fine|safe|alright|all right|acceptable) to (?:use|run|carry on|keep|continue|go on)" +
+  "|can it (?:still )?be used" +
+  "|does it matter|do we have to stop|need to stop|safe to (?:use|run|carry on)";
+
+/**
+ * The same intent as a standalone matcher, wrapped EXACTLY as
+ * `bothWaysAcrossSentences` wraps it, so the register-aware rule below and the
+ * stated-fact rule above cannot drift into recognising different sentences.
+ */
+const KEEP_USING_INTENT_RE = new RegExp(`\\b(?:${KEEP_USING_INTENT})\\b`);
+
+/** The out-of-test half on its own, for the turn BEFORE a pronoun question. */
+const OUT_OF_TEST_RE = new RegExp(`\\b(?:${OUT_OF_TEST})\\b`);
+
+/**
+ * The rule id reported when the REGISTER, not the person, supplied the fact.
+ *
+ * Named separately from `judgement.overdue_service` on purpose: the two are
+ * caught by different evidence and a refusal count that cannot tell them apart
+ * cannot answer "how often does somebody ask about a machine they do not know is
+ * out of test", which is the question the practice would actually want.
+ */
+export const JUDGEMENT_FROM_REGISTER_RULE = "judgement.register_out_of_test";
+
+/**
+ * `bothWays`, BUT ALLOWED TO CROSS A FULL STOP — and only for this one class.
+ *
+ * Everywhere else in this file the spans are `[^.?!]{0,n}`, which is right: a
+ * REFUSAL that pairs a word in one question with a word in the next is a gate
+ * that refuses things nobody asked, and a gate that refuses legitimate questions
+ * gets switched off. But the judgement rules do not refuse. They select
+ * facts-only mode, which reads out everything the register and the manual say
+ * and appends one standing instruction — so the two error directions here are
+ * not comparable:
+ *
+ *   fires when it should not   one redundant "take it out of use" sentence.
+ *   misses when it should fire the decision half of W1-D/2 rests on the prompt.
+ *
+ * And the miss was the common case, not the exotic one: "The autoclave is
+ * overdue its service. Can we keep using it?" is how a person types at a front
+ * desk, and a comma instead of that full stop was the only thing separating a
+ * caught message from an uncaught one (programme ruling W3/15).
+ *
+ * Still bounded, not `.*`: the span keeps the two halves in the same THOUGHT
+ * rather than the same message, so a genuine subject change three sentences
+ * later does not pair with an overdue date mentioned at the start.
+ */
+function bothWaysAcrossSentences(a: string, b: string, span: number): RegExp {
+  return new RegExp(
+    `(?:\\b(?:${a})\\b[\\s\\S]{0,${span}}\\b(?:${b})\\b)|(?:\\b(?:${b})\\b[\\s\\S]{0,${span}}\\b(?:${a})\\b)`,
+  );
+}
 
 export const EQUIPMENT_JUDGEMENT_RULES: GateRule[] = [
   {
@@ -198,11 +312,7 @@ export const EQUIPMENT_JUDGEMENT_RULES: GateRule[] = [
     // normally; asking WHETHER IT IS FINE lands here, where the facts are read
     // out and the decision is handed to the engineer.
     id: "judgement.overdue_service",
-    pattern: bothWays(
-      "overdue|out of date|expired|past (?:its|the|it'?s) (?:service|inspection|test|date)|behind on|missed|skipped|late for|haven'?t had|hasn'?t had|not had",
-      "(?:keep|carry on|still|go on) (?:go\\w*|us\\w*|runn\\w*)|can we (?:use|run|keep)|can i (?:use|run|keep)|is (?:that|this|it) (?:ok|okay|fine|safe|a problem|alright)|does it matter|do we have to stop|need to stop|safe to (?:use|run)",
-      80,
-    ),
+    pattern: bothWaysAcrossSentences(OUT_OF_TEST, KEEP_USING_INTENT, 90),
   },
   {
     // The other phrasing of the same thing: "can we still use it, the service is
@@ -288,10 +398,116 @@ export interface EquipmentGateInput {
    * service?" is recognised without the word "autoclave" appearing anywhere.
    */
   registerVocabulary: readonly string[];
+  /**
+   * THE SUBSET OF `registerVocabulary` BELONGING TO ASSETS THE REGISTER SAYS ARE
+   * PAST THEIR NEXT SERVICE DATE. Names, makes, models and serials, same shape.
+   *
+   * WITHOUT THIS THE JUDGEMENT GATE ONLY FIRES WHEN THE PERSON RESTATES THE FACT,
+   * and a person asking does not restate it — that is what asking is. Every one
+   * of the five phrasings W3/15 names by hand ("can we still use the Lisa MB17?",
+   * "is it safe to run the Lisa MB17?", "should I keep using the autoclave?", "is
+   * it OK to carry on with the autoclave?", "is the Lisa MB17 fine to use?")
+   * reached the model as an ordinary allow with no mode, so neither door appended
+   * the take-out-of-use sentence and the "always refused" half of W1-D/2 rested
+   * on the prompt — the exact posture `desk/gate.ts` exists to stop.
+   *
+   * OPTIONAL ONLY SO THE TYPE DOES NOT BREAK A CALLER MID-WIRING. Omitting it is
+   * NOT a neutral choice: it disarms this half of the rule silently, and a caller
+   * that can compute it (both callers hold `assets` and `today` already) must.
+   */
+  outOfTestVocabulary?: readonly string[];
   /** How many assets the practice has registered. Zero has its own refusal. */
   registeredCount: number;
   /** True once an earlier turn resolved a specific asset (enables continuations). */
   assetInScope: boolean;
+}
+
+/** The register fields a caller already holds, shaped so this file imports nothing. */
+export interface OutOfTestSource {
+  name: string;
+  make: string | null;
+  model: string | null;
+  serial: string | null;
+  nextServiceDue: string | null;
+}
+
+/**
+ * BUILD `outOfTestVocabulary` FROM THE REGISTER. One helper rather than the same
+ * filter written out at each door, because the two doors drifting on what counts
+ * as "overdue" is how one of them quietly stops arming the rule.
+ *
+ * Overdue is `nextServiceDue` strictly BEFORE today — the same line
+ * `service_due` draws when it puts an asset in `overdue` rather than `dueSoon`
+ * (`daysUntil < 0`). Both are ISO YYYY-MM-DD in London, so the comparison is a
+ * string comparison and there is no clock in here.
+ *
+ * An asset with no service date recorded is NOT overdue. It is unknown, which is
+ * a different fact and one the register reports separately; treating unknown as
+ * overdue would put the take-out-of-use sentence under every question about
+ * every asset a practice has not finished filling in.
+ */
+export function outOfTestVocabulary(
+  assets: readonly OutOfTestSource[],
+  today: string,
+): string[] {
+  return assets
+    .filter((a) => a.nextServiceDue !== null && a.nextServiceDue < today)
+    .flatMap((a) => [a.name, a.make, a.model, a.serial].filter((v): v is string => Boolean(v)));
+}
+
+/**
+ * TRUE when the person is asking whether to go on using a machine the REGISTER
+ * says is out of test — whether or not they know it is.
+ *
+ * Two shapes, and the second is the one people actually type:
+ *
+ *   "Is it safe to run the Lisa MB17?"        the latest turn carries the intent
+ *                                             AND names an out-of-test asset.
+ *   "Which of ours is overdue?" / "Can we      the latest turn carries the intent
+ *    still use it?"                            and names no machine at all; the
+ *                                             turn immediately before it either
+ *                                             named an out-of-test asset or
+ *                                             stated the out-of-test fact.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO is fire on the intent alone. "Can we still use
+ * the Lisa MB17?" about a machine that is IN date must come back unconstrained:
+ * appending "take the machine out of use and call the engineer" to a question
+ * about a compliant autoclave is its own harm, and it is how the sentence stops
+ * being read at all. So a latest turn that names a registered asset which is not
+ * on the out-of-test list ends the check there — the person named a machine, and
+ * the register says that machine is fine.
+ *
+ * Only the PREVIOUS turn is consulted for the split, not the whole window: two
+ * consecutive turns are one thought, and a machine mentioned six turns ago is
+ * not what "it" refers to.
+ */
+export function equipmentJudgementFromRegister(
+  userTurns: readonly string[],
+  input: { registerVocabulary: readonly string[]; outOfTestVocabulary?: readonly string[] },
+): boolean {
+  const outOfTest = input.outOfTestVocabulary ?? [];
+  if (outOfTest.length === 0) return false;
+
+  // Normalised here as well as by the gate: `normaliseForGate` is idempotent, and
+  // the co-pilot door calls this with the person's RAW turns (its own window ends
+  // with the model's paraphrase, which must not be what decides this).
+  const turns = userTurns.map(normaliseForGate).filter((t) => t.length > 0);
+  const latest = turns[turns.length - 1];
+  if (latest === undefined) return false;
+  if (!KEEP_USING_INTENT_RE.test(latest)) return false;
+  if (mentionsVocabulary(latest, outOfTest)) return true;
+  // The person named a machine and it is not one of the overdue ones.
+  if (mentionsVocabulary(latest, input.registerVocabulary)) return false;
+
+  const previous = turns[turns.length - 2];
+  if (previous === undefined) return false;
+  // The turn before a pronoun question either NAMED an overdue machine ("is the
+  // Lisa MB17 overdue?" / "can we still use it?") or stated the out-of-test fact
+  // without naming one ("which of our equipment is overdue?" / "can we still use
+  // it?"). Both are the same thought, and the second is the shape the register
+  // itself invites, because "which is overdue" is the question W1-D/2 says is
+  // always answered.
+  return mentionsVocabulary(previous, outOfTest) || OUT_OF_TEST_RE.test(previous);
 }
 
 /**
@@ -351,10 +567,23 @@ export function gateEquipmentQuestion(input: EquipmentGateInput): GateVerdict {
   const judgement = firstMatch(EQUIPMENT_JUDGEMENT_RULES, latest);
   if (judgement) return { kind: "allow", mode: "facts_only", rule: judgement.id };
 
+  // 4b. THE SAME QUESTION, ASKED WITHOUT STATING THE FACT — because the person
+  //     is ASKING. The rules above need the out-of-test half in the person's own
+  //     words; this one takes it from the register instead.
+  //
+  //     IT NARROWS AN ALLOW, IT NEVER CREATES ONE. Deliberately applied to the
+  //     allow-list results below rather than returned here: a message that would
+  //     have been refused as out of scope must still be refused, or a rule whose
+  //     whole purpose is to CONSTRAIN an answer would have widened the gate.
+  const fromRegister = equipmentJudgementFromRegister(turns, input);
+  const allow: GateVerdict = fromRegister
+    ? { kind: "allow", mode: "facts_only", rule: JUDGEMENT_FROM_REGISTER_RULE }
+    : { kind: "allow" };
+
   // 5. ALLOW-LIST.
-  if (mentionsVocabulary(latest, input.registerVocabulary)) return { kind: "allow" };
-  if (looksLikeEquipmentQuestion(latest)) return { kind: "allow" };
-  if (input.assetInScope && looksLikeContinuation(latest)) return { kind: "allow" };
+  if (mentionsVocabulary(latest, input.registerVocabulary)) return allow;
+  if (looksLikeEquipmentQuestion(latest)) return allow;
+  if (input.assetInScope && looksLikeContinuation(latest)) return allow;
 
   return {
     kind: "refuse",

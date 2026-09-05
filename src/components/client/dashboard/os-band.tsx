@@ -40,8 +40,16 @@ export function OperatingSystemBandView({
   /** "/c/<client>" or "/owner/<client>". Every tile href hangs off it. */
   basePath: string;
 }) {
-  // NOTHING TO SHOW IS NOTHING DRAWN. A clinician may reach none of these
-  // modules, and an empty band under a heading reads as a broken feature.
+  // NOTHING TO SHOW IS NOTHING DRAWN. No clearance has an empty band today: the
+  // narrowest is the two desks, Equipment and the IT desk, which ruling W2-A/1
+  // (3 Sep 2026) gave to all five. So this guard describes nobody signing in
+  // now — it stands because a module narrowed later, or a clearance added,
+  // empties the band with no edit to this file: `readOsBand` gates on
+  // `canRoleAccessModule` and on nothing else. An empty band under a heading
+  // reads as a broken feature, so it draws nothing. The behaviour is pinned by
+  // "draws nothing at all for a role with no tiles" (src/lib/home/os-band.test.ts)
+  // and this paragraph by os-band-guard-note.test.ts, which derives both claims
+  // from the real tile table rather than trusting the prose.
   if (band.tiles.length === 0) return null;
 
   return (

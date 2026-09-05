@@ -328,9 +328,20 @@ export const AGENTS: readonly AgentDef[] = [
     drainSource: "recall",
     correspondence: ["recall"],
     needs: ["RECALL_DAILY_CONTACT_LIMIT (default 25)", "RECALL_GRACE_DAYS (default 60)"],
+    // NO ENVIRONMENT-VARIABLE NAMES IN THIS FIELD (wave-3 review, 4 Sep 2026).
+    // `firstTick` is not runbook prose: src/lib/systems/vocabulary.ts reads it by
+    // identity into `SystemVocabulary.starts`, and the control panel prints it
+    // verbatim under this row while the system is OFF — which is every time the
+    // owner is deciding whether to switch it on. `needs` is the field that may
+    // carry env names (vocabulary.ts:50-55 exempts it BY NAME, and the panel
+    // prints it a paragraph below under "Needs first"); this one carries the
+    // NUMBER, so the sentence answers the question the owner is actually asking.
+    // The 25 below is RECALL_DEFAULT_DAILY_CONTACT_LIMIT in
+    // src/app/api/recall/sweep/route.ts. Pinned by roster.test.ts, "the
+    // switch-on sentence an owner reads never names an environment variable".
     firstTick:
-      "Up to RECALL_DAILY_CONTACT_LIMIT due patients are drafted, auto-approved and queued; the " +
-      "drain sends them on its next five-minute tick.",
+      "Up to 25 due patients a day — the shipped default — are drafted, auto-approved and " +
+      "queued; the drain sends them on its next five-minute tick.",
     bound: "25 per London day by default, across the whole 51k book. Capped cadences stay due for tomorrow.",
     verify: "Recall worklist → touches move draft → approved → sent; the drain response reports perSource.recall.sent.",
     stop: "Switch off 'recall'. Queued rows stay queued and drain only when it is switched back on.",
@@ -375,10 +386,13 @@ export const AGENTS: readonly AgentDef[] = [
     drainSource: "noshow",
     correspondence: ["noshow"],
     needs: ["NOSHOW_MAX_SENDS_PER_RUN (default 25)", "NOSHOW_OFFER_TTL_HOURS (default 4)"],
+    // The number, not its variable name — see the note on recall's firstTick. 25
+    // is NOSHOW_DEFAULT_MAX_SENDS_PER_RUN in src/lib/noshow/ramp.ts, and the
+    // env name that raises it stays in `needs` directly below the sentence.
     firstTick:
       "Confirmations go out for appointments already inside their T-48/T-24/T-3 windows — which on " +
       "day one is a BACKLOG, not a trickle. The two-pass sweep settles unsendable targets first and " +
-      "then sends at most NOSHOW_MAX_SENDS_PER_RUN, soonest appointment first.",
+      "then sends at most 25 a run by default, soonest appointment first.",
     bound: "NOSHOW_MAX_SENDS_PER_RUN per tick, every ten minutes.",
     verify: "No-show worklist → confirmations sent; the drain reports perSource.noshow (transactional, drains second).",
     stop: "Switch off 'no-show-defence'. Confirmations, reminders AND waitlist fill all stop.",
@@ -514,21 +528,85 @@ export const AGENTS: readonly AgentDef[] = [
     sendPath: "drain",
     drainSource: "previsit",
     correspondence: ["previsit"],
-    needs: ["a cron registration for /api/previsit/sweep", "PUBLIC_BASE_URL, so the link the text carries resolves"],
+    // NAME THE CONSEQUENCE, NOT JUST THE TASK (wave-3b handoff H45, 5 Sep 2026).
+    // This is the ONLY owner-visible warning that the flagship pre-visit feature
+    // is unreachable: `needs` is read BY IDENTITY into `needsFirst` by
+    // src/lib/systems/vocabulary.ts, shipped by /api/systems and printed as
+    // "Needs first: …" under the switched-OFF row, and handed to the co-pilot's
+    // agent_status. "a cron registration for /api/previsit/sweep" reads like one
+    // more item on a setup list; what it actually means is that flipping the
+    // switch changes nothing at all — no invite, no queue row, no error — which
+    // is the failure a person only discovers by waiting a day for a text that was
+    // never going to come. §2 of the runbook already says it in those words
+    // ("Needs first — and this one is a hard stop"), and runbook.test.ts's
+    // SCHEDULER holds the read of cron.job that makes it true: app-sweep-previsit
+    // is not registered. Registering it deletes this clause AND flips the
+    // SCHEDULER row, in one edit, or the tests disagree with each other.
+    needs: [
+      "a cron registration for /api/previsit/sweep — until it is run the switch sends nothing at all, " +
+        "silently: no invite, no queue row, no error (the SQL is in §2 of docs/runbooks/agent-switch-on.md)",
+      "PUBLIC_BASE_URL, so the link the text carries resolves",
+    ],
+    // DELIVERY COPY MATCHES THE CODE (ruling W3/9). The brief asked for the link
+    // "alongside the medical-history link" and this sentence repeated the brief;
+    // the module decided otherwise and said so in src/lib/triage/copy.ts — two
+    // links do not fit in one SMS credit, so the handover moved into the JOURNEY
+    // (the thank-you screen offers the medical-history form) and the invite is
+    // its own message. This sentence is what the control panel prints as "what
+    // switching it on starts" (src/lib/systems/vocabulary.ts reads it by
+    // identity), so it has to name the cost: one extra text per appointment.
     firstTick:
-      "Patients with an appointment coming up are sent a link to a short questionnaire, " +
-      "alongside the medical-history link the practice already sends.",
+      "Patients with an appointment coming up are sent a link to a short questionnaire. " +
+      "It is its own text, sent before the appointment and separate from the medical-history " +
+      "link — one extra message per appointment.",
     bound: "One invite per upcoming appointment, bounded per site by the sweep's own page cap.",
+    // THE SURFACE THIS NAMES HAS TO BE ONE THAT RENDERS (wave-3 review, 4 Sep
+    // 2026). This field is the runbook's "verify in the first hour" step AND the
+    // co-pilot's `howToSeeItWorking` (src/lib/copilot/tools.ts, agent_status), so
+    // a wrong screen name is repeated to the owner by the assistant as well as
+    // printed in the doc. It said "on the appointment"; there is no
+    // appointment-level surface — the diary's appointment panel reads no triage
+    // summary. `previsitSummaryFor` has exactly two non-test callers: the record
+    // tab below and the co-pilot's previsit_summary tool. Pinned by
+    // roster.test.ts, "the pre-visit summary is verified where it is rendered".
     verify:
-      "The patient's Correspondence tab shows the invite; a completed form appears as a " +
-      "pre-visit summary on the appointment.",
+      "The patient's Correspondence tab shows the invite; a completed form appears as " +
+      "'What the patient shared before this visit', above the appointment list on the patient " +
+      "record's Appointments tab.",
     stop:
       "Switch off 'pre-visit-triage'. The sweep, the queue AND the public form all stop — a " +
       "link already sent stops opening, so the flip is a complete revert.",
     gaps: [
-      "Owned by lane W1-C; this roster entry and its runbook section are a snapshot of the " +
-        "code and should be confirmed by that lane before go-live.",
+      // "Owned by lane W1-C; this roster entry and its runbook section are a
+      // snapshot of the code and should be confirmed by that lane before
+      // go-live." was here and is gone (wave-3b handoffs H36/H44, 5 Sep 2026).
+      // Two reasons, and the second is the one that matters. W1-C is FINAL in the
+      // decisions log, so the hedge was stale; and `gaps` is not an internal note
+      // — the co-pilot's agent_status returns it to the owner as `knownGaps`
+      // (src/lib/copilot/tools.ts), so an internal lane code was being read back
+      // to a practice owner as a known gap in his own platform. The runbook half
+      // of the same hedge was deleted by the runbook lane and its absence pinned
+      // (runbook.test.ts, "the pre-visit section is finished work"); this is the
+      // other half. Nothing about the module's behaviour changed with it.
       "It drains as TRANSACTIONAL, so it is exempt from the once-per-day outreach cap.",
+      // Stated rather than hidden (wave-3 review, 4 Sep 2026). firstTick above is
+      // now honest that the invite is its own text; this is the other half of the
+      // same fact. The handover the module designed instead of a second link is
+      // the thank-you screen at src/app/pv/[token]/page.tsx, and that screen only
+      // mints the medical-history link when isMedicalHistoryEnabled() is true —
+      // the MEDICAL_HISTORY_ENABLED flag, exact string "true", which DEFAULTS
+      // FALSE. That flag is read in exactly ONE module in the whole of src/
+      // (src/lib/patient-medical/gate.ts) and gate.test.ts proves it by crawling
+      // every source file for the `process.env.` reference, comments included —
+      // which is why this comment names the variable without that prefix rather
+      // than the assertion being widened to forgive a comment. It is
+      // deliberately NOT in `needs`: the
+      // pre-visit module works without it, so listing it would tell an owner he
+      // must arrange something he does not need. But a go-live that leaves it
+      // unset gets neither link in the message nor the offer on the screen.
+      "The medical-history hand-off on the completion screen appears only when " +
+        "MEDICAL_HISTORY_ENABLED is on, and that defaults off. Switching pre-visit questions on " +
+        "does not switch it on.",
     ],
   },
   {
@@ -544,9 +622,18 @@ export const AGENTS: readonly AgentDef[] = [
     drainSource: "reviews",
     correspondence: ["reviews"],
     needs: ["REVIEW_LINK_URL (the sweep no-ops entirely without it)", "REVIEW_PRACTICE_NAME"],
+    // TWO CORRECTIONS, not one (wave-3 review, 4 Sep 2026). This sentence named
+    // three environment variables to an owner who has no way to read their
+    // values — see the note on recall's firstTick — and it also described the
+    // schedule as a send WINDOW, which src/lib/reviews/schedule.ts is not: the
+    // sweep has no hour gate at all (src/app/api/reviews/sweep/route.ts sends
+    // whatever is due whenever it ticks). The hours live in `reviewSendAt`, which
+    // is same-day-delay-or-next-morning: attended before the cutoff hour (15) →
+    // delayHours (3) later that day; attended at or after it → morningHour (10)
+    // the next day, in Europe/London. DEFAULT_REVIEW_SCHEDULE holds all three.
     firstTick:
-      "Patients who attended more than REVIEW_DELAY_HOURS ago are asked for a review, inside the " +
-      "REVIEW_MORNING_HOUR–REVIEW_CUTOFF_HOUR window only.",
+      "A patient seen before 3pm is asked for a review three hours later the same day; anyone " +
+      "seen after that is asked at 10am the next morning. Those hours are the shipped defaults.",
     bound: "One request per attended appointment; the drain's daily cap yields to every lifecycle message.",
     verify: "The drain reports perSource.reviews.sent; the request rows move to sent.",
     stop: "Switch off 'reviews', or unset REVIEW_LINK_URL.",
@@ -564,7 +651,23 @@ export const AGENTS: readonly AgentDef[] = [
     sendPath: "drain",
     drainSource: "outreach",
     correspondence: ["outreach"],
-    needs: ["the app-sweep-outreach cron REGISTERED (supabase/ops/register-outreach-cron.sql — NOT applied)"],
+    // REGISTRATION TRUTH, AND WHY THIS LIST IS EMPTY (ruling W3/7, 4 Sep 2026).
+    // This field used to say "the app-sweep-outreach cron REGISTERED
+    // (supabase/ops/register-outreach-cron.sql — NOT applied)". `cron.job` says
+    // otherwise and has for months: app-sweep-outreach is registered, active and
+    // firing every ten minutes (runbook.test.ts's SCHEDULER holds the read, and
+    // §2 of the runbook prints it). This is not documentation drift — vocabulary.ts
+    // reads `needs` BY IDENTITY into `needsFirst`, /api/systems ships it, and
+    // systems-view.tsx prints "Needs first: …" on every switched-OFF row, so the
+    // sentence was telling the owner that a scheduler prerequisite stood between
+    // this switch and its first message. It does not: the switch IS the last gate,
+    // which is the opposite fail direction and the one that matters at go-live.
+    // Nothing else has to be arranged either — no env var, no external account —
+    // so the honest list is the empty one, and the row then prints no "Needs
+    // first" line at all rather than an invented one. The warning belongs in
+    // `firstTick`, which already says a built campaign starts drafting.
+    // Registered ≠ safe to flip; it means the flip is all there is.
+    needs: [],
     firstTick: "Campaigns already built start drafting and queueing to their targets.",
     bound: "Per-campaign target caps; drains LAST, so it yields its slot to every lifecycle message.",
     verify: "The campaign's own progress counters; drain perSource.outreach.",
@@ -608,13 +711,26 @@ export const AGENTS: readonly AgentDef[] = [
     drainSource: null,
     correspondence: [],
     recordNote: "It never messages anyone. It writes a row the in-app Notifications feed reads.",
-    needs: ["the app-sweep-anomaly cron REGISTERED (supabase/ops/register-anomaly-cron.sql — NOT applied)"],
+    // SAME CORRECTION AS OUTREACH, SAME RULING (W3/7). app-sweep-anomaly is
+    // registered and active, hourly at minute 45 — not the minute 40 that
+    // supabase/ops/register-anomaly-cron.sql would set, which is the second reason
+    // this line had to go: an owner who acted on it and ran that file would have
+    // re-scheduled a working job (cron.schedule updates a job of the same name),
+    // and the runbook warns about exactly that at §2. Empty for the same reason as
+    // outreach: this agent needs nothing arranged. It writes notification rows and
+    // messages nobody, so there is no sender, link or key to prepare.
+    needs: [],
     firstTick: "The first hourly pass raises alerts for takings dips, no-show clusters, SLA breaches and stuck queues.",
     bound: "Deduped per condition; an alert only resolves on evidence the condition ENDED.",
     verify: "Notifications → the alerts appear with their evidence.",
     stop: "Switch off 'anomaly-alerts'. The pass stops AND alerts already raised stop showing.",
     gaps: [
-      "Its cron is unregistered.",
+      // "Its cron is unregistered." was here and was false (W3/7): the job has
+      // been running the whole time, returning {"ok":true,"skipped":"system off"}
+      // on every pass. `gaps` reaches the owner too — the co-pilot's agent_status
+      // returns it as `knownGaps` — so a false gap is a false answer, not just a
+      // stale note. Collection and post-op keep theirs: those two really are
+      // unregistered (SCHEDULER in runbook.test.ts, read from cron.job).
       "Alerts are client-scoped while the notifications feed is site-scoped.",
     ],
   },

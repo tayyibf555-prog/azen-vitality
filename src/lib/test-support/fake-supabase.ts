@@ -30,6 +30,11 @@
 // lives in one) asserts against the migration TEXT as well, exactly as
 // src/lib/postop/outbox-isolation.test.ts does. This fake proves the code path;
 // the migration text proves the constraint.
+//
+// BUT WHERE IT DOES MODEL POSTGRES, IT MODELS THE STRICTER SIDE. See
+// POSTGREST_MAX_ROWS below: a fake that is more generous than live is worse than
+// no fake at all, because it hands a green tick to the exact read that will
+// truncate in production.
 // ===========================================================================
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -273,6 +278,49 @@ export function primaryKeyFor(table: string): string[] {
 // The query builder.
 // ---------------------------------------------------------------------------
 
+/**
+ * POSTGREST'S SERVER-SIDE ROW CEILING. EVERY SELECT IS CLIPPED HERE, LIMIT OR NO
+ * LIMIT — because that is what the real database does, and a fake that did not
+ * was the reason four separate reads shipped a floor dressed up as a total.
+ *
+ * MEASURED, NOT ASSUMED. On this project, with the service-role key, `limit=1500`
+ * and `limit=2001` both returned exactly 1,000 rows, `content-range: 0-999/*`, and
+ * NO error (the calibration is written up in src/lib/dentally/sync-ledger.test.ts,
+ * which is where it was first paid for). So the ceiling is not "what you get when
+ * you forget to ask for a page" — it is a hard cap that a bigger `.limit()` cannot
+ * lift, and asking for 20,000 rows gets you a thousand and a cheerful 200.
+ *
+ * WHY THAT IS A CORRECTNESS BUG AND NOT A PERFORMANCE ONE. A response clipped by
+ * this ceiling is byte-for-byte indistinguishable from a short one: same status,
+ * same shape, no flag. Code that reads `rows.length` off it and prints the figure
+ * is printing a FLOOR as a total (charter §0/5), and code that proves "there is
+ * more" by asking for cap + 1 rows can never see the extra row once cap + 1 climbs
+ * past a thousand — the detection is structurally dead rather than merely wrong.
+ * This tree has now found and fixed that same defect four times over:
+ * task-queue/repository.ts, coordinator/repository.ts, telemetry.ts and
+ * triage/repository.ts. Every one of them passed against this fake, because this
+ * fake handed back every row it held.
+ *
+ * SO THE FAKE IS AT LEAST AS STRICT AS LIVE (charter §0/11). A scenario that reads
+ * an unbounded table now sees the same truncation production would, at the point
+ * where fixing it costs nothing. An unbounded select is not made an ERROR here on
+ * purpose: live does not error, and a fake that threw would prove the read is
+ * unbounded rather than proving what the caller then does with the clipped rows —
+ * which is the half that reaches a screen.
+ *
+ * NOT CLIPPED, deliberately: the `count` of an `{ count: 'exact' }` read, which
+ * PostgREST reports as the true total in `content-range` no matter how few rows it
+ * hands back (that asymmetry is exactly why §0/5 prefers a head count); and the
+ * rows an insert/update/upsert/delete hands back, which this tree only ever reads
+ * back one at a time and whose live clipping behaviour has not been measured here.
+ * Guessing at an uncalibrated number is the one thing this file does not do.
+ *
+ * A test may LOWER the ceiling (`createFakeSupabase({ maxRows: 3 })`) so a claim
+ * about what a screen says when a read hits its bound does not cost a thousand
+ * seeded rows. It may never raise it — see createFakeSupabase.
+ */
+export const POSTGREST_MAX_ROWS = 1000;
+
 type Filter = (row: Row) => boolean;
 
 function compare(a: unknown, b: unknown): number {
@@ -466,7 +514,15 @@ class FakeQuery implements PromiseLike<FakeResult> {
       out = [...out].sort((a, b) => (asc ? compare(a[col], b[col]) : compare(b[col], a[col])));
     }
     if (this.offset > 0) out = out.slice(this.offset);
-    if (this.max !== null) out = out.slice(0, this.max);
+    // The requested window, then the server's ceiling on top of it — in that
+    // order, and the ceiling wins. `.limit(2001)` returns a thousand rows in
+    // production; see POSTGREST_MAX_ROWS.
+    const ceiling = this.db.maxRows;
+    const window = this.max === null ? ceiling : Math.min(this.max, ceiling);
+    out = out.slice(0, window);
+    // `count` stays the TRUE total: PostgREST's content-range reports the whole
+    // matching set even when the body was clipped, so a fake that clipped the
+    // count too would hide the very asymmetry a caller has to reckon with.
     return { rows: out, count: total };
   }
 
@@ -511,6 +567,11 @@ export interface FakeDatabase {
   writes: Array<{ table: string; op: string }>;
   /** Tables forced to return an error, for fail-direction scenarios. */
   failures: Map<string, string>;
+  /**
+   * The row ceiling every select is clipped at. POSTGREST_MAX_ROWS unless a test
+   * lowered it, and it can only ever be LOWERED — see `createFakeSupabase`.
+   */
+  maxRows: number;
 }
 
 export interface FakeSupabase {
@@ -526,8 +587,25 @@ export interface FakeSupabase {
   seed: (table: string, ...rows: Row[]) => void;
 }
 
-export function createFakeSupabase(): FakeSupabase {
-  const db: FakeDatabase = { tables: {}, writes: [], failures: new Map() };
+/**
+ * A fake Supabase.
+ *
+ * `maxRows` LOWERS the select ceiling for a test and can never raise it. The
+ * ceiling exists so a scenario meets the truncation production would hand it, but
+ * a thousand seeded rows is a lot of setup to write for a claim about the sentence
+ * a screen prints when a read runs out — so a scenario that wants to prove "this
+ * count says AT LEAST when the read hit its bound" can set the bound to 3 and seed
+ * four rows. It is clamped rather than trusted: passing 50,000 gets you
+ * POSTGREST_MAX_ROWS, because a fake looser than the database it stands in for is
+ * the failure this ceiling was added to end, and an option that could reintroduce
+ * it by accident would be worse than having no option at all.
+ */
+export function createFakeSupabase(opts: { maxRows?: number } = {}): FakeSupabase {
+  const maxRows =
+    opts.maxRows === undefined
+      ? POSTGREST_MAX_ROWS
+      : Math.max(1, Math.min(Math.floor(opts.maxRows), POSTGREST_MAX_ROWS));
+  const db: FakeDatabase = { tables: {}, writes: [], failures: new Map(), maxRows };
   const client = { from: (table: string) => new FakeQuery(table, db) };
   return {
     db,

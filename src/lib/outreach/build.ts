@@ -2,7 +2,7 @@ import { DentallyError } from "@/lib/dentally/client";
 import { dentallyFromEnv } from "@/lib/dentally/read";
 import { dentallySiteId } from "@/lib/mock/clients";
 import { getCampaign, updateCampaign, insertTargets, type NewTarget } from "./repository";
-import { loadExcludedPatientIds } from "@/lib/patient-status/repository";
+import { isExclusionsUnavailable, loadExcludedPatientIds } from "@/lib/patient-status/repository";
 import { prefilterOutcome, matchAppointmentHistory, type AppointmentLike } from "./filters";
 import type { OutreachBuildCursor, OutreachCampaign } from "./types";
 import { normaliseGender, type Gender } from "@/lib/patient/demographics";
@@ -99,7 +99,13 @@ export interface BuildTickResult {
   insertedThisRun: number;
   counts: Record<string, number>;
   cursor: OutreachBuildCursor | null;
-  /** Present when the tick did nothing because the build was already complete. */
+  /**
+   * Present when the tick did no work and that is not a failure. Two cases, and the
+   * difference matters to the caller: "already built" (done:true, nothing left to do)
+   * and "exclusions unavailable" (done:false — the targeting-exclusion list could not
+   * be read while messaging is live, so the tick refused; the cursor is unadvanced and
+   * the next tick resumes on the same page).
+   */
   skipped?: string;
   /** Present on failure (ok === false). */
   error?: string;
@@ -110,7 +116,10 @@ export interface BuildTickResult {
  * their auth + campaign load; this owns the Dentally scan, matching, enrolment and
  * cursor/counts persistence. Assumes the Dentally read key is configured (callers
  * check `dentallyReadKey()` first). Never throws: a failure returns ok:false so the
- * caller can map it to a status without unwinding the request.
+ * caller can map it to a status without unwinding the request, and the one refusal
+ * that is not a failure — an unreadable targeting-exclusion list while messaging is
+ * live — returns ok:true with `skipped: "exclusions unavailable"` and an UNADVANCED
+ * cursor, so the next tick resumes on the same page.
  */
 export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<BuildTickResult> {
   const campaignId = campaign.id;
@@ -140,9 +149,64 @@ export async function runOutreachBuildTick(campaign: OutreachCampaign): Promise<
 
   // Platform admin status: patients marked inactive / do_not_contact are excluded from
   // EVERY build. Loaded ONCE per tick for this campaign's site (not per patient), then
-  // checked cheaply before the prefilter. Fail-open (empty set) on a read blip; a
-  // do_not_contact patient is still blocked at the send choke point by suppression.
-  const excludedIds = await loadExcludedPatientIds(siteId);
+  // checked cheaply before the prefilter.
+  //
+  // THIS READ IS THE ONLY BARRIER ON THIS PATH, so once messaging is live it REFUSES
+  // rather than fails open (ruling W1-B/2, and the long note on loadExcludedPatientIds
+  // itself). The comment that stood here until 4 Sep 2026 said the opposite twice over:
+  // it claimed an empty set on a read blip, and it claimed a missed patient was "still
+  // blocked at the send choke point by suppression". The second half was never true for
+  // `inactive` — applyStatusChange writes message_suppression rows for do_not_contact
+  // ONLY (src/lib/patient-status/service.ts) — and an enrolment made here is permanent,
+  // because sweepCampaign re-checks target status, consent and the cap but never the
+  // exclusion list again.
+  //
+  // So: unreadable + live -> loadExcludedPatientIds throws ExclusionsUnavailableError,
+  // and this tick does NOTHING. No Dentally read, no enrolment, the cursor UNADVANCED
+  // (so the next tick resumes on the same page) and the campaign left in 'building' so
+  // the sweep picks it up again. A skipped tick is a delay; an audience built against
+  // an unknown exclusion list is an incident. Under MESSAGING_DRY_RUN the read still
+  // returns an empty set, so local work against a partial database is unaffected.
+  //
+  // The refusal is caught HERE rather than allowed to escape because this function's
+  // contract is "never throws" (see above): the two HTTP routes and the co-pilot tool
+  // would otherwise surface a 500 instead of a skipped tick. Any OTHER error is not
+  // swallowed either — it lands in the same ok:false channel the body's catch uses.
+  let excludedIds: Set<string>;
+  try {
+    excludedIds = await loadExcludedPatientIds(siteId);
+  } catch (err) {
+    if (isExclusionsUnavailable(err)) {
+      console.error(
+        `[outreach] build tick for ${campaignId} skipped: the targeting-exclusion list for ${siteId} ` +
+          "could not be read and messaging is LIVE; nobody is enrolled and the cursor is unadvanced",
+        err,
+      );
+      return {
+        ok: true,
+        done: false,
+        stopped: null,
+        scannedThisRun: 0,
+        appointmentReads: 0,
+        insertedThisRun: 0,
+        counts: campaign.counts ?? {},
+        cursor,
+        skipped: "exclusions unavailable",
+      };
+    }
+    console.error("[outreach] build failed", err);
+    return {
+      ok: false,
+      done: false,
+      stopped: null,
+      scannedThisRun: 0,
+      appointmentReads: 0,
+      insertedThisRun: 0,
+      counts: campaign.counts ?? {},
+      cursor,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 
   let page = cursor.page;
   let pageOffset = cursor.pageOffset ?? 0;

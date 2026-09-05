@@ -68,6 +68,8 @@ const h = vi.hoisted(() => {
     /** The patient object getPatient returns, or null to make the read throw. */
     patient: null as unknown,
     pending: [] as unknown[],
+    /** What pass 3 finds: targets already `queued` or `sent`. */
+    live: [] as unknown[],
     excluded: new Set<string>(),
     suppressed: false,
     suppressionThrows: false,
@@ -81,6 +83,11 @@ const h = vi.hoisted(() => {
     state,
     sites,
     isSystemEnabled: vi.fn(async () => state.systemOn),
+    // The mid-run gate (ruling W3/4) reads the switch through the SEND variant of
+    // the same module, so the fake has to answer for both or the route's import
+    // of live-switch.ts fails. One state, both reads: a test that flipped only one
+    // of them would prove nothing about a run the owner stopped.
+    isSystemEnabledForSend: vi.fn(async () => state.systemOn),
     acquireCronLock: vi.fn(async () => state.lockAvailable),
     releaseCronLock: vi.fn(async () => {}),
     cronUnauthorized: vi.fn(() => null),
@@ -90,7 +97,13 @@ const h = vi.hoisted(() => {
       if (!state.patient) throw new Error("patient read failed");
       return { patient: state.patient };
     }),
-    listTargets: vi.fn(async () => state.pending),
+    // STATUS-AWARE, because the route now asks TWICE for different things: pass 2
+    // wants `pending`, pass 3 wants the `queued`/`sent` rows an appointment may
+    // have overtaken. A mock that answered the same list to both would hand pass 3
+    // rows it can never see in production and prove nothing about either.
+    listTargets: vi.fn(async (args: { statuses: string[] }) =>
+      args.statuses.includes("pending") ? state.pending : state.live,
+    ),
     upsertTargetIfNew: vi.fn(async (input: Record<string, unknown>) => {
       state.upserted.push(input);
       return { ...target(), ...input };
@@ -113,7 +126,10 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: h.isSystemEnabled }));
+vi.mock("@/lib/systems/repository", () => ({
+  isSystemEnabled: h.isSystemEnabled,
+  isSystemEnabledForSend: h.isSystemEnabledForSend,
+}));
 vi.mock("@/lib/cron-lock", () => ({
   acquireCronLock: h.acquireCronLock,
   releaseCronLock: h.releaseCronLock,
@@ -163,6 +179,7 @@ beforeEach(() => {
   h.state.appointments = [];
   h.state.patient = { first_name: "Alex", last_name: "Berry", use_sms: true, payment_plan_id: 2 };
   h.state.pending = [];
+  h.state.live = [];
   h.state.excluded = new Set();
   h.state.suppressed = false;
   h.state.suppressionThrows = false;
@@ -171,6 +188,10 @@ beforeEach(() => {
   h.state.queued = [];
   h.state.stopped = [];
   process.env.PUBLIC_BASE_URL = "https://azen-vitality.vercel.app";
+  // The bound two of the pass-3 tests shrink. Cleared here rather than in those
+  // tests: an env var left set is the quietest way to make a later test in this
+  // file — or in another file sharing the worker — prove something else.
+  delete process.env.PREVISIT_MAX_EXAMINED;
 });
 
 describe("NOTHING SENDS WHILE THE SYSTEM IS OFF", () => {
@@ -392,5 +413,108 @@ describe("who is NOT texted, and why", () => {
     await run();
     expect(h.state.queued).toEqual([]);
     expect(h.state.stopped.length).toBe(1);
+  });
+});
+
+// ===========================================================================
+// PASS 3: THE RETIREMENT PASS (ruling W3/5).
+//
+// `sent` had no terminal transition anywhere in the module — pass 2 lists only
+// `pending`, stopTarget was reached from that loop and from recordNonDelivery,
+// and 0097 adds no trigger — so a delivered link stayed `sent` for ever and the
+// module's counters climbed with it. The three DOORS (drain, /pv page, submit
+// route) stop the harm; this pass is what makes the row agree with them.
+// ===========================================================================
+describe("PASS 3: a link its appointment has overtaken is retired", () => {
+  /** An hour after NOW, and an hour before it. */
+  const AHEAD = new Date(NOW.getTime() + 60 * 60 * 1000).toISOString();
+  const BEHIND = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+
+  it("stops a SENT target whose appointment has already started, as `expired`", async () => {
+    h.state.live = [target({ id: "t-sent", status: "sent", appointmentAt: BEHIND })];
+    const res = await run();
+    expect(h.state.stopped).toEqual([{ id: "t-sent", reason: "expired" }]);
+    expect(await res.json()).toMatchObject({ expired: 1, expiredMore: false });
+  });
+
+  it("stops a QUEUED one too, so a drain that never ran cannot leave a live row", async () => {
+    h.state.live = [target({ id: "t-queued", status: "queued", appointmentAt: BEHIND })];
+    await run();
+    expect(h.state.stopped).toEqual([{ id: "t-queued", reason: "expired" }]);
+  });
+
+  it("LEAVES a target whose appointment is still ahead of us exactly as it is", async () => {
+    // The control. Without it every assertion here would pass against a pass that
+    // retired the whole list.
+    h.state.live = [target({ id: "t-live", status: "sent", appointmentAt: AHEAD })];
+    const res = await run();
+    expect(h.state.stopped).toEqual([]);
+    expect(await res.json()).toMatchObject({ expired: 0 });
+  });
+
+  it("the boundary is EXCLUSIVE: at the appointment instant itself the target is retired", async () => {
+    // `now < start`, byte-for-byte the drain's comparison, the page's and the
+    // submit route's, so all four agree about which side of the appointment we
+    // are on.
+    h.state.live = [target({ id: "t-now", status: "sent", appointmentAt: NOW.toISOString() })];
+    await run();
+    expect(h.state.stopped).toEqual([{ id: "t-now", reason: "expired" }]);
+
+    h.state.stopped = [];
+    h.state.live = [
+      target({ id: "t-ms", status: "sent", appointmentAt: new Date(NOW.getTime() + 1).toISOString() }),
+    ];
+    await run();
+    expect(h.state.stopped, "one millisecond ahead is still ahead").toEqual([]);
+  });
+
+  it("FAILS CLOSED on an appointment instant that cannot be read", async () => {
+    for (const bad of ["", "not a date", "2026-13-45T99:99:00Z"]) {
+      h.state.stopped = [];
+      h.state.live = [target({ id: "t-bad", status: "sent", appointmentAt: bad })];
+      await run();
+      expect(h.state.stopped, `"${bad}" was left live`).toEqual([{ id: "t-bad", reason: "expired" }]);
+    }
+  });
+
+  it("SENDS NOTHING and reads no Dentally endpoint while retiring", async () => {
+    h.state.live = [
+      target({ id: "t-1", status: "sent", appointmentAt: BEHIND }),
+      target({ id: "t-2", status: "queued", appointmentAt: BEHIND }),
+    ];
+    await run();
+    expect(h.state.stopped.length).toBe(2);
+    expect(h.state.queued, "the retirement pass queued a message").toEqual([]);
+    expect(h.getPatient).not.toHaveBeenCalled();
+  });
+
+  it("says AT LEAST rather than a bare figure when the bound bit", async () => {
+    // A capped read never wears a complete number's clothes (charter §0/5, ruling
+    // W3/11): the route asks for one row MORE than it will retire, and reports
+    // `expiredMore` when the page came back over-full with every row retired.
+    process.env.PREVISIT_MAX_EXAMINED = "3";
+    h.state.live = Array.from({ length: 4 }, (_, i) =>
+      target({ id: `t-${i}`, status: "sent", appointmentAt: BEHIND }),
+    );
+    const res = await run();
+    expect(h.state.stopped.length).toBe(3);
+    expect(await res.json()).toMatchObject({ expired: 3, expiredMore: true });
+  });
+
+  it("does NOT say `at least` when the list simply ended", async () => {
+    process.env.PREVISIT_MAX_EXAMINED = "3";
+    h.state.live = [
+      target({ id: "t-0", status: "sent", appointmentAt: BEHIND }),
+      target({ id: "t-1", status: "sent", appointmentAt: AHEAD }),
+    ];
+    const res = await run();
+    expect(await res.json()).toMatchObject({ expired: 1, expiredMore: false });
+  });
+
+  it("does not run at all while the system is off", async () => {
+    h.state.systemOn = false;
+    h.state.live = [target({ id: "t-sent", status: "sent", appointmentAt: BEHIND })];
+    await run();
+    expect(h.state.stopped).toEqual([]);
   });
 });

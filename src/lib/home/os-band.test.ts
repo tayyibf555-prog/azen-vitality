@@ -24,7 +24,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 //
 // Plus the role rule, which is the OS-cohesion half: a tile is drawn only if the
 // role may open the module it links to, so the practice manager's band is her
-// subset by construction and a clinician gets no band at all.
+// subset by construction and a clinician and a member of staff get exactly the
+// two desks that ruling W2-A/1 (3 Sep 2026) widened to all five clearances —
+// Equipment and the IT desk. (Until that ruling this paragraph said a clinician
+// saw nothing here at all, which is what the module's own header said too; that
+// one is pinned by "the header's account of who sees a tile is the one the code
+// gives", and this one is scanned by the same test now, so the two accounts
+// cannot drift apart again.)
 // ===========================================================================
 
 vi.mock("server-only", () => ({}));
@@ -69,12 +75,18 @@ vi.mock("@/lib/equipment/repository", () => ({
 vi.mock("@/lib/itdesk/repository", () => ({
   getItContact: async () => maybe(contact, "getItContact"),
 }));
+// COUNT_CAP is re-exported for the same reason ASSET_ROW_CAP is: the write-back
+// tile names the ledger's OWN bound in the sentence it prints when a capped read
+// found nothing blocked, and a mock that dropped it would print "the most recent
+// undefined writes" while this suite passed. Pinned to the real value below.
 vi.mock("@/lib/dentally/sync-ledger", () => ({
+  COUNT_CAP: 900,
   countWriteIntents: async () => maybe(intents, "countWriteIntents"),
 }));
 
 const { readOsBand, OS_TILES, TILE_ROW_CAP } = await import("./os-band");
 const { canRoleAccessModule } = await import("@/lib/nav");
+const { londonDayKey } = await import("@/lib/time/london");
 const { OperatingSystemBandView } = await import("@/components/client/dashboard/os-band");
 
 const ALL_ON = OS_TILES.filter((t) => t.systemSlug !== null).map((t) => ({
@@ -217,6 +229,47 @@ describe("a switched-on system prints an honest figure", () => {
     });
   });
 
+  it("decides 'overdue a service' on the PRACTICE's day, not the server's", async () => {
+    // 00:30 on 16 July 2026 in London is 23:30 UTC on the 15th. For that hour
+    // every BST night the UTC day key is still YESTERDAY, and an autoclave whose
+    // pressure-vessel test was due on the 15th is overdue in the practice. The
+    // equipment desk (/api/equipment/[action] passes londonDayKey(new Date()))
+    // and the co-pilot's equipment_lookup both call it overdue at this instant
+    // and append the take-out-of-use sentence (W1-D/2); the front door must not
+    // be the one surface that calls it fine. Fixtures a millennium from any day
+    // boundary — which is what the rest of this suite uses — cannot see this.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-07-15T23:30:00Z"));
+      // The premise, asserted rather than assumed: if the two keys agreed at
+      // this instant, the test below would be proving nothing at all.
+      expect(
+        new Date().toISOString().slice(0, 10),
+        "the UTC/London shift is not biting at this instant",
+      ).not.toBe(londonDayKey(new Date()));
+
+      assets = [{ nextServiceDue: "2026-07-15" }];
+      expect(tile(await readOsBand(OWNER), "equipment").state).toEqual({
+        kind: "figure",
+        value: 1,
+        noun: "overdue a service",
+        atLeast: false,
+        tone: "attention",
+      });
+
+      // CONTROL: due TODAY in London is not overdue. The boundary moved by one
+      // day; it did not turn every asset red.
+      assets = [{ nextServiceDue: "2026-07-16" }];
+      expect(tile(await readOsBand(OWNER), "equipment").state).toEqual({
+        kind: "fact",
+        text: "1 registered, none overdue",
+        tone: "neutral",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a register read at ITS OWN bound makes both equipment figures a floor", async () => {
     const { ASSET_ROW_CAP } = await import("@/lib/equipment/repository");
     // The mock's bound is pinned to the REAL one, read out of the repository's
@@ -278,6 +331,115 @@ describe("a switched-on system prints an honest figure", () => {
     expect(tile(band, "automations").state).toEqual({
       kind: "fact",
       text: "1 of 3 running",
+      tone: "neutral",
+    });
+  });
+});
+
+describe("the write-back tile's ZERO is as honest as its figure", () => {
+  // The tile counts while its system is off because writes held back accrue
+  // BECAUSE it is off, and that number is the reason the owner goes and looks.
+  // The count comes off a read bounded at COUNT_CAP, so on a capped read a zero
+  // means "none of the most recent N", never "none ever" — and a held-back write
+  // is permanent (W1-A/1: no replay, ever). "Nothing held back" printed off a
+  // truncated read is the one sentence that stops the owner opening Sync Status.
+  it("a CAPPED read with nothing blocked in it never claims nothing was held back", async () => {
+    const { COUNT_CAP } = await import("@/lib/dentally/sync-ledger");
+    // The mock's bound is pinned to the REAL one, read out of the ledger's
+    // source rather than remembered here — same reason as ASSET_ROW_CAP above.
+    const { readFileSync } = await import("node:fs");
+    const real = readFileSync("src/lib/dentally/sync-ledger.ts", "utf8").match(/COUNT_CAP\s*=\s*(\d+)/);
+    expect(real, "the COUNT_CAP scan went stale").toBeTruthy();
+    expect(COUNT_CAP, "the mock's bound drifted from the ledger's").toBe(Number(real![1]));
+
+    systemStates = ALL_OFF;
+    intents = {
+      counts: { dry_run: COUNT_CAP, queued: 0, sent: 0, failed: 0, blocked: 0 },
+      total: COUNT_CAP,
+      capped: true,
+    };
+    const state = tile(await readOsBand(OWNER), "write-back").state;
+    expect(state.kind).toBe("fact");
+    const text = state.kind === "fact" ? state.text : "";
+    expect(text, "a truncated read made a claim about the whole ledger").not.toBe("Nothing held back");
+    // It says what it counted, and names the bound it counted to.
+    expect(text).toContain("most recent");
+    expect(text).toContain(COUNT_CAP.toLocaleString("en-GB"));
+    expect(state.kind === "fact" && state.tone).toBe("neutral");
+  });
+
+  it("an UNCAPPED read with nothing blocked says so plainly, with no hedge", async () => {
+    // The control: the qualifier is tracking the CAP, not the zero. A practice
+    // whose whole ledger was read and held nothing back is told exactly that.
+    systemStates = ALL_OFF;
+    intents = {
+      counts: { dry_run: 9, queued: 0, sent: 0, failed: 0, blocked: 0 },
+      total: 9,
+      capped: false,
+    };
+    expect(tile(await readOsBand(OWNER), "write-back").state).toEqual({
+      kind: "fact",
+      text: "Nothing held back",
+      tone: "neutral",
+    });
+  });
+
+  it("a capped read WITH blocked rows still prints the floor it always did", async () => {
+    // Unchanged behaviour, kept under the same heading so the two halves of the
+    // rule are read together: capped + non-zero is "at least N held back".
+    systemStates = ALL_OFF;
+    intents = {
+      counts: { dry_run: 0, queued: 0, sent: 0, failed: 0, blocked: 7 },
+      total: 2000,
+      capped: true,
+    };
+    expect(tile(await readOsBand(OWNER), "write-back").state).toEqual({
+      kind: "figure",
+      value: 7,
+      noun: "held back",
+      atLeast: true,
+      tone: "attention",
+    });
+  });
+});
+
+describe("the pre-visit figure is one the practice can clear", () => {
+  // A target leaves `sent` when the patient answers, or when the pre-visit
+  // sweep's third pass retires a link its appointment overtook (ruling W3/5).
+  // The tile has no retirement of its own and must not grow one — the module's
+  // own note says why a date filter applied AFTER this bounded, oldest-first
+  // read would turn an honest floor into a wrong number — so the noun
+  // "awaiting an answer" is true only while that pass exists. The pass lives in
+  // another module's route and is behaviour-tested there; what a lane removing
+  // it would BREAK is the meaning of this tile, so the red belongs here too.
+  it("the sweep still retires a sent link its appointment has overtaken", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sweep = readFileSync("src/app/api/previsit/sweep/route.ts", "utf8");
+    expect(sweep.length, "the pre-visit sweep scan went stale").toBeGreaterThan(1_000);
+    // Deliberately loose about ORDER and about what else is in the list — the
+    // one fact this tile depends on is that `sent` is among the statuses the
+    // retiring pass examines. A lane widening or reordering that list should
+    // not get a false red from the front door.
+    expect(
+      sweep,
+      "the sweep no longer looks at SENT targets, so nothing retires this tile's number",
+    ).toMatch(/statuses:\s*\[[^\]]*"sent"[^\]]*\]/);
+    expect(
+      sweep,
+      "the sweep no longer retires an overtaken link, so this tile's figure only grows",
+    ).toMatch(/stopTarget\(\s*[^)]*"expired"\s*\)/);
+  });
+
+  it("counts the questionnaires out, and prints a floor at the bound", async () => {
+    // The noun the paragraph above is about, pinned as text: a rename that made
+    // it a claim about something other than an outstanding answer would land
+    // here first.
+    targets = Array.from({ length: TILE_ROW_CAP + 1 }, () => ({}));
+    expect(tile(await readOsBand(OWNER), "pre-visit").state).toEqual({
+      kind: "figure",
+      value: TILE_ROW_CAP,
+      noun: "sent, awaiting an answer",
+      atLeast: true,
       tone: "neutral",
     });
   });
@@ -346,17 +508,88 @@ describe("who sees which tiles is decided by the module guard, not a second list
     }
   });
 
-  it("the band gates on the module guard itself, not on a second list", () => {
+  it("the header's account of who sees a tile is the one the code gives", async () => {
+    // Charter §0 item 1: in this tree the comments are the contract — a later
+    // lane reads this file's header to decide whether a new tile needs a
+    // clinician review or an empty state. The header said a clinician "gets no
+    // band at all", which stopped being true in the very commit that widened the
+    // two desks to all five clearances (W2-A/1), and prod has no clinician login
+    // to catch it. So the paragraph is pinned to the behaviour it describes:
+    // every tile a role actually gets must be named in it, and the stale claim
+    // cannot come back.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("src/lib/home/os-band.ts", "utf8");
+    const header = src.slice(0, src.indexOf("import { canRoleAccessModule }"));
+    expect(header, "the header-block scan went stale").toContain("WHO SEES A TILE");
+
+    for (const role of ["client_clinician", "client_coordinator"] as const) {
+      const band = await readOsBand({ ...OWNER, role });
+      expect(band.tiles.length, `${role} sees no tiles at all`).toBeGreaterThan(0);
+      for (const t of band.tiles) {
+        expect(
+          header.toLowerCase(),
+          `the header never names the ${t.label} tile that ${role} actually gets`,
+        ).toContain(t.label.toLowerCase());
+      }
+    }
+
+    // And the specific stale sentence, which is the one a later lane would act
+    // on: it must not return while the clinician's band is non-empty.
+    expect(header, "the header claims a clinician gets no band").not.toMatch(/clinician[^.]*no band/i);
+
+    // THE SUITE'S OWN HEADER IS THE SAME CONTRACT. It carried the identical
+    // stale claim for as long as the module's did, and it is what a lane adding
+    // a case reads first, so it is scanned the same way. Only the top block —
+    // everything above the first mock — so a test's prose about the old wording
+    // (this one's included) is not mistaken for the claim itself.
+    const suite = readFileSync("src/lib/home/os-band.test.ts", "utf8");
+    const suiteHeader = suite.slice(0, suite.indexOf('vi.mock("server-only"'));
+    expect(suiteHeader, "the suite header-block scan went stale").toContain("Plus the role rule");
+    expect(
+      suiteHeader,
+      "the suite's own header claims a clinician gets no band",
+    ).not.toMatch(/clinician[^.]*no band/i);
+  });
+
+  it("the band gates on the module guard itself, not on a second list", async () => {
     // The property that made the widening above free: every tile's visibility is
     // `canRoleAccessModule(role, tile.moduleSlug)`, so a nav ruling reaches the
     // front door with no second edit — and, more importantly, a module NARROWED
     // later cannot leave a tile behind pointing at a 403.
-    for (const role of ["client_clinician", "client_staff", "client_coordinator"] as const) {
-      const expected = OS_TILES.filter((t) => canRoleAccessModule(role, t.moduleSlug)).map((t) => t.key);
-      return readOsBand({ ...OWNER, role }).then((band) => {
-        expect(band.tiles.map((t) => t.key)).toEqual(expected);
-      });
-    }
+    //
+    // ALL THREE CLEARANCES ARE ACTUALLY EVALUATED, AND THAT IS STRUCTURAL.
+    // This body used to `return` the first role's promise from INSIDE a `for`
+    // loop, so `client_staff` and `client_coordinator` were named in the loop
+    // header and never once run: a green test proving one third of what it
+    // claimed, at exactly the moment a widening or narrowing lane edits the
+    // guard (charter §0 item 11; W3/17). A counter would not have caught the
+    // regression either — a `return` put back inside a loop skips the counter's
+    // assertion along with the remaining roles. So there is no loop carrying
+    // assertions at all: every role is READ first into `seen`, and the three
+    // comparisons below are single assertions over the whole map. An early
+    // `return` inside the `.map` callback returns one element, not the test.
+    const roles = ["client_clinician", "client_staff", "client_coordinator"] as const;
+    const seen = await Promise.all(
+      roles.map(async (role) => ({
+        role,
+        expected: OS_TILES.filter((t) => canRoleAccessModule(role, t.moduleSlug)).map((t) => t.key),
+        actual: (await readOsBand({ ...OWNER, role })).tiles.map((t) => t.key),
+      })),
+    );
+
+    // 1. Every clearance the test names was actually evaluated.
+    expect(seen.map((s) => s.role), "a clearance named above went unevaluated").toEqual([...roles]);
+    // 2. None of the comparisons is `[] === []`: a role that may open no module
+    //    at all would make the check below true while proving nothing.
+    expect(
+      seen.filter((s) => s.expected.length === 0).map((s) => s.role),
+      "these clearances may open no module in the band, so their check proves nothing",
+    ).toEqual([]);
+    // 3. The band IS the guard, per role — keyed by role so a red names the
+    //    clearance that moved rather than a bare array diff.
+    expect(Object.fromEntries(seen.map((s) => [s.role, s.actual]))).toEqual(
+      Object.fromEntries(seen.map((s) => [s.role, s.expected])),
+    );
   });
 });
 

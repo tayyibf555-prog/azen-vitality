@@ -36,14 +36,20 @@ import type {
 // clear both:
 //
 //   (a) `kind !== "symptom"` — the classification;
-//   (b) no FORBIDDEN_IN_BRIEF term in the LABEL or the HELP — the check on the
-//       classification, because a question written as "Is anything hurting?" and
-//       filed as "logistics" is a symptom question whatever the dropdown said.
+//   (b) no FORBIDDEN_IN_BRIEF term in ANY STRING THE PATIENT READS — the label,
+//       the help, and every OPTION LABEL AND VALUE on a choice question — because
+//       a question written as "Is anything hurting?" and filed as "logistics" is a
+//       symptom question whatever the dropdown said, and so is one written as "How
+//       can we help at this visit?" with "I have toothache" among its answers.
+//       Scanning only the label is how the second one got through (ruling W3/3):
+//       the option labels are rendered to the patient exactly as the label is.
 //
 // Break either one and `brief-bank-has-no-symptom-questions` in ./project.test.ts
-// goes red. They are not redundant: (a) catches an honestly-classified question
-// switched on by mistake, (b) catches a dishonestly- or carelessly-classified one,
-// and neither catches the other's case.
+// goes red — a single named test that mutates each of the three routes in turn
+// (the classification, a mis-classified label, a mis-classified option). They are
+// not redundant: (a) catches an honestly-classified question switched on by
+// mistake, (b) catches a dishonestly- or carelessly-classified one, and neither
+// catches the other's case.
 //
 // THE FULL BANK GETS NO SYMPTOM FILTER AT ALL, deliberately. Its whole purpose is
 // to ask those questions.
@@ -54,7 +60,9 @@ import type {
 // A custom question is owner-written free text rendered to a patient, which makes
 // it the one place in this module where the funding-jargon rule could be broken by
 // a person rather than by a model. A custom question naming NHS, private, a band
-// or a payment plan is dropped from BOTH banks.
+// or a payment plan is dropped from BOTH banks — in its label, in its help, or in
+// any of its option labels or values, which are owner-written and patient-read in
+// exactly the same way.
 // ===========================================================================
 
 /** A question as it will actually be rendered, with its required flag resolved. */
@@ -120,7 +128,7 @@ export function projectBank(
       dropped.push({ key, label: "", reason: "unknown-key", matched: null });
       continue;
     }
-    const verdict = admit(fork, q.kind, q.label, q.help ?? "");
+    const verdict = admit(fork, q.kind, q.label, q.help ?? "", q.options);
     if (verdict) {
       dropped.push({ key, label: q.label, reason: verdict.reason, matched: verdict.matched });
       continue;
@@ -150,7 +158,7 @@ export function projectBank(
     }
     if (seen.has(parsed.key)) continue;
     seen.add(parsed.key);
-    const verdict = admit(fork, parsed.kind, parsed.label, "");
+    const verdict = admit(fork, parsed.kind, parsed.label, "", parsed.options);
     if (verdict) {
       dropped.push({ key: parsed.key, label: parsed.label, reason: verdict.reason, matched: verdict.matched });
       continue;
@@ -182,18 +190,35 @@ function admit(
   kind: TriageQuestion["kind"],
   label: string,
   help: string,
+  options: readonly { value: string; label: string }[] | undefined,
 ): { reason: DroppedQuestion["reason"]; matched: string } | null {
+  // EVERY STRING THIS QUESTION PUTS IN FRONT OF A PATIENT, in one list, because a
+  // scan that reads only the label is a scan a choice question walks straight
+  // past (ruling W3/3). An option LABEL is rendered to the patient exactly as the
+  // question label is — `previsit-form.tsx` prints `{c.label}` for each option —
+  // so "How can we help at this visit?" filed as logistics with a "I have
+  // toothache" option is a symptom question asked of an NHS-plan patient, which
+  // is the obligation this whole fork exists to avoid. The option VALUE is here
+  // too: it is what a staff screen falls back to when it renders an answer to a
+  // question the practice wrote itself and the bank cannot name.
+  const patientText = [label, help];
+  for (const o of options ?? []) patientText.push(o.label, o.value);
+
   // BOTH banks: no funding word reaches a patient, ever.
-  const funding = fundingTermIn(label) ?? fundingTermIn(help);
-  if (funding) return { reason: "funding-word", matched: funding };
+  for (const text of patientText) {
+    const funding = fundingTermIn(text);
+    if (funding) return { reason: "funding-word", matched: funding };
+  }
 
   if (fork !== "brief") return null;
 
   // (a) the classification.
   if (kind === "symptom") return { reason: "symptom-on-brief", matched: kind };
   // (b) the check on the classification.
-  const term = symptomTermIn(label) ?? symptomTermIn(help);
-  if (term) return { reason: "symptom-on-brief", matched: term };
+  for (const text of patientText) {
+    const term = symptomTermIn(text);
+    if (term) return { reason: "symptom-on-brief", matched: term };
+  }
   return null;
 }
 
@@ -205,6 +230,21 @@ function admit(
  * `enabledKeys` array did not survive a write is not a practice that wants no
  * questions, it is a broken row, and rendering an empty form off it would look
  * exactly like a working one.
+ *
+ * THE FALLBACK REPLACES THE BANK SELECTION AND NOTHING ELSE. It used to return
+ * `defaultConfigFor(fork)` whole, which threw the practice's OWN questions away
+ * with it: an owner who switched every shipped question off — a supported thing
+ * to do, and the editor only WARNS about it — got the shipped list back AND lost
+ * every custom question they had written, silently, at projection time rather
+ * than at save time. Nothing on any screen could show what had happened, because
+ * the stored row still held them. So `custom` is parsed FIRST and carried onto
+ * the fallback: the defaults answer "which bank questions", and the questions the
+ * practice wrote itself survive every route out of this function.
+ *
+ * Carrying them costs no safety. Every custom question is re-validated by
+ * `usableCustom` and re-scanned by `admit` on every projection, so one restored
+ * here still cannot reach a patient with a funding word in it, and still cannot
+ * put a symptom question on the brief bank.
  */
 export function usableConfig(
   fork: TriageFork,
@@ -212,10 +252,13 @@ export function usableConfig(
 ): TriageBankConfig {
   const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   if (!obj) return defaultConfigFor(fork);
+  const custom = Array.isArray(obj.custom)
+    ? (obj.custom.filter((c) => !!c && typeof c === "object") as TriageCustomQuestion[])
+    : [];
   const enabledKeys = Array.isArray(obj.enabledKeys)
     ? obj.enabledKeys.filter((k): k is string => typeof k === "string")
     : null;
-  if (!enabledKeys || enabledKeys.length === 0) return defaultConfigFor(fork);
+  if (!enabledKeys || enabledKeys.length === 0) return { ...defaultConfigFor(fork), custom };
 
   const required: Record<string, boolean> = {};
   if (obj.required && typeof obj.required === "object" && !Array.isArray(obj.required)) {
@@ -223,9 +266,6 @@ export function usableConfig(
       if (v === true) required[k] = true;
     }
   }
-  const custom = Array.isArray(obj.custom)
-    ? (obj.custom.filter((c) => !!c && typeof c === "object") as TriageCustomQuestion[])
-    : [];
   return { enabledKeys, required, custom };
 }
 

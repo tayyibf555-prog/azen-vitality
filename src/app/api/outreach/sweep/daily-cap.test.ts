@@ -11,6 +11,14 @@ vi.mock("@/lib/cron-lock", () => ({
   releaseCronLock: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabledForSend: vi.fn(async () => true) }));
+// Boundary fake for the once-per-tick exclusion read (ruling W1-B/2). No overrides here,
+// so every target below is a normal one and the cap behaviour under test is unchanged.
+// The refusal posture itself is pinned in ./status-exclusion.test.ts.
+vi.mock("@/lib/patient-status/repository", () => ({
+  loadExcludedTargetKeys: vi.fn(async () => new Set<string>()),
+  isExclusionsUnavailable: () => false,
+  excludedTargetKey: (siteId: string, patientId: string) => `${siteId}::${patientId}`,
+}));
 vi.mock("@/lib/outreach/draft", () => ({
   draftOutreach: vi.fn(async () => ({ body: "Come back and see us", usedFallback: false })),
 }));

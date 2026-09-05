@@ -16,10 +16,47 @@ import type { ParsedAssetRow } from "./csv";
 // four-figure token bill per question.
 // ---------------------------------------------------------------------------
 
-/** The most assets any single read will return. A practice past this has bigger news for us. */
+/**
+ * The most assets any single read will return.
+ *
+ * MUST equal `REGISTER_READ_CAP` in `./types` — the pure copy the prompt and the
+ * tool results read, because neither may import this `server-only` module. The
+ * literal is spelled out here rather than imported because two source scans read
+ * this line as TEXT to prove their own bounds have not drifted from it:
+ * `prompt.test.ts` ("the prompt's bound is the REPOSITORY's bound, read out of
+ * its source") and `os-band.test.ts` ("the mock's bound drifted from the
+ * repository's").
+ *
+ * A read AT this bound is a read that may be incomplete, and every count taken
+ * off one says "at least N" rather than a bare figure (programme ruling W3/11).
+ */
 export const ASSET_ROW_CAP = 400;
-/** The most chunks a single manual search will consider. */
-export const CHUNK_ROW_CAP = 1_200;
+
+/**
+ * The most chunks a single manual search will consider.
+ *
+ * AND IT HAS TO SIT BELOW POSTGREST'S OWN CEILING, which is the whole reason for
+ * this number. Supabase applies a server-side max-rows ceiling to every REST
+ * request — measured at 1,000 on this project with the service-role key, by
+ * asking for 1,500 and for 2,001 and receiving exactly 1,000 rows and
+ * `content-range: 0-999/*` both times, with no error (see
+ * `src/lib/dentally/sync-ledger.ts`, where the same measurement forced COUNT_CAP
+ * from 2,000 to 900). A response clipped by that ceiling is indistinguishable
+ * from a short one.
+ *
+ * This constant was 1,200, which is ABOVE the ceiling, so the extra 200 could
+ * never arrive and `chunks.length >= CHUNK_ROW_CAP` — the only way a caller can
+ * tell a partial read from a whole one — was structurally false. A dense manual
+ * inside the 400-page/4MB ingest gates reaches four figures of chunks, and what
+ * happened then was worse than a wrong number: `search_manual` ranked the first
+ * thousand passages, found nothing, and told the practice "the manual does not
+ * cover this" about a fault code printed in their own book. At 900 the bound is
+ * observable, and `MANUAL_CHUNK_READ_CAP` in `./types` is the pure copy the
+ * tool results read (they may not import this `server-only` module — the
+ * dispatch's test mocks it wholesale, so the constant would resolve to
+ * `undefined` and the honesty would evaporate with nothing going red).
+ */
+export const CHUNK_ROW_CAP = 900;
 
 interface AssetRow {
   id: string;
@@ -135,6 +172,61 @@ export interface ImportResult {
 }
 
 /**
+ * The most existing serials one import will read before matching against them.
+ *
+ * Comfortably above ASSET_ROW_CAP — the register read is 400 — because this read
+ * is two narrow columns rather than whole rows, and BELOW PostgREST's 1,000-row
+ * ceiling, because a number above it is not a bound at all: it was 5,000, which
+ * the server silently clipped to 1,000, so the constant said one thing and the
+ * code did another.
+ *
+ * Being short here does not corrupt anything, which is why this is the smaller
+ * of the two ceiling fixes: a serial the index did not cover simply misses, the
+ * insert is attempted, and the database's own unique index (0098:
+ * `unique (client_id, lower(serial))`) is what actually stops a duplicate. The
+ * index below is an optimisation over that constraint, never a substitute for
+ * it. The cost of the miss is the per-row sentence "another asset on the
+ * register already has that serial number" instead of an update, on a re-import
+ * by a practice with more than 900 serialled assets.
+ */
+export const SERIAL_INDEX_CAP = 900;
+
+/**
+ * The register's dedupe key, spelled exactly as the database spells it.
+ *
+ * `idx_equipment_asset_serial` is `unique (client_id, lower(serial))` — a plain
+ * case-folded equality, nothing more. This function is the JavaScript half of
+ * that same key, and the two must not drift: a match key that is LOOSER than the
+ * constraint updates a row the constraint would have left alone, and a match key
+ * that is TIGHTER inserts a row the constraint then rejects.
+ *
+ * WHY THIS IS A FUNCTION AND NOT AN `.ilike()`. It used to be
+ * `.ilike("serial", serial)`, with the spreadsheet cell handed to PostgREST as
+ * the pattern itself. `_` and `%` are wildcards in SQL LIKE and PostgREST reads
+ * `*` as `%` besides, so an asset tag of "SN_1234" matched a REGISTERED
+ * "SN-1234": one row came back, the importer updated it, and the autoclave
+ * silently took on another machine's name, supplier and — the part that matters
+ * — its next service date, reported to the practice as `updated: 1`. Two matches
+ * were worse in a quieter way: `maybeSingle` errors, and a legitimate row was
+ * reported as "could not be saved". Untrusted text is never a raw pattern
+ * (programme ruling W3/12); it is matched with equality on a normalised value,
+ * and this is that value.
+ *
+ * NOT trimmed, deliberately: `lower(serial)` in the index is not trimmed either,
+ * so trimming here would make the two keys disagree on a stored value with
+ * stray whitespace. The importer trims what it WRITES (csv.ts `clean()`), which
+ * is the right end to fix it at.
+ */
+function serialKey(serial: string | null | undefined): string {
+  return typeof serial === "string" ? serial.toLowerCase() : "";
+}
+
+/** A Postgres unique violation — the register's serial constraint, in practice. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23505";
+}
+
+/**
  * Write an import plan's rows.
  *
  * SERIAL-KEYED UPSERT, which is the behaviour the practice expects even though
@@ -156,31 +248,69 @@ export async function importAssets(
   const db = serviceClient();
   const result: ImportResult = { inserted: 0, updated: 0, failed: [] };
 
+  // THE SERIAL INDEX, READ ONCE. Two narrow columns for the whole practice,
+  // rather than one round trip per row — and, more to the point, matched in
+  // memory with `serialKey` rather than by handing a spreadsheet cell to the
+  // database as a LIKE pattern (see `serialKey` for what that used to do).
+  //
+  // A read FAILURE here is not fatal and is not swallowed either: the map stays
+  // empty, every row is attempted as an insert, and the unique index catches the
+  // duplicates and reports them per row. Better a re-import that says "another
+  // asset already has that serial number" for the rows it could not match than
+  // one that refuses the whole file because a lookup blinked.
+  const serialToId = new Map<string, string>();
+  try {
+    const { data, error } = await db
+      .from("equipment_asset")
+      .select("id,serial")
+      .eq("client_id", clientId)
+      .not("serial", "is", null)
+      .limit(SERIAL_INDEX_CAP);
+    if (error) throw error;
+    for (const raw of (data ?? []) as { id: string; serial: string | null }[]) {
+      const key = serialKey(raw.serial);
+      if (key && !serialToId.has(key)) serialToId.set(key, raw.id);
+    }
+  } catch (err) {
+    console.error(`[equipment] import serial index for ${clientId} failed`, err);
+  }
+
   for (const row of rows) {
     const payload = assetPayload(clientId, row, actor);
     try {
-      const serial = row.serial?.trim();
-      if (serial) {
-        const { data: existing, error: findError } = await db
+      const key = serialKey(row.serial?.trim());
+      const existingId = key ? serialToId.get(key) : undefined;
+      if (existingId) {
+        const { error } = await db
           .from("equipment_asset")
-          .select("id")
-          .eq("client_id", clientId)
-          .ilike("serial", serial)
-          .maybeSingle();
-        if (findError) throw findError;
-        if (existing) {
-          const { error } = await db.from("equipment_asset").update(payload).eq("id", (existing as { id: string }).id);
-          if (error) throw error;
-          result.updated += 1;
-          continue;
-        }
+          .update(payload)
+          .eq("client_id", clientId) // tenancy in the WHERE clause, not in the map we built
+          .eq("id", existingId);
+        if (error) throw error;
+        result.updated += 1;
+        continue;
       }
-      const { error } = await db.from("equipment_asset").insert(payload);
+      const { data: inserted, error } = await db
+        .from("equipment_asset")
+        .insert(payload)
+        .select("id")
+        .single();
       if (error) throw error;
       result.inserted += 1;
+      // A spreadsheet that lists the same serial twice must update the row the
+      // first line created, not fall foul of the constraint on the second.
+      if (key) serialToId.set(key, (inserted as { id: string }).id);
     } catch (err) {
       console.error(`[equipment] import row "${row.name}" failed`, err);
-      result.failed.push({ name: row.name, reason: "could not be saved" });
+      result.failed.push({
+        name: row.name,
+        // The one failure the practice can actually do something about gets its
+        // own sentence. "Could not be saved" for a serial clash sends somebody
+        // looking for a platform fault instead of at the duplicated cell.
+        reason: isUniqueViolation(err)
+          ? "another asset on the register already has that serial number"
+          : "could not be saved",
+      });
     }
   }
 

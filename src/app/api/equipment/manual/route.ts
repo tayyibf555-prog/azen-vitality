@@ -3,8 +3,9 @@ import type { AuthedUser } from "@/lib/auth/session";
 import type { Client as PracticeClient } from "@/lib/types";
 import { getClient } from "@/lib/mock/clients";
 import { chunkManualPages } from "@/lib/equipment/chunk";
-import { extractPdfText, PdfExtractionError, MAX_PDF_BYTES } from "@/lib/equipment/pdf-text";
+import { extractPdfText, PdfExtractionError, MAX_PDF_BYTES, MAX_PDF_SIZE_LABEL } from "@/lib/equipment/pdf-text";
 import { deleteManualForAsset, getAsset, replaceManual } from "@/lib/equipment/repository";
+import { MANUAL_CHUNK_READ_CAP } from "@/lib/equipment/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -31,6 +32,54 @@ export const maxDuration = 60;
 
 function bad(error: string, status = 400): Response {
   return Response.json({ ok: false, error }, { status });
+}
+
+// ---------------------------------------------------------------------------
+// THE ONE SENTENCE THE PRACTICE READS ABOUT SIZE, and it is interpolated from
+// the module's own constant rather than typed out (ruling W3/13).
+//
+// It was typed out, twice, and said "larger than 25MB" while the code enforced
+// 4 MB: the ceiling moved in `pdf-text.ts` and these two literals did not, so a
+// practice manager refused a 4.2 MB manual was told the limit was six times
+// what it is — and the one action that would have worked (split it under 4 MB)
+// was the action the sentence ruled out. `equipment-workspace.tsx` prints
+// `data.error` verbatim and nothing else in the UI states a size, so THIS
+// STRING IS THE ADVERTISED CEILING. Deriving it from MAX_PDF_SIZE_LABEL is what
+// makes "advertise and enforce the same number" true by construction instead of
+// by everyone remembering.
+// ---------------------------------------------------------------------------
+const TOO_LARGE = `That PDF is larger than ${MAX_PDF_SIZE_LABEL}. Upload the operating and troubleshooting sections.`;
+
+// The slack allowed on top of the file itself for multipart framing (the field
+// boundaries, the `client` and `assetId` parts, the filename header) when the
+// only thing we have to judge by is Content-Length.
+//
+// IT MUST STAY BELOW VERCEL'S REQUEST-BODY CEILING or the check is dead code:
+// the platform refuses a body over 4.5 MB at the edge, before this handler runs
+// at all, so a threshold of MAX_PDF_BYTES + 2 MB (6 MB, what this was) could
+// never be reached in production and every oversized upload paid to be buffered
+// first. A quarter of a megabyte is orders of magnitude more than multipart
+// framing costs and still leaves the whole window reachable.
+const MULTIPART_SLACK_BYTES = 256 * 1024;
+
+// ---------------------------------------------------------------------------
+// WHAT WAS STORED IS NOT WHAT WILL BE SEARCHED, and the practice is told so at
+// upload time rather than finding out inside an answer (§0/5 and ruling W3/11:
+// a truncated read never wears a complete read's clothes).
+//
+// `listChunksForAsset` stops at MANUAL_CHUNK_READ_CAP passages in page order,
+// so on a very long manual the desk never ranks the back of the book. The
+// answer-time half of this is already honest — `tools.ts` swaps "the manual
+// does not cover this" for a sentence naming the part it searched — but "Stored
+// 1,240 searchable passages" told an owner the whole book was in, and the one
+// action that would have fixed it (upload the operating and troubleshooting
+// section on its own) is the action nobody takes when they believe it worked.
+//
+// Same advice `pdf-text.ts` gives for a PDF over MAX_PDF_PAGES, deliberately:
+// two ways of hitting the same wall should not read like two different problems.
+// ---------------------------------------------------------------------------
+function overCapNote(passages: number): string {
+  return ` This manual is longer than the desk reads in one go: only the first ${MANUAL_CHUNK_READ_CAP} of those ${passages} passages will be searched, in page order, so the later pages will not be looked at. Upload the operating and troubleshooting sections on their own to be sure the desk can see them.`;
 }
 
 /**
@@ -76,8 +125,8 @@ export async function POST(request: Request): Promise<Response> {
   // oversized upload is refused rather than buffered. The post-parse check below
   // is the authoritative one — Content-Length can be absent or wrong.
   const declared = Number(request.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > MAX_PDF_BYTES + 2_000_000) {
-    return bad("That PDF is larger than 25MB. Upload the operating and troubleshooting sections.", 413);
+  if (Number.isFinite(declared) && declared > MAX_PDF_BYTES + MULTIPART_SLACK_BYTES) {
+    return bad(TOO_LARGE, 413);
   }
 
   let form: FormData;
@@ -105,8 +154,11 @@ export async function POST(request: Request): Promise<Response> {
   if (!(file instanceof File)) return bad("No file provided");
   if (form.getAll("file").length !== 1) return bad("Upload one manual at a time");
   if (file.size <= 0) return bad("That file appears to be empty");
+  // THE AUTHORITATIVE CHECK. It fires before `extractPdfText`, so the corrected
+  // sentence that module throws is unreachable over HTTP and this one is what a
+  // practice actually reads.
   if (file.size > MAX_PDF_BYTES) {
-    return bad("That PDF is larger than 25MB. Upload the operating and troubleshooting sections.", 413);
+    return bad(TOO_LARGE, 413);
   }
 
   let pages: string[];
@@ -147,15 +199,22 @@ export async function POST(request: Request): Promise<Response> {
   );
   if (!stored.ok) return bad(stored.reason, 500);
 
+  const storedLine = `Stored ${chunks.length} searchable passage${chunks.length === 1 ? "" : "s"} from ${pageCount} page${pageCount === 1 ? "" : "s"}.`;
   return Response.json({
     ok: true,
     status,
     pageCount,
     passages: chunks.length,
+    // The cap the desk reads to, returned alongside the count so a caller can
+    // say the same thing without re-deriving it from a sentence.
+    searchCap: MANUAL_CHUNK_READ_CAP,
+    searchedInFull: chunks.length <= MANUAL_CHUNK_READ_CAP,
     message:
       status === "no_text"
         ? "That PDF is a scan — it holds pictures of pages rather than text, so there is nothing for the desk to read. A text PDF from the manufacturer's website will work."
-        : `Stored ${chunks.length} searchable passage${chunks.length === 1 ? "" : "s"} from ${pageCount} page${pageCount === 1 ? "" : "s"}.`,
+        : chunks.length > MANUAL_CHUNK_READ_CAP
+          ? `${storedLine}${overCapNote(chunks.length)}`
+          : storedLine,
   });
 }
 

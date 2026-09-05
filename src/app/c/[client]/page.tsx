@@ -94,9 +94,36 @@ export default async function ClientHomePage({
         {/* THE PLATFORM'S OWN STATE, between the practice's numbers and the
             practice's worklist. The dashboard above says how the day is going;
             this says what the platform is running while it goes; the worklist
-            below says what to do about either. It is role-filtered inside — a
-            practice manager gets her operational subset and a clinician gets no
-            band at all — so it is rendered unconditionally here. */}
+            below says what to do about either.
+
+            IT IS ROLE-FILTERED INSIDE, which is why it is rendered here
+            unconditionally. The filter is `canRoleAccessModule` and nothing
+            else: a tile is drawn only if the role may open the module that tile
+            links to, so a nav ruling reaches this band with no edit of its own.
+            The authoritative account of that is the header of
+            src/lib/home/os-band.ts, which is pinned to the code by its own test.
+
+            WHAT IT COMES TO ON THIS PAGE, role by role. The names below are the
+            band's own tile labels, and `os-band-note.test.ts` beside this file
+            re-derives every line from `canRoleAccessModule` on each run, so a
+            module widened, narrowed or added turns this paragraph red rather
+            than leaving a false contract in the file a later lane opens first:
+
+              [agency_admin, client_owner] all six: Leads, Pre-visit questions,
+                Equipment, IT desk, Dentally write-back, Automations.
+              [client_coordinator] the practice manager's operational subset:
+                Leads, Pre-visit questions, Equipment, IT desk. She may not open
+                System controls, so neither of the last two is drawn for her.
+              [client_clinician] the two desks: Equipment, IT desk. Ruling
+                W2-A/1 (3 Sep 2026) widened both of those modules to every
+                clearance and the band followed with no edit of its own.
+              [client_staff] nothing at all here — not because the predicate
+                refuses it, but because `requireIndexAccess` at the top of this
+                page forwards a staff login to My work before this line is
+                reached.
+
+            The enumeration that stood here predates W2-A/1 and had stopped
+            describing what the newest clearance is actually drawn. */}
         <OperatingSystemBand clientId={client.id} clientSlug={clientSlug} tree="client" />
         <TaskQueueBoard
           plain

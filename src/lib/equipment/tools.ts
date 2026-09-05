@@ -3,7 +3,12 @@ import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { rankManualChunks } from "./chunk";
 import { getAsset, listAssets, listChunksForAsset, listManuals } from "./repository";
-import { CATEGORY_LABELS, type EquipmentAsset } from "./types";
+import {
+  CATEGORY_LABELS,
+  MANUAL_CHUNK_READ_CAP,
+  REGISTER_READ_CAP,
+  type EquipmentAsset,
+} from "./types";
 
 // ===========================================================================
 // THE EQUIPMENT AGENT'S TOOLS.
@@ -83,8 +88,15 @@ export function equipmentToolRefusal(): string {
   });
 }
 
-/** The shape an asset takes in a tool result: the register's own facts, nothing else. */
-function assetSummary(asset: EquipmentAsset, hasManual: boolean) {
+/**
+ * The shape an asset takes in a tool result: the register's own facts, nothing else.
+ *
+ * `hasManual` is THREE-VALUED, and the third value is the point. `null` means the
+ * manual index could not be read at all, and the key is then OMITTED rather than
+ * written `false` — see MANUAL_INDEX_UNREADABLE_NOTE below for why a stamped
+ * `false` is the dangerous answer here.
+ */
+function assetSummary(asset: EquipmentAsset, hasManual: boolean | null) {
   return {
     id: asset.id,
     name: asset.name,
@@ -99,7 +111,10 @@ function assetSummary(asset: EquipmentAsset, hasManual: boolean) {
     lastServicedOn: asset.lastServicedOn,
     nextServiceDue: asset.nextServiceDue,
     notes: asset.notes,
-    manualUploaded: hasManual,
+    // OMITTED, not `false`, when the manual index could not be read. A model
+    // handed `manualUploaded: false` has been told a fact; a model handed
+    // nothing has to ask, and the note beside it tells it to.
+    ...(hasManual === null ? {} : { manualUploaded: hasManual }),
   };
 }
 
@@ -111,6 +126,74 @@ function matchesQuery(asset: EquipmentAsset, query: string): boolean {
     .filter((v): v is string => Boolean(v))
     .some((v) => v.toLowerCase().includes(q));
 }
+
+// ---------------------------------------------------------------------------
+// THE REGISTER READ IS BOUNDED, AND EVERY TOOL RESULT SAYS SO WHEN IT MATTERS.
+//
+// `listAssets` stops at REGISTER_READ_CAP rows and hands back a bare array, so
+// the only evidence a caller has that it was cut short is the length itself. A
+// figure taken off a read at its own bound is a floor, not a total (programme
+// ruling W3/11), and the model has no way to know that unless it is told: left
+// alone it reads `total: 400`, repeats it to the practice, and answers "we have
+// no such machine" about everything in the unread tail.
+//
+// So a capped read swaps `total` for `atLeast` and carries the sentence below.
+// The key CHANGES rather than gaining a sibling flag on purpose — a model that
+// ignores a `truncated: true` it did not expect still prints `total`, whereas
+// there is no bare total left for it to print.
+// ---------------------------------------------------------------------------
+
+/** TRUE when the read came back at its own bound and may therefore be partial. */
+function registerIsCapped(assets: EquipmentAsset[]): boolean {
+  return assets.length >= REGISTER_READ_CAP;
+}
+
+const REGISTER_CAPPED_NOTE =
+  `The register is larger than this desk reads in one go (${REGISTER_READ_CAP} entries, ordered by category then name), so this is a floor and not a total. Say "at least" rather than a number, and never tell anyone a machine is not registered on the strength of this list — say you could not find it on the part of the register you can see, and suggest checking the Register tab.`;
+
+// ---------------------------------------------------------------------------
+// AN UNREADABLE MANUAL INDEX IS "WE DO NOT KNOW", NEVER "THERE IS NO MANUAL".
+//
+// `listManuals` returns null when its read fails — a distinct value from the
+// empty array precisely so a caller cannot confuse the two — and this dispatch
+// used to collapse them with `manuals ?? []`. The result was not a missing
+// caveat, it was a false statement about every asset at once: `manualUploaded:
+// false` on all of them, from which the model says "there is no manual for the
+// autoclave, you can upload one on the Manuals tab" about a manual that is
+// stored, indexed and searchable.
+//
+// AND THE TWO HALVES OF ONE TURN THEN CONTRADICT EACH OTHER, which is the part
+// that makes this worse than an ordinary wrong answer. `search_manual` reads
+// `equipment_manual_chunk` directly and is unaffected by this failure, so in the
+// same conversation the desk quotes page 14 of a manual it has just said does not
+// exist. Whoever is standing at the machine has to decide which half to believe.
+//
+// So the key is dropped from every summary and this sentence goes in its place.
+// It names the tool that still works, because "we do not know" without a next
+// step is how a model fills the gap on its own.
+// ---------------------------------------------------------------------------
+const MANUAL_INDEX_UNREADABLE_NOTE =
+  "Whether each machine has a manual could not be read just now, so these entries do not say and neither may you. Never tell anyone a machine has no manual on the strength of this, and never invite anyone to upload one that may already be there: search_manual reads the manual's own text and is unaffected, so use it, and only say a manual is missing if search_manual itself says so.";
+
+/** TRUE when the manual read came back at its own bound, so later pages went unsearched. */
+function manualIsCapped(chunks: { ordinal: number }[]): boolean {
+  return chunks.length >= MANUAL_CHUNK_READ_CAP;
+}
+
+/**
+ * THE SENTENCE THAT REPLACES "THE MANUAL DOES NOT COVER THIS".
+ *
+ * The ordinary empty-result note tells the model to say, plainly, that the
+ * practice's own manual does not cover the thing asked about. That is only true
+ * when the whole manual was searched. `listChunksForAsset` stops at
+ * MANUAL_CHUNK_READ_CAP passages in page order, so on a long manual the ranking
+ * never saw the back of the book — and "the manual does not cover E27" about a
+ * fault table on page 361 is not a hedge, it is a false statement that sends a
+ * nurse away from the answer she is holding (programme ruling W3/11, and §0/5:
+ * a truncated read never wears a complete one's clothes).
+ */
+const MANUAL_CAPPED_NOTE =
+  `This manual is longer than the desk reads in one go: only its first ${MANUAL_CHUNK_READ_CAP} passages were searched, in page order, so the later pages were not looked at. Never say the manual does not cover something on the strength of this search — say you could not find it in the part you can read, and point at the supplier or engineer on the asset's record.`;
 
 /** Whole days from today (London date strings) to an ISO date. Negative = past. */
 function daysUntil(today: string, iso: string): number {
@@ -138,9 +221,16 @@ export function makeEquipmentDispatch(ctx: EquipmentDispatchContext) {
       // the middle of a conversation is how somebody is told an asset they just
       // added does not exist.
       const manuals = await listManuals(ctx.clientId);
-      const withManual = new Set(
-        (manuals ?? []).filter((m) => m.status === "ready").map((m) => m.assetId),
-      );
+      // NULL SURVIVES THE JOURNEY. `listManuals` distinguishes "no manuals" from
+      // "could not read the manuals", and so does everything downstream of here:
+      // a null set means the manual column is unknown, not empty.
+      const withManual: ReadonlySet<string> | null =
+        manuals === null
+          ? null
+          : new Set(manuals.filter((m) => m.status === "ready").map((m) => m.assetId));
+      /** What one asset's manual state is, for a summary: true, false, or unknown. */
+      const manualState = (assetId: string): boolean | null =>
+        withManual === null ? null : withManual.has(assetId);
 
       switch (name) {
         case "find_asset": {
@@ -150,9 +240,25 @@ export function makeEquipmentDispatch(ctx: EquipmentDispatchContext) {
           }
           const query = String(input.query ?? "");
           const matches = assets.filter((a) => matchesQuery(a, query));
+          const shown = matches.slice(0, 25);
+          const capped = registerIsCapped(assets);
+          // Both caveats can be true at once — a capped register read whose
+          // manual index also failed — and both sentences then go out. Joining
+          // them keeps ONE `note` key: a second key beside it is a key a model
+          // may not read.
+          const notes = [
+            ...(capped ? [REGISTER_CAPPED_NOTE] : []),
+            ...(withManual === null ? [MANUAL_INDEX_UNREADABLE_NOTE] : []),
+          ];
           return JSON.stringify({
-            found: matches.length,
-            assets: matches.slice(0, 25).map((a) => assetSummary(a, withManual.has(a.id))),
+            // `found` is a count of matches within what was READ. When the read
+            // was itself at its bound, or when there are more matches than the
+            // 25 returned, the count is a floor and says so rather than passing
+            // for a complete answer.
+            ...(capped ? { foundAtLeast: matches.length } : { found: matches.length }),
+            ...(shown.length < matches.length ? { showing: shown.length } : {}),
+            assets: shown.map((a) => assetSummary(a, manualState(a.id))),
+            ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
           });
         }
 
@@ -163,13 +269,19 @@ export function makeEquipmentDispatch(ctx: EquipmentDispatchContext) {
           }
           const category = typeof input.category === "string" ? input.category : "";
           const filtered = category ? assets.filter((a) => a.category === category) : assets;
+          const capped = registerIsCapped(assets);
+          const notes = [
+            ...(capped ? [REGISTER_CAPPED_NOTE] : []),
+            ...(withManual === null ? [MANUAL_INDEX_UNREADABLE_NOTE] : []),
+          ];
           return JSON.stringify({
-            total: filtered.length,
-            // The cap is the repository's ASSET_ROW_CAP; if a practice ever has
-            // more than that, `total` is what was READ, and the honest thing is
-            // that the model is told the number it can see rather than a number
-            // nobody proved.
-            assets: filtered.map((a) => assetSummary(a, withManual.has(a.id))),
+            // The cap is the repository's ASSET_ROW_CAP. Below it, `total` is a
+            // real total. AT it, there is no total to give — only a floor — and
+            // the key says so, because a number nobody proved must not be handed
+            // to the model wearing the name of one.
+            ...(capped ? { atLeast: filtered.length } : { total: filtered.length }),
+            assets: filtered.map((a) => assetSummary(a, manualState(a.id))),
+            ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
           });
         }
 
@@ -199,15 +311,21 @@ export function makeEquipmentDispatch(ctx: EquipmentDispatchContext) {
           }
 
           const ranked = rankManualChunks(query, chunks, 5);
+          const capped = manualIsCapped(chunks);
           return JSON.stringify({
             asset: asset.name,
             manualUploaded: true,
+            // The bound is reported whether or not anything ranked: a hit found
+            // in the first 900 passages may still not be the BEST passage, and
+            // the model is the only thing that can hedge a page citation.
+            ...(capped ? { searchedFirstPassages: MANUAL_CHUNK_READ_CAP } : {}),
             passages: ranked.map((r) => ({
               page: r.chunk.pageFrom === r.chunk.pageTo ? r.chunk.pageFrom : `${r.chunk.pageFrom}-${r.chunk.pageTo}`,
               text: r.chunk.body,
             })),
-            note:
-              ranked.length === 0
+            note: capped
+              ? MANUAL_CAPPED_NOTE
+              : ranked.length === 0
                 ? "The manual does not cover this. Say so plainly and do not answer from general knowledge; if it is a fault, hand over to the supplier or engineer."
                 : undefined,
           });
@@ -229,6 +347,7 @@ export function makeEquipmentDispatch(ctx: EquipmentDispatchContext) {
             if (days < 0) overdue.push(entry);
             else if (days <= withinDays) dueSoon.push(entry);
           }
+          const capped = registerIsCapped(assets);
           return JSON.stringify({
             today: ctx.today,
             overdue,
@@ -238,6 +357,17 @@ export function makeEquipmentDispatch(ctx: EquipmentDispatchContext) {
             // list: "nothing is overdue" and "we do not know when 12 of these are
             // due" are different answers and the practice needs the second one.
             noServiceDateRecorded: assets.length - dated.length,
+            // "Which equipment is overdue?" is the question this register exists
+            // to answer and the one W1-D/2 says is ALWAYS answered. When the read
+            // was capped, an empty `overdue` no longer means "nothing is
+            // overdue" — it means "nothing overdue in the part I can see", and
+            // the difference is a statutory test nobody is told about.
+            ...(capped
+              ? {
+                  registerCapped: true,
+                  note: `${REGISTER_CAPPED_NOTE} In particular an empty overdue list here means "nothing overdue in the part of the register I can read", not "nothing is overdue" — say it that way.`,
+                }
+              : {}),
           });
         }
 

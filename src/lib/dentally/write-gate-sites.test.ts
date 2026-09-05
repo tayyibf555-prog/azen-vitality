@@ -191,12 +191,52 @@ describe("every Dentally write in the tree goes through the WriteGate", () => {
     }
   });
 
-  it("the crawl is not vacuous: it still finds the declarations it deliberately skips", () => {
+  it("the crawl is not vacuous: read, strip and match still work on the real tree", () => {
     // If the walk or the regexes ever broke, every assertion above would pass by
     // finding nothing at all — which is the failure mode a structural test cannot
-    // afford. The client's own declarations are a fixed, known population.
-    const clientHits = writeMethodHits(stripComments(readFileSync(srcPath(CLIENT_MODULE), "utf8")));
-    expect(clientHits.length).toBeGreaterThanOrEqual(0);
+    // afford, and the guard that was here could not fail: it asserted that an
+    // array's length was >= 0, which is true of every array including the empty
+    // one a broken pipeline returns. It also described the wrong population.
+    // writeMethodHits counts CALL shapes, and client.ts DECLARES the five
+    // (`async createPatient(payload) {`) rather than calling them, so its real
+    // hit count is zero and always was.
+    //
+    // So the anchors are the two things that must genuinely survive the pipeline.
+    // FIRST: the five declarations are still readable in client.ts after
+    // stripComments — which proves the file is found, read and stripped without
+    // the strip having eaten the code (a greedy block-comment regex would).
+    const clientSource = stripComments(readFileSync(srcPath(CLIENT_MODULE), "utf8"));
+    for (const name of WRITE_METHODS) {
+      expect(clientSource, `client.ts no longer declares ${name}, or stripComments ate it`).toMatch(
+        new RegExp(`async\\s+${name}\\s*\\(`),
+      );
+    }
+
+    // SECOND, and this is the positive control the crawl itself depends on: the
+    // real files that DO call the gate must produce hits BEFORE the gate calls are
+    // blanked and none after. If writeMethodHits stopped matching, the first half
+    // goes red here instead of the headline assertion passing by finding nothing.
+    const gateCallers = walkSrc({ extensions: [".ts", ".tsx"] }).filter(
+      (file) => file !== CLIENT_MODULE && file !== GATE_MODULE && !file.endsWith(".test.ts"),
+    );
+    let matchedBeforeBlanking = 0;
+    for (const file of gateCallers) {
+      const code = stripComments(readFileSync(srcPath(file), "utf8"));
+      if (!/\bdentallyWrite\s*\./.test(code)) continue;
+      expect(
+        writeMethodHits(code).length,
+        `${file} calls the gate, so the crawl must see a write method in it before the gate calls are blanked`,
+      ).toBeGreaterThan(0);
+      matchedBeforeBlanking += 1;
+      expect(
+        writeMethodHits(withoutGateCalls(code)),
+        `${file} goes through the gate, so nothing must remain once gate calls are blanked`,
+      ).toEqual([]);
+    }
+    // The tree really does have gated call sites; a control that matched none
+    // would be as vacuous as the assertion it replaced.
+    expect(matchedBeforeBlanking, "no gate caller was found at all — the walk is broken").toBeGreaterThanOrEqual(8);
+
     const gateSource = readFileSync(srcPath(GATE_MODULE), "utf8");
     for (const name of WRITE_METHODS) {
       expect(gateSource, `the gate does not name ${name}`).toContain(name);

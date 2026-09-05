@@ -30,8 +30,20 @@ export {
 //
 // THE READS ARE BOUNDED, and say so. `listWriteIntents` caps at ROW_CAP and
 // reports whether it hit the cap; `countWriteIntents` scans at most COUNT_CAP
-// rows and reports `capped`, so the surface can say "at least 2,000" in words
+// rows and reports `capped`, so the surface can say "at least 900" in words
 // rather than printing a cap as if it were a total (the honest-numbers rule).
+//
+// AND OUR CAP HAS TO SIT BELOW POSTGREST'S OWN. Supabase applies a server-side
+// max-rows ceiling to every REST request — measured at 1,000 on this project,
+// with the service-role key, by asking for 1,500 and for 2,001 and receiving
+// exactly 1,000 rows and `content-range: 0-999/*` both times, without an error.
+// A response clipped by that ceiling is indistinguishable from a short one, so a
+// count that asks for MORE rows than the server will ever hand back can never
+// observe its own cap: `capped` would be structurally false and a floor would
+// print as a total, which is precisely the dishonesty this file exists to
+// prevent. COUNT_CAP was 2,000 and asked for 2,001, so that is exactly what it
+// did. It is 900 now and asks for 901, well inside the ceiling, with room for
+// the ceiling to be lowered without silently disarming the flag.
 
 const TABLE = "dentally_write_intent";
 
@@ -75,7 +87,15 @@ export interface WriteIntentRow {
 
 /** The most rows one list read will return, and the most one count will scan. */
 export const ROW_CAP = 200;
-export const COUNT_CAP = 2000;
+/**
+ * The most status values one count will scan.
+ *
+ * MUST STAY BELOW POSTGREST'S max-rows CEILING (1,000 here — see the note at the
+ * head of this file), because the cap is detected by asking for COUNT_CAP + 1 and
+ * seeing more than COUNT_CAP come back. Raise this above the ceiling and the
+ * detection dies silently: every count becomes a floor wearing a total's clothes.
+ */
+export const COUNT_CAP = 900;
 
 /**
  * A Dentally error body can echo the fields it rejected, and a 422 on a patient
@@ -265,8 +285,15 @@ export async function listWriteIntents(
  *
  * BOUNDED AND HONEST. It reads at most COUNT_CAP status values; if it hits the
  * cap the numbers are a FLOOR, not a total, and `capped` says so, so the surface
- * prints "at least 2,000" in words. A cap is never reported as a total (the
+ * prints "at least 900" in words. A cap is never reported as a total (the
  * honest-numbers rule).
+ *
+ * The cap is PROVEN, not guessed: it asks for one row beyond it and reports
+ * `capped` only when that extra row really arrives. That proof only works while
+ * COUNT_CAP + 1 stays under PostgREST's own max-rows ceiling, which is why the
+ * constant is 900 and not the 2,000 it started at — above the ceiling the server
+ * clips the response and the flag can never be raised. Pinned by
+ * sync-ledger.test.ts ("the scan asks for fewer rows than PostgREST will return").
  */
 export async function countWriteIntents(
   clientId: string,

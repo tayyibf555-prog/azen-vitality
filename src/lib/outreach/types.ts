@@ -59,6 +59,39 @@ export type OutreachTargetStatus =
  *
  * Consent is deliberately NOT a build filter: it is decided at send time (the
  * sweep checks the snapshot, the drain re-checks suppression live).
+ *
+ * ---------------------------------------------------------------------------
+ * NOT HERE, ON PURPOSE: an `interestIn` predicate (ledger, ruling W3/10).
+ * ---------------------------------------------------------------------------
+ * Every filter above selects against DENTALLY's patient base — appointment
+ * reason text, last-visit dates, DOB, gender. None of them can see the
+ * platform's own `treatment_interest` rows, so the practice cannot build "the
+ * people who ticked implants on the pre-visit form" as a campaign here.
+ *
+ * W3/10 sets the floor at owner+manager CSV export / copy-as-audience on the
+ * interest-lists screen, and that is LANDED (see the note in
+ * src/components/client/previsit/interest-export.test.ts) — the ruling's own
+ * words are "anything larger -> ledger with sizing", and this is the ledger.
+ *
+ * SIZING, if the client wants the list targetable in-platform rather than via
+ * a file:
+ *   - `interestIn?: InterestTreatmentKey[]` here;
+ *   - `parseFilters` in ./validate.ts accepts it against the four known keys
+ *     (whitening | straightening | implants | veneers-bonding) and rejects
+ *     anything else, exactly as it does treatmentContains;
+ *   - ONE repository read in build.ts before the page loop — the same shape as
+ *     the exclusion load: `listInterest({ siteIds: [siteId], answer: 'yes' })`
+ *     paged to exhaustion into a Set of dentally_patient_ids — plus one cheap
+ *     membership test in the pre-filter (before the appointment read, like the
+ *     exclusion check). It must page to exhaustion for the reason the exclusion
+ *     read does: a clipped read silently narrows the audience with no error;
+ *   - a segment field in the co-pilot's create_outreach_campaign and a control
+ *     in the campaigns workspace, or the filter has no caller (W3/8) and is not
+ *     shipped;
+ *   - consent and the daily cap are untouched: an interest tick is not consent,
+ *     and the send path still decides.
+ * Deliberately NOT added as a dormant field: a filter nothing can set is dead
+ * weight that reads like a capability.
  */
 export interface OutreachFilters {
   lastVisitAfter?: string;

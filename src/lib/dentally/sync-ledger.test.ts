@@ -235,6 +235,27 @@ describe("the reads are bounded, and say when they were cut short", () => {
     expect(counted.total).toBe(COUNT_CAP);
   });
 
+  it("the scan asks for fewer rows than PostgREST will return, or the cap can never be seen", () => {
+    // THE FLAG IS ONLY AS HONEST AS ITS DETECTION. `capped` is proven by asking
+    // for COUNT_CAP + 1 rows and seeing more than COUNT_CAP arrive — and Supabase
+    // applies a server-side max-rows ceiling to every REST request, measured at
+    // 1,000 on this project with the service-role key (limit=1500 and limit=2001
+    // both returned exactly 1,000 rows, `content-range: 0-999/*`, no error). A
+    // response clipped by that ceiling looks exactly like a short one, so with
+    // COUNT_CAP at its original 2,000 the extra row could NEVER arrive: `capped`
+    // was structurally false in production and the Sync Status screen would have
+    // printed a floor as a bare total the moment the ledger passed a thousand
+    // rows. The fake in these tests honours .limit(2001) literally, which is why
+    // no behavioural test could catch it and why this one is arithmetic.
+    const POSTGREST_MAX_ROWS = 1000;
+    expect(
+      COUNT_CAP + 1,
+      "countWriteIntents asks for more rows than PostgREST will hand back, so `capped` can never be true",
+    ).toBeLessThanOrEqual(POSTGREST_MAX_ROWS);
+    // And the same for the page read, which proves `more` the same way.
+    expect(ROW_CAP + 1).toBeLessThanOrEqual(POSTGREST_MAX_ROWS);
+  });
+
   it("ignores a status the ledger does not know, rather than inventing a bucket", async () => {
     h.set({ data: [{ status: "wat" }, { status: "sent" }], error: null });
     const counted = await countWriteIntents("vitality");

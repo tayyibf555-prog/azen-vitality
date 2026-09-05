@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
-import { BankPanel, dropReason } from "./bank-editor";
+import { BankPanel, draftToQuestion, dropReason } from "./bank-editor";
 import { TRIAGE_BANK, defaultConfigFor } from "@/lib/triage/bank";
-import { projectBank } from "@/lib/triage/project";
+import { projectBank, usableCustom } from "@/lib/triage/project";
 import type { TriageBankConfig, TriageFork } from "@/lib/triage/types";
 
 // ===========================================================================
@@ -190,5 +192,165 @@ describe("the save states are all renderable", () => {
     const markup = render("brief", config, { error: "Those settings were not saved." });
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("Those settings were not saved.");
+  });
+});
+
+// ===========================================================================
+// THE PRACTICE'S OWN QUESTIONS (wave-3 review, 4 September 2026).
+//
+// THE DEFECT this pins: `TriageCustomQuestion` is documented as "a question the
+// practice wrote itself, IN THE OWNER EDITOR", and every layer under that
+// sentence shipped — the ten-question cap and the per-question refusal in the
+// PUT route, `usableCustom`, the W3/3 scan over custom option labels AND values,
+// `resolveAnswerKind`'s custom index, `UNKNOWN_ANSWER_KIND` failing to
+// restricted. The editor was the missing half: it rendered the shipped library
+// as switches and posted `bank.config` straight back, so `config.custom` could
+// only round-trip. The owner could not write one, could not remove one, and — the
+// sharper half — a custom question already STORED was invisible here while being
+// asked of patients, because the panel iterates the shipped library and custom
+// questions do not live in it.
+// ===========================================================================
+
+const CUSTOM: TriageBankConfig["custom"][number] = {
+  key: "custom-parking",
+  label: "Do you know where to park?",
+  type: "yesno",
+  kind: "logistics",
+  required: false,
+};
+
+describe("a question the practice wrote is visible, and can be written and removed", () => {
+  it("shows a stored custom question, which the library-only list never did", () => {
+    const config: TriageBankConfig = { ...defaultConfigFor("full"), custom: [CUSTOM] };
+    const markup = text(render("full", config));
+    expect(markup).toContain("Do you know where to park?");
+    expect(markup).toContain("Yes / no");
+    expect(markup).toContain("Getting to the appointment");
+  });
+
+  it("offers a way to remove it", () => {
+    const config: TriageBankConfig = { ...defaultConfigFor("full"), custom: [CUSTOM] };
+    expect(text(render("full", config))).toContain('Remove "Do you know where to park?"');
+  });
+
+  it("offers the form that writes one, with every answer type usableCustom accepts", () => {
+    const markup = text(render("full", defaultConfigFor("full")));
+    expect(markup).toContain("Your own questions");
+    expect(markup).toContain("Add this question");
+    for (const label of ["Short answer", "Longer answer", "Multiple choice", "Yes / no", "0 to 10"]) {
+      expect(markup, `no ${label} option`).toContain(label);
+    }
+  });
+
+  it("says what the classification costs, next to the picker rather than after a save", () => {
+    const markup = text(render("full", defaultConfigFor("full")));
+    expect(markup).toContain("only asked on the longer list");
+    expect(markup).toContain("it is not asked");
+  });
+
+  it("counts what has been written against the cap", () => {
+    const config: TriageBankConfig = { ...defaultConfigFor("full"), custom: [CUSTOM] };
+    expect(text(render("full", config))).toContain("1 written so far");
+  });
+
+  it("warns about the fallback that would silently discard them", () => {
+    // `usableConfig` falls back to the fork's shipped defaults whenever
+    // `enabledKeys` is empty, and the fallback replaces the WHOLE config — the
+    // stored `custom` array goes with it. Until that is fixed in the projection,
+    // the editor says so rather than letting somebody find out from an empty form.
+    const config: TriageBankConfig = { enabledKeys: [], required: {}, custom: [CUSTOM] };
+    const markup = text(render("full", config));
+    expect(markup).toContain("Keep at least one of the questions above switched on");
+  });
+
+  it("does not warn when a shipped question is still on", () => {
+    const config: TriageBankConfig = { ...defaultConfigFor("full"), custom: [CUSTOM] };
+    expect(text(render("full", config))).not.toContain("Keep at least one of the questions above");
+  });
+
+  it("survives a config with no custom array at all", () => {
+    // Legacy rows predate the field. A panel that threw on one would take the
+    // whole editor down for the practice that has never used it.
+    const config = { ...defaultConfigFor("full"), custom: undefined } as unknown as TriageBankConfig;
+    expect(text(render("full", config))).toContain("Your own questions");
+  });
+});
+
+describe("a draft becomes a question, or says why it does not", () => {
+  const draft = {
+    label: "Do you know where to park?",
+    type: "yesno" as const,
+    kind: "logistics" as const,
+    optionsText: "",
+    required: false,
+  };
+
+  it("mints the custom- key usableCustom demands", () => {
+    const out = draftToQuestion(draft, []);
+    expect("question" in out && out.question.key).toBe("custom-do-you-know-where-to-park");
+  });
+
+  it("suffixes rather than colliding with a question already written", () => {
+    const out = draftToQuestion(draft, ["custom-do-you-know-where-to-park"]);
+    expect("question" in out && out.question.key).toBe("custom-do-you-know-where-to-park-2");
+  });
+
+  it("refuses a question with no words in it", () => {
+    const out = draftToQuestion({ ...draft, label: "   " }, []);
+    expect("error" in out && out.error).toMatch(/Write the question/);
+  });
+
+  it("refuses a multiple choice with nothing to choose between", () => {
+    const out = draftToQuestion({ ...draft, type: "choice", optionsText: "Yes" }, []);
+    expect("error" in out && out.error).toMatch(/at least two answers/);
+  });
+
+  it("gives every option a distinct value even when two read the same", () => {
+    const out = draftToQuestion({ ...draft, type: "choice", optionsText: "Yes\nYes\nNo" }, []);
+    const options = "question" in out ? out.question.options ?? [] : [];
+    expect(options.map((o) => o.value)).toEqual(["yes", "yes-2", "no"]);
+    expect(new Set(options.map((o) => o.value)).size).toBe(options.length);
+  });
+
+  it("produces a key the server's own validator accepts", () => {
+    // The rule that matters is `usableCustom`'s, not this screen's: a key it
+    // refuses is a save the owner cannot make, and the editor would be offering
+    // a control that always fails.
+    for (const label of ["Do you know where to park?", "Parking!!!", "Sí, ¿aparcamiento?"]) {
+      const out = draftToQuestion({ ...draft, label }, []);
+      expect("question" in out, label).toBe(true);
+      if ("question" in out) {
+        expect(usableCustom(out.question), `usableCustom refused "${label}"`).not.toBeNull();
+      }
+    }
+  });
+
+  it("produces a choice question the server's validator accepts", () => {
+    const out = draftToQuestion({ ...draft, type: "choice", optionsText: "Yes\nNo\nNot sure" }, []);
+    expect("question" in out).toBe(true);
+    if ("question" in out) expect(usableCustom(out.question)).not.toBeNull();
+  });
+});
+
+describe("the editor's cap is the route's cap", () => {
+  it("MAX_CUSTOM matches src/app/api/previsit/bank/route.ts", () => {
+    // The route slices the incoming array at its own figure, so a higher number
+    // in the browser would drop the eleventh question after the owner typed it,
+    // with no error anywhere.
+    const source = readFileSync(join(process.cwd(), "src/app/api/previsit/bank/route.ts"), "utf8");
+    const declared = source.match(/const MAX_CUSTOM\s*=\s*(\d+)/);
+    expect(declared, "the MAX_CUSTOM scan went stale").toBeTruthy();
+    const panel = readFileSync(join(process.cwd(), "src/components/client/previsit/bank-editor.tsx"), "utf8");
+    const mine = panel.match(/const MAX_CUSTOM\s*=\s*(\d+)/);
+    expect(mine, "the editor no longer declares a cap").toBeTruthy();
+    expect(mine![1], "the editor's cap drifted from the route's").toBe(declared![1]);
+  });
+
+  it("the form is closed once the cap is reached", () => {
+    const custom = Array.from({ length: Number(10) }, (_, i) => ({ ...CUSTOM, key: `custom-q${i}` }));
+    const markup = render("full", { ...defaultConfigFor("full"), custom });
+    // The add button is disabled, not hidden: an absent control reads as a
+    // missing feature, a disabled one beside "Up to 10" reads as a limit.
+    expect(markup).toMatch(/<button[^>]*disabled[^>]*>\s*Add this question/);
   });
 });

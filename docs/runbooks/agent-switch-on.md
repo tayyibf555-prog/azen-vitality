@@ -1,13 +1,15 @@
 # Switching an agent on
 
-What each of the platform's twenty automated agents does on its **first tick**,
+What each of the platform's automated agents does on its **first tick**,
 what it needs before that tick can work, how to see it working inside an hour,
 and how to stop it.
 
 Written for the person holding the owner login on go-live day. Every claim here
-is pinned by `src/lib/agent-wiring/roster.test.ts` and traced end to end by
-`src/lib/agent-wiring/scenarios.test.ts`, so a change to the code that makes a
-sentence here false turns a test red.
+is pinned by `src/lib/agent-wiring/roster.test.ts` (shape: a section, a slug and
+the gaps for every agent) and `src/lib/agent-wiring/runbook.test.ts` (facts: what
+the scheduler holds, which switches ship off, what the pre-visit invite is), and
+traced end to end by `src/lib/agent-wiring/scenarios.test.ts` — so a change to the
+code that makes a sentence here false turns a test red.
 
 ---
 
@@ -21,15 +23,26 @@ to be open before anybody is messaged.**
    space — all of those mean **dry run**, and every "send" is a synthetic result
    in the log. This is deliberate: a typo in the Vercel env screen must never be
    the thing that starts texting 51,000 people.
-2. **The agent's own switch** in Settings → Systems. Five of them ship OFF twice
-   over (declared default-off in the catalog *and* seeded disabled by their
-   migration), so they are off even in a database the seed never reached:
-   `treatment-closer`, `balance-reminders`, `postop-checkin`,
-   `booking-reply-context`, `anomaly-alerts`. Four more ship seeded-off:
-   `outreach`, `whatsapp`, `fp17`, `staff-esign`.
-3. **The cron job that triggers it.** Five sweeps have their registration SQL
-   written and *deliberately not applied*. Switching those toggles on does
-   **nothing at all** until the SQL is run. See §2.
+2. **The agent's own switch** in **System controls** — the sidebar item under
+   *Staff & Ops*, not a page inside Settings. **Six** of the agents below ship OFF
+   twice over (declared `defaultEnabled: false` in the catalog *and* seeded
+   disabled by their migration), so they are off even in a database the seed never
+   reached: `treatment-closer`, `balance-reminders`, `postop-checkin`,
+   `pre-visit-triage`, `booking-reply-context`, `anomaly-alerts`. Four more ship
+   seeded-off only: `outreach`, `whatsapp`, `fp17`, `staff-esign`. Three systems
+   that are not agents ship off twice over too and have no section below to
+   remind you: `equipment`, `it-desk`, and the master `dentally-write-back`.
+   The live list is `DEFAULT_OFF_SLUGS` in `src/lib/systems/catalog.ts`, derived
+   from the catalog itself; this paragraph is asserted against it, so a new
+   default-off agent turns a test red until it is named here.
+3. **The cron job that triggers it.** Registration is *not* uniform, and §2 is
+   the list — read it before you switch anything on, because it cuts both ways.
+   **`outreach` and `anomaly-alerts` are registered and have been firing for
+   months** (every ten minutes and hourly), so for those two the switch is the
+   only thing between them and their first tick. **Five sweeps have no job at
+   all** — the closer, the collection run, post-op, and both pre-visit passes —
+   and switching those toggles on does **nothing at all**, with no error
+   anywhere, until the SQL in §2 is run.
 
 **What a switch actually stops.** Switching a system OFF halts everything it
 *does to patients*: its sweep, its drafting, its outbox, its agent replies, its
@@ -38,16 +51,35 @@ stays current and the practice can preview a system before turning it on.
 
 **Two things about switching off that surprise people.**
 
-- **A switch-off takes effect within ten rows, not instantly.** A sweep checks
-  its switch before it starts and then re-reads it every ten rows for the rest of
-  the run, so flipping it off mid-run stops the drafting within ten rows rather
-  than at the end of a 300-second batch. Nothing already drafted is delivered
-  either: the drain re-reads the switch and refuses the source.
-- **A queued row survives 48 hours.** Rows the drain could not send (because the
-  system was off) stay queued and are retired unsent only once they are 48 hours
-  old. Switch a system off and back on the same afternoon and the backlog goes
-  out. If you want the queue gone rather than paused, leave the system off for
-  two days, or clear the outbox rows by hand.
+- **A switch-off takes effect within ten rows for eight sweeps, and at the end of
+  the batch for the rest.** Eight of them re-read the switch every ten rows for
+  the whole run — `recall`, `reactivation`, `no-show-defence`,
+  `treatment-coordinator`, `reviews`, `speed-to-lead`, `pre-visit-triage` and
+  `outreach` — so flipping one of those off mid-run stops the drafting within ten
+  rows rather than at the end of a 300-second batch. Those eight are every sweep
+  that can text a patient without a member of staff approving it first, which is
+  the reason they are the eight. **The remaining sweeps read their switch once,
+  at the top of the tick, and then run that batch out**: `treatment-closer`,
+  `balance-reminders`, `postop-checkin` and `rota`. That costs less than it
+  sounds — the first three have no cron at all (§2) and only ever draft for a
+  person to approve, and `rota` runs once a day and texts staff, not patients —
+  but if you flip one of the four off while its tick is running, that tick
+  finishes its batch. **In every case nothing already drafted is delivered:** the
+  drain re-reads the switch and refuses the source, so the rows sit queued
+  instead. The last three sweeps — `anomaly-alerts`, the implant-mining pass and
+  the landing-page promoter — message nobody at all, so the question does not
+  arise for them.
+- **A queued row survives 48 hours — except a pre-visit invite.** Rows the drain
+  could not send (because the system was off) stay queued and are retired unsent
+  only once they are 48 hours old. Switch a system off and back on the same
+  afternoon and the backlog goes out. If you want the queue gone rather than
+  paused, leave the system off for two days, or clear the outbox rows by hand.
+  **The one exception is `pre-visit-triage`:** a queued invite is also retired the
+  moment its own appointment starts, however young the row is, because "Before
+  your visit, a few quick questions" cannot arrive after the visit (ruling W3/5).
+  So a pre-visit backlog does *not* all flush when you switch back on — the links
+  for appointments that have already begun are gone, and those patients are asked
+  at the desk instead.
 
 **And one about things going wrong.** Once `MESSAGING_DRY_RUN` is `false`, every
 piece of uncertainty fails closed. If the platform cannot read a system's switch,
@@ -86,6 +118,10 @@ the output before the next thing starts.
 
 ## 2. Cron registration — the silent prerequisite
 
+This table is **registration truth**, not intention: every row was read from
+`cron.job` on the production project, and the schedule column is the schedule the
+scheduler is holding — not the one an ops file proposes.
+
 | Job | Schedule | Route | Status |
 |---|---|---|---|
 | `app-drain` | `*/5 * * * *` | `/api/messaging/drain` | **registered** |
@@ -94,17 +130,112 @@ the output before the next thing starts.
 | `app-sweep-reactivation` | `*/10 * * * *` | `/api/reactivation/sweep` | **registered** |
 | `app-sweep-noshow` | `*/10 * * * *` | `/api/noshow/sweep` | **registered** |
 | `app-sweep-coordinator` | `*/10 * * * *` | `/api/coordinator/sweep` | **registered** |
+| `app-sweep-outreach` | `*/10 * * * *` | `/api/outreach/sweep` | **registered** |
 | `app-sweep-reviews` | `*/15 * * * *` | `/api/reviews/sweep` | **registered** |
+| `app-sweep-anomaly` | `45 * * * *` | `/api/anomaly/sweep` | **registered** |
 | `app-sweep-rota` | `0 6 * * *` | `/api/rota/sweep` | **registered** |
-| `app-sync-*` | hourly | `/api/sync/*` | **registered** |
-| `app-sweep-closer` | `17 * * * *` | `/api/closer/sweep` | **NOT applied** |
-| `app-sweep-collection` | `40 6 * * *` | `/api/collection/sweep` | **NOT applied** |
-| `app-sweep-postop` | `25 * * * *` | `/api/postop/sweep` | **NOT applied** |
-| `app-sweep-outreach` | `*/10 * * * *` | `/api/outreach/sweep` | **NOT applied** |
-| `app-sweep-anomaly` | `40 * * * *` | `/api/anomaly/sweep` | **NOT applied** |
+| `app-sweep-landing-promote` | `17 3 * * *` | `/api/landing-pages/promote-sweep` | **registered** |
+| `app-prewarm-dentally` | `40 * * * *` | `/api/dentally/prewarm` | **registered** |
+| `app-purge-assessment-step-events` | `43 4 * * *` | (in-database delete, no route) | **registered** |
+| `app-sync-reactivation` | `5 * * * *` | `/api/sync/reactivation` | **registered** |
+| `app-sync-recall` | `10 * * * *` | `/api/sync/recall` | **registered** |
+| `app-sync-noshow` | `15 * * * *` | `/api/sync/noshow` | **registered** |
+| `app-sync-coordinator` | `20 * * * *` | `/api/sync/coordinator` | **registered** |
+| `app-sync-patient-count` | `15 3 * * *` | `/api/sync/patient-count` | **registered** |
+| `app-sync-dentally` | `0 * * * *` | `/api/sync/dentally` | **registered, INACTIVE** |
+| `app-sweep-closer` | `17 * * * *` | `/api/closer/sweep` | **not registered** |
+| `app-sweep-collection` | `40 6 * * *` | `/api/collection/sweep` | **not registered** |
+| `app-sweep-postop` | `25 * * * *` | `/api/postop/sweep` | **not registered** |
+| `app-sweep-previsit` | `*/10 * * * *` | `/api/previsit/sweep` | **not registered** |
+| `app-sweep-previsit-mining` | `20 2 * * *` | `/api/previsit/mining-sweep` | **not registered** |
 
-The SQL for each unapplied one is in `supabase/ops/register-*-cron.sql`. The
-app's Supabase role is read-only on the `cron.job` **table**, so use the
+The schedule shown for the last five is a **proposal**: those jobs do not exist,
+so nothing is running on it. `app-sync-dentally` is the one row in between — the
+job exists but is switched off at the scheduler (last successful run: 5 July
+2026), so it is not the same failure as an unregistered job and `cron.alter_job`
+rather than `cron.schedule` is what revives it.
+
+**Where this list comes from.** A read-only `select jobname, schedule, active
+from cron.job` against the production project on **4 September 2026**, with
+`cron.job_run_details` to confirm the jobs actually fire rather than merely exist:
+`app-sweep-outreach` had 6,949 successful runs, the last at 19:30 UTC that day,
+and `app-sweep-anomaly` 336, the last at 18:45. The same list is held as data in
+`src/lib/agent-wiring/runbook.test.ts`, which asserts this table row by row, so
+the two cannot drift apart quietly: when a job is registered later, change the
+data there and this table in one edit.
+
+**An ops file's header is not evidence.** The SQL for the closer, the collection
+run and post-op is in `supabase/ops/register-*-cron.sql`, written and deliberately
+not applied. Two of those files — `register-outreach-cron.sql` and
+`register-anomaly-cron.sql` — still describe themselves as *"NOT YET APPLIED"*
+even though their jobs have been running for months. A file states its status on
+the day it was written; `cron.job` states it today. Read the table, not the
+header. Note also that `register-anomaly-cron.sql` schedules minute **40** while
+the live job runs at minute **45**, and `cron.schedule()` on an existing job name
+*updates* it — so running that file now would move a job that is already working.
+
+**The two pre-visit jobs have no ops file at all**, so their SQL is here. Neither
+can be triggered any other way: both routes require the scheduler's secret, and
+the sweep is the only writer of `previsit_outbox`, so until this is run the
+`pre-visit-triage` switch prepares the module and sends nothing.
+
+```sql
+-- app-sweep-previsit — the pre-visit questionnaire sweep.
+-- Flags upcoming appointments and queues one fixed-template link each, 24 hours
+-- ahead by default and only inside 08:00-20:00 Europe/London. */10 matches the
+-- other lifecycle sweeps: there is ONE send instant per appointment, so the
+-- cadence is simply the precision with which that instant is hit.
+-- Safe to register before the system is switched on — 'pre-visit-triage' is
+-- default-off, so every run returns {"ok":true,"skipped":"system off"} until an
+-- owner enables it. CRON_SECRET is not written here; it lives inside
+-- public.trigger_app_cron(), exactly as every other job relies on.
+select cron.schedule(
+  'app-sweep-previsit',
+  '*/10 * * * *',
+  $$select public.trigger_app_cron('/api/previsit/sweep')$$
+);
+```
+
+```sql
+-- app-sweep-previsit-mining — the implant-interest scan behind "People who might
+-- want to hear about implants". Read-only against Dentally, bounded (30 days of
+-- book and 120 patient reads per run), resumable, background priority, and it
+-- messages nobody.
+-- NIGHTLY because the engine is built around it: each run walks 30 more days
+-- backwards (MINING_DAYS_PER_RUN), so about five weeks of nights reach the
+-- three-year horizon (MINING_HORIZON_DAYS = 1095). 02:20 keeps it clear of the
+-- 03:xx daily jobs and of the hourly Dentally prewarm.
+-- WHAT A NIGHT COSTS, so that nobody registers this blind. The scan reads the
+-- book ONE DAY AT A TIME per site, because a day it did not read is a day it must
+-- not claim. That is
+--     31 days x 3 mapped sites = about 93 appointment requests
+-- a run (a day carrying more than 100 appointments adds a page, up to 12), plus
+--     at most 120 patient reads (MINING_MAX_PATIENT_READS_PER_RUN)
+-- split evenly between the sites so that none starves another (ruling W3/25).
+-- All of it at BACKGROUND priority against the shared 3,600/hour Dentally
+-- budget, so it yields to the diary and to anything a member of staff is waiting
+-- on, and a run that is refused simply resumes tomorrow having lost nothing.
+-- If that is too much for this practice the lever is MINING_DAYS_PER_RUN in
+-- src/lib/triage/mining.ts — read a smaller window, never a coarser slice: the
+-- day-at-a-time reading is what makes the coverage sentence on screen true.
+-- It shares the 'pre-visit-triage' switch. There is a second, owner-only door
+-- onto the same engine — POST /api/previsit/mining-run, gated on the owner's
+-- session and on that switch — and it takes the same lease, so a manual run
+-- during a scheduled one is answered rather than doubling the practice's
+-- Dentally reads. THAT DOOR NOW HAS ITS BUTTON: "Build / refresh candidates" on
+-- the pre-visit page, owner-only on screen as well as at the route, and disabled
+-- with the route's own sentence while 'pre-visit-triage' is off, because the scan
+-- reads real patient history (rulings W3/8, W3/21, W3/27). So an owner can fill
+-- the list by hand today; registering this job is what makes it fill itself
+-- overnight instead of a window at a time, by hand.
+select cron.schedule(
+  'app-sweep-previsit-mining',
+  '20 2 * * *',
+  $$select public.trigger_app_cron('/api/previsit/mining-sweep')$$
+);
+```
+
+The app's Supabase role is read-only on the `cron.job` **table**, so use the
 `cron.*` functions (they are `SECURITY DEFINER`), never a plain `update`.
 `cron.schedule()` on an existing job updates the schedule but keeps the current
 active flag — use `cron.alter_job` to (de)activate.
@@ -531,30 +662,55 @@ design closes. Do not add one.
 **Switch:** `pre-visit-triage` (ships OFF twice over).
 **Trigger:** `src/app/api/previsit/sweep/route.ts`.
 
-> Owned by a different workstream. This section is a snapshot of what the code
-> does today and should be confirmed by that lane before go-live.
-
 **Day one.** Patients with an appointment coming up are sent a link to a short
-questionnaire, alongside the medical-history link the practice already sends.
+questionnaire. It is **its own text**, sent before the appointment and separate
+from the medical-history link the practice already sends — one extra message per
+appointment. Two links do not fit in one SMS credit, so the handover lives in the
+journey instead: when the medical-history form is enabled, the pre-visit form's
+completion screen offers it as the next step. `src/lib/triage/copy.ts` is where
+that decision is recorded, and it is the contract for this wording.
 
 **Volume bound.** One invite per upcoming appointment, bounded per site by the
 sweep's own page cap. It drains as **transactional**, so it is exempt from the
 once-per-day outreach cap — a patient can receive this and a recall on the same
 day.
 
-**Needs first.** A cron registration for `/api/previsit/sweep`, and
-`PUBLIC_BASE_URL` so the link the text carries resolves.
+**Needs first — and this one is a hard stop.** `/api/previsit/sweep` **has no
+cron job** (§2 carries the exact SQL). The sweep is the only writer of
+`previsit_outbox` and the route answers only the scheduler, so until that SQL is
+run, switching `pre-visit-triage` on prepares the module and sends nothing at all,
+silently: no invite, no queue row, no error. Also `PUBLIC_BASE_URL`, so the link
+the text carries resolves.
 
-**Verify in the first hour.** The patient's Correspondence tab shows the invite;
-a completed form appears as a pre-visit summary on the appointment.
+**Verify in the first hour.** The patient's Correspondence tab shows the invite.
+A completed form appears as the **pre-visit summary on the patient's record**,
+above the appointment list on their Appointments tab — what the viewer may read
+is decided server-side by role, so a manager sees a symptom count and a
+discomfort flag rather than the patient's words.
 
 **Stop.** Switch off `pre-visit-triage`. The sweep, the queue **and the public
 form** all stop — a link already sent stops opening, so the flip is a complete
-revert rather than a stop with a live form still collecting answers.
+revert rather than a stop with a live form still collecting answers. This is the
+one module where the 48-hour queue rule in §0 does not simply pause the backlog:
+a queued invite is retired the moment its own appointment starts, so switching
+back on the next morning sends nothing to anyone whose appointment has already
+begun (ruling W3/5 — the invite may never arrive after the visit). Those patients
+are asked at the desk.
 
 **Gaps.** Which questions a patient is asked forks on their payment plan,
 server-side, and the form never says which. That fork is load-bearing and is not
-a switch: read the module's own notes before changing anything about it.
+a switch: read the module's own notes before changing anything about it. The
+implant-candidate mining pass shares this switch and is the second job with no
+cron (§2, which carries its SQL as well), so the implant-candidate list does not
+build or refresh itself overnight. **It can be built by hand in the meantime:**
+the owner-only **Build / refresh candidates** button on the pre-visit page posts
+to `POST /api/previsit/mining-run` — the same engine as the nightly job, taking
+the same lease — and prints what that run actually read rather than a spinner.
+A practice manager does not see it, and while `pre-visit-triage` is off the
+button is disabled and says so, because the scan reads real patient history
+(rulings W3/8, W3/21, W3/27). One press is one window, not a finish: the list
+grows about a month of book at a time, so until that cron is registered somebody
+has to keep pressing it.
 
 ---
 
@@ -593,8 +749,15 @@ to their targets.
 **Volume bound.** Per-campaign target caps. It drains **last**, so it yields its
 once-per-day slot to every automatic lifecycle message.
 
-**Needs first.** Register the cron (`supabase/ops/register-outreach-cron.sql`,
-not applied).
+**Needs first.** Nothing. `app-sweep-outreach` **is registered and firing every
+ten minutes** (§2), so this switch is the only thing between a built campaign and
+its first drafted message. Read that sentence twice before flipping it.
+
+**Already running with the switch off.** The build-continuation pass at the top of
+the route is deliberately **ungated** — it advances any campaign left in
+`building` to `ready`, and reads Dentally to do it, on every tick regardless of
+the switch. Only sending is gated. So "nothing is happening yet" is not true of
+this route even today.
 
 **Verify in the first hour.** The campaign's own progress counters; drain
 `perSource.outreach`.
@@ -643,8 +806,9 @@ anyone** — it writes rows the in-app Notifications feed reads.
 **Volume bound.** Deduped per condition. An alert resolves only on evidence the
 condition **ended**, never because the collector failed to look.
 
-**Needs first.** Register the cron (`supabase/ops/register-anomaly-cron.sql`, not
-applied).
+**Needs first.** Nothing. `app-sweep-anomaly` **is registered and active**,
+hourly at minute **45** (§2) — not minute 40, which is what its ops file would
+set if anybody ran it now.
 
 **Verify in the first hour.** Notifications → the alerts appear with their
 evidence.
@@ -652,9 +816,10 @@ evidence.
 **Stop.** Switch off `anomaly-alerts`. The pass stops **and** alerts already
 raised stop showing, so a flip is a complete revert with no residue.
 
-**Gaps.** Cron unregistered. Alerts are client-scoped while the notifications
-feed is site-scoped — a product call, not a security one. It ships off so a week
-of its output can be read by a person before anybody relies on it.
+**Gaps.** Alerts are client-scoped while the notifications feed is site-scoped —
+a product call, not a security one. It ships off so a week of its output can be
+read by a person before anybody relies on it; the cron has been running the whole
+time, returning `{"ok":true,"skipped":"system off"}` on every pass.
 
 ---
 
@@ -687,7 +852,7 @@ its own defect.
 
 | Symptom | Almost always |
 |---|---|
-| Switched on, nothing happens, ever | Its cron is not registered (§2) |
+| Switched on, nothing happens, ever | Its cron is not registered (§2). Today that is the closer, the collection run, post-op, and both pre-visit jobs — and nothing on screen says so |
 | Reviews sends nothing | `REVIEW_LINK_URL` unset |
 | Drafts appear, nothing sends | Draft-for-approval by design (closer, balance, post-op) — or `MESSAGING_DRY_RUN` is not the exact string `false` |
 | Queued rows, nothing sends | The system's own switch is off, or the drain's toggle read failed while messaging is live (it fails **closed**: the whole tick is skipped) |

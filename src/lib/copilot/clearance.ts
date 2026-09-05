@@ -308,8 +308,16 @@ export const TOOL_DOMAIN: Record<CopilotToolName, Domain> = {
   // (CLINICAL_SUMMARY_ROLES, ruling W1-C/2), which is a narrower rule than
   // this domain and is applied on top of it, never instead of it.
   previsit_summary: read("patients"),
-  // Who said yes to which treatment. The acquisition pipeline: the same
-  // subject as the leads worklist, and the campaign tools target it.
+  // Who said yes to which treatment. The acquisition pipeline, and so the same
+  // subject as the leads worklist — which is what files it under `leads`.
+  //
+  // WHAT IT IS NOT: a campaign source. No campaign tool in this catalog can see
+  // `treatment_interest` — `create_outreach_campaign` selects on Dentally's own
+  // patient base and has no interest predicate, and the Meta tools take free
+  // prose. Ruling W3/10 made the lists targetable by a different route: an
+  // owner/manager CSV export and "copy as audience", per treatment, on the
+  // pre-visit screen itself (src/app/api/previsit/interest/export). This tool
+  // reads them; nothing here sends to them, and its own prompt says so.
   interest_lists: read("leads"),
   equipment_lookup: read("equipment"),
   it_desk: read("it-desk"),

@@ -575,7 +575,19 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         break;
       }
       // Kill switch: skip this system entirely when the owner has turned it off.
-      // Its rows stay 'queued' and drain the moment it is switched back on.
+      // Its rows stay 'queued' for as long as it is off — nothing here retires or
+      // sends them.
+      //
+      // What switching it back on does NOT mean is that the whole backlog then
+      // goes out. Two upper bounds sit downstream of this check and both are
+      // deliberate:
+      //   1) the 48-hour staleness guard (MAX_ROW_AGE_MS, applied per row inside
+      //      drainSource) retires anything queued longer than that as failed — a
+      //      switch left off for days flushes retirements, not late messages; and
+      //   2) pre-visit's list() (the SOURCES entry above) additionally retires any
+      //      queued link whose appointment has already STARTED (W3/5) — status
+      //      expired, never sent — so its backlog does not all flush either.
+      // Only rows still inside both bounds drain when the owner switches back on.
       const slug = DRAIN_SOURCE_TO_SLUG[source.name];
       if (slug && disabledSlugs.has(slug)) {
         perSource[source.name] = { drained: 0, sent: 0, failed: 0, blocked: 0, skipped: "system off" };

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { RankedNode } from "./retrieval";
-import { fence, fenceRule, newFenceNonce } from "./fencing";
+import { fence, fenceRule, newFenceNonce, plainLabel } from "./fencing";
 
 export interface Citation {
   id: string;
@@ -74,12 +74,17 @@ export function buildAskPrompt(
     'Output ONLY JSON: {"answer":"","citedIds":[]}',
   ].join("\n");
 
-  // The id and the title stay OUTSIDE the fence (they are platform-authored and
-  // are what the model cites); only the author-written body goes inside it.
+  // The id and the title stay OUTSIDE the fence: they are what the model cites,
+  // and the system prompt above tells it that region is the platform's. The id
+  // is genuinely ours (Postgres mints it; no writer accepts one). The TITLE is
+  // not — `create` takes it off the request body and `learn` takes it from the
+  // classifier's own output — so it is forced into the shape of a label first,
+  // one line and bounded, and can no longer open a second item. See
+  // ./fencing.ts for the payload this closes.
   const itemsText = ranked
     .map(
       (r) =>
-        `id: ${r.node.id}\ntitle: ${r.node.title}\ncontent:\n${fence(r.node.body ?? r.snippet, nonce)}`,
+        `id: ${r.node.id}\ntitle: ${plainLabel(r.node.title, nonce)}\ncontent:\n${fence(r.node.body ?? r.snippet, nonce)}`,
     )
     .join("\n\n");
 

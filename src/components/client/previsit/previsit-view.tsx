@@ -5,7 +5,7 @@ import { getViewScope } from "@/lib/site-view";
 import { INTEREST_TREATMENTS } from "@/lib/triage/bank";
 import { coverageSentence, exclusionSentence, MINING_CAVEATS, MINING_TITLE } from "@/lib/triage/mining";
 import { listCandidates, listCoverage } from "@/lib/triage/mining-repository";
-import { countInterestByTreatment, listInterest } from "@/lib/triage/repository";
+import { countInterestByTreatmentDetailed, listInterest } from "@/lib/triage/repository";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { PreVisitWorkspace } from "./previsit-workspace";
 import type { MiningCoverage } from "@/lib/triage/mining";
@@ -29,6 +29,38 @@ import type { MiningCoverage } from "@/lib/triage/mining";
 // SCOPED TO THE SELECTED SITE, like every other display surface: getViewScope
 // resolves the site switcher's cookie, so a practice looking at N15 sees N15's
 // lists. Background jobs stay all-sites.
+//
+// BOTH LISTS ARE BOUNDED, AND THE SCREEN SAYS SO WHEN THE BOUND BITES. Neither
+// repository read returns a "there are more" flag, so this page proves it the
+// way the Dentally sync ledger does: it asks for ONE ROW MORE than it means to
+// show, and a page that comes back over-full is a page with more behind it. A
+// full page and a full page plus one look identical otherwise, which is how a
+// coordinator ends up working a truncated outreach list to "completion" while
+// the patients past the bound are invisible. `more` travels to the panels and is
+// printed beside the list (charter §0/5, ruling W3/11).
+//
+// AND SO ARE THE COUNTS ABOVE THE LIST. `countInterestByTreatmentDetailed`
+// scans a bounded number of interest rows and says, in `capped`, whether it
+// reached the end of them. The bare wrapper this page used to call could not
+// carry that word — a `Record<string, number>` cannot say "at least" — so it
+// THREW on a capped scan and the whole grid collapsed to "The totals could not
+// be read." A practice past twenty thousand yeses would lose every headline
+// figure it has, to protect it from a floor it could simply have been told was
+// a floor. `capped` travels down instead and each figure renders as "at least
+// N", the same sentence Home's Operating system band already prints for a
+// capped read (charter §0/5, ruling W3/11).
+
+/**
+ * How many rows each list SHOWS. One more than this is asked for, so truncation
+ * is proven rather than guessed (see the header).
+ *
+ * They are plain module constants rather than props because this is a server
+ * module: a "use client" module may hand a server component components and
+ * nothing else (rsc-value-import.test.ts), so the numbers cannot live beside the
+ * panels that render them.
+ */
+const INTEREST_PAGE = 400;
+const MINING_PAGE = 300;
 
 export async function PreVisitTriageView({ clientSlug }: { clientSlug: string }) {
   const client = getClient(clientSlug);
@@ -50,19 +82,33 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
   // therefore never asked anybody anything. `isSystemEnabled` is the read helper
   // that already defaults a default-off system to off on a read failure, so an
   // unreadable toggle shows the onboarding line rather than hiding it.
-  const [interestRows, interestCounts, candidates, coverage, systemEnabled] = await Promise.all([
-    listInterest({ siteIds: scope.siteIds, limit: 400 }).catch(() => null),
-    countInterestByTreatment(scope.siteIds).catch(() => null),
-    listCandidates({ siteIds: scope.siteIds, limit: 300 }).catch(() => null),
+  const [interestRead, interestSummary, candidateRead, coverage, systemEnabled] = await Promise.all([
+    listInterest({ siteIds: scope.siteIds, limit: INTEREST_PAGE + 1 }).catch(() => null),
+    countInterestByTreatmentDetailed(scope.siteIds).catch(() => null),
+    listCandidates({ siteIds: scope.siteIds, limit: MINING_PAGE + 1 }).catch(() => null),
     listCoverage(scope.siteIds).catch(() => null),
     isSystemEnabled(client.id, "pre-visit-triage"),
   ]);
+
+  // The over-fetched row is never shown; it exists only to answer "is there
+  // more?". A null read stays null — that is a failed read, not an empty list.
+  const interestRows = interestRead ? interestRead.slice(0, INTEREST_PAGE) : null;
+  const interestMore = interestRead !== null && interestRead.length > INTEREST_PAGE;
+  const candidates = candidateRead ? candidateRead.slice(0, MINING_PAGE) : null;
+  const miningMore = candidateRead !== null && candidateRead.length > MINING_PAGE;
 
   // The COVERAGE across the sites in scope, merged into one honest window: the
   // widest range every site in scope has actually been read for, which is the
   // NARROWEST claim any of them supports. Claiming the union would say the list
   // covers a period that one of the sites was never scanned over.
-  const merged = mergeCoverage(coverage);
+  //
+  // THE SCOPE GOES IN WITH IT, and that is the whole of the wave-3 fix here. The
+  // merge used to narrow over the rows the read RETURNED, so a site with no scan
+  // row at all — never opened, not one day of book read — contributed nothing to
+  // the intersection instead of collapsing it, and the surviving site's window
+  // was printed as the whole list's provenance.
+  const merged = mergeCoverage(coverage, scope.siteIds);
+  const unscanned = unscannedSites(coverage, scope.siteIds);
 
   return (
     <>
@@ -85,7 +131,13 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
               }))
             : null
         }
-        interestCounts={interestCounts}
+        interestCounts={interestSummary ? interestSummary.counts : null}
+        // A FAILED read is still null; a CAPPED one is a set of floors, and the
+        // difference is the whole point of the Detailed variant. `false` when the
+        // read failed, because there is then no figure to qualify.
+        interestCountsCapped={interestSummary !== null && interestSummary.capped}
+        interestMore={interestMore}
+        interestPageSize={INTEREST_PAGE}
         mining={
           candidates
             ? candidates.map((c) => ({
@@ -98,9 +150,12 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
               }))
             : null
         }
+        miningMore={miningMore}
+        miningPageSize={MINING_PAGE}
         miningTitle={MINING_TITLE}
-        miningCoverage={coverageSentence(merged)}
+        miningCoverage={coverageLine(coverage, merged, unscanned, scope.siteIds.length)}
         miningExclusions={exclusionSentence(merged)}
+        scopeLabel={scope.label}
         miningCaveats={[...MINING_CAVEATS]}
         systemEnabled={systemEnabled}
       />
@@ -117,11 +172,28 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
  * intersection is the only range that is true of the whole list, and `moreToRead`
  * is true if ANY site still has book to walk.
  *
- * Null when no site has been scanned at all, which coverageSentence renders as
- * "this list has not been built yet" rather than as an empty list.
+ * A SITE IN SCOPE WITH NO ROW COLLAPSES THE CLAIM RATHER THAN BEING ABSENT FROM
+ * IT. `listCoverage` returns a row per site the scan has TOUCHED, so a site it
+ * has never opened is simply missing from the array — and an intersection taken
+ * over the rows that came back narrows nothing for it. That is how "built from
+ * appointments between 6 August and 4 September" ends up printed over a
+ * three-site scope where two sites have not had one day of book read, which the
+ * sweep produces on its very first run: it walks the sites in order and breaks
+ * out of the site loop the moment it spends its patient-read budget, so the
+ * flagship consumes the budget and the other two get no row at all.
+ *
+ * `moreToRead` is therefore forced TRUE while any site in scope is unscanned:
+ * there is more to read, a whole site of it, and the alternative tail — "that is
+ * as far back as this list goes" — would be a completeness claim over a site
+ * nobody has looked at. `coverageLine` below says the same thing in words.
+ *
+ * Null when no site in scope has been scanned at all, which coverageSentence
+ * renders as "this list has not been built yet" rather than as an empty list.
  */
-function mergeCoverage(rows: MiningCoverage[] | null): MiningCoverage | null {
+function mergeCoverage(rows: MiningCoverage[] | null, siteIds: string[]): MiningCoverage | null {
   if (!rows || rows.length === 0) return null;
+  const scannedInScope = new Set(rows.map((r) => r.siteId));
+  const anyUnscanned = siteIds.some((id) => !scannedInScope.has(id));
   let from = rows[0].coveredFrom;
   let to = rows[0].coveredTo;
   let examined = 0;
@@ -149,6 +221,63 @@ function mergeCoverage(rows: MiningCoverage[] | null): MiningCoverage | null {
     excludedNoDob,
     excludedUnderAge,
     lastRunAt,
-    moreToRead,
+    moreToRead: moreToRead || anyUnscanned,
   };
+}
+
+/**
+ * The sites in scope the scan has never opened.
+ *
+ * NULL means the coverage read FAILED, which is a different fact from "none":
+ * an empty array says every site in scope has a scan row, and null says we could
+ * not find out. The caller keeps them apart.
+ */
+function unscannedSites(rows: MiningCoverage[] | null, siteIds: string[]): string[] | null {
+  if (rows === null) return null;
+  const scanned = new Set(rows.map((r) => r.siteId));
+  return siteIds.filter((id) => !scanned.has(id));
+}
+
+/**
+ * The provenance sentence printed above the implant list.
+ *
+ * THREE STATES, because there are three different facts to state and the screen
+ * used to have one sentence for all of them:
+ *
+ *   read failed     we could not read the scan's own record. Say so. A window
+ *                   claimed off a failed read is a claim nothing supports, and
+ *                   "this list has not been built yet" would be a second wrong
+ *                   statement about the same thing.
+ *   sites missing   the window is true of the sites that HAVE been scanned and
+ *                   of no others, so it is printed with the gap named. The
+ *                   names on the list are real either way; what is not real is
+ *                   reading the window as the group's.
+ *   complete scope  the ordinary sentence.
+ *
+ * Sites are counted, never named: this line sits under a page header that
+ * already says which sites are in view, and a list of site ids is not a
+ * sentence anybody reads (charter §0/5, ruling W3/11).
+ */
+function coverageLine(
+  rows: MiningCoverage[] | null,
+  merged: MiningCoverage | null,
+  unscanned: string[] | null,
+  siteCount: number,
+): string {
+  if (rows === null || unscanned === null) {
+    return (
+      "The dates this list covers could not be read just now, so none are claimed for it. That is a " +
+      "failure to read the scan's own record, not a finding that nothing has been scanned."
+    );
+  }
+  const base = coverageSentence(merged);
+  if (merged === null || unscanned.length === 0) return base;
+  const missing = unscanned.length;
+  const done = siteCount - missing;
+  return (
+    `${base} Those dates are the window for the ${done === 1 ? "one site" : `${done} sites`} the scan has ` +
+    `reached: ${missing === 1 ? "one other site" : `${missing} other sites`} in view ${missing === 1 ? "has" : "have"} ` +
+    `not been scanned at all, so no appointment there has been read and nobody from ${missing === 1 ? "it" : "them"} ` +
+    `can be on this list yet.`
+  );
 }

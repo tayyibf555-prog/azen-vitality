@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { consumeBudget } from "@/lib/rate-budget";
 import { classifyKnowledge } from "@/lib/practice-brain/classify";
 import { visibleNodes } from "@/lib/practice-brain/clearance";
+import { plainLabel } from "@/lib/practice-brain/fencing";
 import { askCopilot } from "@/lib/practice-brain/copilot";
 import { searchKnowledge } from "@/lib/practice-brain/retrieval";
 import { signSession, verifySession } from "@/lib/practice-brain/session";
@@ -57,6 +58,31 @@ function ok<T>(data: T) {
 }
 function fail(error: string, status = 400) {
   return NextResponse.json({ success: false, error }, { status });
+}
+
+// ---------------------------------------------------------------------------
+// TITLES AND BRANCH NAMES ARE PLATFORM LABELS, SO STORE THEM AS LABELS.
+//
+// Both prompt builders now normalise every label they emit (see
+// src/lib/practice-brain/fencing.ts — the security property is closed at prompt
+// build, for rows written before this route existed too). This is the OTHER
+// half, defence in depth on the WRITE side: `create` takes `result` straight
+// off the request body and `learn` takes it straight off the classifier's own
+// JSON, and `parseClassification` applies only `stripEmDash` — so what lands in
+// the unbounded `text` column (migration 0003_practice_brain.sql) is arbitrary
+// multi-line text, and it renders in the tree UI, the needs-review queue and the
+// citation chips. `plainLabel` (no nonce argument: a write has no fence to
+// close) forces one line, no controls, bounded — the shape a label claims to be.
+//
+// A BLANK branch is not a branch. `plainLabel` substitutes EMPTY_LABEL for an
+// empty value, which is right for a title (a `title:` line is never blank) and
+// wrong for a branch: it would invent an "Untitled note" branch out of whitespace
+// nobody typed. Blank therefore fails closed to null — no branch, the node stays
+// parentless (`create`/`learn`) or the request is refused (`resolve-review`).
+function branchLabel(value: unknown): string | null {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return null;
+  return plainLabel(raw);
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
@@ -153,13 +179,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         confidence: result.confidence,
         branchIsNew: result.branchIsNew,
       };
-      const parentId = needsReview || !result.branch
+      const branch = branchLabel(result.branch);
+      const parentId = needsReview || !branch
         ? null
-        : await ensureBranch(CLIENT_ID, result.branch, tier);
+        : await ensureBranch(CLIENT_ID, branch, tier);
       const node = await createItem({
         clientId: CLIENT_ID,
         parentId,
-        title: result.title,
+        title: plainLabel(result.title),
         body: result.body,
         rawInput,
         tier,
@@ -221,13 +248,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const tier: Tier = canPublish ? claimedTier : 4;
       const needsReview = canPublish ? Boolean(result.needsReview) : true;
       const classification = { reasoning: result.reasoning, confidence: result.confidence, branchIsNew: result.branchIsNew };
-      const parentId = needsReview || !result.branch ? null : await ensureBranch(CLIENT_ID, result.branch, tier);
+      const branch = branchLabel(result.branch);
+      const parentId = needsReview || !branch ? null : await ensureBranch(CLIENT_ID, branch, tier);
       const node = await createItem({
-        clientId: CLIENT_ID, parentId, title: result.title, body: result.body, rawInput: text,
+        clientId: CLIENT_ID, parentId, title: plainLabel(result.title), body: result.body, rawInput: text,
         tier, tags: result.tags, status: needsReview ? "needs_review" : "active",
         classification, createdBy: session.credentialId, source: "copilot_capture",
       });
-      return ok({ node, needsReview, tier, branch: result.branch });
+      return ok({ node, needsReview, tier, branch });
     }
 
     if (action === "gaps") {
@@ -246,7 +274,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     if (action === "resolve-review") {
       if (maxTier < 3) return fail("Not authorised.", 403);
       const id = String(body.id ?? "");
-      const branch = String(body.branch ?? "");
+      const branch = branchLabel(body.branch);
       const tierNum = Math.round(Number(body.tier));
       if (!id || !branch) return fail("Missing id or branch.");
       if (![1, 2, 3, 4].includes(tierNum)) return fail("Tier must be 1 to 4.");

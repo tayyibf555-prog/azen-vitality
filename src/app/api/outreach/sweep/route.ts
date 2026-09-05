@@ -18,7 +18,13 @@ import { runOutreachBuildTickById } from "@/lib/outreach/build";
 import type { OutreachCampaign, OutreachTarget } from "@/lib/outreach/types";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabledForSend } from "@/lib/systems/repository";
+import { liveSwitch, type LiveSwitch } from "@/lib/systems/live-switch";
 import { dentallyReadKey } from "@/lib/dentally/read";
+import {
+  loadExcludedTargetKeys,
+  isExclusionsUnavailable,
+  excludedTargetKey,
+} from "@/lib/patient-status/repository";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -113,9 +119,15 @@ interface CampaignResult {
   paused: number;
   exhausted: number;
   excluded: number;
+  suppressed: number;
 }
 
-async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<CampaignResult> {
+async function sweepCampaign(
+  campaign: OutreachCampaign,
+  now: Date,
+  gate: LiveSwitch,
+  excludedKeys: Set<string>,
+): Promise<CampaignResult> {
   const r: CampaignResult = {
     id: campaign.id,
     dailyLimit: campaign.dailyCap,
@@ -126,15 +138,46 @@ async function sweepCampaign(campaign: OutreachCampaign, now: Date): Promise<Cam
     paused: 0,
     exhausted: 0,
     excluded: 0,
+    suppressed: 0,
   };
 
   const due = await listDueTargets(campaign.id, now.toISOString());
   for (const stale of due) {
+    // THE OWNER'S SWITCH, RE-READ MID-RUN (ruling W1-B/5), and consulted BEFORE
+    // the row is touched at all. Every later statement in this loop mutates the
+    // target — it settles it 'exhausted' or 'excluded', or drafts, approves,
+    // ADVANCES THE CADENCE and queues a patient-facing marketing SMS — so a
+    // verdict read 300 seconds ago is the wrong thing to spend a step on. Asking
+    // first means a run the owner halted leaves every target it never reached
+    // exactly where it was, due, for the next tick.
+    if (!(await gate.stillOn())) break;
+
     // Re-read the target so concurrent state (an inbound reply flipping it to
     // 'replied') is respected even within a single run.
     const target = await getTarget(stale.id);
     if (!target) continue;
     if (target.status !== "pending" && target.status !== "contacted") continue;
+
+    // PLATFORM ADMIN STATUS, RE-CONSULTED ON EVERY STEP — not once, at build time.
+    //
+    // The outreach audience is a SNAPSHOT: build.ts checks loadExcludedPatientIds as it
+    // enrols each patient into outreach_target, and until this line nothing ever looked
+    // again. So a patient a receptionist marked `inactive` AFTER the audience was built
+    // kept receiving the rest of the cadence, and `inactive` has no second net: the
+    // drain stops `do_not_contact` on its message_suppression rows, but applyStatusChange
+    // writes no suppression row for `inactive`, so nothing downstream would have caught it.
+    // Checked BEFORE listTouches and before any mutation, so no Anthropic draft is spent,
+    // no touch is queued and the cadence is not advanced.
+    //
+    // The target is left DUE rather than settled 'excluded': an override is a reversible
+    // act by a human at the desk, so clearing it lets the cadence resume naturally — the
+    // same posture as the seven sibling sweeps (recall, reactivation, coordinator, noshow,
+    // closer, collection, postop). The no-consent branch below settles instead; that
+    // predates this and is unchanged.
+    if (excludedKeys.has(excludedTargetKey(target.siteId, target.patientId))) {
+      r.suppressed += 1;
+      continue;
+    }
 
     // Skip if an outbound touch is already pending (approved-but-unsent): without
     // this the next sweep would draft a SECOND message for the same step and the
@@ -265,27 +308,68 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       return Response.json({ ok: true, build, skipped: "system off" });
     }
 
+    // Patients marked inactive / do_not_contact are excluded from outreach. Loaded ONCE
+    // per tick (campaigns span sites, so the cross-site key set is the right read) and
+    // checked per target below, before anything is drafted or queued.
+    // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE DRAFTED (ruling W1-B/2). loadExcludedTargetKeys
+    // throws once messaging is LIVE and the override table cannot be read, so a database
+    // blip can never be the reason a patient a human marked inactive got a marketing SMS.
+    // It still returns an empty set under dry-run, so local work is unaffected. The build
+    // pass above has already run: a list still finishes while the send pass refuses.
+    let excludedKeys: Set<string>;
+    try {
+      excludedKeys = await loadExcludedTargetKeys();
+    } catch (err) {
+      if (!isExclusionsUnavailable(err)) throw err;
+      console.error("[outreach] exclusion list unreadable while messaging is live; skipping this tick", err);
+      return Response.json({ ok: true, build, skipped: "exclusions unavailable" });
+    }
+
     const now = new Date();
     const campaigns = await listRunningCampaigns();
     const results: CampaignResult[] = [];
-    let drafted = 0, queued = 0, paused = 0, capped = 0, exhausted = 0, excluded = 0, swept = 0;
+    // ONE GATE FOR THE WHOLE RUN, ACROSS EVERY CAMPAIGN (ruling W1-B/5). The
+    // check above is read ONCE and this handler then loops for up to 300 seconds
+    // over every running campaign and every due target inside each — an
+    // Anthropic draft, an auto-approved touch, an advanced cadence and a queued
+    // patient-facing marketing SMS per row. An owner who switched Segment
+    // outreach off at 10:03 during a supervised test would otherwise keep paying
+    // for drafts until the tick ended, and the rows would sit in the outbox for
+    // 48 hours ready to land as a burst the moment outreach came back on.
+    //
+    // The gate is created here rather than per campaign so the ten-row bound is
+    // the RUN's, not each campaign's: five running campaigns must not multiply
+    // the exposure by five.
+    const gate = liveSwitch(CLIENT_ID, "outreach");
+    let drafted = 0, queued = 0, paused = 0, capped = 0, exhausted = 0, excluded = 0, suppressed = 0, swept = 0;
     for (const campaign of campaigns) {
       // Isolate each campaign: one campaign's failure (a DB blip on its targets)
       // must not abort the others' sends for this tick.
       try {
-        const res = await sweepCampaign(campaign, now);
+        const res = await sweepCampaign(campaign, now, gate, excludedKeys);
         results.push(res);
         drafted += res.drafted; queued += res.queued; paused += res.paused;
         capped += res.capped; exhausted += res.exhausted; excluded += res.excluded;
-        swept += res.queued + res.capped + res.paused + res.exhausted + res.excluded;
+        suppressed += res.suppressed;
+        swept += res.queued + res.capped + res.paused + res.exhausted + res.excluded + res.suppressed;
       } catch (err) {
         console.error(`[outreach] sweep failed for campaign ${campaign.id}; skipping`, err);
       }
+      // The inner loop breaks out of ITS campaign; without this the next
+      // campaign would start a fresh pass over its own due targets and the run
+      // would carry on drafting on a switch already read as off. (The gate
+      // itself never resumes once off, so each of those passes would stop on its
+      // first row — but "stops immediately" is not "does not start", and the
+      // reads it would spend getting there are pointless.)
+      if (gate.switchedOffMidRun) break;
     }
     return Response.json({
       ok: true,
       build,
       campaigns: campaigns.length,
+      // Honest signal for ops: this run stopped early because the owner switched
+      // outreach off while it was working, not because there was nothing to do.
+      switchedOffMidRun: gate.switchedOffMidRun,
       swept,
       drafted,
       queued,
@@ -293,6 +377,10 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       capped,
       exhausted,
       excluded,
+      // Rows skipped because the patient carries a platform admin override
+      // (inactive / do_not_contact). Named apart from `excluded` (no SMS consent)
+      // because they are different facts and only one of them settles the target.
+      suppressed,
       // Convenience for a single-campaign run (and the daily-cap test): surface the
       // one campaign's budget at the top level.
       ...(results.length === 1 ? { dailyLimit: results[0].dailyLimit, usedToday: results[0].usedToday } : {}),

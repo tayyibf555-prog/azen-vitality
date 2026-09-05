@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, vi } from "vitest";
 import { chunkManualPages, rankManualChunks } from "./chunk";
-import { extractPdfText, PdfExtractionError, MAX_PDF_BYTES } from "./pdf-text";
+import { extractPdfText, PdfExtractionError, MAX_PDF_BYTES, MAX_PDF_SIZE_LABEL } from "./pdf-text";
 
 vi.mock("server-only", () => ({}));
 
@@ -83,7 +83,38 @@ describe("2. the extractor refuses what it cannot read, with a sentence", () => 
   it("refuses an oversized file rather than truncating it", async () => {
     const huge = new Uint8Array(MAX_PDF_BYTES + 1);
     huge.set(new TextEncoder().encode("%PDF-"), 0);
-    await expect(extractPdfText(huge)).rejects.toThrow(/larger than 25MB/i);
+    await expect(extractPdfText(huge)).rejects.toThrow(
+      new RegExp(`larger than ${MAX_PDF_SIZE_LABEL}`, "i"),
+    );
+  });
+
+  it("the ceiling is UNDER Vercel's request-body limit, and the sentence says the same number", async () => {
+    // W3/13. `/api/equipment/manual` streams the whole PDF into a Vercel
+    // Function, and Vercel refuses a body over 4.5 MB AT THE EDGE — before this
+    // module, before the route, before any guard — with a non-JSON error the app
+    // cannot catch or explain. A ceiling above that is not a ceiling: it is a
+    // promise the platform breaks, and the practice retries a file that can
+    // never work. Nothing local can observe the edge's limit — `next dev`,
+    // `next build` and vitest all have none — so the number is pinned here
+    // instead, along with the sentence that quotes it.
+    const VERCEL_FUNCTION_BODY_LIMIT = 4.5 * 1024 * 1024;
+    expect(MAX_PDF_BYTES).toBeLessThan(VERCEL_FUNCTION_BODY_LIMIT);
+    // The advertised words and the enforced bytes are the same number. A label
+    // that drifted from the constant is how staff are refused at 4 MB by a
+    // sentence that told them 25 was fine.
+    expect(MAX_PDF_SIZE_LABEL).toBe(`${MAX_PDF_BYTES / (1024 * 1024)}MB`);
+
+    const over = new Uint8Array(MAX_PDF_BYTES + 1);
+    over.set(new TextEncoder().encode("%PDF-"), 0);
+    await expect(extractPdfText(over)).rejects.toThrow(
+      new RegExp(`larger than ${MAX_PDF_SIZE_LABEL}`, "i"),
+    );
+    // And a file just UNDER the ceiling is not refused for its size — it gets as
+    // far as the parser, which is what proves the bound is a bound and not a
+    // blanket refusal.
+    const under = new Uint8Array(MAX_PDF_BYTES - 1);
+    under.set(new TextEncoder().encode("%PDF-"), 0);
+    await expect(extractPdfText(under)).rejects.not.toThrow(/larger than/i);
   });
 
   it("a damaged PDF fails with an owner-readable sentence, not a stack trace", async () => {

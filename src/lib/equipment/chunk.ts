@@ -17,8 +17,8 @@
 // ingestion path, so uploading a manual costs nothing but the PDF parse, and the
 // module works with no VOYAGE_API_KEY set (which is the state prod is in).
 //
-// WHY IT IS PURE. No database, no model, no clock — so `chunk.test.ts` drives the
-// real chunker over the real fixture PDF and the real ranker over the result.
+// WHY IT IS PURE. No database, no model, no clock — so `ingest.test.ts` drives
+// the real chunker over the real fixture PDF and the real ranker over the result.
 // ===========================================================================
 
 /** A chunk before it has an id — what ingestion inserts. */

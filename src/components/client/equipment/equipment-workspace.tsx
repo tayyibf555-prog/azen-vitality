@@ -15,6 +15,11 @@ import { firstStepFor } from "@/lib/systems/first-steps";
 // The row + site shapes live in a PLAIN module, imported by this client file and
 // by the server page alike. See src/lib/equipment/view.ts for why.
 import type { AssetRow, SiteOption } from "@/lib/equipment/view";
+// The upload ceiling and the reading of the server's answer. In their own plain
+// module because `@/lib/equipment/pdf-text` — which owns the ceiling — opens with
+// `import "server-only"` and cannot be reached from a browser bundle, and because
+// a decision inside an event handler is untestable in this suite. See that file.
+import { MAX_PDF_SIZE_LABEL, oversizeRefusal, readManualUploadReply } from "./upload-limits";
 
 // ===========================================================================
 // THE EQUIPMENT MODULE'S WORKSPACE: three tabs over one register.
@@ -65,6 +70,10 @@ export function EquipmentWorkspace({
   sites,
   systemEnabled,
   registerUnreadable,
+  registerMore = false,
+  registerCap,
+  manualsUnreadable = false,
+  initialTab,
 }: {
   clientSlug: string;
   assets: AssetRow[];
@@ -72,9 +81,36 @@ export function EquipmentWorkspace({
   systemEnabled: boolean;
   /** True when the register could not be READ — a different fact from "empty". */
   registerUnreadable: boolean;
+  /**
+   * True when the server's register read came back AT its bound, so this page
+   * holds a floor rather than the register.
+   *
+   * Stated by the caller, never inferred here: the bound belongs to the
+   * `server-only` repository and this is a browser bundle. It defaults to false
+   * so a caller that cannot prove a cut never claims one.
+   */
+  registerMore?: boolean;
+  /** The bound itself, so the sentence can name the figure the page was cut at. */
+  registerCap?: number;
+  /**
+   * True when the MANUALS read failed. Different from "no manuals": the first is
+   * "we could not look", and this whole page renders `manual: null` either way.
+   */
+  manualsUnreadable?: boolean;
+  /**
+   * Which tab opens. Defaults to the register while there is nothing on it (its
+   * empty state carries the first step) and to the desk otherwise.
+   *
+   * It is a prop rather than only internal state so a tab can be RENDERED on its
+   * own — the same reason MiningPanel is exported over in the pre-visit module.
+   * Only one tab is in the markup at a time, so a claim about the register table
+   * or the manuals list is otherwise unassertable: the truncation sentence under
+   * both of them could be deleted without a single test going red.
+   */
+  initialTab?: TabKey;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<TabKey>(assets.length === 0 ? "register" : "ask");
+  const [tab, setTab] = useState<TabKey>(initialTab ?? (assets.length === 0 ? "register" : "ask"));
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -154,6 +190,16 @@ export function EquipmentWorkspace({
   };
 
   const uploadManual = async (assetId: string, file: File) => {
+    // REFUSED HERE, BEFORE THE WIRE (ruling W3/13). Above 4.5 MB Vercel rejects
+    // the request body at the edge — before the route, before its guards, before
+    // its own 413 — with a non-JSON body, so nothing the application can write
+    // ever reaches the screen. Refusing at 4 MB in the browser is what makes the
+    // advertised ceiling true; the route's check stays the authoritative one.
+    const tooLarge = oversizeRefusal(file.size);
+    if (tooLarge) {
+      setMessage(tooLarge);
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -162,9 +208,12 @@ export function EquipmentWorkspace({
       body.append("assetId", assetId);
       body.append("file", file);
       const response = await fetch("/api/equipment/manual", { method: "POST", body });
-      const data = ((await response.json()) ?? {}) as Record<string, unknown>;
-      setMessage(String(data.message ?? data.error ?? "Uploaded."));
-      if (data.ok) router.refresh();
+      // NOT `response.json()` unconditionally. A 413 from the edge and a 502 from
+      // a gateway are HTML; parsing one threw into the catch below and told the
+      // practice to "try again" for a file that can never work. See upload-limits.
+      const outcome = await readManualUploadReply(response);
+      setMessage(outcome.message);
+      if (outcome.ok) router.refresh();
     } catch {
       setMessage("We could not upload that manual. Please try again.");
     } finally {
@@ -223,11 +272,25 @@ export function EquipmentWorkspace({
     </label>
   );
 
+  // A BADGE IS A COUNT, AND A COUNT OFF A CUT READ WEARS ITS SIGN. "Register
+  // (400)" reads as "there are four hundred things on the register"; "(400+)"
+  // does not, and the sentence under the table says the rest.
   const TABS: { key: TabKey; label: string; icon: typeof Wrench }[] = [
     { key: "ask", label: "Ask the desk", icon: MessageSquare },
-    { key: "register", label: `Register (${assets.length})`, icon: Wrench },
+    { key: "register", label: `Register (${assets.length}${registerMore ? "+" : ""})`, icon: Wrench },
     { key: "manuals", label: "Manuals", icon: BookOpen },
   ];
+
+  /**
+   * The sentence a cut register carries, printed under BOTH lists it cuts.
+   *
+   * The Manuals tab iterates the same bounded array, so an asset past the bound
+   * cannot be given a manual at all — which is worse than the count, and is why
+   * this is said twice rather than once under the register table.
+   */
+  const cutSentence = `This page holds ${assets.length.toLocaleString("en-GB")} items, which is as many as it reads in one go${
+    registerCap && registerCap !== assets.length ? ` (${registerCap.toLocaleString("en-GB")})` : ""
+  }. There are more on the register than this — the count on the tab is a floor, not a total, and the items past the cut are not on this page or on the Manuals tab.`;
 
   return (
     <div className="space-y-5">
@@ -257,6 +320,16 @@ export function EquipmentWorkspace({
         <p className="rounded-[8px] border border-line bg-tile px-3 py-2 text-[12.5px] text-navy">
           The register could not be read just now, so this page is showing nothing rather than showing an empty
           register. Nothing has been lost — try again in a moment.
+        </p>
+      ) : null}
+      {/* THE SAME COURTESY FOR THE MANUALS, and for the same reason: without it
+          every machine on both tabs reads "No manual uploaded" and somebody
+          re-uploads a document the platform already holds — or rings the
+          engineer because we told them the practice has no manual for it. */}
+      {manualsUnreadable ? (
+        <p className="rounded-[8px] border border-line bg-tile px-3 py-2 text-[12.5px] text-navy">
+          Whether each machine has a manual could not be read just now, so this page cannot say which do. Nothing
+          has been lost, and no manual has been removed — try again in a moment.
         </p>
       ) : null}
 
@@ -409,7 +482,13 @@ export function EquipmentWorkspace({
                       </td>
                       <td className="px-3 py-2 text-muted">{a.nextServiceDue ?? "not recorded"}</td>
                       <td className="px-3 py-2 text-muted">
-                        {a.manual ? (a.manual.status === "ready" ? `${a.manual.pageCount} pages` : "scan — unreadable") : "none"}
+                        {manualsUnreadable
+                          ? "not read"
+                          : a.manual
+                            ? a.manual.status === "ready"
+                              ? `${a.manual.pageCount} pages`
+                              : "scan — unreadable"
+                            : "none"}
                       </td>
                       <td className="px-3 py-2 text-right">
                         <button
@@ -426,6 +505,9 @@ export function EquipmentWorkspace({
                   ))}
                 </tbody>
               </table>
+              {registerMore ? (
+                <p className="mt-2 text-[12px] leading-relaxed text-status-amber">{cutSentence}</p>
+              ) : null}
             </div>
           )}
 
@@ -509,6 +591,18 @@ export function EquipmentWorkspace({
             passages so the desk can answer from the manual and cite the page. The PDF itself is not kept. A scanned
             manual — pictures of pages rather than text — cannot be read, and we will tell you if that is what arrived.
           </p>
+          {/* THE SIZE RULE, ON SCREEN, BEFORE THE UPLOAD (ruling W3/13). It used
+              to exist only in the server's refusal — a sentence the practice
+              reached by picking a file, waiting for it to upload, and being turned
+              away. A ceiling nobody is told about is not advertised, and the
+              mirror of it is the HR document vault's "PDF or a photograph, up to
+              10 MB" (src/components/hr/staff-documents-panel.tsx). The figure is
+              interpolated from the module's own constant, never typed out, so it
+              cannot drift from what is enforced. */}
+          <p className="text-[12.5px] leading-relaxed text-muted">
+            One PDF per machine, {MAX_PDF_SIZE_LABEL} or smaller. A bigger manual is refused before it is sent — upload
+            just the operating and troubleshooting sections, which is what the desk answers from anyway.
+          </p>
           {assets.length === 0 ? (
             <p className="rounded-[10px] border border-dashed border-line-strong px-4 py-8 text-center text-[13px] text-muted">
               Add equipment to the register first, then upload each machine&rsquo;s manual here.
@@ -520,11 +614,13 @@ export function EquipmentWorkspace({
                   <div className="min-w-0">
                     <p className="text-[13px] font-medium text-navy">{a.name}</p>
                     <p className="text-[12px] text-muted">
-                      {a.manual
-                        ? a.manual.status === "ready"
-                          ? `${a.manual.filename} · ${a.manual.pageCount} pages, searchable`
-                          : `${a.manual.filename} · a scan, so there is no text to read`
-                        : "No manual uploaded"}
+                      {manualsUnreadable
+                        ? "Whether this machine has a manual could not be read just now"
+                        : a.manual
+                          ? a.manual.status === "ready"
+                            ? `${a.manual.filename} · ${a.manual.pageCount} pages, searchable`
+                            : `${a.manual.filename} · a scan, so there is no text to read`
+                          : "No manual uploaded"}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -548,7 +644,12 @@ export function EquipmentWorkspace({
                       className="pressable inline-flex items-center gap-1.5 rounded-[8px] border border-line px-3 py-1.5 text-[12.5px] font-medium text-navy disabled:opacity-40"
                     >
                       <Upload size={14} />
-                      {a.manual ? "Replace" : "Upload"}
+                      {/* NEUTRAL WHILE THE READ IS UNKNOWN. `a.manual` is null
+                          for every machine when the manuals could not be read,
+                          so a plain "Upload" would invite somebody to overwrite
+                          a manual this screen has wrongly implied is absent —
+                          and the upload REPLACES (delete then insert). */}
+                      {manualsUnreadable ? "Upload or replace" : a.manual ? "Replace" : "Upload"}
                     </button>
                     {a.manual ? (
                       <button
@@ -566,6 +667,9 @@ export function EquipmentWorkspace({
               ))}
             </ul>
           )}
+          {assets.length > 0 && registerMore ? (
+            <p className="text-[12px] leading-relaxed text-status-amber">{cutSentence}</p>
+          ) : null}
         </div>
       ) : null}
     </div>

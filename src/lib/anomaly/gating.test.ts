@@ -10,7 +10,11 @@ import { describe, it, expect } from "vitest";
 // seed row — two independent mechanisms, because the catalog covers every
 // database and the seed covers every owner who has already opened the panel.
 // This file checks both, and checks the third thing that matters just as much:
-// that the cron file is written and deliberately NOT registered.
+// that the ops file agrees with the job that is actually registered. It used to
+// say the opposite here — "the cron file is written and deliberately NOT
+// registered" — and that was false about production. See the W3/22 block above
+// that describe for the full account; registration truth itself is `SCHEDULER`
+// in src/lib/agent-wiring/runbook.test.ts, read from cron.job on 4 Sep 2026.
 //
 // It also pins what this module is NOT. The single largest risk in shipping an
 // "alerting layer" is that it quietly grows a send path — an SMS to the owner at
@@ -94,12 +98,33 @@ describe("the kill switch, both halves", () => {
   });
 });
 
-describe("the cron job is written and NOT registered", () => {
-  it("exists, targets this route, and says plainly it has not been applied", () => {
+// THE CRON FILE, AFTER RULING W3/22.
+//
+// This block used to be called "the cron job is written and NOT registered" and
+// asserted the file said "NOT YET APPLIED". Both were false about production:
+// `app-sweep-anomaly` has been registered and active on `45 * * * *` for months
+// (336 successful runs to 4 Sep 2026; the read is recorded as CRON.JOB TRUTH under
+// W3/7 and held as `SCHEDULER` in src/lib/agent-wiring/runbook.test.ts). The file
+// was written proposing minute 40 and somebody registered the job at 45 instead.
+//
+// W3/22 corrects the FILE, never the running job — and the minute matters here
+// rather than being pedantry: `cron.schedule()` on an existing job name UPDATES
+// it, so the old file would have moved a working hourly pass onto :40, which is
+// the Dentally prewarm's own minute. The sweep in
+// src/lib/agent-wiring/ops-cron-registration.test.ts holds every ops file to the
+// same rule; this keeps the anomaly module's own suite honest about it.
+describe("the cron file states registration truth (W3/22)", () => {
+  it("exists, targets this route, and no longer claims the job was never applied", () => {
     const sql = read(CRON);
     expect(sql).toContain("/api/anomaly/sweep");
     expect(sql).toContain("app-sweep-anomaly");
-    expect(sql).toContain("NOT YET APPLIED");
+    expect(sql).toMatch(/^-- STATUS: APPLIED/m);
+    expect(sql).not.toContain("NOT YET APPLIED");
+  });
+
+  it("schedules the minute the live job runs, so running the file cannot move it", () => {
+    expect(read(CRON)).toContain("'45 * * * *'");
+    expect(read(CRON)).not.toContain("'40 * * * *'");
   });
 
   it("is not referenced by anything that would apply it automatically", () => {

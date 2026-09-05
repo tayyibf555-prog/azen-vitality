@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, Power } from "lucide-react";
 import { PageHeader, SectionCard, StatCard, Tabs } from "@/components/primitives";
 import { SyncStatusView } from "./sync-status-view";
@@ -37,6 +37,23 @@ export interface SystemRow {
   starts: string | null;
   /** What has to be in place before that first tick can work. */
   needsFirst: string[];
+  /**
+   * THE ONE THING TO DO FIRST, and this panel is the only screen that can print
+   * it for the Dentally master lever.
+   *
+   * The sentence is written once in src/lib/systems/first-steps.ts and printed
+   * everywhere: the equipment, IT desk and pre-visit workspaces print their own
+   * in their empty state, and Home's Operating system band prints one under a
+   * switched-off tile. The write-back lever is the one surface neither of those
+   * reaches — it has no module page of its own, and its band tile is the one
+   * tile that counts WHILE OFF (os-band.ts), so that tile always resolves to a
+   * figure or a fact and never to the off state that carries a first step. The
+   * sentence was therefore written, serialised by /api/systems, and read by
+   * nobody. It is read here.
+   *
+   * Null for a system with no sentence written, which is most of them.
+   */
+  firstStep: string | null;
   enabled: boolean;
   updatedAt: string | null;
   updatedBy: string | null;
@@ -57,6 +74,68 @@ export const GROUP_ORDER = [
 ];
 
 /**
+ * The systems whose sweep the SCHEDULER DOES NOT HOLD.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A SWITCHED-ON ROW NEEDS THIS (wave-3 review, 4 September 2026).
+ * ---------------------------------------------------------------------------
+ * "Needs first" is rendered only while a system is OFF, which is right for a
+ * prerequisite an owner arranges before switching on — an env var, an account, a
+ * phone number. It is exactly wrong for the one prerequisite that is not about
+ * being ready: five of these sweeps have no cron job at all, so the switch
+ * starts nothing, and the only sentence on any screen that said so DISAPPEARED
+ * at the moment the owner acted on it.
+ *
+ * The path was: the platform's own first step says "read the two question lists,
+ * then switch the system on"; he does; and from that second the control panel
+ * says "Running.", the module page's banner vanishes, and Home's tile prints
+ * "0 sent, awaiting an answer" — a bare, complete-looking nought for a sweep
+ * that cannot ever run. Ruling W3/7 puts registration truth on this screen, and
+ * the state where it matters is ON.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE LIST IS HERE, AND WHAT KEEPS IT TRUE.
+ * ---------------------------------------------------------------------------
+ * Registration truth lives in the scheduler, and the tree's record of it is
+ * §2 of docs/runbooks/agent-switch-on.md (pinned row-for-row against
+ * `SCHEDULER` in src/lib/agent-wiring/runbook.test.ts, which is a read of
+ * `cron.job` on the production project). Neither is reachable from a browser
+ * bundle: the runbook is a file, the roster carries repo-relative source paths,
+ * and /api/systems does not send it. So the slugs are named here and
+ * cron-registration.test.ts derives the same set from the runbook's table by
+ * mapping each unregistered ROUTE through the agent roster's `trigger` — this
+ * list going stale is a red test, in both directions, the day a job is
+ * registered or a new sweep ships without one.
+ *
+ * A `needsFirst` string is deliberately NOT used to detect this: two of the
+ * roster's cron sentences say "NOT applied" for jobs that have been firing in
+ * production for months (the runbook says so in as many words), so a screen that
+ * read the prose would tell an owner a working system cannot run.
+ */
+export const SWEEPS_WITH_NO_CRON_JOB: readonly string[] = [
+  "treatment-closer",
+  "balance-reminders",
+  "postop-checkin",
+  // Covers BOTH pre-visit jobs: the questionnaire sweep and the implant scan.
+  "pre-visit-triage",
+];
+
+/**
+ * What a switched-on system with no scheduled job says about itself, or null.
+ *
+ * Null while the system is OFF, because the row is already carrying the same
+ * fact under "Needs first" — the roster's own words, with the job name in them.
+ */
+export function registrationWarning(row: Pick<SystemRow, "enabled" | "slug">): string | null {
+  if (!row.enabled) return null;
+  if (!SWEEPS_WITH_NO_CRON_JOB.includes(row.slug)) return null;
+  return (
+    "Switched on, but it has not started: its scheduled job has never been registered, so nothing runs and " +
+    "nothing is sent. Ask the agency to register it — until then this system is on in name only."
+  );
+}
+
+/**
  * The one line under a system's name.
  *
  * EXTRACTED SO IT CAN BE TESTED, because the rule it encodes is the whole point
@@ -73,29 +152,57 @@ export function systemRowSentence(row: Pick<SystemRow, "enabled" | "halts" | "st
   return row.enabled ? `Running. ${row.halts}` : row.starts ?? row.halts;
 }
 
+/** One request, as a value. Pure of React, so the effect below stays readable. */
+async function fetchSystems(
+  clientSlug: string,
+): Promise<{ systems: SystemRow[] } | { error: string }> {
+  try {
+    const res = await fetch(`/api/systems?client=${encodeURIComponent(clientSlug)}`);
+    const json = (await res.json()) as { ok?: boolean; systems?: SystemRow[]; error?: string };
+    if (!res.ok || !json.ok || !Array.isArray(json.systems)) {
+      throw new Error(json.error ?? "Could not load system controls");
+    }
+    return { systems: json.systems };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Could not load system controls" };
+  }
+}
+
 export function SystemsView({ clientSlug }: { clientSlug: string }) {
   const [rows, setRows] = useState<SystemRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [rowError, setRowError] = useState<string | null>(null);
+  // Bumping this re-runs the effect: "Try again" asks for the same request the
+  // mount made, rather than a second copy of it living beside the effect.
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const load = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const res = await fetch(`/api/systems?client=${encodeURIComponent(clientSlug)}`);
-      const json = (await res.json()) as { ok?: boolean; systems?: SystemRow[]; error?: string };
-      if (!res.ok || !json.ok || !Array.isArray(json.systems)) {
-        throw new Error(json.error ?? "Could not load system controls");
-      }
-      setRows(json.systems);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Could not load system controls");
-    }
-  }, [clientSlug]);
-
+  // THE FETCH IS OWNED BY THE EFFECT, not called from it — the same shape the
+  // Dentally sync panel next door now uses.
+  //
+  // `void load()` in an effect body tripped react-hooks/set-state-in-effect (a
+  // stale-closure and cascading-render hazard the rule is right about). Running
+  // the request inside the effect, with its own `cancelled` flag, keeps every
+  // setState behind an await AND fixes the bug the pattern actually has: an
+  // agency admin switching practice mid-flight could otherwise let the previous
+  // practice's switches land on the new practice's panel — and this panel's
+  // toggles write straight to /api/systems, so a row acted on there would be a
+  // kill switch flipped for the wrong client.
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    void (async () => {
+      const next = await fetchSystems(clientSlug);
+      if (cancelled) return;
+      if ("error" in next) setLoadError(next.error);
+      else {
+        setLoadError(null);
+        setRows(next.systems);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientSlug, reloadKey]);
 
   async function toggle(slug: string, next: boolean) {
     if (busy.has(slug)) return;
@@ -147,7 +254,10 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
           <p className="text-sm text-muted">{loadError}</p>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setLoadError(null);
+              setReloadKey((k) => k + 1);
+            }}
             className="mt-3 rounded-lg border border-line-strong px-3 py-1.5 text-sm font-semibold text-navy hover:bg-card-muted"
           >
             Try again
@@ -177,44 +287,12 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
             >
               <ul className="divide-y divide-line">
                 {items.map((r) => (
-                  <li key={r.slug} className="flex items-center justify-between gap-4 px-5 py-3.5">
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-2 text-sm font-semibold text-navy">
-                        {r.label}
-                        {!r.enabled ? (
-                          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-semibold text-warning">
-                            Off
-                          </span>
-                        ) : null}
-                      </p>
-                      {/* THE SENTENCE FOLLOWS THE SWITCH, AND IT USED TO BE THE
-                          WRONG WAY ROUND. A row that is OFF printed what would
-                          stop if you switched it off — a fact about a state it is
-                          already in — and a row that is ON printed nothing but
-                          "Running.". Each row now answers the question its own
-                          state raises: an off row says what switching it on
-                          starts, an on row says what switching it off stops. */}
-                      <p className="mt-0.5 text-xs leading-relaxed text-muted">
-                        {systemRowSentence(r)}
-                      </p>
-                      {/* `?? []` because a browser holding the new bundle can
-                          reach the previous deployment's route for a few seconds
-                          during a rollout, and a control panel is not the place
-                          to throw on a missing field. */}
-                      {!r.enabled && (r.needsFirst ?? []).length > 0 ? (
-                        <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                          <span className="font-semibold">Needs first:</span>{" "}
-                          {r.needsFirst.join(" · ")}
-                        </p>
-                      ) : null}
-                    </div>
-                    <SystemSwitch
-                      enabled={r.enabled}
-                      busy={busy.has(r.slug)}
-                      label={r.label}
-                      onToggle={() => void toggle(r.slug, !r.enabled)}
-                    />
-                  </li>
+                  <SystemRowLine
+                    key={r.slug}
+                    row={r}
+                    busy={busy.has(r.slug)}
+                    onToggle={() => void toggle(r.slug, !r.enabled)}
+                  />
                 ))}
               </ul>
             </SectionCard>
@@ -245,6 +323,76 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
         ]}
       />
     </>
+  );
+}
+
+/**
+ * ONE ROW of the panel.
+ *
+ * EXPORTED, and pulled out of the map for that reason: SystemsView fetches its
+ * rows in an effect, so a test that renders the view gets the loading state and
+ * nothing else — which is how "Needs first" could be hidden on every switched-on
+ * row without one assertion going red. Rendered directly, each state of a row is
+ * a test rather than a click.
+ */
+export function SystemRowLine({
+  row,
+  busy,
+  onToggle,
+}: {
+  row: SystemRow;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  const warning = registrationWarning(row);
+  return (
+    <li className="flex items-center justify-between gap-4 px-5 py-3.5">
+      <div className="min-w-0">
+        <p className="flex items-center gap-2 text-sm font-semibold text-navy">
+          {row.label}
+          {!row.enabled ? (
+            <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-semibold text-warning">
+              Off
+            </span>
+          ) : null}
+        </p>
+        {/* THE SENTENCE FOLLOWS THE SWITCH, AND IT USED TO BE THE
+            WRONG WAY ROUND. A row that is OFF printed what would
+            stop if you switched it off — a fact about a state it is
+            already in — and a row that is ON printed nothing but
+            "Running.". Each row now answers the question its own
+            state raises: an off row says what switching it on
+            starts, an on row says what switching it off stops. */}
+        <p className="mt-0.5 text-xs leading-relaxed text-muted">{systemRowSentence(row)}</p>
+        {/* AND THE ON ROW SAYS WHEN IT CANNOT ACTUALLY RUN. "Running." over a
+            sweep with no cron job is the one sentence on this screen that is
+            simply untrue, and it is the state the platform's own first step
+            walks the owner into. See registrationWarning above. */}
+        {warning ? (
+          <p className="mt-1 text-[11px] leading-relaxed text-warning">{warning}</p>
+        ) : null}
+        {/* WHAT TO DO FIRST, on the screen where an owner decides to switch
+            it on. Above "Needs first" because it is the step that comes
+            before the prerequisites are worth reading — for the Dentally
+            lever it is "read the sync tab and see what is waiting", which is
+            the tab immediately to the right of this one. Only while OFF: a
+            running system's first step has been taken. `?? null` for the same
+            rollout reason as the list below. */}
+        {!row.enabled && (row.firstStep ?? null) ? (
+          <p className="mt-1 text-[11px] leading-relaxed text-muted">{row.firstStep}</p>
+        ) : null}
+        {/* `?? []` because a browser holding the new bundle can
+            reach the previous deployment's route for a few seconds
+            during a rollout, and a control panel is not the place
+            to throw on a missing field. */}
+        {!row.enabled && (row.needsFirst ?? []).length > 0 ? (
+          <p className="mt-1 text-[11px] leading-relaxed text-muted">
+            <span className="font-semibold">Needs first:</span> {row.needsFirst.join(" · ")}
+          </p>
+        ) : null}
+      </div>
+      <SystemSwitch enabled={row.enabled} busy={busy} label={row.label} onToggle={onToggle} />
+    </li>
   );
 }
 

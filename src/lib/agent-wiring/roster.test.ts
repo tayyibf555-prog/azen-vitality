@@ -29,6 +29,11 @@ import { AGENTS, AGENT_BY_KEY, DRAIN_AGENTS, PATIENT_FACING_AGENTS } from "./ros
 import { SYSTEM_BY_SLUG, DRAIN_SOURCE_TO_SLUG, DEFAULT_OFF_SLUGS } from "@/lib/systems/catalog";
 import { CORRESPONDENCE_SOURCE_NAMES } from "@/lib/inbox/repository";
 import { SEND_SITES } from "@/lib/inbox/send-sites";
+// Section 9 checks the roster's owner-facing sentences against the code they
+// describe, so it imports the composer and the panel's own heading rather than
+// retyping either. Both are pure (no I/O, no clock, no server-only).
+import { previsitBody } from "@/lib/triage/copy";
+import { SUMMARY_COPY } from "@/lib/triage/summary";
 import { walkSrc, srcPath, SRC_ROOT } from "@/lib/test-support/walk-src";
 
 const REPO_ROOT = join(SRC_ROOT, "..");
@@ -46,9 +51,31 @@ function code(source: string): string {
     .join("\n");
 }
 
-/** Every non-test file under src/, as repo-relative posix paths. */
+/**
+ * Every non-test file under src/, as repo-relative posix paths.
+ *
+ * NO `includeDotDirs`, AND THAT IS A CORRECTNESS FIX, NOT TIDINESS (wave-3
+ * review, 4 Sep 2026). This was the tree's only whole-src walk that descended
+ * into dot-directories, which is precisely the combination walk-src.ts's own
+ * header rules out: "the whole-src sweeps leave it off deliberately", and the
+ * two sweeps that turn it on are narrowed to app/ because Next SERVES
+ * `app/.well-known/<name>/route.ts`. Nothing below makes a routing claim, so
+ * nothing below needs them.
+ *
+ * What it cost while it was on: src/ holds no permanent dot-directory, so the
+ * only thing such a walk can ever find is another test's transient fixture —
+ * walk-src.test.ts mkdtemps `src/lib/test-support/.walk-fixture-XXXX/route.ts`
+ * and removes it in a `finally`. Vitest runs files in parallel, so this crawl
+ * would list that path and `readRepo` (a bare readFileSync) would reach it after
+ * the teardown: `ENOENT … .walk-fixture-F14TNe/route.ts` thrown from whichever of
+ * the six tests below happened to be running. Roughly one full-suite run in five.
+ *
+ * That is worse than a flake here. Charter §0 item 11 makes "break the rule →
+ * the NAMED test goes red" the way every fix in this programme is verified, and
+ * a red that no mutation caused is indistinguishable from a mutation caught.
+ */
 function everySourceFile(): string[] {
-  return walkSrc({ includeDotDirs: true }).map((p) => `src/${p}`);
+  return walkSrc().map((p) => `src/${p}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +274,47 @@ const QUEUE_WITHOUT_TOGGLE: Record<string, string> = {
   "src/lib/collection/repository.ts": "defines approveDraft",
   "src/lib/postop/repository.ts": "defines approveDraft",
 };
+
+// ---------------------------------------------------------------------------
+// 2b. THE CRAWL ITSELF. Six tests below read the whole tree through
+//     everySourceFile(), so how it walks is a property of all six.
+// ---------------------------------------------------------------------------
+
+describe("the shared source crawl cannot read a file that is being deleted", () => {
+  it("skips dot-directories, so no other test's fixture is ever in its list", () => {
+    // The behavioural half. src/ holds no permanent dot-directory, so this list
+    // is identical either way TODAY — which is exactly why the hazard was
+    // invisible: the only dot-directory that ever appears is a fixture another
+    // file creates and removes while this one is running (walk-src.test.ts).
+    expect(everySourceFile()).toEqual(walkSrc().map((p) => `src/${p}`));
+    const dotted = everySourceFile().filter((rel) => rel.split("/").some((seg) => seg.startsWith(".")));
+    expect(dotted, `the crawl descended into: ${dotted.join(", ")}`).toEqual([]);
+  });
+
+  it("asks walkSrc for the default walk and never widens it", () => {
+    /*
+     * The deterministic half, and the one the mutation check uses: the option is
+     * a configuration, and re-adding it goes red here whether or not a fixture
+     * happens to exist at that instant. Writing the obvious behavioural test
+     * instead — create a dot-directory, assert it is skipped — would mean THIS
+     * file creating a transient file under src/ and so spreading the very race it
+     * closes to the tree's other hand-rolled crawls. walk-src.test.ts already owns
+     * that fixture and is the right place for it.
+     *
+     * The needle is the argument list rather than the option's name because the
+     * name would have to appear in this file to be searched for.
+     */
+    const self = code(readRepo("src/lib/agent-wiring/roster.test.ts"));
+    const args = [...self.matchAll(/walkSrc\(([^)]*)\)/g)].map((m) => m[1].trim());
+    expect(args.length, "no call to walkSrc found; the pin has gone stale").toBeGreaterThan(0);
+    expect(
+      args.filter((a) => a !== ""),
+      `a whole-src walk in this file takes options: ${args.join(" | ")}. ` +
+        `walk-src.ts's header says whole-src sweeps leave includeDotDirs off; only the ` +
+        `routing sweeps narrowed to app/ turn it on.`,
+    ).toEqual([]);
+  });
+});
 
 describe("nothing can queue a patient message without reading the owner's switch", () => {
   /**
@@ -452,7 +520,240 @@ describe("the switch-on runbook covers every agent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 9. Sanity: the roster is not silently empty.
+// 9. THE OWNER-FACING HALF OF THE ROSTER.
+//
+// Everything above this line checks the roster against the SOURCE TREE. This
+// section checks it against the SCREEN, which is a different claim and was the
+// one nothing held.
+//
+// `firstTick` stopped being documentation on 3 Sep 2026, when W2-B wired the
+// control panel to it: src/lib/systems/vocabulary.ts reads `starts` off this
+// field BY IDENTITY for every rostered slug, /api/systems serialises it, and
+// systems-view.tsx prints it verbatim under every switched-OFF row — which is
+// every row an owner is looking at while deciding to switch something on. It is
+// also `whatSwitchingItOnStarts` in the co-pilot's agent_status tool, and
+// `verify` is that tool's `howToSeeItWorking`, so a wrong sentence here is one
+// the assistant repeats on request.
+//
+// The wave-3 review found three ways that goes wrong, and each has a test below:
+// a sentence written in the deployment's environment-variable names (a value the
+// owner cannot see and has not been given a name for), a sentence that promises
+// a message the composer does not compose, and a sentence that sends a person to
+// a screen that does not render the thing.
+// ---------------------------------------------------------------------------
+
+/**
+ * SCREAMING_SNAKE_CASE — an identifier, not a word. Global on purpose so a
+ * failure can list every hit; only ever used with String.match, which resets
+ * lastIndex, so it is safe to share.
+ */
+const ENV_NAME = /\b[A-Z][A-Z0-9]{2,}(?:_[A-Z0-9]+)+\b/g;
+
+describe("the switch-on sentence an owner reads is written for an owner", () => {
+  it("never names an environment variable", () => {
+    // WHY firstTick AND NOT EVERY FIELD. `needs` is the field where env names
+    // belong, and vocabulary.ts:50-55 says so in as many words: it becomes
+    // "Needs first" a paragraph below, and "the person reading this row is the
+    // person who arranges them". `firstTick` answers a different question —
+    // what will happen if I flip this — and an answer given in the names of
+    // values the owner cannot read is not an answer. Found by the wave-3 review
+    // on recall, no-show-defence and reviews; the audit note of 4 Sep had caught
+    // recall alone, because the copy sweep in src/lib/systems/os-copy-sweep.test.ts
+    // feeds only `source: "module"` sentences into its crawl and every rostered
+    // sentence arrives as `source: "roster"`.
+    const offenders = AGENTS.map((a) => ({ key: a.key, hits: a.firstTick.match(ENV_NAME) ?? [] }))
+      .filter((r) => r.hits.length > 0)
+      .map((r) => `${r.key}: ${[...new Set(r.hits)].join(", ")}`);
+    expect(
+      offenders,
+      `these print an environment-variable name to the practice owner on the control panel: ` +
+        `${offenders.join("; ")}. Put the NUMBER in firstTick and leave the name in needs.`,
+    ).toEqual([]);
+  });
+
+  it("and the crawl can still see one where an env name is allowed", () => {
+    // The guard above is a "nothing matched" assertion, which is exactly the
+    // shape that rots into always-true (ruling W3/17). This is its floor: the
+    // same regex, run over the field that deliberately DOES carry env names.
+    const recall = AGENT_BY_KEY.get("recall");
+    expect(recall, "the roster lost its recall entry").toBeTruthy();
+    expect(recall!.needs.join(" ").match(ENV_NAME) ?? []).toContain("RECALL_DAILY_CONTACT_LIMIT");
+  });
+
+  it("still says something an owner can act on, rather than going quiet", () => {
+    // Deleting the offending clause would also pass the test above. Every
+    // sentence has to keep answering the question, and the three the review
+    // rewrote have to keep naming the volume they used to name as a variable.
+    for (const key of ["recall", "no-show-defence", "reviews"]) {
+      const agent = AGENT_BY_KEY.get(key);
+      expect(agent, `${key} is missing from the roster`).toBeTruthy();
+      expect(agent!.firstTick.length, `${key}.firstTick`).toBeGreaterThan(60);
+      expect(/\d/.test(agent!.firstTick), `${key}.firstTick states no figure at all`).toBe(true);
+    }
+  });
+});
+
+describe("the pre-visit sentence describes the message the module composes", () => {
+  /**
+   * RULING W3/9 (4 Sep 2026): "copy matches code, never the reverse". The
+   * sentence used to say the questionnaire link went out "alongside the
+   * medical-history link the practice already sends". src/lib/triage/copy.ts
+   * decided the opposite and wrote down why — two links do not fit in one SMS
+   * credit — so the invite is its own text and the medical-history hand-off
+   * moved onto the completion screen. An owner reading the old sentence budgeted
+   * one text per patient and would have been sent two.
+   *
+   * This is the behavioural half the string pin was missing: the claim is
+   * checked against the message the composer actually returns.
+   */
+  it("the composed invite carries exactly one link, and the sentence says so", () => {
+    const agent = AGENT_BY_KEY.get("pre-visit-triage");
+    expect(agent, "pre-visit-triage is missing from the roster").toBeTruthy();
+
+    const body = previsitBody({
+      firstName: "Amara",
+      practiceName: "Vitality Dental",
+      link: "https://vitality.example/pv/aaaaaaaaaaaaaaaaaaaaaa",
+    });
+    const links = body.match(/https?:\/\/\S+/g) ?? [];
+    expect(links, `the invite the module composes: ${body}`).toHaveLength(1);
+
+    // And the composer has no way to acquire a second one: the medical-history
+    // link builder is not reachable from the message at all.
+    expect(code(readRepo("src/lib/triage/copy.ts"))).not.toContain("buildMedicalHistoryLink");
+
+    // Given ONE link in the body, the sentence may not describe a message that
+    // travels with another.
+    const ridesAlong = /\b(alongside|along with|together with)\b/i.test(agent!.firstTick);
+    expect(
+      ridesAlong,
+      `the control panel says the pre-visit link travels with another link; the message carries ` +
+        `one: ${agent!.firstTick}`,
+    ).toBe(false);
+    expect(
+      /separate from the medical-history/i.test(agent!.firstTick),
+      `ruling W3/9 requires the sentence to say the link is separate from the medical-history ` +
+        `link: ${agent!.firstTick}`,
+    ).toBe(true);
+  });
+});
+
+describe("a verify step names a surface that renders the thing", () => {
+  it("the pre-visit summary is verified on the record, which is where it is drawn", () => {
+    // The sentence said a completed form "appears as a pre-visit summary on the
+    // appointment". No appointment-level surface reads it: the diary's
+    // appointment panel has no triage import, and `previsitSummaryFor` has two
+    // non-test callers — the patient record's Appointments tab and the co-pilot
+    // tool. A clinician sent to the appointment would have found nothing and
+    // treated the patient without reading what they wrote, which is the failure
+    // the summary exists to prevent (charter §2 W1-C).
+    const agent = AGENT_BY_KEY.get("pre-visit-triage");
+    expect(agent, "pre-visit-triage is missing from the roster").toBeTruthy();
+
+    // Named by the heading the panel actually prints, so a renamed panel is a
+    // red test rather than a stale instruction.
+    expect(agent!.verify).toContain(SUMMARY_COPY.heading);
+
+    const readers = everySourceFile().filter((rel) =>
+      /previsitSummaryFor\s*\(/.test(code(readRepo(rel))),
+    );
+    expect(readers.length, "nothing reads the pre-visit summary; this crawl has gone stale").toBeGreaterThan(1);
+    expect(readers).toContain("src/components/client/patients/record/record-tab-content.tsx");
+
+    const appointmentSurfaces = readers.filter((rel) => /\/(calendar|diary)\//.test(rel));
+    expect(
+      appointmentSurfaces,
+      `a diary surface now reads the summary; the verify step may name it: ${appointmentSurfaces.join(", ")}`,
+    ).toEqual([]);
+    expect(
+      /\bon the appointment\b/i.test(agent!.verify),
+      `verify sends a clinician to the appointment, where nothing renders it: ${agent!.verify}`,
+    ).toBe(false);
+  });
+});
+
+describe("no sentence an owner reads is addressed to the team that built it", () => {
+  /**
+   * WAVE-3B HANDOFFS H36/H44 (5 Sep 2026). The pre-visit entry carried, in
+   * `gaps`, "Owned by lane W1-C; this roster entry and its runbook section are a
+   * snapshot of the code and should be confirmed by that lane before go-live."
+   *
+   * That is a note from one build lane to another, and eight of this Record's
+   * fields are not notes: src/lib/systems/vocabulary.ts reads `firstTick` and
+   * `needs` by identity onto the control panel, and the co-pilot's agent_status
+   * hands `label`, `slugNote`, `firstTick`, `bound`, `needs`, `verify`, `stop`
+   * and `gaps` straight back to whoever asked (src/lib/copilot/tools.ts:3280-97,
+   * `knownGaps`). So a practice owner asking "is anything wrong with the
+   * pre-visit questions?" was told his platform had an internal lane code as a
+   * known gap — an answer he can neither act on nor understand, about work that
+   * was in fact finished (W1-C is FINAL in the decisions log). The runbook half
+   * of the same hedge was deleted by the runbook lane and its absence pinned
+   * (runbook.test.ts, "the pre-visit section is finished work"); this is the
+   * other half, and this is what stops a third one being written.
+   *
+   * WHAT IS AND IS NOT FORBIDDEN. Not ruling citations: "ruling W1-B/4" tells a
+   * reader where a decision is recorded and three of these sentences carry one
+   * deliberately. What is forbidden is the PROVISIONAL-OWNERSHIP class — a
+   * sentence that names a build lane as the thing responsible, or says the entry
+   * is a draft somebody else has still to confirm. Those are true only inside the
+   * programme, and they are false to the person reading them.
+   */
+  const HANDOVER_NOTE: readonly RegExp[] = [
+    /\bowned by\b/i,
+    /\blanes?\s+W\d/i,
+    /\bthis lane\b/i,
+    /\bconfirmed by that lane\b/i,
+    /\bsnapshot of the code\b/i,
+  ];
+
+  /** Every field of an agent that reaches a person outside this repository. */
+  function ownerFacingSentences(): Array<{ key: string; field: string; text: string }> {
+    return AGENTS.flatMap((a) => [
+      { key: a.key, field: "label", text: a.label },
+      { key: a.key, field: "slugNote", text: a.slugNote ?? "" },
+      { key: a.key, field: "firstTick", text: a.firstTick },
+      { key: a.key, field: "bound", text: a.bound },
+      { key: a.key, field: "verify", text: a.verify },
+      { key: a.key, field: "stop", text: a.stop },
+      { key: a.key, field: "recordNote", text: a.recordNote ?? "" },
+      ...a.needs.map((text) => ({ key: a.key, field: "needs", text })),
+      ...a.gaps.map((text) => ({ key: a.key, field: "gaps", text })),
+    ]);
+  }
+
+  it("names no build lane as the owner of anything, on the panel or in the co-pilot", () => {
+    const offenders = ownerFacingSentences()
+      .filter(({ text }) => HANDOVER_NOTE.some((re) => re.test(text)))
+      .map(({ key, field, text }) => `${key}.${field}: "${text}"`);
+    expect(
+      offenders,
+      `these are printed on the owner's control panel or returned by agent_status as ` +
+        `knownGaps/needsFirst, and they are addressed to a build lane: ${offenders.join("; ")}`,
+    ).toEqual([]);
+  });
+
+  it("and the crawl would still catch the sentence it was written for (W3/17)", () => {
+    // Floor for the "nothing matched" assertion above, which is otherwise the
+    // exact shape that rots into always-true. The control is the deleted string,
+    // byte for byte, plus proof the crawl reaches every field rather than one.
+    const deleted =
+      "Owned by lane W1-C; this roster entry and its runbook section are a snapshot of the " +
+      "code and should be confirmed by that lane before go-live.";
+    expect(HANDOVER_NOTE.some((re) => re.test(deleted))).toBe(true);
+
+    const sentences = ownerFacingSentences().filter((s) => s.text.length > 0);
+    expect(sentences.length, "the owner-facing crawl found almost nothing").toBeGreaterThan(120);
+    expect(new Set(sentences.map((s) => s.field)).size, "the crawl reads only some fields").toBe(9);
+
+    // Ruling citations are deliberately NOT caught: three sentences carry one.
+    const cited = sentences.filter((s) => /\bruling W\d-[A-E]\/\d/i.test(s.text));
+    expect(cited.length, "the ruling citations vanished; loosen this floor deliberately or not at all")
+      .toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Sanity: the roster is not silently empty.
 // ---------------------------------------------------------------------------
 
 describe("the roster is real", () => {

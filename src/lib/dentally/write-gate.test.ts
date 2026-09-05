@@ -97,6 +97,22 @@ function gateOn(): void {
   process.env.DENTALLY_WRITE_BASE_URL = "https://api.dentally.co";
 }
 
+/**
+ * Writes ARMED — and aimed at the local mock.
+ *
+ * The rehearsal configuration this repo ships as `azen-web-mockwrite-3002`: all
+ * three DENTALLY_WRITE_* variables set, with the write base URL pointing at
+ * /api/mock-dentally so the whole write path can be exercised end to end without
+ * touching 51,000 real patient records. gateOn() always aimed at api.dentally.co,
+ * so this combination was never constructed and the gate's own stated rule — a
+ * write that only reached the local mock is a dry_run, never a sent — went
+ * unproven for the one configuration that can break it.
+ */
+function gateOnAgainstTheMock(): void {
+  gateOn();
+  process.env.DENTALLY_WRITE_BASE_URL = "http://localhost:3002/api/mock-dentally";
+}
+
 // An OPAQUE user id, which is the only shape of actor this ledger may hold.
 const ACTOR_ID = "usr_9f2b41c8";
 const ctx = { source: "recall" as DentallyWriteSource, siteId: "site-ng", actor: ACTOR_ID };
@@ -599,6 +615,212 @@ describe("the source registry cannot make a write unkillable", () => {
   it("every one of the five kinds is claimed by at least one source", () => {
     const claimed = new Set(sources.flatMap((s) => [...DENTALLY_WRITE_SOURCES[s].kinds]));
     for (const kind of DENTALLY_WRITE_KINDS) expect([...claimed]).toContain(kind);
+  });
+});
+
+// ===========================================================================
+describe("an ARMED deployment aimed at the local mock is still a rehearsal", () => {
+  /**
+   * THE RULE THE GATE ALREADY STATED AND DID NOT KEEP: "`sent` means it went to
+   * the live practice book; a write that only reached the local mock is a
+   * `dry_run` with a response, never a `sent`."
+   *
+   * The status used to be chosen from the MODE alone, and the mode says only that
+   * the three DENTALLY_WRITE_* variables are set — nothing about WHERE the write
+   * is aimed. So a rehearsal against /api/mock-dentally filed `sent` rows, and the
+   * Sync Status figure for "written to your Dentally book", the home tile and the
+   * os-scenarios invariant "no `sent` anywhere" all described writes that never
+   * left the building.
+   */
+  it.each(CALLS)("$kind: performs against the mock and files a dry_run, never a sent", async ({ run, kind, method }) => {
+    gateOnAgainstTheMock();
+    await run();
+    // The write really happened — this is not a refusal.
+    expect(h.client[method]).toHaveBeenCalledTimes(1);
+    const filed = intent();
+    expect(filed.kind).toBe(kind);
+    expect(filed.status, "an armed deployment aimed at a mock filed a `sent`").toBe("dry_run");
+    expect(filed.responseId).toBeTruthy();
+    expect(filed.target).toBe("localhost:3002");
+  });
+
+  it("a mock-aimed row is labelled as the mock, so it cannot read as a rehearsal against the book", () => {
+    gateOnAgainstTheMock();
+    const t = dentallyWriteTarget();
+    expect(t.live).toBe(false);
+    expect(targetLabel(t.host)).toBe("localhost:3002 (local mock)");
+  });
+
+  it("CONTROL: armed and aimed at the real book still files a sent", async () => {
+    // The other side of the conjunction, so the fix cannot be "never say sent".
+    gateOn();
+    await dentallyWrite.createAppointment(ctx, { patient_id: "pat-1" });
+    expect(intent().status).toBe("sent");
+  });
+});
+
+// ===========================================================================
+describe("the co-pilot's diary writes answer to the DIARY's own switch", () => {
+  /**
+   * RULING W3/2: "Co-pilot Dentally writes carry the PER-MODULE slug of the
+   * module they act in (diary_write -> the diary-moves switch slug) in addition to
+   * the master; slug:null is reserved for the two staff sources (W1-A/3)."
+   *
+   * The co-pilot source was declared with slug:null when it made one write kind —
+   * patient.create — and wave 2 widened it to the three appointment kinds without
+   * revisiting that. `calendar-writes` ("Diary appointment moves") exists exactly
+   * to stop an appointment being moved; the diary desk honours it at
+   * move-service.ts, and for a while an owner could switch the diary off, watch
+   * the desk refuse every drag, then move the same appointment by asking the
+   * co-pilot for it. The ledger row carried module_slug: null too, so Sync Status
+   * could not even attribute the write.
+   */
+  const copilot = { source: "copilot" as DentallyWriteSource, siteId: "site-ng", actor: ACTOR_ID };
+  const DIARY_CALLS = [
+    { kind: "appointment.create", method: "createAppointment" as const, run: () => dentallyWrite.createAppointment(copilot, { patient_id: "pat-1" }) },
+    { kind: "appointment.update", method: "updateAppointment" as const, run: () => dentallyWrite.updateAppointment(copilot, "appt-1", { start_time: "x" }) },
+    { kind: "appointment.cancel", method: "cancelAppointment" as const, run: () => dentallyWrite.cancelAppointment(copilot, "appt-1") },
+  ];
+
+  it.each(DIARY_CALLS)("$kind: asks calendar-writes, not only the master", async ({ run }) => {
+    gateOn();
+    await run();
+    expect(h.isSystemEnabledStrict).toHaveBeenCalledWith("vitality", "calendar-writes");
+  });
+
+  it.each(DIARY_CALLS)("$kind: is REFUSED when the owner has switched diary moves off", async ({ run, method }) => {
+    gateOn();
+    // The master stays on: this is about the diary's own switch, and a test that
+    // turned both off would pass on the wrong one.
+    h.isSystemEnabledStrict.mockImplementation(async (_c: string, slug: string) => slug !== "calendar-writes");
+    await expect(run()).rejects.toMatchObject({ reason: "system_off" });
+    expect(h.client[method], "the co-pilot wrote to Dentally through a switch the owner had flipped off").not.toHaveBeenCalled();
+    expect(intent()).toMatchObject({ status: "blocked", blockedReason: "system_off" });
+  });
+
+  it.each(DIARY_CALLS)("$kind: files the diary's slug on the row, so Sync Status can attribute it", async ({ run }) => {
+    gateOn();
+    await run();
+    expect(intent().moduleSlug).toBe("calendar-writes");
+  });
+
+  it("the refusal names the control the owner actually flipped", async () => {
+    gateOn();
+    h.isSystemEnabledStrict.mockImplementation(async (_c: string, slug: string) => slug !== "calendar-writes");
+    await expect(dentallyWrite.updateAppointment(copilot, "appt-1", {})).rejects.toThrow(
+      /Diary appointment moves is switched off/,
+    );
+  });
+
+  it("a co-pilot move and a desk move answer the SAME switch, whichever source files the row", async () => {
+    // WHY THIS IS ASSERTED ON BOTH SOURCES (ruling W3/1 + handoff H32). Since
+    // wave 3 the co-pilot's confirmed move goes through performMove — the desk's
+    // own guarded path — so its ledger row is filed under `diary`, not `copilot`.
+    // `appointment.update` stays declared on the co-pilot for the Sync Status
+    // list and for any direct update that ever comes back, and the property that
+    // actually protects the owner is that BOTH doors resolve `calendar-writes`:
+    // one switch, one answer, whichever name ends up on the row.
+    gateOn();
+    h.isSystemEnabledStrict.mockImplementation(async (_c: string, slug: string) => slug !== "calendar-writes");
+    const desk = { source: "diary" as DentallyWriteSource, siteId: "site-ng", actor: ACTOR_ID };
+    await expect(dentallyWrite.updateAppointment(desk, "appt-1", { start_time: "x" })).rejects.toMatchObject({
+      reason: "system_off",
+    });
+    expect(intent()).toMatchObject({ status: "blocked", blockedReason: "system_off", moduleSlug: "calendar-writes" });
+    expect(writeSlugFor("copilot", "appointment.update")).toBe(writeSlugFor("diary", "appointment.update"));
+  });
+
+  it("the co-pilot's patient.create answers the Onboarding switch (W3/19), not the master alone", async () => {
+    // THE OPEN QUESTION THIS REGISTRY USED TO CARRY, now answered. It was the
+    // last slug-less co-pilot kind: an owner asking for a patient to be created
+    // reached Dentally with only `dentally-write-back` in the way, so an owner
+    // who had switched New-patient onboarding off could still create a patient by
+    // asking for one in a sentence — the same hole W3/2 closed for the diary.
+    // Ruling W3/19: creating a patient is the Onboarding module's job whichever
+    // door asks for it.
+    expect(writeSlugFor("copilot", "patient.create")).toBe("onboarding");
+
+    gateOn();
+    h.isSystemEnabledStrict.mockImplementation(async (_c: string, slug: string) => slug !== "onboarding");
+    await expect(dentallyWrite.createPatient(copilot, { first_name: "A" })).rejects.toMatchObject({
+      reason: "system_off",
+    });
+    expect(h.client.createPatient, "the co-pilot created a patient through a switch the owner had flipped off").not
+      .toHaveBeenCalled();
+    expect(intent()).toMatchObject({ status: "blocked", blockedReason: "system_off", moduleSlug: "onboarding" });
+  });
+
+  it("the Onboarding switch does not leak onto the co-pilot's DIARY writes", async () => {
+    // The other direction, so the fix cannot be "make everything onboarding":
+    // with onboarding off and calendar-writes on, a booking still goes through.
+    gateOn();
+    h.isSystemEnabledStrict.mockImplementation(async (_c: string, slug: string) => slug !== "onboarding");
+    await dentallyWrite.createAppointment(copilot, { patient_id: "pat-1" });
+    expect(intent()).toMatchObject({ status: "sent", moduleSlug: "calendar-writes" });
+  });
+});
+
+// ===========================================================================
+describe("every write KIND a source may make is covered by a switch, or is a named exemption", () => {
+  /**
+   * THE INVARIANT THE REGISTRY WAS MISSING. The existing check asks whether a
+   * SOURCE names a real slug or explains itself; it cannot notice a source whose
+   * KINDS have been widened past the module its slug covers, which is exactly how
+   * the co-pilot came to make diary writes with no diary switch.
+   *
+   * So the unit is the (source, kind) PAIR. Every pair either resolves a slug the
+   * owner's control panel really has, or appears below with the ruling that made
+   * it slug-less. A new pair is a compile-free but test-red change until somebody
+   * writes down which switch governs it.
+   */
+  const EXEMPT: Record<string, string> = {
+    "patient-admin::patient.update":
+      "W1-A/3: a member of staff correcting the record in front of them. No sweep, no queue, no message to halt; the locks are requirePatientAdmin on the route and the master dentally-write-back switch.",
+    "patient-status::patient.update":
+      "W1-A/3: the same staff action as patient-admin, on the one field Dentally exposes as an upstream flag. Covered by the master switch.",
+    // copilot::patient.create WAS the third entry, exempted with the words
+    // "OPEN QUESTION for the programme: whether this should adopt the onboarding
+    // slug". Ruling W3/19 answered it — yes — so the pair now resolves
+    // `onboarding` and the exemption is GONE rather than reworded. Two remain,
+    // and both are a member of staff editing the record in front of them.
+  };
+
+  const PAIRS = (Object.keys(DENTALLY_WRITE_SOURCES) as DentallyWriteSource[]).flatMap((source) =>
+    DENTALLY_WRITE_SOURCES[source].kinds.map((kind) => ({ source, kind, key: `${source}::${kind}` })),
+  );
+
+  it.each(PAIRS)("$key resolves a real switch, or is exempted in writing", ({ source, kind, key }) => {
+    const slug = writeSlugFor(source, kind);
+    if (slug === null) {
+      expect(
+        EXEMPT[key],
+        `${key} has NO kill switch and no written exemption. Give the kind a slug in DENTALLY_WRITE_SOURCES[${source}].slugByKind, or add a cited entry here.`,
+      ).toBeTruthy();
+      expect(String(EXEMPT[key]).length, key).toBeGreaterThan(80);
+      return;
+    }
+    expect(SYSTEM_BY_SLUG.has(slug), `${key} names "${slug}", which is not a controllable system`).toBe(true);
+  });
+
+  it("no exemption is stale: every exempted pair still exists and is still slug-less", () => {
+    // Fails in the other direction too, so the list cannot rot into a description
+    // of a registry we used to have.
+    for (const key of Object.keys(EXEMPT)) {
+      const pair = PAIRS.find((p) => p.key === key);
+      expect(pair, `${key} is exempted but no longer exists in the registry`).toBeTruthy();
+      expect(writeSlugFor(pair!.source, pair!.kind), `${key} now HAS a switch — drop its exemption`).toBe(null);
+    }
+  });
+
+  it("the exemptions are the two the rulings allow, and no more", () => {
+    // Stated as its own assertion so a third is a decision somebody makes here,
+    // not a line that slid into a list. It was three until ruling W3/19 gave
+    // copilot::patient.create the Onboarding switch; the list SHRANK, and this
+    // assertion is what makes that visible rather than silent.
+    expect(Object.keys(EXEMPT).sort()).toEqual([
+      "patient-admin::patient.update",
+      "patient-status::patient.update",
+    ]);
   });
 });
 

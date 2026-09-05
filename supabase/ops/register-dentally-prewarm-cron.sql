@@ -1,11 +1,23 @@
 -- register-dentally-prewarm-cron.sql  —  register the Dentally display-cache
 -- pre-warm on pg_cron
 -- ---------------------------------------------------------------------------
--- STATUS: RE-REGISTRATION REQUIRED. The job (pg_cron 'app-prewarm-dentally') is
--- currently DISABLED in production by hand — see the incident below. Running this
--- file re-schedules it at the new HOURLY cadence; it must then be re-activated
--- explicitly (the alter_job call at the bottom), because cron.schedule() on an
--- existing job keeps its current active flag.
+-- STATUS: APPLIED (verify against cron.job).
+--
+-- This header used to demand a re-registration, on the grounds that the job was
+-- disabled in production by hand. That was true on 20 August 2026 and is the
+-- incident described below. It is not true now:
+-- the read-only `select jobname, schedule, active from cron.job` against
+-- production on 4 September 2026 found 'app-prewarm-dentally' registered AND
+-- ACTIVE on `40 * * * *` — this file's hourly cadence — so the re-registration it
+-- asks for has already happened. Corrected under ruling W3/22 (cron.job is
+-- authoritative; a header is only a claim). Verify rather than trust it:
+--
+--   select jobname, schedule, active from cron.job where jobname = 'app-prewarm-dentally';
+--
+-- Run the file only to rebuild the job on a fresh project, or if that query ever
+-- comes back active = f again. Both statements below are then safe: identical
+-- name, schedule and command, and the alter_job at the bottom is a no-op on a job
+-- that is already active.
 --
 -- Fable applies cron SQL. The app's Supabase role is read-only on the cron.job
 -- TABLE, so this uses the cron.* FUNCTIONS, which are SECURITY DEFINER — same
@@ -206,8 +218,10 @@ select cron.schedule(
 );
 
 -- cron.schedule() on an existing job named 'app-prewarm-dentally' updates its
--- schedule/command but KEEPS the current active flag — and this job is currently
--- DISABLED in production. It must be re-activated explicitly:
+-- schedule/command but KEEPS the current active flag, so re-activation is spelled
+-- out rather than assumed. On production today this is a no-op — the job has been
+-- active since the incident was cleared (cron.job, 4 Sep 2026) — and it is here
+-- for the case the header names: a job that comes back active = f.
 select cron.alter_job(
   job_id := (select jobid from cron.job where jobname = 'app-prewarm-dentally'),
   active := true

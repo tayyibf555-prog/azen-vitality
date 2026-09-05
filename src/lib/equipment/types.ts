@@ -118,3 +118,48 @@ export interface EquipmentManualChunk {
 
 /** The catalog slug + system-toggle slug for the equipment agent. */
 export const EQUIPMENT_SLUG = "equipment";
+
+/**
+ * THE BOUND EVERY REGISTER READ IS SUBJECT TO, stated where the PURE code can
+ * see it.
+ *
+ * `repository.ts` owns the read and declares the same number as `ASSET_ROW_CAP`;
+ * this copy exists because the two things that have to KNOW about the bound —
+ * the system prompt and the tool results — must not import a `server-only`
+ * module (the equipment route's test mocks the repository wholesale, so an
+ * import of the cap from there would silently resolve to `undefined` and the
+ * honesty below would evaporate without a single test going red).
+ *
+ * The two are pinned equal by a named test that reads the repository's source:
+ * `prompt.test.ts`, "the prompt's bound is the REPOSITORY's bound, read out of
+ * its source", the same way `os-band.test.ts` pins its own mock. Raise one and
+ * the other goes red.
+ *
+ * WHY ANY OF THIS MATTERS. A count taken off a capped read is not a total, and
+ * a register at its bound must say "at least N" rather than wear a complete
+ * number's clothes (programme ruling W3/11). The failure it prevents is
+ * specific: a practice past the cap being told it has exactly this many assets,
+ * and being told a machine in the unread tail is not registered at all.
+ */
+export const REGISTER_READ_CAP = 400;
+
+/**
+ * THE SAME BOUND, FOR ONE MANUAL'S PASSAGES. Mirrors `CHUNK_ROW_CAP` in
+ * `repository.ts` and exists here for the identical reason: `tools.ts` must know
+ * whether the read it was handed was cut short, and it cannot learn the number
+ * from a `server-only` module its own test mocks wholesale.
+ *
+ * WHY IT MATTERS MORE HERE THAN FOR THE REGISTER. When the register is capped
+ * the desk says "at least N". When a MANUAL read is capped and nothing ranks,
+ * `search_manual`'s note is "The manual does not cover this. Say so plainly and
+ * do not answer from general knowledge" — an affirmatively false statement about
+ * the practice's own uploaded document, made about a fault code that is printed
+ * on page 361 of the book in the drawer. So a capped manual read swaps that
+ * sentence for one that says which part was searched.
+ *
+ * Pinned equal to the repository's literal by a named test that reads its
+ * source: `tools.test.ts`, "the manual bound is the REPOSITORY's bound, read out
+ * of its source", and pinned below PostgREST's ceiling by "every equipment read
+ * cap sits below PostgREST's own row ceiling" in the same file.
+ */
+export const MANUAL_CHUNK_READ_CAP = 900;

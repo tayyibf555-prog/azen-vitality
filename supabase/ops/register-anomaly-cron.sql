@@ -1,9 +1,29 @@
 -- register-anomaly-cron.sql  —  register the proactive anomaly pass on pg_cron
 -- ---------------------------------------------------------------------------
--- STATUS: NOT YET APPLIED, and deliberately not registered by this build. Run it
--- once when the module is wanted (Fable applies cron SQL; the app's Supabase role
--- is read-only on the cron.job TABLE, so use the cron.* FUNCTIONS, which are
--- SECURITY DEFINER — the same method as supabase/ops/enable-24-7-cron.sql).
+-- STATUS: APPLIED (verify against cron.job).
+--
+-- This header used to deny that, and denied it for months while the job ran every
+-- hour. A read-only `select jobname, schedule, active from cron.job` against
+-- production on 4 September 2026 found 'app-sweep-anomaly' registered, active, on
+-- `45 * * * *`, with 336 successful runs in cron.job_run_details, the last at
+-- 18:45 UTC that day. Verify before acting on any header, including this one:
+--
+--   select jobname, schedule, active from cron.job where jobname = 'app-sweep-anomaly';
+--
+-- THE SCHEDULE BELOW WAS ALSO WRONG, AND THAT ONE COULD BITE. It said minute 40;
+-- the live job runs at minute 45, and `cron.schedule()` on an existing job name
+-- UPDATES it — so running this file as it stood would have quietly moved a job
+-- that had been working for months, onto the same minute as the hourly Dentally
+-- prewarm. Ruling W3/22 settles it in the live job's favour: cron.job is
+-- authoritative, the file is corrected to :45, and nothing about the running job
+-- changes. The statement below is therefore a harmless re-registration of what
+-- already exists (identical name, schedule and command; cron.schedule keeps the
+-- current active flag) — run it only to rebuild the job on a fresh project or
+-- after somebody has unscheduled it.
+--
+-- Method, when it IS run: Fable applies cron SQL; the app's Supabase role is
+-- read-only on the cron.job TABLE, so use the cron.* FUNCTIONS, which are
+-- SECURITY DEFINER — the same method as supabase/ops/enable-24-7-cron.sql.
 --
 -- WHAT IT RUNS: /api/anomaly/sweep, which LOOKS and WRITES ONE TABLE.
 --   It reads the dashboard's own assembled takings strip, the no-show risk
@@ -12,7 +32,7 @@
 --   anomaly_alert and nothing else. No patient record, no diary, no cadence, no
 --   touch, no outbox, no message. There is no path from this job to a patient.
 --
--- CADENCE: HOURLY, at minute 40.
+-- CADENCE: HOURLY, at minute 45.
 --   Hourly rather than daily because two of the four conditions are perishable:
 --   an enquiry uncontacted for an hour and a cluster of no-show risks in
 --   TOMORROW's diary are both worth knowing about the same working day, and a
@@ -25,9 +45,12 @@
 --   condition that persists is REFRESHED, not re-raised, so a takings dip that
 --   lasts a fortnight is one row on the owner's feed for a fortnight, not 336.
 --
--- MINUTE 40 deliberately: the lifecycle sweeps run on */10 (minutes 0, 10, 20,
--- 30...), post-op takes :25 and the Meta insights pull takes the top of the hour,
--- so :40 lands this job in a gap rather than alongside the Dentally readers.
+-- MINUTE 45, which is what the live job actually runs on and what this file now
+-- says. The lifecycle sweeps run on */10 (minutes 0, 10, 20, 30...), post-op
+-- proposes :25, the Meta insights pull proposes the top of the hour, and the
+-- hourly Dentally prewarm holds :40 — so :45 lands this job in a gap rather than
+-- alongside the Dentally readers. The file used to propose :40, i.e. the prewarm's
+-- own minute; whoever registered the job in production chose better.
 --
 -- DENTALLY COST: one dashboard read per hour, at BACKGROUND priority
 -- (runWithDentallyPriority in src/lib/anomaly/collect.ts), and usually a cache
@@ -46,7 +69,7 @@
 
 select cron.schedule(
   'app-sweep-anomaly',
-  '40 * * * *',
+  '45 * * * *',
   $$select public.trigger_app_cron('/api/anomaly/sweep')$$
 );
 

@@ -5,6 +5,7 @@ import { dentallyReadKey } from "@/lib/dentally/read";
 import { cronUnauthorized } from "@/lib/cron";
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { liveSwitch } from "@/lib/systems/live-switch";
 import { SITES, getSite, dentallySiteId } from "@/lib/mock/clients";
 import { isSuppressed } from "@/lib/messaging/suppression";
 import {
@@ -22,21 +23,51 @@ import { TRIAGE_SYSTEM_SLUG, triageConfig } from "@/lib/triage/types";
 import type { TriageTarget } from "@/lib/triage/types";
 
 // ===========================================================================
-// THE PRE-VISIT SWEEP. It flags upcoming appointments and it queues links.
+// THE PRE-VISIT SWEEP. It flags upcoming appointments, queues links, and retires
+// the ones the appointment has overtaken.
 //
-// Two passes, deliberately separate, exactly as post-op splits its own:
+// Three passes, deliberately separate, exactly as post-op splits its own:
 //
 //   PASS 1 (flag)   read the appointment window ahead of us, keep the live ones,
 //                   resolve each distinct patient ONCE, decide their bank from
 //                   their payment plan, and record each appointment once.
 //   PASS 2 (queue)  for every recorded appointment now due, compose the fixed
 //                   message and put it in this module's own outbox.
+//   PASS 3 (retire) stop every `queued` or `sent` target whose appointment has
+//                   already started, or whose instant cannot be read at all.
 //
 // Splitting them means a Dentally outage during pass 1 cannot lose an appointment
 // that was already flagged yesterday, and a database problem in pass 2 cannot
-// cause the same appointment to be flagged twice tomorrow. Pass 2 makes NO
+// cause the same appointment to be flagged twice tomorrow. Passes 2 and 3 make NO
 // Dentally read at all, so a budget refusal above still lets yesterday's flags be
-// sent.
+// sent and yesterday's links be retired.
+//
+// ---------------------------------------------------------------------------
+// WHY PASS 3 EXISTS: `sent` HAD NO TERMINAL TRANSITION (ruling W3/5).
+// ---------------------------------------------------------------------------
+// Ruling W3/5 — "a queued pre-visit link is NEVER dispatched after its
+// appointment start ... fail closed" — was implemented at the three DOORS: the
+// drain drops a queued row past its appointment (dropRowsPastTheirAppointment),
+// and /pv/[token] and /api/previsit/submit both refuse one. All three stop the
+// harm; none of them retires the ROW. Pass 2 lists only `pending`, `stopTarget`
+// was reachable only from that loop and from `recordNonDelivery`, and migration
+// 0097 adds no trigger — so a delivered link stayed at `sent` for ever and the
+// module's own counters climbed for ever with it. A worklist that never falls is
+// a worklist nobody reads.
+//
+// So a `sent` or `queued` target whose appointment is behind us is stopped with
+// the reason the module already has for exactly this — `expired`, until now
+// reachable only from expireOutbox/recordNonDelivery. It sends nothing, it reads
+// no Dentally endpoint, and it never touches a target whose appointment is still
+// ahead: `now < start`, byte-for-byte the comparison the drain, the page and the
+// submit route make, so all four agree about which side of the appointment we
+// are on. An instant that cannot be parsed is retired too, the same fail-CLOSED
+// direction decideSend takes for an undatable appointment.
+//
+// NOTE THE CRON TRUTH (ruling W3/7): /api/previsit/sweep is NOT REGISTERED in
+// cron.job as at 5 Sep 2026, so this pass cannot run until the runbook's
+// registration SQL is applied. That is exactly why the two public-door checks
+// exist on their own and were not deferred to it.
 //
 // ---------------------------------------------------------------------------
 // WHY THIS QUEUES DIRECTLY RATHER THAN DRAFTING FOR APPROVAL.
@@ -53,6 +84,26 @@ import type { TriageTarget } from "@/lib/triage/types";
 // What replaces the approval is `checkTriageMessage`, which refuses to STORE a
 // body that breaks a rule. Nothing that fails the scan reaches the outbox, so
 // there is never a queued row a human would have had to catch.
+//
+// ---------------------------------------------------------------------------
+// THE OWNER'S SWITCH IS RE-READ INSIDE BOTH LOOPS (ruling W3/4, 4 Sep 2026).
+// ---------------------------------------------------------------------------
+// This is a `maxDuration = 300` route holding a 310-second lease. Pass 1 walks up
+// to `maxExaminedPerRun` appointment rows with one Dentally read per DISTINCT
+// patient, so the verdict pass 2 acts on can be MINUTES old — the widest stale-
+// verdict window of any sweep in the tree. An owner who switched the module off
+// from System controls mid-tick would have had up to `maxQueuedPerRun` further
+// links written into previsit_outbox behind them. Nothing would have been
+// delivered while the switch stayed off (the drain re-reads it and skips this
+// source), but the rows persist, and the drain's own comment says what happens
+// next: they "drain the moment it is switched back on".
+//
+// So the shared gate (src/lib/systems/live-switch.ts) re-reads the switch every
+// ten rows and never resumes inside the same tick. It is consulted FIRST in each
+// loop, before `decideSend`/`stopTarget`/`enqueueSend`, so a stopping run retires
+// nothing it did not intend to and leaves every un-queued target exactly as it
+// was, at `pending`, for the next tick. `switchedOffMidRun` is reported in the
+// response body so an operator can tell a stopped run from a quiet one.
 //
 // ---------------------------------------------------------------------------
 // THE FORK IS RESOLVED HERE AND ONLY HERE.
@@ -201,6 +252,13 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     const now = new Date();
     const config = triageConfig();
     const siteIds = vitalitySiteIds();
+    // THE OWNER'S SWITCH, RE-READ INSIDE BOTH BATCH LOOPS (ruling W1-B/5 as
+    // applied to this sweep by W3/4). One gate for the whole run: once it has
+    // read OFF it stays off, so a flicker cannot resume flagging or queueing
+    // inside the same tick, and pass 2 is skipped entirely. It reads through
+    // isSystemEnabledForSend, which for a default-OFF slug fails CLOSED whatever
+    // MESSAGING_DRY_RUN says.
+    const gate = liveSwitch(CLIENT_ID, TRIAGE_SYSTEM_SLUG);
     // READ-ONLY. The latch (client.ts assertWritable) means a future caller
     // reaching for the handy client already in scope throws rather than writing.
     const client = new DentallyClient({
@@ -225,9 +283,9 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     const facts = new Map<string, PatientFacts | null>();
 
     for (const siteId of siteIds) {
-      if (dentallyScopeRefused()) break;
+      if (dentallyScopeRefused() || gate.switchedOffMidRun) break;
       for (let page = 1; page <= MAX_PAGES_PER_SITE; page += 1) {
-        if (examined >= config.maxExaminedPerRun || dentallyScopeRefused()) break;
+        if (examined >= config.maxExaminedPerRun || dentallyScopeRefused() || gate.switchedOffMidRun) break;
         let rows: unknown[] = [];
         try {
           const res = await client.listAppointments({
@@ -245,6 +303,10 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         if (rows.length === 0) break;
         for (const raw of rows) {
           if (examined >= config.maxExaminedPerRun) break;
+          // Consulted BEFORE the row is examined: the Dentally patient read below
+          // is the expensive part of this pass and an owner who has just switched
+          // the module off should not pay for another ten of them.
+          if (!(await gate.stillOn())) break;
           examined += 1;
           const hit = upcoming(raw);
           if (!hit) continue;
@@ -283,6 +345,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
             forkCounts[fork] = (forkCounts[fork] ?? 0) + 1;
           }
         }
+        if (gate.switchedOffMidRun) break;
         if (rows.length < PER_PAGE) break;
       }
     }
@@ -290,24 +353,6 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     // -----------------------------------------------------------------------
     // PASS 2: queue. No Dentally read at all.
     // -----------------------------------------------------------------------
-    const pending = await listTargets({
-      siteIds,
-      statuses: ["pending"],
-      limit: config.maxExaminedPerRun,
-    });
-    // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE DRAFTED (ruling W1-B/2, 3 Sep 2026).
-    // loadExcludedTargetKeys now REFUSES rather than returning an empty set when it
-    // cannot read the override table and messaging is live, so a patient a human
-    // marked inactive can never be drafted because of a database blip.
-    let excludedKeys: Set<string>;
-    try {
-      excludedKeys = await loadExcludedTargetKeys();
-    } catch (err) {
-      if (!isExclusionsUnavailable(err)) throw err;
-      console.error("[previsit] exclusion list unreadable while messaging is live; skipping this tick", err);
-      return Response.json({ ok: true, skipped: "exclusions unavailable" });
-    }
-
     let queued = 0;
     let waiting = 0;
     let stopped = 0;
@@ -315,8 +360,45 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     const stopReasons: Record<string, number> = {};
     const refusalReasons: Record<string, number> = {};
 
+    // PASS 2 DOES NOT START once the switch has been read as off in pass 1. The
+    // loop below would stop on its first row anyway (the gate never resumes
+    // inside a tick), but not listing the targets at all means an owner who
+    // switched the module off mid-run pays for no further reads, and cannot have
+    // this tick answer "exclusions unavailable" about work it was never going to
+    // do. Every target stays exactly as it was, at `pending`, for the next tick.
+    const pending = gate.switchedOffMidRun
+      ? []
+      : await listTargets({
+          siteIds,
+          statuses: ["pending"],
+          limit: config.maxExaminedPerRun,
+        });
+    // EXCLUSIONS UNKNOWN MEANS NOBODY MAY BE DRAFTED (ruling W1-B/2, 3 Sep 2026).
+    // loadExcludedTargetKeys now REFUSES rather than returning an empty set when it
+    // cannot read the override table and messaging is live, so a patient a human
+    // marked inactive can never be drafted because of a database blip.
+    let excludedKeys = new Set<string>();
+    if (!gate.switchedOffMidRun) {
+      try {
+        excludedKeys = await loadExcludedTargetKeys();
+      } catch (err) {
+        if (!isExclusionsUnavailable(err)) throw err;
+        console.error("[previsit] exclusion list unreadable while messaging is live; skipping this tick", err);
+        // The WHOLE tick, pass 3 included. Retiring an overtaken link needs no
+        // exclusion list and would be safe on its own, but a tick that cannot
+        // read one of its inputs reports one outcome rather than a partial run
+        // nobody can interpret — and nothing is lost: the next tick retires them.
+        return Response.json({ ok: true, skipped: "exclusions unavailable" });
+      }
+    }
+
     for (const target of pending) {
       if (queued >= config.maxQueuedPerRun) break;
+      // THE SWITCH, FIRST IN THE LOOP AND BEFORE ANY ROW MUTATION. Consulted
+      // ahead of decideSend/stopTarget so a run stopped mid-batch retires
+      // nothing: a target it never reached is untouched at `pending` for the
+      // next tick rather than stopped as `stale` by a run the owner halted.
+      if (!(await gate.stillOn())) break;
 
       const decision = decideSend(target, now, config);
       if (decision.action === "drop") {
@@ -403,9 +485,53 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       queued += 1;
     }
 
+    // -----------------------------------------------------------------------
+    // PASS 3: retire. No Dentally read at all, and it sends nothing.
+    // -----------------------------------------------------------------------
+    let expired = 0;
+    let expiredMore = false;
+
+    // NOT STARTED once the switch has been read as off, for the same reason pass
+    // 2 is not: a run the owner halted mutates no further rows, and a target it
+    // never reached is left exactly as it was for the next tick.
+    //
+    // ORDERED BY appointment_at ASCENDING (listTargets), so the oldest — the ones
+    // this pass exists for — are at the head of the page rather than behind a
+    // year of live appointments. ONE ROW MORE than the bound is asked for so the
+    // response can say honestly that there is more behind it (charter §0/5,
+    // ruling W3/11) instead of printing a bare figure off a capped read.
+    const liveRows = gate.switchedOffMidRun
+      ? []
+      : await listTargets({
+          siteIds,
+          statuses: ["queued", "sent"],
+          limit: config.maxExaminedPerRun + 1,
+        });
+    const overdue = liveRows.slice(0, config.maxExaminedPerRun);
+
+    for (const target of overdue) {
+      // THE SWITCH, FIRST IN THE LOOP AND BEFORE ANY ROW MUTATION (W1-B/5 as
+      // applied here by W3/4), exactly as pass 2 does it.
+      if (!(await gate.stillOn())) break;
+      const startMs = Date.parse(target.appointmentAt);
+      // Still ahead of us: leave it alone. Every row after this one is later
+      // still (the read is ordered by appointment_at), so there is nothing left
+      // to retire in this page.
+      if (Number.isFinite(startMs) && now.getTime() < startMs) break;
+      await stopTarget(target.id, "expired");
+      expired += 1;
+    }
+    // "At least this many": the page came back full AND every row on it was
+    // retired, so the bound bit rather than the list ending.
+    expiredMore = liveRows.length > config.maxExaminedPerRun && expired === overdue.length;
+
     return Response.json({
       ok: true,
       window: { from, to },
+      // True when the owner switched the module off while this run was in flight.
+      // An operator reading a short run needs to be able to tell that from a
+      // quiet one, and from a crash.
+      switchedOffMidRun: gate.switchedOffMidRun,
       examined,
       flagged,
       forkCounts,
@@ -417,6 +543,10 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       refused,
       stopReasons,
       refusalReasons,
+      // Pass 3. `expiredMore` true means the bound bit: read this as "at least
+      // `expired`", and the next tick will retire the rest.
+      expired,
+      expiredMore,
     });
   } finally {
     await releaseCronLock("sweep-previsit");

@@ -86,15 +86,40 @@ export const BLOCKED_REASON_COPY: Record<BlockedReason, string> = {
 interface WriteSourceDef {
   /** The system_toggle slug that governs this source, or null (see whyNoSwitch). */
   slug: string | null;
+  /**
+   * PER-KIND OVERRIDE, for a source that ACTS IN MORE THAN ONE MODULE.
+   *
+   * A source is usually one surface doing one job, so one slug governs all of
+   * its kinds. The co-pilot is not: the same conversational door creates a
+   * patient AND books, moves and cancels in the practice's diary, and those are
+   * two different modules with two different owner switches. Ruling W3/2 settles
+   * which one applies — "co-pilot Dentally writes carry the PER-MODULE slug of
+   * the module they act in (diary_write -> the diary-moves switch slug) in
+   * addition to the master" — so the diary kinds resolve to `calendar-writes`
+   * and, per W3/19, creating a patient resolves to `onboarding`. The gate asks
+   * the switch the owner actually flipped, not a switch named after the door.
+   *
+   * Read through writeSlugFor(source, kind), never off `.slug` directly: a
+   * caller that forgets the kind gets the source's default, which for a
+   * multi-module source is the answer that skips the check.
+   */
+  slugByKind?: Partial<Record<DentallyWriteKind, string>>;
   /** Owner-facing: which surface this is. */
   label: string;
   /**
-   * Required when `slug` is null. There are exactly two such sources and both
-   * are a member of staff editing the record in front of them rather than an
-   * automated system doing work on its own — there is no sweep to halt, so
-   * there is nothing for a kill switch to switch off. Adding one would put a
-   * control in the owner's panel that nobody asked for, which is a product
-   * decision and not a build step.
+   * Required when `slug` is null. Every such case is a surface with no system of
+   * its own in the catalog: a member of staff editing the record in front of
+   * them, or the co-pilot, which is a conversation rather than a sweep. There is
+   * no queue to halt, so there is nothing for a source-level kill switch to
+   * switch off, and adding one would put a control in the owner's panel that
+   * nobody asked for — a product decision, not a build step.
+   *
+   * A null base slug does NOT mean the source's writes are unswitched: a kind
+   * named in `slugByKind` is governed by that slug (the co-pilot's four all are),
+   * and the master switch governs every kind of every source regardless. What a
+   * null base DOES buy is that a kind added here later resolves null and turns
+   * the registry's own (source, kind) coverage test red until its module switch
+   * is written down.
    */
   whyNoSwitch?: string;
   /** The write kinds this source is allowed to make. */
@@ -150,21 +175,60 @@ export const DENTALLY_WRITE_SOURCES = {
     kinds: ["patient.update"],
   },
   // ADDED BY W1-E (the co-pilot clearance lane), additively and by agreement:
-  // routing `create_patient` through the gate needs a source, and using
-  // `onboarding` would have put "registering a completed form" on a ledger row
-  // for something an owner typed into a chat. The ledger's whole value is that
-  // it does not misdescribe what the platform did.
+  // routing `create_patient` through the gate needs a source of its own, because
+  // filing it as `onboarding` would have put "registering a completed form" on a
+  // ledger row for something an owner typed into a chat. The ledger's whole value
+  // is that it does not misdescribe what the platform did — which is why the
+  // SOURCE stayed separate even after ruling W3/19 gave the kind the Onboarding
+  // module's SWITCH. The two are different questions: "who did this?" and "which
+  // control stops it?".
   copilot: {
     slug: null,
     label: "Co-pilot (the owner adding a patient, or booking, moving or cancelling, by asking)",
     whyNoSwitch:
-      "The same shape as patient-admin: an owner in a session, behind a two-step confirm, not an automated system. There is no sweep, no queue and no message to halt, so there is nothing for a per-module kill switch to stop, and the co-pilot is deliberately absent from the systems catalog for that reason. The locks are the module guard and the `system.copilot.ask` capability on /api/copilot, the owner-only `diary-write` clearance domain, the tool's own confirm gate, and the master dentally-write-back switch that governs every source here.",
+      "Not a system of its own: the co-pilot is deliberately absent from the systems catalog, because it is an owner in a session behind a two-step confirm rather than a sweep with a queue to halt. So there is no `copilot` slug to flip, and the base is null ON PURPOSE — a write kind added here later resolves null, which the registry's own coverage test turns red until somebody writes down which module's switch governs it. NO KIND IS ACTUALLY SLUG-LESS TODAY: patient.create carries `onboarding` and the three diary kinds carry `calendar-writes`, both below. The other locks are the module guard and the `system.copilot.ask` capability on /api/copilot, the clearance domain, the tool's own confirm gate, and the master dentally-write-back switch that governs every source here.",
     // WIDENED BY WAVE 2, LANE A, from patient.create alone to the three
     // appointment kinds as well: the co-pilot's `diary_write` tool books, moves
-    // and cancels through this gate. Declared here because the Sync Status page
-    // derives "which surfaces make this write" from this registry, and a surface
-    // that changes a practice's diary while being absent from the page they read
-    // to find out what changes their diary is the exact gap W1-A closed.
+    // and cancels. Declared here because the Sync Status page derives "which
+    // surfaces make this write" from this registry, and a surface that changes a
+    // practice's diary while being absent from the page they read to find out
+    // what changes their diary is the exact gap W1-A closed.
+    //
+    // AND THE SWITCH CAME WITH THEM (ruling W3/2), because widening the kinds
+    // without revisiting the null slug left a hole worth naming: `calendar-writes`
+    // — "Diary appointment moves" — exists precisely to stop an appointment being
+    // moved, the diary desk honours it, and for a while a co-pilot move went round
+    // it with only the master switch in the way. An owner who switches the diary
+    // off and watches the desk refuse every drag must not then be able to move the
+    // same appointment by asking for it in a sentence. All THREE diary kinds carry
+    // it, not only the move: diary_write is one tool doing one job in one module,
+    // and the fail direction is closed.
+    //
+    // WHERE A CONFIRMED MOVE ACTUALLY LANDS, since wave 3 (ruling W3/1): a
+    // co-pilot MOVE is filed under the `diary` source, not this one, because
+    // diary_write no longer makes a bare gate call — it drives performMove
+    // (src/lib/calendar/move-service.ts), the desk's own guarded path, which
+    // files its row as `diary`. So an owner reading the ledger sees a move
+    // described as a diary move, which is what it was. `appointment.update`
+    // stays declared here for two reasons that are still true: the co-pilot IS a
+    // surface that changes the diary and must keep appearing on the Sync Status
+    // list of what changes it (that list is derived from `kinds`), and any future
+    // co-pilot update that does reach the gate directly must land on
+    // `calendar-writes` rather than on the master switch alone. Removing the kind
+    // would drop the co-pilot off the owner's list AND remove the per-module
+    // switch from a path that could come back.
+    slugByKind: {
+      // RULING W3/19, answering the open question this registry used to carry:
+      // creating a patient IS the New-patient onboarding module's job, whichever
+      // door asks for it, so switching Onboarding off in System controls stops
+      // the co-pilot creating patients too. Per W3/2 the slug is the module the
+      // write acts in; slug:null is reserved for the two staff sources (W1-A/3),
+      // and an owner asking in a chat is not one of those.
+      "patient.create": "onboarding",
+      "appointment.create": "calendar-writes",
+      "appointment.update": "calendar-writes",
+      "appointment.cancel": "calendar-writes",
+    },
     kinds: ["patient.create", "appointment.create", "appointment.update", "appointment.cancel"],
   },
   "patient-status": {
@@ -178,9 +242,19 @@ export const DENTALLY_WRITE_SOURCES = {
 
 export type DentallyWriteSource = keyof typeof DENTALLY_WRITE_SOURCES;
 
-/** The system_toggle slug that governs a source, or null when it has none. */
-export function writeSlugFor(source: DentallyWriteSource): string | null {
-  return DENTALLY_WRITE_SOURCES[source].slug;
+/**
+ * The system_toggle slug that governs a source's write, or null when it has none.
+ *
+ * PASS THE KIND. A source that acts in more than one module (the co-pilot: a
+ * patient record here, the practice's diary there) resolves a different slug per
+ * kind, and the two-argument form is the authoritative one — it is what the gate
+ * asks. The one-argument form answers "what governs this source by default",
+ * which is all most sources have, and is kept for the registry's own tests.
+ */
+export function writeSlugFor(source: DentallyWriteSource, kind?: DentallyWriteKind): string | null {
+  const def: WriteSourceDef = DENTALLY_WRITE_SOURCES[source];
+  if (kind && def.slugByKind && kind in def.slugByKind) return def.slugByKind[kind] ?? null;
+  return def.slug;
 }
 
 // ---------------------------------------------------------------------------

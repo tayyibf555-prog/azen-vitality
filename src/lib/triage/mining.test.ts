@@ -208,6 +208,43 @@ describe("the coverage sentence: the list never wears a complete number's clothe
 
   it("says nothing about exclusions when there are none", () => {
     expect(exclusionSentence(coverage({ excludedNoDob: 0, excludedUnderAge: 0 }))).toBe("");
+    // And says nothing about scope either: there is no figure to qualify.
+    expect(exclusionSentence(coverage({ excludedNoDob: 0, excludedUnderAge: 0 }), { unscannedSites: 2 })).toBe("");
+  });
+
+  // THE SAME HOLE THE COVERAGE LINE WAS FIXED FOR. `mergeCoverage` sums the rows
+  // the scan has TOUCHED, so on a scope where the sweep has only reached one of
+  // three sites these figures are a floor over a third of the practice — printed
+  // under a header naming all three. A bare figure there is the false-
+  // completeness failure (charter §0/5, ruling W3/11).
+  it("the exclusion COUNT never claims a scope the scan has not reached", () => {
+    // (a) a stated gap is named, and counted rather than listed.
+    const gap = exclusionSentence(coverage(), { unscannedSites: 2 });
+    expect(gap).toContain("41");
+    expect(gap).toMatch(/over the sites the scan has reached/i);
+    expect(gap).toContain("2 other sites");
+    expect(gap).toMatch(/have not been scanned/i);
+
+    // (b) one missing site reads as a sentence, not as "1 other sites".
+    const one = exclusionSentence(coverage(), { unscannedSites: 1 });
+    expect(one).toContain("one other site");
+    expect(one).toMatch(/has not been scanned/i);
+    expect(one).not.toContain("1 other sites");
+
+    // (c) a complete scope gets the plain sentence — the qualifier is a fact
+    // about a gap, and printing it with no gap would be its own small lie.
+    const whole = exclusionSentence(coverage(), { unscannedSites: 0 });
+    expect(whole).toContain("41");
+    expect(whole).not.toMatch(/over the sites the scan has reached/i);
+    expect(whole).not.toMatch(/not been scanned/i);
+
+    // (d) FAIL CLOSED. A caller that does not state the scope has not proved the
+    // figures cover it, so they are qualified rather than printed bare. This is
+    // the case every caller is in until the pre-visit view passes its own
+    // `unscannedSites` count through.
+    const unstated = exclusionSentence(coverage());
+    expect(unstated).toContain("41");
+    expect(unstated).toMatch(/over the sites the scan has reached/i);
   });
 });
 

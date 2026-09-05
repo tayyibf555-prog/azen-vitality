@@ -152,11 +152,26 @@ export const SYSTEMS: SystemDef[] = [
     // Switching it OFF halts the sweep, the queue AND the public form: an already
     // sent link stops opening, so a flip is a complete revert rather than a stop
     // with a live form still collecting answers behind it.
+    //
+    // AND IT HALTS THE IMPLANT SCAN, which the sentence below now says out loud
+    // (ruling W3/21, wave-3 review). The implant-candidate list is the other half
+    // of this module and it is fail-CLOSED under this one switch: both of its
+    // doors ask `isSystemEnabled(client, TRIAGE_SYSTEM_SLUG)` before they read a
+    // single patient — the scheduler's (src/app/api/previsit/mining-sweep) and
+    // the owner's own "Build / refresh candidates" button, which posts to
+    // src/app/api/previsit/mining-run. A practice that switches this off should
+    // not find the implant list has grown anyway, and an owner deciding whether
+    // to switch it off should be told that is what happens. There is no separate
+    // mining switch: one is a LEDGER item for the client (W3/21), not a thing
+    // this row may quietly imply. catalog.test.ts derives the requirement from
+    // the two route files rather than from this comment.
     slug: "pre-visit-triage",
     label: "Pre-visit questions",
     group: "Patient lifecycle",
     halts:
-      "No pre-visit questionnaires are sent, any queued ones stop sending, and links already sent stop opening. Answers already given are kept.",
+      "No pre-visit questionnaires are sent, any queued ones stop sending, and links already sent stop opening. " +
+      "Answers already given are kept, and the implant-candidate list stops growing: neither its nightly scan nor " +
+      "the owner's Build / refresh candidates button on the pre-visit page adds to it while this is off.",
     defaultEnabled: false,
   },
   {
@@ -276,10 +291,27 @@ export const SYSTEMS: SystemDef[] = [
   },
   // --- Operations ---
   {
+    // THE SENTENCE NAMES BOTH DOORS, because the switch closes both (ruling
+    // W3/2, wave-3 review). This row used to describe the desk alone — "from the
+    // diary" — and it was written when the diary WAS the only way to change an
+    // appointment. It is not any more: the co-pilot's `diary_write` tool books,
+    // moves and cancels, and all three of its kinds resolve to THIS slug
+    // (src/lib/dentally/write-vocabulary.ts, `copilot.slugByKind`), so an owner
+    // who switches this off and watches the desk refuse a drag cannot then move
+    // the same appointment by asking for it in a sentence.
+    //
+    // The behaviour landed first and this sentence was behind it, which is the
+    // wrong way round for a kill switch: the row is what the owner reads while
+    // deciding whether one flip is enough. Ruling W3/9 — copy matches code,
+    // never the reverse — and catalog.test.ts derives the requirement from the
+    // write registry rather than from this comment, so a kind that stops
+    // resolving `calendar-writes` turns the assertion red instead of leaving the
+    // sentence quietly over-promising.
     slug: "calendar-writes",
     label: "Diary appointment moves",
     group: "Operations",
-    halts: "Appointments can no longer be moved, reassigned or resized from the diary.",
+    halts:
+      "Appointments can no longer be moved, reassigned or resized from the diary — and the co-pilot cannot book, move or cancel one either.",
   },
   {
     slug: "rota",

@@ -6,7 +6,7 @@ import { gbp } from "@/lib/utils";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
-import { sanitiseName, sanitiseTreatment } from "@/lib/agent/free-text";
+import { FREE_TEXT_IS_DATA, sanitiseName, sanitiseTreatment } from "@/lib/agent/free-text";
 
 const REASON_GUIDANCE: Record<ReactivationReason, string> = {
   lapsed:
@@ -52,6 +52,12 @@ export function buildDraftPrompt(
     `Cadence step: ${step.step} (${step.purpose})`,
     // SANITISED: name and treatment are Dentally free text (see
     // src/lib/agent/free-text.ts). `reason` is our own enum, so it is not.
+    //
+    // AND THE BOUNDARY IS SAID OUT LOUD, immediately above the values it is about,
+    // exactly as the live booking agent's own prompt says it (ruling W1-B/3, charter
+    // §0.8). The sanitiser strips the SHAPE of an injected instruction; this line
+    // strips its AUTHORITY. Either alone is weaker than both.
+    FREE_TEXT_IS_DATA,
     `Patient: ${sanitiseName(t.patientName)}`,
     `Reason: ${t.reason}`,
     `Treatment: ${t.treatment ? sanitiseTreatment(t.treatment) : "none on file"}`,

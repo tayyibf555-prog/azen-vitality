@@ -23,8 +23,11 @@ import {
 //   MIRRORED             the write kinds that really do reach the practice's
 //                        Dentally book right now.
 //   PENDING ON THE KEY   the same kinds, while the write path is off. They are
-//                        built, calibrated and recorded as intents — the one
-//                        thing missing is the practice's write credential.
+//                        built, calibrated and recorded as intents. The name is
+//                        historical: this group is reached by EITHER switch
+//                        being off, so nothing that renders it may assert which
+//                        one is in the way without being told (see
+//                        SYNC_GROUP_TITLES and syncGroupTitle at the foot).
 //   BLOCKED BY GOVERNANCE things this platform holds that will NOT flow back,
 //                        because Dentally publishes no supported way to write
 //                        them. These do not move when the key arrives. They are
@@ -200,10 +203,56 @@ export function syncHeadline(mode: DentallyWriteMode, masterOff = false): string
     : "Writing back to Dentally is OFF. Nothing this platform does reaches your Dentally book yet: every appointment and patient change is recorded below as an intent, so you can see exactly what would have been written.";
 }
 
+/**
+ * THE HEADINGS — AND WHY THE MIDDLE ONE IS NOT ALLOWED TO NAME A CAUSE.
+ *
+ * `pending_on_key` is reached by BOTH ways of not flowing (see `syncFacts`: the
+ * grouping is the conjunction of the two switches), so a heading that names the
+ * write key is a heading that is WRONG in half the states it renders in — and
+ * wrong in the specific direction that costs the practice time. On the day the
+ * agency arms the key with the owner's own master switch still off, this page
+ * says "you have switched it off" in the headline, "Armed for writing" beside
+ * the connection, and "waiting on ONE thing you control" under every bullet: a
+ * heading between them reading "waiting on your Dentally write key" points the
+ * owner at the one party who has already done their part.
+ *
+ * So this record holds the CAUSE-NEUTRAL wording — true in either state — and is
+ * the safe answer for any caller that does not know which switch is in the way.
+ * A caller that DOES know (the page, the co-pilot tool; both hold `master.off`)
+ * should call `syncGroupTitle`/`syncGroupTitles` and get the sentence that names
+ * the switch the reader can actually act on. Neutral is the fallback because a
+ * vaguer true heading costs a reader a glance; a precise false one costs them a
+ * week of waiting on somebody else.
+ */
 export const SYNC_GROUP_TITLES: Record<SyncGroup, string> = {
   mirrored: "Flowing into Dentally",
-  pending_on_key: "Ready, waiting on your Dentally write key",
+  pending_on_key: "Built and ready, not flowing yet",
   blocked_by_governance: "Stays in this platform (Dentally has no way to accept it)",
 };
+
+/**
+ * The heading for one group, given the owner's master switch.
+ *
+ * The precedence is the SAME as the headline's and the same as the bullets':
+ * when the owner's own switch is off it is named first, whatever the key is
+ * doing, because it is the nearer of the two and the only one they can flip
+ * themselves. Every other group's heading is a fact about Dentally rather than
+ * about a switch, so it does not move.
+ */
+export function syncGroupTitle(group: SyncGroup, masterOff = false): string {
+  if (group !== "pending_on_key") return SYNC_GROUP_TITLES[group];
+  return masterOff
+    ? "Ready, waiting on your switch in System controls"
+    : "Ready, waiting on your Dentally write key";
+}
+
+/** All three headings for one deployment, for callers that render every group. */
+export function syncGroupTitles(masterOff = false): Record<SyncGroup, string> {
+  return {
+    mirrored: syncGroupTitle("mirrored", masterOff),
+    pending_on_key: syncGroupTitle("pending_on_key", masterOff),
+    blocked_by_governance: syncGroupTitle("blocked_by_governance", masterOff),
+  };
+}
 
 export const SYNC_GROUP_ORDER: SyncGroup[] = ["mirrored", "pending_on_key", "blocked_by_governance"];

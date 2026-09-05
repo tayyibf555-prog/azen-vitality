@@ -4,7 +4,7 @@ import type { NoshowTarget } from "./types";
 import type { TouchChannel } from "@/lib/reactivation/types";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getSite } from "@/lib/mock/clients";
-import { sanitiseName, sanitisePractitioner } from "@/lib/agent/free-text";
+import { FREE_TEXT_IS_DATA, sanitiseName, sanitisePractitioner } from "@/lib/agent/free-text";
 
 const PURPOSE_TONE: Record<NoshowStep["purpose"], string> = {
   confirm: "This is the first confirmation request, a couple of days before. Ask warmly if they can still make it.",
@@ -51,6 +51,12 @@ export function buildNoshowPrompt(t: NoshowTarget, channel: TouchChannel, step: 
     `Cadence step: ${step.step} (${step.purpose})`,
     `Practice: ${practiceName}`,
     // SANITISED: both names are Dentally free text (src/lib/agent/free-text.ts).
+    //
+    // AND THE BOUNDARY IS SAID OUT LOUD, immediately above the values it is about,
+    // exactly as the live booking agent's own prompt says it (ruling W1-B/3, charter
+    // §0.8). The sanitiser strips the SHAPE of an injected instruction; this line
+    // strips its AUTHORITY. Either alone is weaker than both.
+    FREE_TEXT_IS_DATA,
     `Patient: ${sanitiseName(t.patientName)}`,
     `Appointment: ${whenLabel(t.appointmentStartAt)}`,
     t.practitioner ? `With: ${sanitisePractitioner(t.practitioner)}` : "",

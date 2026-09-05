@@ -4,7 +4,7 @@ import type { TouchChannel, TreatmentOpportunity } from "./types";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
-import { sanitiseName, sanitiseTreatment } from "@/lib/agent/free-text";
+import { FREE_TEXT_IS_DATA, sanitiseName, sanitiseTreatment } from "@/lib/agent/free-text";
 
 export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel, usps?: string[]) {
   const system = [
@@ -33,6 +33,12 @@ export function buildDraftPrompt(o: TreatmentOpportunity, channel: TouchChannel,
     // SANITISED. Both are free text a human typed into Dentally, so both are the
     // drafter's injection surface. See src/lib/agent/free-text.ts; an ordinary name
     // or plan title passes through byte for byte.
+    //
+    // AND THE BOUNDARY IS SAID OUT LOUD, immediately above the values it is about,
+    // exactly as the live booking agent's own prompt says it (ruling W1-B/3, charter
+    // §0.8). The sanitiser strips the SHAPE of an injected instruction; this line
+    // strips its AUTHORITY. Either alone is weaker than both.
+    FREE_TEXT_IS_DATA,
     `Patient: ${sanitiseName(o.patientName)}`,
     `Treatment: ${sanitiseTreatment(o.treatment)}`,
     `Planned value (GBP): ${o.plannedValue}`,

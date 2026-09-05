@@ -131,8 +131,22 @@ export const MINING_MAX_PAGES_PER_WINDOW = 12;
  *
  * Every candidate costs one GET /v1/patients/:id for the date of birth and the
  * name, and that read is the expensive half of the job. Capped so a run cannot
- * burn the background ceiling: the remaining matches are simply picked up by the
- * next run, because the window does not advance past what was fully resolved.
+ * burn the background ceiling.
+ *
+ * THE CAP ONLY MAKES PROGRESS BECAUSE COVERAGE IS CLAIMED A DAY AT A TIME. The
+ * matches this budget leaves unresolved are picked up by the next run — but that
+ * is a property of the DAY loop, not of the cap, and the distinction is the
+ * difference between a scan that advances and one that does not. Under the old
+ * whole-window shape a run that spent its budget claimed nothing at all, so the
+ * next night re-read the same newest days, spent the same 120 reads on the same
+ * patients, and claimed nothing again: coverage never moved. The sweep now
+ * commits each day as it is fully read AND fully resolved
+ * (`src/app/api/previsit/_mining.ts`, the commit-with-the-claim invariant), so a
+ * budget-stopped run still banks every day it finished, and the next run resumes
+ * at the first day it did not.
+ *
+ * Which is also why this number can stay small: the run budget bounds the night,
+ * the day-by-day claim guarantees the month.
  */
 export const MINING_MAX_PATIENT_READS_PER_RUN = 120;
 
@@ -185,8 +199,50 @@ export function coverageSentence(coverage: MiningCoverage | null): string {
   return `Built from appointments between ${range}.${tail}`;
 }
 
-/** The exclusions, printed rather than hidden. Empty string when there are none. */
-export function exclusionSentence(coverage: MiningCoverage | null): string {
+/**
+ * How much of the group the exclusion figures actually cover.
+ *
+ * `unscannedSites` is how many sites IN VIEW have no scan row at all — the number
+ * `unscannedSites()` in the pre-visit view already computes for the coverage line.
+ * Omitting it does not mean "none": it means the caller did not say, which is the
+ * conservative case and is qualified as such.
+ */
+export interface MiningScope {
+  unscannedSites: number;
+}
+
+/**
+ * The exclusions, printed rather than hidden. Empty string when there are none.
+ *
+ * THE FIGURES ARE SUMMED OVER THE SITES THAT HAVE A SCAN ROW, WHICH IS NOT
+ * ALWAYS THE SITES ON SCREEN. `mergeCoverage` adds up the rows the scan has
+ * touched, and a site in view that has never been opened contributes nothing to
+ * them — so on a three-site scope where the sweep has only reached the flagship
+ * (which is exactly what its first run produces: it spends the patient-read
+ * budget and moves on), "41 patients have no date of birth on record" is a figure
+ * about one site printed under a header naming three. It is a floor, and a bare
+ * figure is the false-completeness failure this module has a rule against
+ * (charter §0/5, ruling W3/11) — the same hole `coverageLine` was fixed for, in
+ * the sentence directly above this one.
+ *
+ * So the count is qualified whenever it cannot be shown to cover the whole scope:
+ *
+ *   scope omitted            the caller did not say, so it is not claimed. The
+ *                            figures are named as covering the sites the scan has
+ *                            reached, which is true in every case.
+ *   scope with a gap         the gap is stated in the same words the coverage
+ *                            line uses — sites are counted, never named.
+ *   scope with no gap        the plain sentence. Every site in view has a row, so
+ *                            the figures cover the window the line above names.
+ *
+ * `MiningCoverage` has no bucket for a patient the scan could not read AT ALL
+ * (Dentally 404/410, or a record with no usable name). The sweep counts them —
+ * `MiningSiteReport.unreadable` in src/app/api/previsit/_mining.ts — and reports
+ * them per site in the run response, but `previsit_mining_scan` has no column to
+ * persist them, so they cannot be printed here yet. That is a migration and a
+ * handoff, and until it lands those patients are absent from this sentence.
+ */
+export function exclusionSentence(coverage: MiningCoverage | null, scope?: MiningScope): string {
   if (!coverage) return "";
   const parts: string[] = [];
   if (coverage.excludedNoDob > 0) {
@@ -200,7 +256,21 @@ export function exclusionSentence(coverage: MiningCoverage | null): string {
     );
   }
   if (parts.length === 0) return "";
-  return `Left off this list: ${parts.join("; ")}.`;
+  const body = `Left off this list: ${parts.join("; ")}.`;
+  if (scope && scope.unscannedSites <= 0) return body;
+  if (!scope) {
+    // Deliberately says "so far" and NOT "not every site in view": the caller has
+    // not told us whether there is a gap, so a sentence that asserted one would be
+    // false in exactly the case where there is none. This qualifies, it does not
+    // claim.
+    return `${body} That is a count over the sites the scan has reached so far.`;
+  }
+  const missing = scope.unscannedSites;
+  return (
+    `${body} That is a count over the sites the scan has reached: ` +
+    `${missing === 1 ? "one other site" : `${missing} other sites`} in view ` +
+    `${missing === 1 ? "has" : "have"} not been scanned, so nobody there has been counted either way.`
+  );
 }
 
 function humanDay(key: string): string {

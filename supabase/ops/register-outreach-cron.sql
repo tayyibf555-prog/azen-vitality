@@ -1,8 +1,26 @@
 -- register-outreach-cron.sql  —  register the Segment-outreach sweep on pg_cron
 -- ---------------------------------------------------------------------------
--- STATUS: NOT YET APPLIED. Run this once (Fable applies cron SQL; the app's
--- Supabase role is read-only on the cron.job TABLE, so use the cron.* FUNCTIONS,
--- which are SECURITY DEFINER — same method as supabase/ops/enable-24-7-cron.sql).
+-- STATUS: APPLIED (verify against cron.job).
+--
+-- This header used to deny that, and denied it for months while the job it
+-- registers was running every ten minutes. A read-only `select jobname, schedule,
+-- active from cron.job` against production on 4 September 2026 found
+-- 'app-sweep-outreach' registered, active, on */10, with 6,949 successful runs in
+-- cron.job_run_details, the last at 19:30 UTC that day. Ruling W3/22 corrects the
+-- header rather than the job: never move a working job in a review round.
+-- `cron.job` is the evidence; a header is only a claim, so verify before acting
+-- on either:
+--
+--   select jobname, schedule, active from cron.job where jobname = 'app-sweep-outreach';
+--
+-- The statement below is now a RE-REGISTRATION of a job that already exists. It
+-- is safe (identical name, identical */10 schedule, identical command, and
+-- cron.schedule keeps the current active flag), but it is not needed. Run it only
+-- to rebuild the job on a fresh project, or after somebody has unscheduled it.
+--
+-- Method, when it IS run: Fable applies cron SQL; the app's Supabase role is
+-- read-only on the cron.job TABLE, so use the cron.* FUNCTIONS, which are
+-- SECURITY DEFINER — same method as supabase/ops/enable-24-7-cron.sql.
 --
 -- WHY: app-sweep-outreach was never registered (see enable-24-7-cron.sql's job
 -- list — outreach is absent). Two things depend on it running on the schedule:

@@ -14,6 +14,11 @@ import { join } from "node:path";
 interface FakeRow {
   id: string; touchId: string; siteId: string; channel: string; toRef: string; body: string;
   status: string; provider?: string; toAddress?: string; touchStatus: string;
+  // Every real repository's listQueuedOutbox selects created_at and returns it as
+  // `createdAt`; the drain's 48-hour staleness guard keys off it. The fake carries
+  // it too so the mock is no laxer than live (a fake that dropped it would make
+  // the staleness branch unreachable here).
+  createdAt: string;
 }
 interface FakeModule {
   rows: FakeRow[];
@@ -31,7 +36,7 @@ const fakes = vi.hoisted(() => {
       list: vi.fn(async (siteIds: string[]) =>
         rows
           .filter((r) => r.status === "queued" && siteIds.includes(r.siteId))
-          .map(({ id, touchId, siteId, channel, toRef, body }) => ({ id, touchId, siteId, channel, toRef, body })),
+          .map(({ id, touchId, siteId, channel, toRef, body, createdAt }) => ({ id, touchId, siteId, channel, toRef, body, createdAt })),
       ),
       // Real conditional claim: queued -> sending, true only if it transitioned.
       claim: vi.fn(async (id: string) => {
@@ -143,6 +148,9 @@ function seed(module: (typeof ALL_SOURCES)[number], overrides: Partial<FakeRow> 
     id: `${module}-ob-${n}`, touchId: `${module}-t-${n}`, siteId: "site-1",
     channel: "sms", toRef: `patient:${module}-${n}`, body: "Hello from the practice",
     status: "queued", touchStatus: "queued",
+    // Fresh by default so the drain's staleness guard never fires unless a test
+    // asks for it by overriding createdAt.
+    createdAt: new Date().toISOString(),
     ...overrides,
   };
   fakes.modules[module].rows.push(row);
@@ -205,11 +213,45 @@ describe("shared messaging drain", () => {
     expect(json.perSource.noshow).toMatchObject({ skipped: "system off", sent: 0 });
     expect(fakes.modules.recall.list).not.toHaveBeenCalled();
     expect(fakes.modules.noshow.list).not.toHaveBeenCalled();
-    expect(rec.status).toBe("queued"); // untouched, drains when switched back on
+    // Untouched. These rows are freshly seeded, so they DO drain when the owner
+    // switches back on — but only because they are inside the 48-hour staleness
+    // bound; the next test pins what happens to a backlog that aged out.
+    expect(rec.status).toBe("queued");
     expect(ns.status).toBe("queued");
     // The enabled system still delivers.
     expect(react.status).toBe("sent");
     expect(json.perSource.reactivation).toMatchObject({ sent: 1 });
+  });
+
+  // The kill-switch comment in route.ts must not promise that a disabled system's
+  // whole backlog goes out the moment it is switched back on: the 48-hour
+  // staleness guard (MAX_ROW_AGE_MS) sits DOWNSTREAM of the switch check, so a
+  // switch left off for days flushes retirements, not late messages. "See you
+  // tomorrow" three days late is worse than silence. This pins the behaviour the
+  // corrected comment claims. (Pre-visit's second bound — a link is never
+  // dispatched after its appointment has started, W3/5 — lives in its own list()
+  // and is pinned by src/lib/triage/repository.test.ts.)
+  it("kill switch does not resurrect a stale backlog: a row queued while its system was off is retired unsent once past the 48-hour bound", async () => {
+    const fresh = seed("recall", { createdAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const stale = seed("recall", { createdAt: new Date(Date.now() - 49 * 3_600_000).toISOString() });
+    fakes.disabledSlugs.add("recall");
+
+    // While OFF: the source is not even listed and both rows stay queued.
+    await POST(drainRequest());
+    expect(fakes.modules.recall.list).not.toHaveBeenCalled();
+    expect(fresh.status).toBe("queued");
+    expect(stale.status).toBe("queued");
+
+    // Switched back ON: only the row still inside the 48-hour bound is delivered;
+    // the one that aged out while the owner had the system off is retired unsent.
+    fakes.disabledSlugs.delete("recall");
+    const res = await POST(drainRequest());
+    const json = await res.json();
+    expect(fresh.status).toBe("sent");
+    expect(stale.status).toBe("failed");
+    expect(json.perSource.recall).toMatchObject({ drained: 2, sent: 1, failed: 1 });
+    expect(fakes.modules.recall.recordSent).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("drains EVERY module outbox and records sends with provider 'dry-run' (no network)", async () => {

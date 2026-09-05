@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import type { ClassificationResult, Tier } from "./types";
-import { fence, fenceRule, newFenceNonce } from "./fencing";
+import { fence, fenceRule, newFenceNonce, plainLabel } from "./fencing";
 
 const CONFIDENCE_THRESHOLD = 0.6;
 
@@ -123,8 +123,14 @@ export function buildClassifyPrompt(rawInput: string, branches: string[], nonce:
     'Output ONLY: {"branch":"","branchIsNew":false,"title":"","body":"","tier":1,"tags":[],"confidence":0,"reasoning":""}',
   ].join("\n");
 
+  // The branch menu is the other line outside the fence, and it is not as
+  // platform-authored as it looks: a branch name is PROPOSED BY THE MODEL from a
+  // note ("propose a new short branch name"), stored by `ensureBranch`, then read
+  // back here by `listBranchNames`. So each name is forced into a label's shape
+  // first, and a name carrying its own newline cannot add a second line to this
+  // prompt. (`resolve-review` takes a branch name off the request body too.)
   const user = [
-    `Existing branches: ${branches.join(", ")}`,
+    `Existing branches: ${branches.map((b) => plainLabel(b, nonce)).join(", ")}`,
     "",
     "Note:",
     fence(rawInput.trim(), nonce),

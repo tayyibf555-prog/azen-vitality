@@ -732,6 +732,13 @@ describe("a module guard that names the wrong slug is worse than none", () => {
       "reactivation/[action]": "reactivation",
       "noshow/[action]": "no-show-defence",
       "after-hours/[action]": "after-hours",
+      // ADDED with the route, under ruling W3/10 (5 Sep 2026): the interest-list
+      // export. It is not a page a role may open — it is a CSV of named patients
+      // and their Dentally ids leaving the platform, which a clinician or a
+      // receptionist session must not be able to fetch by URL. The route carries
+      // `requireApproverRole` on top, so the manager (an intended user) is in and
+      // the other two are out twice over.
+      "previsit/interest/export": "pre-visit-triage",
     };
     for (const [route, slug] of Object.entries(pinned)) {
       expect(routeSource(route)).toContain(`requireModuleApiAccess(auth, "${slug}")`);

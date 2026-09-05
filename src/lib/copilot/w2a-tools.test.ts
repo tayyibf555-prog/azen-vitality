@@ -32,6 +32,7 @@ const createAppointment = vi.fn();
 const updateAppointment = vi.fn();
 const cancelAppointment = vi.fn();
 const logCopilotAction = vi.fn();
+const performMove = vi.fn();
 
 vi.mock("@/lib/dentally/read", () => ({
   searchPatients: (...a: unknown[]) => searchPatients(...a),
@@ -74,6 +75,18 @@ vi.mock("@/lib/dentally/write-gate", async (importOriginal) => {
 });
 
 vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: (...a: unknown[]) => logCopilotAction(...a) }));
+
+// THE DIARY'S OWN MOVE PATH (ruling W3/1). `performMove` is the guarded body of
+// PATCH /api/calendar/appointment/[id] — the session, the capability, the
+// calendar-writes kill switch, the write gate, the re-read, the state and
+// concurrency checks, every drop check, the `diary_move` audit row and the
+// patient's reschedule text. It is stubbed here because its own behaviour is
+// tested in src/lib/calendar/move-service*.test.ts and in the route test; what
+// THIS file proves is that the co-pilot goes through it and hands it the right
+// body, rather than making the same Dentally write with none of those checks.
+vi.mock("@/lib/calendar/move-service", () => ({
+  performMove: (id: string, body: unknown) => performMove(id, body),
+}));
 
 import { runAgentTurn } from "@/lib/agent/run";
 import { DentallyError } from "@/lib/dentally/client";
@@ -123,6 +136,20 @@ beforeEach(() => {
   updateAppointment.mockResolvedValue({ appointment: { id: "a1" } });
   cancelAppointment.mockResolvedValue({ appointment: { id: "a1", state: "cancelled" } });
   logCopilotAction.mockResolvedValue(undefined);
+  // The diary's own answer to a move it SAVED, in the shape performMove returns:
+  // a Response, because that is what the desk's route hands back.
+  performMove.mockResolvedValue(
+    Response.json(
+      {
+        ok: true,
+        confirmed: true,
+        moveId: "mv-1",
+        notify: { queued: true, reason: null },
+        appointment: { id: "a1", startTime: "2026-09-11T14:00:00Z", finishTime: "2026-09-11T14:30:00Z", practitionerId: "prac-2", practitionerName: "Dr Khan", day: "2026-09-11" },
+      },
+      { status: 200 },
+    ),
+  );
 });
 
 // ===========================================================================
@@ -208,20 +235,114 @@ describe("2. diary_write goes through the gate, and only through the gate", () =
     expect(String(ctx.actor)).not.toMatch(/@/);
   });
 
-  it("a move sends start, finish AND practitioner — never a start on its own", async () => {
-    // start_time alone leaves the old finish behind, so a 30 minute booking
-    // dragged an hour later silently becomes 90. The diary's own move
-    // (src/lib/calendar/move-service.ts) sends exactly these three.
-    const out = await run({ action: "move", appointmentId: "a1", start: "2026-09-11T14:00:00Z", finish: "2026-09-11T14:30:00Z", practitionerId: "prac-2", confirm: true });
+  const MOVE = {
+    action: "move",
+    appointmentId: "a1",
+    start: "2026-09-11T14:00:00Z",
+    finish: "2026-09-11T14:30:00Z",
+    practitionerId: "prac-2",
+    // The appointment AS IT STANDS: the diary's `expected` block, which is what
+    // makes a co-pilot move refuse rather than overwrite a change the desk made
+    // while the owner was talking.
+    currentStart: "2026-09-10T09:00:00Z",
+    currentFinish: "2026-09-10T09:30:00Z",
+    currentPractitionerId: "prac-1",
+    confirm: true,
+  };
+
+  it("A MOVE GOES THROUGH THE DIARY'S OWN MOVE PATH, never a bare gate call", async () => {
+    // RULING W3/1. The co-pilot used to call dentallyWrite.updateAppointment
+    // directly: the same write the desk makes, with none of the checks the desk
+    // makes around it (no re-read, no cancelled-row refusal, no concurrency
+    // check, no clash or continuity validation, no diary_move audit row and no
+    // text to the patient, who then arrives at the old hour). This asserts the
+    // co-pilot now drives `performMove` — and that it does not ALSO write.
+    const out = await run(MOVE);
     expect(out.done).toBe(true);
-    const [, id, payload] = updateAppointment.mock.calls[0];
+    expect(performMove).toHaveBeenCalledTimes(1);
+    expect(updateAppointment).not.toHaveBeenCalled();
+    const [id, body] = performMove.mock.calls[0] as [string, Record<string, unknown>];
     expect(id).toBe("a1");
-    expect(payload).toEqual({
-      start_time: "2026-09-11T14:00:00Z",
-      finish_time: "2026-09-11T14:30:00Z",
-      practitioner_id: "prac-2",
+    expect(body).toEqual({
+      siteId: "site-cc",
+      // Derived from the START the server validated, never from anything the
+      // model said the day was: performMove refuses a day that disagrees.
+      day: "2026-09-11",
+      startTime: "2026-09-11T14:00:00Z",
+      finishTime: "2026-09-11T14:30:00Z",
+      practitionerId: "prac-2",
+      expected: {
+        startTime: "2026-09-10T09:00:00Z",
+        finishTime: "2026-09-10T09:30:00Z",
+        practitionerId: "prac-1",
+      },
+      // THE DESK'S OWN BEHAVIOUR, not a wider one: the diary queues the patient's
+      // reschedule text whenever the time changed and nothing blocks it, and
+      // every blocker is re-derived inside performMove.
+      notifyPatient: true,
     });
-    expect(Object.keys(payload as object)).toContain("finish_time");
+  });
+
+  it("a saved move reports whether the PATIENT was told, and never assumes it", async () => {
+    const out = await run(MOVE);
+    expect(out.patientTextQueued).toBe(true);
+    expect(String(out.note)).toMatch(/text telling the patient their new time has been queued/i);
+
+    performMove.mockResolvedValueOnce(
+      Response.json({ ok: true, confirmed: true, moveId: "mv-2", notify: { queued: false, reason: "no_phone" }, appointment: { id: "a1" } }, { status: 200 }),
+    );
+    const quiet = await run(MOVE);
+    expect(quiet.done).toBe(true);
+    expect(quiet.patientTextQueued).toBe(false);
+    expect(quiet.patientTextNotSentBecause).toBe("no_phone");
+    expect(String(quiet.note)).toMatch(/No text has been queued for the patient/i);
+  });
+
+  it("REFUSES A MOVE WITH NO SNAPSHOT of the appointment as it stands", async () => {
+    // Fail closed: without `expected` the diary cannot tell "the owner is moving
+    // the appointment they were looking at" from "somebody changed it two minutes
+    // ago", so nothing is attempted at all.
+    for (const missing of ["currentStart", "currentFinish", "currentPractitionerId"]) {
+      const input = { ...MOVE } as Record<string, unknown>;
+      delete input[missing];
+      const out = JSON.parse(await dispatch("diary_write", input)) as Record<string, unknown>;
+      expect(out.done, missing).toBe(false);
+      expect(String(out.error), missing).toMatch(/as it stands NOW/i);
+      expect(performMove, missing).not.toHaveBeenCalled();
+      expect(updateAppointment, missing).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a diary refusal is relayed as a refusal, in the diary's own words", async () => {
+    // A 409 is the concurrency check, a clash or a cancelled row. None of them is
+    // a move, and the co-pilot must not dress one up as one.
+    performMove.mockResolvedValueOnce(
+      Response.json({ ok: false, error: "This appointment changed while you were moving it. Reload the diary and try again." }, { status: 409 }),
+    );
+    const out = await run(MOVE);
+    expect(out.done).toBe(false);
+    expect(out.refused).toBe(true);
+    expect(out.status).toBe(409);
+    expect(String(out.message)).toMatch(/changed while you were moving it/i);
+    expect(String(out.message)).toMatch(/appointment is unchanged/i);
+    expect(JSON.stringify(out)).not.toMatch(/"done":true/);
+    expect(logCopilotAction).toHaveBeenCalledWith(expect.objectContaining({ status: "blocked:diary_409" }));
+  });
+
+  it("a move that could not be verified says so, and says not to retry", async () => {
+    // The diary answers 200 with confirmed:false when the read-back could not
+    // settle it. A second attempt is how one move becomes two.
+    performMove.mockResolvedValueOnce(
+      Response.json(
+        { ok: false, confirmed: false, reason: "unknown", moveId: "mv-3", error: "The move may or may not have saved. Open this appointment in Dentally and check before telling the patient." },
+        { status: 200 },
+      ),
+    );
+    const out = await run(MOVE);
+    expect(out.done).toBe(false);
+    expect(out.reason).toBe("unknown");
+    expect(String(out.message)).toMatch(/may or may not have saved/i);
+    expect(String(out.message)).toMatch(/Do not retry/i);
   });
 
   it("a cancel names the appointment and sends no payload of its own", async () => {
@@ -269,13 +390,15 @@ describe("2. diary_write goes through the gate, and only through the gate", () =
 
   it("an unclassifiable error says it cannot tell whether it landed", async () => {
     // The one honest answer to a timeout: the write MAY have landed, so a second
-    // attempt is how one booking becomes two.
-    updateAppointment.mockRejectedValueOnce(new Error("socket hang up"));
-    const out = await run({ action: "move", appointmentId: "a1", start: "2026-09-11T14:00:00Z", finish: "2026-09-11T14:30:00Z", practitionerId: "prac-2", confirm: true });
+    // attempt is how one booking becomes two. Asserted on the CANCEL path, which
+    // is still a direct gate call; the move's own version of this is the
+    // "could not be verified" case above, which the diary reports for itself.
+    cancelAppointment.mockRejectedValueOnce(new Error("socket hang up"));
+    const out = await run({ action: "cancel", appointmentId: "a1", confirm: true });
     expect(out.done).toBe(false);
     expect(String(out.message)).toMatch(/cannot tell you whether it landed/i);
     expect(String(out.message)).toMatch(/do not retry/i);
-    expect(updateAppointment).toHaveBeenCalledTimes(1);
+    expect(cancelAppointment).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a time with no timezone, before anything is written", async () => {
@@ -449,13 +572,19 @@ describe("3. the modules' own rules are CALLED, not copied", () => {
     expect(source).toMatch(/import \{ AGENTS \} from "@\/lib\/agent-wiring\/roster"/);
   });
 
-  it("the diary write reaches Dentally ONLY through the gate façade", () => {
+  it("the diary write reaches Dentally ONLY through the gate façade, and the MOVE through the diary", () => {
     // The write-gate source crawl (write-gate-sites.test.ts) enforces this across
     // the whole tree; this is the same claim stated where the tool lives, so a
     // reviewer reading this file sees it.
-    for (const method of ["createAppointment", "updateAppointment", "cancelAppointment"]) {
+    for (const method of ["createAppointment", "cancelAppointment"]) {
       expect(source).toMatch(new RegExp(`dentallyWrite\\.${method}\\(`));
     }
+    // AND THE MOVE IS NOT ONE OF THEM ANY MORE (ruling W3/1). It goes through the
+    // diary's own guarded path, which makes that write itself — so a second,
+    // unguarded `updateAppointment` here would be the defect coming back.
+    expect(source).toMatch(/import \{ performMove \} from "@\/lib\/calendar\/move-service"/);
+    expect(source).toMatch(/await performMove\(appointmentId, \{/);
+    expect(source).not.toMatch(/dentallyWrite\.updateAppointment\(/);
     // Comment-stripped, the same way write-gate-sites.test.ts strips them: three
     // paragraphs in this file DISCUSS the client the create_patient tool used to
     // build, and counting prose as a call would drown the signal.

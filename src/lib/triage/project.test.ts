@@ -7,7 +7,7 @@ import {
 } from "./bank";
 import { FORBIDDEN_IN_BRIEF, symptomTermIn } from "./forbidden";
 import { projectBank, usableConfig, usableCustom } from "./project";
-import type { TriageBankConfig } from "./types";
+import type { TriageBankConfig, TriageCustomQuestion } from "./types";
 
 // ===========================================================================
 // THE CONTRACTUAL RULE, PINNED.
@@ -173,6 +173,149 @@ describe("projectBank refuses a symptom question ON THE SHORT BANK, whatever the
 });
 
 // ===========================================================================
+// THE TEST project.ts NAMES BY NAME.
+//
+// project.ts:43 tells the next engineer that breaking either brief-bank filter
+// turns `brief-bank-has-no-symptom-questions` red. Until this ran, no test of
+// that name existed anywhere in the tree: `vitest -t
+// "brief-bank-has-no-symptom-questions"` skipped every test and exited 0, so a
+// citation meant to prove the guard was pinned read GREEN to anyone who checked
+// it (ruling W3/17 — a comment naming a test that does not exist is corrected or
+// the test is written).
+//
+// ONE test, THREE routes onto the short bank, because the comment promises one
+// name for the whole rule. It must go red under each of these mutations, taken
+// one at a time, in admit():
+//
+//   1. delete `if (kind === "symptom")`         → the honestly-classified question
+//   2. delete the symptomTermIn loop            → the mis-classified LABEL
+//   3. drop `o.label` / `o.value` from patientText → the mis-classified OPTION
+// ===========================================================================
+describe("the contractual fork, pinned under the name project.ts cites", () => {
+  it("brief-bank-has-no-symptom-questions", () => {
+    // ROUTE 1: an owner switches an honestly-classified symptom question on.
+    for (const key of SYMPTOM_KEYS) {
+      const projected = projectBank("brief", {
+        enabledKeys: [...defaultConfigFor("brief").enabledKeys, key],
+        required: {},
+        custom: [],
+      });
+      expect(projected.questions.map((q) => q.key), `${key} reached the short bank`).not.toContain(key);
+      expect(projected.dropped.find((d) => d.key === key)?.reason).toBe("symptom-on-brief");
+    }
+
+    // ROUTE 2: the owner picked "logistics" from the dropdown and then wrote a
+    // symptom question. The classification cannot catch this one.
+    const byLabel = projectBank("brief", {
+      enabledKeys: defaultConfigFor("brief").enabledKeys,
+      required: {},
+      custom: [
+        { key: "custom-hurting", label: "Is anything hurting before you come in?", type: "yesno", kind: "logistics", required: false },
+      ],
+    });
+    expect(byLabel.questions.map((q) => q.key)).not.toContain("custom-hurting");
+    expect(byLabel.dropped.find((d) => d.key === "custom-hurting")?.reason).toBe("symptom-on-brief");
+
+    // ROUTE 3 (W3/3): the LABEL is innocuous, the classification is honest for
+    // the label, and the symptom is in an ANSWER the patient taps. This is the
+    // one the label scan alone walked past.
+    const byOption = projectBank("brief", {
+      enabledKeys: defaultConfigFor("brief").enabledKeys,
+      required: {},
+      custom: [
+        {
+          key: "custom-visit-reason",
+          label: "How can we help at this visit?",
+          type: "choice",
+          kind: "logistics",
+          options: [
+            { value: "routine", label: "Just my usual check-up" },
+            { value: "sore", label: "I have toothache and it is painful" },
+          ],
+          required: true,
+        },
+      ],
+    });
+    expect(byOption.questions.map((q) => q.key)).not.toContain("custom-visit-reason");
+    const dropped = byOption.dropped.find((d) => d.key === "custom-visit-reason");
+    expect(dropped?.reason).toBe("symptom-on-brief");
+    // AND IT NAMES THE WORD, so the editor can tell the owner what to rewrite
+    // rather than showing them a shorter form than they configured.
+    expect(dropped?.matched?.toLowerCase()).toBe("painful");
+
+    // AND THE SHIPPED SHORT BANK IS STILL THE SHORT BANK: a scan broadened over
+    // option text must not start eating the questions the fork exists to ask.
+    expect(projectBank("brief", null).questions.map((q) => q.key).sort()).toEqual(
+      ["anything-helpful", "attending", "health-changed", INTEREST_QUESTION_KEY, "smile-change"].sort(),
+    );
+  });
+});
+
+// ===========================================================================
+// RULING W3/3, in its own right: the OPTION labels and values of a custom
+// choice question are scanned exactly like the question text.
+// ===========================================================================
+describe("custom choice OPTIONS are scanned like question text (W3/3)", () => {
+  function withOptions(options: { value: string; label: string }[]) {
+    return {
+      enabledKeys: defaultConfigFor("brief").enabledKeys,
+      required: {},
+      custom: [
+        { key: "custom-visit-reason", label: "How can we help at this visit?", type: "choice" as const, kind: "logistics" as const, options, required: true },
+      ],
+    };
+  }
+
+  it("a symptom word in an option LABEL keeps the question off the short bank", () => {
+    const projected = projectBank("brief", withOptions([
+      { value: "routine", label: "Just my usual check-up" },
+      { value: "broken", label: "A broken tooth" },
+    ]));
+    expect(projected.questions.map((q) => q.key)).not.toContain("custom-visit-reason");
+    expect(projected.dropped.find((d) => d.key === "custom-visit-reason")?.matched?.toLowerCase()).toBe("broken");
+  });
+
+  it("a symptom word in an option VALUE keeps it off too — the value reaches a staff screen", () => {
+    const projected = projectBank("brief", withOptions([
+      { value: "routine", label: "Just my usual check-up" },
+      { value: "pain", label: "Something I would like looked at" },
+    ]));
+    expect(projected.questions.map((q) => q.key)).not.toContain("custom-visit-reason");
+    expect(projected.dropped.find((d) => d.key === "custom-visit-reason")?.reason).toBe("symptom-on-brief");
+  });
+
+  it("the SAME question is still asked on the FULL bank, so the scan is fork-scoped", () => {
+    const config = withOptions([
+      { value: "routine", label: "Just my usual check-up" },
+      { value: "sore", label: "I have toothache and it is painful" },
+    ]);
+    const projected = projectBank("full", { ...config, enabledKeys: defaultConfigFor("full").enabledKeys });
+    expect(projected.questions.map((q) => q.key)).toContain("custom-visit-reason");
+  });
+
+  it.each(["full", "brief"] as const)("a FUNDING word in an option is dropped from %s", (fork) => {
+    const config = withOptions([
+      { value: "a", label: "On the NHS" },
+      { value: "b", label: "Something else" },
+    ]);
+    const projected = projectBank(fork, { ...config, enabledKeys: defaultConfigFor(fork).enabledKeys });
+    expect(projected.questions.map((q) => q.key)).not.toContain("custom-visit-reason");
+    expect(projected.dropped.find((d) => d.key === "custom-visit-reason")?.reason).toBe("funding-word");
+  });
+
+  it("an innocuous choice question is still admitted on the short bank", () => {
+    // Guards the guard: a scan that refused every choice question would pass the
+    // tests above while making the editor's choice type useless.
+    const projected = projectBank("brief", withOptions([
+      { value: "morning", label: "Mornings suit me best" },
+      { value: "afternoon", label: "Afternoons suit me best" },
+    ]));
+    expect(projected.questions.map((q) => q.key)).toContain("custom-visit-reason");
+    expect(projected.dropped.map((d) => d.key)).not.toContain("custom-visit-reason");
+  });
+});
+
+// ===========================================================================
 // RULING 1 (3 Sep 2026): the anxiety question is FULL-only BY DEFAULT, but the
 // owner may enable it for the short bank. Both halves are load-bearing, and a
 // single test cannot hold both.
@@ -294,6 +437,55 @@ describe("usableConfig", () => {
     const config = usableConfig("full", { enabledKeys: ["attending"], required: { attending: true }, custom: [] });
     expect(config.enabledKeys).toEqual(["attending"]);
     expect(config.required.attending).toBe(true);
+  });
+
+  // THE DATA LOSS THIS FUNCTION USED TO CAUSE, in the projection rather than on a
+  // screen. Switching every shipped question off is a supported thing for an owner
+  // to do — the editor warns, it does not refuse — and the fallback used to return
+  // `defaultConfigFor(fork)` WHOLE, taking the practice's own questions with it.
+  // The stored row still held them, so nothing anywhere could show what had gone.
+  //
+  // Both routes out of the fallback are asserted, because they are separate `if`s
+  // and a fix to one leaves the other losing the same data: an empty enabledKeys
+  // array (the owner's own doing) and a missing one (a half-written row).
+  it("keeps the practice's OWN questions when the bank selection falls back", () => {
+    const custom: TriageCustomQuestion[] = [
+      { key: "custom-heard", label: "How did you hear about us?", type: "text", kind: "logistics", required: false },
+      { key: "custom-parking", label: "Do you need a parking space?", type: "yesno", kind: "logistics", required: false },
+    ];
+
+    // (a) every shipped question switched off.
+    const emptied = usableConfig("full", { enabledKeys: [], required: {}, custom });
+    expect(emptied.enabledKeys).toEqual(defaultConfigFor("full").enabledKeys);
+    expect(emptied.custom.map((c) => c.key)).toEqual(["custom-heard", "custom-parking"]);
+
+    // (b) enabledKeys missing entirely — a broken row, not an empty practice.
+    const partial = usableConfig("full", { required: {}, custom });
+    expect(partial.custom.map((c) => c.key)).toEqual(["custom-heard", "custom-parking"]);
+
+    // And they are ASKED, not merely carried: the projection is what the patient
+    // sees, and a config kept in a field nobody projects is the same loss.
+    const projected = projectBank("full", { enabledKeys: [], required: {}, custom });
+    expect(projected.questions.map((q) => q.key)).toContain("custom-heard");
+    expect(projected.questions.map((q) => q.key)).toContain("custom-parking");
+  });
+
+  it("restoring a custom question does NOT restore it past the two scans", () => {
+    // Carrying `custom` onto the fallback must not become a door around `admit`.
+    // A funding word is refused on both banks; a symptom question is refused on
+    // the brief one — on the fallback path exactly as on the ordinary one.
+    const projected = projectBank("brief", {
+      enabledKeys: [],
+      required: {},
+      custom: [
+        { key: "custom-nhs", label: "Are you an NHS patient?", type: "yesno", kind: "logistics", required: false },
+        { key: "custom-pain", label: "Is anything hurting today?", type: "yesno", kind: "logistics", required: false },
+      ],
+    });
+    expect(projected.questions.map((q) => q.key)).not.toContain("custom-nhs");
+    expect(projected.questions.map((q) => q.key)).not.toContain("custom-pain");
+    expect(projected.dropped.find((d) => d.key === "custom-nhs")?.reason).toBe("funding-word");
+    expect(projected.dropped.find((d) => d.key === "custom-pain")?.reason).toBe("symptom-on-brief");
   });
 });
 

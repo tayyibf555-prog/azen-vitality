@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
 import { SEND_SITES, PATIENT_SEND_SITES } from "./send-sites";
 import { CORRESPONDENCE_SOURCE_NAMES } from "./repository";
 
@@ -24,27 +24,46 @@ import { CORRESPONDENCE_SOURCE_NAMES } from "./repository";
  * list of places the platform used to send from.
  */
 
-const SRC = resolve(__dirname, "..", "..");
-const REPO = resolve(SRC, "..");
-
 /** Where `sendMessage` is DEFINED. Its own declaration is not a call site. */
 const SEND_MODULE = "src/lib/messaging/send.ts";
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === ".next") continue;
-      walk(full, out);
-      continue;
-    }
-    if (!/\.tsx?$/.test(entry.name)) continue;
-    // Tests mock and assert on sendMessage constantly; they never put a message on
-    // the wire, so counting them would drown the signal in noise.
-    if (/\.test\.tsx?$/.test(entry.name)) continue;
-    out.push(full);
-  }
-  return out;
+/** This file, for the assertions below that read their own source. */
+const SELF = "lib/inbox/send-sites.test.ts";
+
+/**
+ * EVERY SOURCE FILE, as a path relative to src/, through the SHARED walk.
+ *
+ * This used to hand-roll its own directory listing, skipping only `node_modules`
+ * and `.next` — which left it the one whole-src sweep that still DESCENDED
+ * dot-directories, and it reads the bytes of every file it lists. `walk-src.test.ts`
+ * materialises a real dot-directory mid-run (`mkdtemp ".walk-fixture-*"` under
+ * lib/test-support, with a `route.ts` and a nested `.git/route.ts` inside) and
+ * removes it again in a `finally`, so in a parallel run this crawl listed the
+ * fixture's files and then reached `readFileSync` after they were gone: ENOENT,
+ * failing the send registry for a reason that has nothing to do with sending.
+ * `source-hygiene.test.ts` had already had to name that fixture in its own skip
+ * list for exactly this. `walkSrc` skips dot-directories by default, so the race
+ * is closed by construction rather than by a second name-based skip; it also roots
+ * the walk at THIS FILE's src/ instead of at a `resolve(__dirname, ...)` climb.
+ *
+ * THE SECOND PASS IS NOT DECORATION. The third assertion in this file claims that
+ * nothing in the platform reaches Twilio or Resend around `sendMessage`, and Next
+ * serves `app/.well-known/<x>/route.ts` as a real route handler
+ * (node_modules/next/dist/docs/01-app/02-guides/backend-for-frontend.md), so a
+ * sweep making that claim may not skip the dot-directories the router serves. That
+ * is the same posture the destructive-route and loading.tsx sweeps take, and it is
+ * narrowed to app/ for the same reason theirs are — the transient fixture lives
+ * under lib/test-support, where an app-narrowed walk cannot see it. Dropping this
+ * pass would silently narrow a security claim; it is pinned below.
+ *
+ * Tests are excluded (walkSrc's default): they mock and assert on sendMessage
+ * constantly and never put a message on the wire, so counting them would drown the
+ * signal in noise.
+ */
+function sourceFiles(): string[] {
+  const wholeTree = walkSrc();
+  const dotDirsTheRouterServes = walkSrc({ subdir: "app", includeDotDirs: true });
+  return [...new Set([...wholeTree, ...dotDirsTheRouterServes])].sort();
 }
 
 /**
@@ -142,11 +161,11 @@ function countCalls(source: string): number {
 /** file (repo-relative, forward slashes) -> number of call sites. */
 function crawl(): Map<string, number> {
   const found = new Map<string, number>();
-  for (const file of walk(SRC)) {
-    const rel = relative(REPO, file).split(sep).join("/");
-    if (rel === SEND_MODULE) continue;
-    const n = countCalls(readFileSync(file, "utf8"));
-    if (n > 0) found.set(rel, n);
+  for (const rel of sourceFiles()) {
+    const file = `src/${rel}`;
+    if (file === SEND_MODULE) continue;
+    const n = countCalls(readFileSync(srcPath(rel), "utf8"));
+    if (n > 0) found.set(file, n);
   }
   return found;
 }
@@ -184,17 +203,17 @@ describe("every send site is declared", () => {
     // Twilio or Resend around it. If this ever fails, the registry has become a
     // list of SOME of the places the platform sends from.
     const callers: string[] = [];
-    for (const file of walk(SRC)) {
-      const rel = relative(REPO, file).split(sep).join("/");
-      if (rel === SEND_MODULE || rel.startsWith("src/lib/messaging/providers/")) continue;
-      const code = stripComments(readFileSync(file, "utf8"));
+    for (const rel of sourceFiles()) {
+      const file = `src/${rel}`;
+      if (file === SEND_MODULE || file.startsWith("src/lib/messaging/providers/")) continue;
+      const code = stripComments(readFileSync(srcPath(rel), "utf8"));
       // Alias-resolved for the same reason as countCalls: `import { sendViaTwilio as
       // wire }` would otherwise walk straight past the door this test guards.
       for (const exported of ["sendViaTwilio", "sendViaResend"]) {
         const bound = localBindings(code, PROVIDER_MODULE_TAIL, exported);
         const names = new Set(bound.length > 0 ? bound : [exported]);
         for (const name of names) {
-          if (countByName(code, name) > 0) callers.push(rel);
+          if (countByName(code, name) > 0) callers.push(file);
         }
       }
     }
@@ -202,6 +221,93 @@ describe("every send site is declared", () => {
       callers,
       `these call a provider directly, bypassing sendMessage and every gate around it: ${callers.join(", ")}`,
     ).toEqual([]);
+  });
+});
+
+describe("the crawl's file list comes from the shared walk", () => {
+  /**
+   * These three pin the walk itself, because the walk is the half of this file that
+   * decides WHAT is audited. A crawl that quietly stops opening a directory keeps
+   * printing the same completeness claim about a smaller tree, and nothing else in
+   * the suite can tell — src/ holds no dot-directory of its own to find one with.
+   */
+  const selfSource = (): string => stripComments(readFileSync(srcPath(SELF), "utf8"));
+
+  /**
+   * The BODY of `sourceFiles`, not the whole file.
+   *
+   * A pin that searched the whole file for "includeDotDirs: true" would match the
+   * assertion below quoting it and stay green after the pass it guards was deleted —
+   * the always-true guard this programme keeps finding. So the needle is looked for
+   * only inside the function that must contain it.
+   */
+  const walkSetup = (): string => {
+    const code = selfSource();
+    const start = code.indexOf("function sourceFiles(");
+    expect(start, "sourceFiles() has been renamed or removed; this pin is stale").toBeGreaterThan(
+      -1,
+    );
+    const end = code.indexOf("\n}", start);
+    expect(end, "sourceFiles() has no closing brace at column 0; this pin is stale").toBeGreaterThan(
+      start,
+    );
+    return code.slice(start, end);
+  };
+
+  // MUTATION: hand-roll the readdir back ("it was only ten lines"). That is the walk
+  // that descended lib/test-support/.walk-fixture-*/ and ENOENT'd on it mid-run.
+  it("never hand-rolls a directory listing again", () => {
+    const code = selfSource();
+    expect(code, "the file list must come from walk-src, not a private copy").toContain(
+      "walkSrc(",
+    );
+    const clause = code.match(/import\s*\{([^}]*)\}\s*from\s*"node:fs"/);
+    expect(clause, "this file still has to READ the sources it walks").not.toBeNull();
+    expect(
+      clause?.[1]
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean),
+      "a listing has been hand-rolled here again: reading is this file's job, " +
+        "listing is walk-src's, and the private walk is what raced walk-src.test.ts's " +
+        "transient dot-directory fixture into an ENOENT",
+    ).toEqual(["readFileSync"]);
+  });
+
+  // MUTATION: delete the second walkSrc pass "because src/app holds no dot-folders".
+  // Everything stays green and the provider assertion goes on claiming that NOTHING
+  // reaches Twilio or Resend around sendMessage, about a directory it never opened.
+  it("still opens the dot-directories the router serves", () => {
+    const setup = walkSetup();
+    expect(
+      setup,
+      'this file claims "sendMessage is the only door to a provider", which it ' +
+        "cannot claim about app/.well-known/<x>/route.ts if it never looks there",
+    ).toContain("includeDotDirs: true");
+    expect(
+      setup,
+      "and that pass stays narrowed to app/, away from the transient fixture under " +
+        "lib/test-support that the default walk is skipping",
+    ).toContain('subdir: "app", includeDotDirs: true');
+    expect(setup, "the whole-src pass is still there too").toMatch(/walkSrc\(\s*\)/);
+  });
+
+  // MUTATION: concatenate the two passes without the Set. Every file under src/app is
+  // returned by BOTH, so each one would be crawled and counted twice and the per-file
+  // call counts would double — an all-green way to make the registry unmaintainable.
+  it("lists every file once, in a stable order, across both passes", () => {
+    const files = sourceFiles();
+    expect(new Set(files).size, "the two passes overlap on all of app/").toBe(files.length);
+    expect(files, "a failure list in readdir order is a different list per machine").toEqual([
+      ...files,
+    ].sort());
+    expect(files).toContain("lib/inbox/send-sites.ts");
+    expect(files, "the app pass has to actually return app files").toContain(
+      "app/api/messaging/drain/route.ts",
+    );
+    expect(files, "tests are excluded; they mock sendMessage, they never send").not.toContain(
+      SELF,
+    );
   });
 });
 

@@ -248,6 +248,13 @@ export type TriageStopReason =
   | "opted_out"
   | "excluded"
   | "stale"
+  /**
+   * The appointment started before the queued link reached the drain, so it was
+   * retired unsent (ruling W3/5). Distinct from `stale`, which is the SWEEP's
+   * word for a target it never composed: this one had a message written and
+   * waiting, and the visit overtook it.
+   */
+  | "expired"
   | "undeliverable"
   | "no_link"
   | "staff_stopped";

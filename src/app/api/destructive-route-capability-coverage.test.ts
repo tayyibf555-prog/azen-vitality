@@ -546,6 +546,29 @@ describe("5. spot-pins on the acts a practice asked to control", () => {
     expect(routeSource("rota/shift/[id]")).toContain('await requireCapability(auth, "rota.edit")');
   });
 
+  it("the interest-list export is a READ, and still carries both locks (W3/10)", () => {
+    // NAMED HERE BECAUSE IT IS NOT A WRITE ROUTE and would otherwise be invisible
+    // to this sweep, while being exactly the kind of act it exists for: ruling
+    // W3/10 asked for the per-treatment interest list as a file, and a file of
+    // named patients with their Dentally ids leaving the platform deserves the
+    // same scrutiny as a write.
+    //
+    // Two locks, and each would be sufficient TODAY — the module slug's own roles
+    // (owner, agency, practice manager) and APPROVER_ROLES are the same set. They
+    // are both here because they can drift apart: the day the pre-visit module
+    // widens to the clinician for the pre-visit summary, the module gate alone
+    // would hand him the export as well.
+    //
+    // The read/write assertion is the other half: adding a POST here would put a
+    // patient-data act in this sweep's interim tier without anybody noticing, so
+    // this test fails first and asks for the decision to be made deliberately.
+    const src = routeSource("previsit/interest/export");
+    expect(src).toContain('requireModuleApiAccess(auth, "pre-visit-triage")');
+    expect(src).toContain("requireApproverRole(auth)");
+    expect(src).toContain("requireClientAccess(auth");
+    expect(WRITE_METHOD.test(src), "the export grew a write method; re-judge its authorisation").toBe(false);
+  });
+
   it("the permissions API keeps its owner role guard as well as the capability", () => {
     // Belt and braces, and the reason the API coverage sweep is satisfied by this
     // route without an exemption entry.

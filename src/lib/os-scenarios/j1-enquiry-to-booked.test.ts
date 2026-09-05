@@ -369,14 +369,14 @@ describe("JOURNEY 1 — website enquiry → first text → reply → booking →
     expect(roles, "the reply did not join the outbound message").toEqual(["agent", "patient"]);
   });
 
-  it("step 4: booking with writes OFF — the agent refuses, tells the patient nothing, files no intent", async () => {
+  it("step 4: booking with writes OFF — the agent refuses, tells the patient nothing, and FILES the attempt", async () => {
     await enquiryThroughFirstContact();
     const dentally = dentallyDouble();
 
     // writesEnabled unset ⇒ the deployment gate decides, and it is off. This is
-    // production today, and it is the ACCEPTED trade recorded for the co-pilot's
-    // create_patient: the tool touches Dentally not at all, so there is no ledger
-    // row, which is a stronger property than a dry-run row would be.
+    // production today. Ruling W3/16: the early-return trade was granted to the
+    // co-pilot create_patient ONLY, so this door records (blocked/writes_disabled)
+    // and then refuses, exactly as the desk cancel does.
     const dispatch = makeDispatch(agentDeps(dentally));
     const out = await dispatch(BOOK_TOOL, bookInput());
 
@@ -387,7 +387,43 @@ describe("JOURNEY 1 — website enquiry → first text → reply → booking →
     expect(String(parsed.error)).toContain("Do not tell the patient they have an appointment");
 
     expect(dentally.created, "a refusal reached the Dentally client").toEqual([]);
-    expect(world.rows("dentally_write_intent"), "a path that touches Dentally not at all filed a row").toEqual([]);
+
+    const intents = world.rows("dentally_write_intent");
+    expect(intents, "the patient's booking attempt left no trace").toHaveLength(1);
+    expect(intents[0].kind).toBe("appointment.create");
+    expect(intents[0].status).toBe("blocked");
+    // `writes_disabled`, NOT the `client_read_only` of step 5, and the two are not
+    // in tension. W2-C/3 governs the ARMED path below, where the agent's injected
+    // client reaches its own latch; THIS path hands the gate no client at all
+    // (src/lib/agent/tools.ts recordRefusedWrite says why), so the gate pre-empts
+    // and files what the non-injecting staff doors file — the same reason the
+    // coordinator reads in step 5b.
+    expect(intents[0].blocked_reason).toBe("writes_disabled");
+    expect(intents[0].source).toBe("booking-agent");
+    expect(intents[0].module_slug).toBe("booking-agent");
+    // An agent slug, never a person and never the patient's number.
+    expect(intents[0].actor).toBe("agent:booking-agent");
+    expect(intents[0].response_id ?? null).toBeNull();
+
+    // W1-A/1's payload rule at the door where it is easiest to break: this agent
+    // knows the lead's NAME and the mobile it has been texting, and neither may be
+    // filed. Pinned as the whole field list rather than "no Rachel anywhere",
+    // because the summariser's allow-list would swallow a personal field silently
+    // — it would still be listed by name here. Anything personal added to this
+    // payload later reddens this line before the allow-list is the only thing left
+    // between it and the database.
+    const summary = intents[0].payload_summary as { fields: string[]; values: Record<string, unknown> };
+    const EXPECTED_FIELDS = ["booked_via_api", "patient_id", "reason", "start_time"];
+    expect(summary.fields, "the filed payload grew a field").toEqual(EXPECTED_FIELDS);
+    expect(Object.keys(summary.values).sort(), "a filed value is not on the non-personal list").toEqual(
+      EXPECTED_FIELDS,
+    );
+    expect(summary.values.patient_id).toBe(PATIENT_ID);
+
+    // Recording is not writing. The row names the live host, and "blocked" is the
+    // only status that is safe there — the sweep is what says so, not this test.
+    expect(liveDentallyViolations(world, guard)).toEqual([]);
+    expect(guard.calls, "a refused booking still put a request on a wire").toEqual([]);
   });
 
   it("step 5: booking with the agent armed but the deployment not — the write is refused and filed blocked", async () => {

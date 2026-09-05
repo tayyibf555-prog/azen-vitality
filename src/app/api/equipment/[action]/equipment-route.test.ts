@@ -202,6 +202,49 @@ describe("2. the topic gate runs before the model, not after it", () => {
     expect(body.factsOnly).toBeUndefined();
   });
 
+  // -------------------------------------------------------------------------
+  // THE REGISTER-AWARE HALF OF THE JUDGEMENT RULE (W3/15), asserted through the
+  // ROUTE rather than the gate.
+  //
+  // `outOfTestVocabulary` is an OPTIONAL field on the gate input — it had to be,
+  // so the type did not break while the two doors were being wired — which means
+  // a route that never passes it compiles, ships, and silently answers "can we
+  // still use the Lisa MB17?" about a machine the register says is out of test
+  // with no take-out-of-use sentence at all. Nothing above catches that: every
+  // existing judgement case here RESTATES the fact ("...it is overdue its
+  // pressure test"), which the stated-fact rule catches on its own.
+  //
+  // So these two pin the WIRING, in both directions: the register supplies the
+  // fact when the person does not, and it does not invent one when the machine
+  // is in date. Deleting `outOfTestVocabulary:` from the route's gate input
+  // turns the first red and leaves the second green.
+  // -------------------------------------------------------------------------
+  // Fixed dates, both far from any clock this suite could be run under: the past
+  // one is permanently past and the future one is permanently future, so neither
+  // test becomes a time bomb the first time somebody runs the suite in 2027.
+  const OVERDUE = { ...ASSET, id: "a2", name: "Duraflow compressor", make: "Duraflow", model: "MB17", serial: "C9911", nextServiceDue: "2020-01-01" };
+  const IN_DATE = { ...ASSET, id: "a3", name: "Kavo chair", make: "Kavo", model: "E30", serial: "K7712", nextServiceDue: "2099-01-01" };
+
+  it("a 'can we still use it' question about a machine the REGISTER says is out of test gets the DECISION sentence, without the person restating the fact", async () => {
+    store.assets = [OVERDUE, IN_DATE];
+    const body = (await (await ask("Can we still use the Duraflow compressor?")).json()) as Record<string, unknown>;
+    expect(body.refused).toBeUndefined();
+    expect(body.factsOnly, "the route never told the gate which assets are out of test").toBe(true);
+    expect(String(body.reply)).toContain(EQUIPMENT_REFUSALS.judgement);
+    expect(store.turns).toBe(1);
+  });
+
+  it("the same question about a machine that is IN date gets NO appended sentence", async () => {
+    // The other error direction, and it is not a small one: bolting "take the
+    // machine out of use and call the engineer" onto a question about a
+    // compliant chair is how the sentence stops being read on the day it counts.
+    store.assets = [OVERDUE, IN_DATE];
+    const body = (await (await ask("Can we still use the Kavo chair?")).json()) as Record<string, unknown>;
+    expect(body.factsOnly).toBeUndefined();
+    expect(String(body.reply)).not.toContain(EQUIPMENT_REFUSALS.judgement);
+    expect(store.turns).toBe(1);
+  });
+
   it("an EMPTY register refuses with the sentence that says what to do next", async () => {
     store.assets = [];
     const body = (await (await ask("What does E04 mean on the autoclave?")).json()) as Record<string, unknown>;

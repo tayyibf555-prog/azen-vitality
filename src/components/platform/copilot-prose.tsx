@@ -14,8 +14,15 @@ import { parseCopilotMarkdown, type CopilotBlock, type CopilotInline } from "@/l
 // Every string below reaches the DOM as a React text child or as the href of an
 // anchor whose scheme the parser has already proved. React escapes text children,
 // so a reply containing "<script>" renders the characters "<script>" and nothing
-// executes. copilot-markdown.test.ts renders this component against hostile input
-// and asserts on the markup, so the claim is pinned rather than promised.
+// executes. TWO tests in src/lib/copilot import this component and render it with
+// react-dom/server against hostile input, asserting on the MARKUP rather than on
+// the parser's intent: markdown.test.ts ("hostile input renders as text and
+// nothing else", plus a tag allow-list), and zz-xss-probe.test.ts, an
+// independently written vector list. markdown.test.ts additionally reads this
+// file as SOURCE ("never emits dangerouslySetInnerHTML from either half of the
+// reader"), so the ban above covers code that no test calls. The claim is
+// pinned, not promised — and platform-citations.test.ts in this directory keeps
+// those pointers resolvable (ruling W3/17).
 //
 // NO "use client". This component holds no state and no handler, so it stays a
 // plain component that either tree can render: the page chat (a client component)

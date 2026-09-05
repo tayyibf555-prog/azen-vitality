@@ -20,7 +20,7 @@ import {
   updateAsset,
 } from "@/lib/equipment/repository";
 import { EQUIPMENT_TOOLS, makeEquipmentDispatch } from "@/lib/equipment/tools";
-import { gateEquipmentQuestion, EQUIPMENT_REFUSALS } from "@/lib/equipment/topic-gate";
+import { gateEquipmentQuestion, outOfTestVocabulary, EQUIPMENT_REFUSALS } from "@/lib/equipment/topic-gate";
 import { ASSET_CATEGORIES, EQUIPMENT_SLUG, type AssetCategory } from "@/lib/equipment/types";
 
 export const dynamic = "force-dynamic";
@@ -227,6 +227,13 @@ export async function POST(
         });
       }
 
+      // Today, in London, read ONCE and used by both the gate below and the
+      // dispatch/prompt further down. It is computed here rather than after the
+      // gate because the gate needs it: `outOfTestVocabulary` is what tells the
+      // gate which machines the REGISTER says are out of test, and a gate given
+      // a register but not a date cannot know that.
+      const today = londonDayKey(new Date());
+
       // 2. THE SERVER-SIDE TOPIC GATE. Deterministic, before the Anthropic
       //    client is constructed and before a single token is spent, so a
       //    refusal costs nothing and there is no prompt for it to be argued out
@@ -236,6 +243,20 @@ export async function POST(
         registerVocabulary: assets.flatMap((a) =>
           [a.name, a.make, a.model, a.serial].filter((v): v is string => Boolean(v)),
         ),
+        // THE REGISTER-AWARE HALF OF THE JUDGEMENT RULE (W3/15), and the field
+        // is optional ONLY so the type did not break mid-wiring — omitting it
+        // here is not a neutral choice. Without it the gate can only reach
+        // facts_only when the person RESTATES the fact ("...it is overdue its
+        // pressure test"), and a person asking whether a machine is still safe
+        // does not restate it: that is what asking is. So every natural
+        // phrasing W3/15 names — "can we still use the Lisa MB17?", "is it safe
+        // to run it?", "should I keep using the autoclave?" — reached the model
+        // as an ordinary allow, the server never appended the take-out-of-use
+        // sentence, and the "always refused" half of W1-D/2 rested on the
+        // prompt. `outOfTestVocabulary` does the filter (nextServiceDue
+        // strictly before today; an asset with no date is UNKNOWN, not
+        // overdue), shared with the co-pilot door so the two cannot drift.
+        outOfTestVocabulary: outOfTestVocabulary(assets, today),
         registeredCount: assets.length,
         // An asset is "in scope" once the conversation has run at least one
         // exchange, which is what lets a two-word follow-up through without
@@ -252,7 +273,6 @@ export async function POST(
 
       const manuals = await listManuals(client.id);
       const scope = await getViewScope(client.id);
-      const today = londonDayKey(new Date());
 
       try {
         const history: MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));

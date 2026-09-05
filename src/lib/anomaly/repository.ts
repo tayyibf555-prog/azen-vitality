@@ -57,8 +57,15 @@ export interface OutboxWatch {
    * True when the table carries `not_before_at` — a deliberate hold (quiet
    * hours, or a check-in timed for the morning after a procedure). Those rows
    * are NOT stuck and are excluded, otherwise every overnight defer would look
-   * like a jam at breakfast. Only two tables have the column (migrations 0063
-   * and 0091); selecting it on the others would fail the read outright.
+   * like a jam at breakfast. Three tables have the column (migrations 0063
+   * diary, 0091 post-op, 0097 pre-visit); selecting it on the others would fail
+   * the read outright.
+   *
+   * The count read "two" until the pre-visit outbox made it three, in the very
+   * change that added the third. So both halves of the sentence are now derived
+   * from the migration files and checked rather than remembered: see "the flag's
+   * own docstring counts the tables the migrations gave the column" and "no
+   * watched outbox carries the column without the flag" in repository.test.ts.
    */
   hasNotBefore: boolean;
 }

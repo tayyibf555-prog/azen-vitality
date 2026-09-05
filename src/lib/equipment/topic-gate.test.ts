@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   gateEquipmentQuestion,
+  equipmentJudgementFromRegister,
+  outOfTestVocabulary,
+  type OutOfTestSource,
   EQUIPMENT_REFUSALS,
   EQUIPMENT_HARD_SAFETY_RULES,
   EQUIPMENT_JUDGEMENT_RULES,
@@ -21,6 +24,9 @@ import {
 //   1b. JUDGEMENT  — must ALLOW IN FACTS-ONLY MODE. The middle path (programme
 //                    ruling): the facts are the practice's to have, the decision
 //                    is not ours to give.
+//   1c. THE REGISTER'S OWN EVIDENCE — the same middle path when the person never
+//                    states the fact, because they are asking. Both directions:
+//                    an overdue machine is capped, an in-date one is not.
 //   2. OFF TOPIC   — must refuse, with reason "off_topic". Every rule is covered.
 //   3. LEGITIMATE  — must ALLOW, unconstrained. The battery that stops the gate
 //                    being "fixed" by tightening it until it refuses everything.
@@ -120,6 +126,39 @@ const JUDGEMENT_BATTERY: [prompt: string, rule: string][] = [
   ["We haven't had the compressor serviced, can we still use it?", "judgement.overdue_service"],
   ["Is it safe to use the chair until the engineer comes next month?", "judgement.use_until_service"],
   ["Can we carry on using the autoclave until the part arrives?", "judgement.use_until_service"],
+
+  // TWO SENTENCES, WHICH IS HOW PEOPLE ACTUALLY TYPE (programme ruling W3/15).
+  // Every entry below was UNCAUGHT before this fix and came back `allow` with no
+  // mode, which meant the route never appended the take-out-of-use sentence and
+  // the "always refused" half of W1-D/2 rested entirely on the prompt. The first
+  // pair differ from a caught phrasing by one character — a full stop instead of
+  // a comma.
+  ["The autoclave is overdue its service. Can we keep using it?", "judgement.overdue_service"],
+  ["The compressor is overdue a service. Is it OK to carry on?", "judgement.overdue_service"],
+  ["The autoclave's pressure vessel test has lapsed. Is it safe to use?", "judgement.overdue_service"],
+  ["Our compressor service was due in June. Is it fine to carry on using it?", "judgement.overdue_service"],
+  ["The steriliser is out of test. Should I keep using it for today's list?", "judgement.overdue_service"],
+
+  // THE WORDS THE PROMPT ITSELF NAMES. `prompt.ts` lists "service, calibration,
+  // inspection or validation" under WHAT YOU REFUSE, ALWAYS; the gate carried
+  // only two of the four, so a boundary the prompt stated was one the gate could
+  // not see — exactly what `desk/gate.ts` exists to stop.
+  ["The autoclave is past its validation date, can we keep using it today?", "judgement.overdue_service"],
+  ["The X-ray is past its calibration date, is it OK to run one more list?", "judgement.overdue_service"],
+  // Without the trailing "date" — the shape that needs the noun itself in the
+  // list rather than riding on the generic "past its ... date".
+  ["The X-ray is past its calibration, can we keep using it?", "judgement.overdue_service"],
+  ["The autoclave is past its validation, is that OK?", "judgement.overdue_service"],
+  ["The compressor's certificate has lapsed, can it still be used?", "judgement.overdue_service"],
+  ["The chair has not been serviced this year. Are we OK to use it?", "judgement.overdue_service"],
+
+  // ONE ENTRY PER REMAINING PHRASING BRANCH, so no alternation in the rule ships
+  // without a message that needs it. Each of these is caught by exactly one
+  // branch: strike that branch out and this line, and only this line, goes red.
+  ["The autoclave's pressure test is out of date. Should I stop it?", "judgement.overdue_service"],
+  ["The compressor is overdue its service. Do we have to stop using it?", "judgement.overdue_service"],
+  ["The steriliser's validation is no longer in date. Can we go on running it?", "judgement.overdue_service"],
+  ["We are behind on the compressor service. Does it matter?", "judgement.overdue_service"],
 ];
 
 describe("1b. a judgement question is ALLOWED in facts-only mode, not refused", () => {
@@ -171,6 +210,99 @@ describe("1b. a judgement question is ALLOWED in facts-only mode, not refused", 
     expect(verdict.reason).toBe("safety");
   });
 
+  it("A FULL STOP IS NOT AN ESCAPE HATCH: the same words, two sentences, same verdict", () => {
+    // W3/15, stated as one assertion. Everywhere else in the gate the spans are
+    // `[^.?!]` so a REFUSAL cannot pair a word in one question with a word in the
+    // next — right, because a gate that refuses legitimate questions gets
+    // switched off. But these rules do not refuse: they pick facts-only mode,
+    // which reads out everything the register and the manual say and appends one
+    // standing instruction. So the error directions are not comparable, and the
+    // punctuation must not decide.
+    for (const [comma, stop] of [
+      ["The autoclave is overdue its service, can we keep using it?", "The autoclave is overdue its service. Can we keep using it?"],
+      ["The X-ray is past its inspection date, does it matter?", "The X-ray is past its inspection date. Does it matter?"],
+    ]) {
+      const a = ask(comma);
+      const b = ask(stop);
+      expect(a.kind === "allow" && a.mode, comma).toBe("facts_only");
+      expect(b.kind === "allow" && b.mode, stop).toBe("facts_only");
+    }
+  });
+
+  it("the span is still BOUNDED: a distant, unrelated sentence does not pair", () => {
+    // Not `.*`. An overdue date mentioned at the top of a long message must not
+    // reach forward to a "can we use it" about something else three sentences
+    // later, or the mode stops meaning anything and every register question ends
+    // with a take-out-of-use instruction nobody asked for.
+    const verdict = ask(
+      "The compressor was overdue its service last year and the engineer came out and sorted it, which was a relief because the practice was very busy that week and we had a full book. Anyway, the new handpiece arrived. Can we keep using the old one as a spare?",
+    );
+    expect(verdict.kind).toBe("allow");
+    expect(verdict.kind === "allow" && verdict.mode).toBeUndefined();
+  });
+
+  it("THE REGISTER QUERY STAYS UNCONSTRAINED across the widened vocabulary", () => {
+    // The other direction, and the one W1-D/2 protects by name: "which equipment
+    // is overdue?" is ALWAYS answered. Widening the out-of-test words is only
+    // safe if none of them, on their own, caps a question that carries no intent
+    // to go on using anything.
+    for (const question of [
+      "Which of our equipment is overdue a service?",
+      "What has lapsed on the register?",
+      "Is anything past its calibration date?",
+      "Which machines on the register are out of test?",
+      "When was the autoclave's validation last done?",
+      "Show me everything with no service date recorded.",
+    ]) {
+      const verdict = ask(question);
+      expect(verdict.kind, question).toBe("allow");
+      expect(verdict.kind === "allow" && verdict.mode, question).toBeUndefined();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // A FUTURE SERVICE DATE IS NOT AN OVERDUE ONE. The negative direction of the
+  // W3/15 widening, which nothing pinned before.
+  //
+  // The widening added `due (?:in|back|last|on)` beside `(?:was|were) due`, and
+  // three of those four words are the ordinary English for a service that has
+  // NOT happened yet. Paired with the deliberately generous "is that ok", an
+  // IN-DATE machine selected facts-only mode and both doors appended "Take the
+  // machine out of use and call the supplier or service engineer" to a question
+  // about a service three months away. That is not the cheap direction of error:
+  // the standing sentence only works while it means something, and the way it
+  // stops working is being printed under answers that did not need it.
+  // -------------------------------------------------------------------------
+  const FUTURE_DATE_BATTERY = [
+    "The autoclave's next service is due in June - is that ok?",
+    "The compressor service is due on the 3rd. Is that fine?",
+    "Service is due on Monday for the compressor. Is that fine?",
+    "The autoclave PAT test is due in April. Is that ok?",
+    "The chair is due back from the engineer on Friday. Can we still use the other one?",
+  ];
+
+  it.each(FUTURE_DATE_BATTERY)(
+    "a FUTURE service date is answered normally, with no take-out-of-use sentence: %j",
+    (prompt) => {
+      const verdict = ask(prompt);
+      expect(verdict.kind).toBe("allow");
+      expect(verdict.kind === "allow" && verdict.mode, prompt).toBeUndefined();
+    },
+  );
+
+  it("the PAST-tense phrasing of the same sentence still lands in facts-only", () => {
+    // The pair that shows the line is drawn on tense, not on the word "due":
+    // "was due in June" is a lapsed service and "is due in June" is a booked one.
+    expect(ask("Our compressor service was due in June. Is it fine to carry on using it?")).toEqual({
+      kind: "allow",
+      mode: "facts_only",
+      rule: "judgement.overdue_service",
+    });
+    expect(ask("Our compressor service is due in June. Is it fine to carry on using it?")).toEqual({
+      kind: "allow",
+    });
+  });
+
   it("facts-only mode is decided from the LATEST turn, not from history", () => {
     // A judgement asked and answered three messages ago must not silently cap a
     // later ordinary question at facts-only.
@@ -181,6 +313,235 @@ describe("1b. a judgement question is ALLOWED in facts-only mode, not refused", 
       assetInScope: true,
     });
     expect(verdict.kind === "allow" && verdict.mode).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1c. THE JUDGEMENT QUESTION ASKED THE WAY A PERSON ACTUALLY ASKS IT — without
+//     restating the fact, because they are ASKING.
+//
+// Every rule in 1b needs the out-of-test half in the person's own words. A nurse
+// who types "is it safe to run the Lisa MB17?" has not put it there and never
+// will: the REGISTER is the thing that knows that machine's pressure test lapsed
+// in August. So all five of the phrasings W3/15 names by hand came back as an
+// ordinary allow with no mode, neither door appended the take-out-of-use
+// sentence, and the "always refused" half of W1-D/2 rested on the prompt — the
+// exact posture `desk/gate.ts` exists to stop.
+//
+// The fix pairs the same intent with the register's overdue list. Both halves
+// are pinned here, and the second is as important as the first: a machine the
+// register says is IN DATE must come back unconstrained, or the standing
+// sentence gets printed under answers that did not need it until nobody reads
+// it.
+// ---------------------------------------------------------------------------
+
+/**
+ * The overdue names are a SUBSET of the register, exactly as the callers build
+ * them: the same vocabulary, filtered to the assets whose next service date has
+ * passed. A machine that is overdue is still a machine the practice owns.
+ */
+const REGISTER_WITH_OVERDUE = [...REGISTER, "Lisa MB17"];
+const OVERDUE_VOCAB = ["Lisa MB17"];
+
+/** The same question, with the register's overdue list supplied. */
+function askWithOverdue(text: string, over: Partial<EquipmentGateInput> = {}) {
+  return ask(text, {
+    registerVocabulary: REGISTER_WITH_OVERDUE,
+    outOfTestVocabulary: OVERDUE_VOCAB,
+    ...over,
+  });
+}
+
+describe("1c. the register's own overdue list arms the judgement gate", () => {
+  // The five W3/15 phrasings, each naming a machine the REGISTER says is out of
+  // test and stating no out-of-test fact at all.
+  const NAMED_PHRASINGS = [
+    "Can we still use the Lisa MB17?",
+    "Is it safe to run the Lisa MB17?",
+    "Should I keep using the Lisa MB17?",
+    "Is it OK to carry on with the Lisa MB17?",
+    "Is the Lisa MB17 fine to use?",
+  ];
+
+  it.each(NAMED_PHRASINGS)("caps %j at facts-only on the register's evidence", (prompt) => {
+    const verdict = askWithOverdue(prompt);
+    expect(verdict.kind).toBe("allow");
+    if (verdict.kind !== "allow") return;
+    expect(verdict.mode).toBe("facts_only");
+    // Named separately from judgement.overdue_service: the two are caught by
+    // different evidence, and a refusal count that cannot tell them apart cannot
+    // answer "how often does somebody ask about a machine they do not know is
+    // out of test".
+    expect(verdict.rule).toBe("judgement.register_out_of_test");
+  });
+
+  it("THE TWO-TURN SPLIT: the fact in one message, the question in the next", () => {
+    // The most natural version of all, and the one step 4's LATEST-turn-only
+    // rule cannot see: the fact is established, and the follow-up is a pronoun.
+    // Both shapes count — the turn before either NAMES an overdue machine or
+    // states the out-of-test fact without naming one, and "which of ours is
+    // overdue?" is the question W1-D/2 says is always answered, so it is
+    // precisely the turn a "can we still use it?" follows.
+    for (const opener of [
+      "Is the Lisa MB17 overdue a service?",
+      "Which of our equipment is overdue a service?",
+    ]) {
+      const verdict = gateEquipmentQuestion({
+        userTurns: [opener, "Can we still use it?"],
+        registerVocabulary: REGISTER_WITH_OVERDUE,
+        outOfTestVocabulary: OVERDUE_VOCAB,
+        registeredCount: 4,
+        assetInScope: true,
+      });
+      expect(verdict.kind === "allow" && verdict.mode, opener).toBe("facts_only");
+      expect(verdict.kind === "allow" && verdict.rule, opener).toBe("judgement.register_out_of_test");
+    }
+  });
+
+  it("the split reaches back ONE turn, not through the whole conversation", () => {
+    // Bounded for the same reason the stated-fact rule's span is bounded: a
+    // machine mentioned four turns ago is not what "it" refers to, and a mode
+    // that never lifts is a take-out-of-use sentence under every answer.
+    const verdict = gateEquipmentQuestion({
+      userTurns: [
+        "Is the Lisa MB17 overdue a service?",
+        "What does its manual say about the cycle?",
+        "Can we still use it?",
+      ],
+      registerVocabulary: REGISTER_WITH_OVERDUE,
+      outOfTestVocabulary: OVERDUE_VOCAB,
+      registeredCount: 4,
+      assetInScope: true,
+    });
+    expect(verdict.kind === "allow" && verdict.mode).toBeUndefined();
+  });
+
+  it("A MACHINE THE REGISTER SAYS IS IN DATE IS ANSWERED NORMALLY", () => {
+    // The other direction, and it is not a nicety. "Can we still use the
+    // SteriPro 22B?" about a compliant autoclave must not come back with "Take
+    // the machine out of use and call the supplier or service engineer" — that
+    // is a false instruction, and it is how the sentence stops being read on the
+    // day a machine really is out of test.
+    for (const prompt of [
+      "Can we still use the SteriPro 22B?",
+      "Is it safe to run the Durr Tyscor?",
+      "Is the SteriPro 22B fine to use?",
+    ]) {
+      const verdict = askWithOverdue(prompt);
+      expect(verdict.kind, prompt).toBe("allow");
+      expect(verdict.kind === "allow" && verdict.mode, prompt).toBeUndefined();
+    }
+
+    // AND IT HOLDS MID-CONVERSATION, which is the case a single-turn assertion
+    // cannot reach: the turn before named an overdue machine, and the person has
+    // now NAMED a different one that is in date. Naming it is the whole signal —
+    // "it" would have been the overdue one, "the SteriPro 22B" is not.
+    const afterOverdue = gateEquipmentQuestion({
+      userTurns: ["Is the Lisa MB17 overdue a service?", "Can we still use the SteriPro 22B?"],
+      registerVocabulary: REGISTER_WITH_OVERDUE,
+      outOfTestVocabulary: OVERDUE_VOCAB,
+      registeredCount: 4,
+      assetInScope: true,
+    });
+    expect(afterOverdue.kind === "allow" && afterOverdue.mode).toBeUndefined();
+  });
+
+  it("the register's evidence NARROWS an allow; it never creates one", () => {
+    // A message the allow-list would have refused is still refused. A rule whose
+    // whole purpose is to CONSTRAIN an answer must not be the thing that lets a
+    // message through — that would be the gate widening itself.
+    const verdict = gateEquipmentQuestion({
+      userTurns: ["The Lisa MB17 is a nightmare.", "Can we still use it?"],
+      registerVocabulary: REGISTER_WITH_OVERDUE,
+      outOfTestVocabulary: OVERDUE_VOCAB,
+      registeredCount: 4,
+      assetInScope: false, // nothing has resolved an asset, so no continuation
+    });
+    expect(verdict.kind).toBe("refuse");
+    expect(verdict.kind === "refuse" && verdict.rule).toBe("scope.unrecognised");
+  });
+
+  it("A HARD SAFETY RULE STILL WINS over the register's evidence", () => {
+    const verdict = askWithOverdue("Can we still use the Lisa MB17 with the guard off?");
+    expect(verdict.kind).toBe("refuse");
+    expect(verdict.kind === "refuse" && verdict.reason).toBe("safety");
+  });
+
+  it("a register QUERY carries no intent, so the overdue list does not cap it", () => {
+    // W1-D/2's protected question, checked again with the new evidence path
+    // armed: naming an overdue machine is not asking to go on using it.
+    for (const question of [
+      "Which of our equipment is overdue a service?",
+      "When is the Lisa MB17 next due a service?",
+      "What does the manual say about the Lisa MB17's service interval?",
+    ]) {
+      const verdict = askWithOverdue(question);
+      expect(verdict.kind, question).toBe("allow");
+      expect(verdict.kind === "allow" && verdict.mode, question).toBeUndefined();
+    }
+  });
+
+  it("WITHOUT the list the gate is blind, which is why both doors must pass it", () => {
+    // Stated as a test rather than left as a comment: the field is optional only
+    // so the type does not break a caller mid-wiring, and omitting it silently
+    // disarms this half of the rule. This is the assertion that says so out loud
+    // — if a caller ever stops passing it, the behaviour it loses is this.
+    const blind = ask("Is it safe to run the Lisa MB17?", {
+      registerVocabulary: REGISTER_WITH_OVERDUE,
+    });
+    expect(blind.kind === "allow" && blind.mode).toBeUndefined();
+    const armed = askWithOverdue("Is it safe to run the Lisa MB17?");
+    expect(armed.kind === "allow" && armed.mode).toBe("facts_only");
+  });
+
+  it("the vocabulary builder draws the overdue line where service_due draws it", () => {
+    // One helper for both doors, so they cannot drift on what "overdue" means.
+    // Strictly before today, and a MISSING date is unknown rather than overdue —
+    // otherwise every question about every half-filled-in register would end
+    // with a take-out-of-use instruction.
+    const asset = (over: Partial<OutOfTestSource>): OutOfTestSource => ({
+      name: "SteriPro 22B",
+      make: "W&H",
+      model: null,
+      serial: null,
+      nextServiceDue: null,
+      ...over,
+    });
+    expect(
+      outOfTestVocabulary(
+        [
+          asset({ name: "Lapsed", nextServiceDue: "2026-09-03", serial: "A1" }),
+          asset({ name: "Due today", nextServiceDue: "2026-09-04" }),
+          asset({ name: "Future", nextServiceDue: "2026-12-01" }),
+          asset({ name: "Unknown", nextServiceDue: null }),
+        ],
+        "2026-09-04",
+      ),
+    ).toEqual(["Lapsed", "W&H", "A1"]);
+  });
+
+  it("the exported helper reads the PERSON's turns, for the co-pilot door", () => {
+    // The co-pilot's window ends with the MODEL's paraphrase, so its latest turn
+    // is not the person's (W3/14). The helper is exported so that door can run
+    // the same check over `turn.userTurns` alone, exactly as it already runs
+    // `equipmentJudgementAskedByPerson`.
+    expect(
+      equipmentJudgementFromRegister(["Is it safe to run the Lisa MB17?"], {
+        registerVocabulary: REGISTER_WITH_OVERDUE,
+        outOfTestVocabulary: OVERDUE_VOCAB,
+      }),
+    ).toBe(true);
+    expect(
+      equipmentJudgementFromRegister(["Is it safe to run the SteriPro 22B?"], {
+        registerVocabulary: REGISTER_WITH_OVERDUE,
+        outOfTestVocabulary: OVERDUE_VOCAB,
+      }),
+    ).toBe(false);
+    expect(
+      equipmentJudgementFromRegister(["Is it safe to run the Lisa MB17?"], {
+        registerVocabulary: REGISTER_WITH_OVERDUE,
+      }),
+    ).toBe(false);
   });
 });
 

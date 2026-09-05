@@ -8,7 +8,12 @@ import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
 import { checkAgentReply } from "@/lib/agent/guardrail";
-import { sanitiseName, sanitisePractitioner, sanitiseReason } from "@/lib/agent/free-text";
+import {
+  FREE_TEXT_IS_DATA,
+  sanitiseName,
+  sanitisePractitioner,
+  sanitiseReason,
+} from "@/lib/agent/free-text";
 
 const PURPOSE_TONE: Record<CadenceStep["purpose"], string> = {
   nudge: "This is a first, warm invitation. Keep it short and friendly.",
@@ -75,8 +80,21 @@ export function buildOutreachPrompt(
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
     // SANITISED. `matchedReason` is built from a Dentally APPOINTMENT REASON, which
-    // is the freest text in the practice's book, and "do not quote verbatim" is a
-    // quoting instruction rather than a data boundary. See src/lib/agent/free-text.ts.
+    // is the freest text in the practice's book. See src/lib/agent/free-text.ts.
+    //
+    // AND THE BOUNDARY IS NOW SAID OUT LOUD. This comment used to note that "do not
+    // quote verbatim" is a QUOTING instruction rather than a data boundary, and then
+    // left the boundary unstated; FREE_TEXT_IS_DATA closes it, immediately above the
+    // values it is about, exactly as the live booking agent's own prompt says it
+    // (ruling W1-B/3, charter §0.8). The sanitiser strips the SHAPE of an injected
+    // instruction; this line strips its AUTHORITY. Either alone is weaker than both.
+    //
+    // The system half above carries the one other Dentally-shaped value, the
+    // clinician's name, and is deliberately not covered by this line's position: it
+    // is not handed to the model as data to read but interpolated into a sentence of
+    // OURS ("Mention X by name warmly"), where sanitisePractitioner is the whole
+    // defence and the injection battery in src/lib/agent/free-text.test.ts pins it.
+    FREE_TEXT_IS_DATA,
     `Patient: ${sanitiseName(target.name)}`,
     `Invitation is for: ${angle(campaign, variant)}`,
     campaign.practitionerName

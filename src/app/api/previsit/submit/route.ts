@@ -79,7 +79,8 @@ function bad(message: string, status = 400): Response {
 
 /**
  * The SAME refusal for a bad token, an unknown token, a spent link, a switched-off
- * system and a target that is not in a sendable state.
+ * system, AN APPOINTMENT THAT HAS ALREADY STARTED, and a target that is not in a
+ * sendable state.
  *
  * One sentence for every one of them, so a caller holding a guessed token learns
  * nothing about whether it named a real appointment. The patient reading it is
@@ -134,6 +135,41 @@ export async function POST(request: Request): Promise<Response> {
     if (!target) return deadLink();
     // A spent or stopped link. Same refusal, so a caller cannot probe the state.
     if (target.status !== "queued" && target.status !== "sent") return deadLink();
+
+    // THE UPPER BOUND, AND STATUS ALONE CANNOT EXPRESS IT — the second public
+    // door, closed with the same bound the page uses.
+    //
+    // Ruling W3/5 ("a queued pre-visit link is NEVER dispatched after its
+    // appointment start ... fail closed") was implemented on the DRAIN
+    // (repository.ts, dropRowsPastTheirAppointment), which can only retire a link
+    // that has not gone out yet. `sent` has no terminal transition in this module,
+    // so a delivered link sits live in a phone's message list for ever — and the
+    // page fix alone would close only the browser door: a hand-rolled POST with an
+    // expired token would still write a previsit_response plus its
+    // treatment_interest rows.
+    //
+    // The answers are the harm, not the request. The first required question is
+    // "are you still able to come to your appointment?", so answers submitted after
+    // the visit are not late answers to this appointment, they are answers to a
+    // DIFFERENT one — and `submitted_at = now` presents them to the clinician as
+    // the summary standing in front of the NEXT visit (the record tab and the
+    // co-pilot's previsit_summary both read the newest response).
+    //
+    // `now < start`, byte-for-byte the comparison on /pv/[token], in the drain's
+    // dropRowsPastTheirAppointment and in decideSend's `past` drop, so all four
+    // agree about which side of the appointment we are on. FAIL CLOSED on an
+    // instant that cannot be parsed: an appointment we cannot date is not an
+    // appointment we may assume is still ahead of us.
+    //
+    // `Date.now()` is correct here and `new Date()` was correct on the page: a
+    // route handler is not a component, so the react-hooks purity rule that forced
+    // the latter does not apply.
+    //
+    // PLACED AFTER THE BUDGETS AND BEFORE getSite / the kill switch / getBank, so
+    // an expired token can never be used as a free oracle and costs no further
+    // reads once it is refused.
+    const startMs = Date.parse(target.appointmentAt);
+    if (!Number.isFinite(startMs) || Date.now() >= startMs) return deadLink();
 
     const site = getSite(target.siteId);
     if (!site) return deadLink();

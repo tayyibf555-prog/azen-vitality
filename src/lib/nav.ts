@@ -474,7 +474,15 @@ export const CLIENT_NAV: NavGroup[] = [
         // gated on "patients" (a slug they do hold), not the editor that decides
         // what every patient in the practice is asked.
         roles: [...OWNER_ROLES, "client_coordinator"],
-        note: "A short questionnaire the patient answers on their phone before their appointment, sent with the reminder. Their answers reach the clinician on the patient record. It also asks which treatments they would like to hear about, and every yes lands on a list the practice can follow up. Two question lists are kept here and both are editable; which one a patient is asked is decided automatically and is never shown to them.",
+        // DELIVERY COPY MATCHES THE CODE (ruling W3/9). This used to say the
+        // questionnaire is "sent with the reminder", which is a message the
+        // module does not send: `previsitBody` composes ONE standalone SMS with
+        // one link in it, the pre-visit sweep is the only producer, and the
+        // drain carries `previsit` as its own transactional source — so it
+        // cannot even collapse into the no-show reminder under the once-a-day
+        // cap. Switching this module on costs one extra text per appointment,
+        // and the owner reading this row is the person paying for it.
+        note: "A short questionnaire the patient answers on their phone before their appointment. It goes as its own text, on its own schedule, separate from the appointment reminder and from the medical-history link — one extra message per appointment. Their answers reach the clinician on the patient record. It also asks which treatments they would like to hear about, and every yes lands on a list the practice can follow up. Two question lists are kept here and both are editable; which one a patient is asked is decided automatically and is never shown to them.",
       },
       {
         slug: "reviews",

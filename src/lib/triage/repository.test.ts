@@ -1,0 +1,563 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createFakeSupabase } from "@/lib/test-support/fake-supabase";
+import type { TriageTarget } from "./types";
+
+// ===========================================================================
+// THE THREE PROPERTIES OF THIS REPOSITORY THAT NOTHING ELSE COULD HOLD.
+//
+// There was no test file here at all, which is why all three of the defects
+// below shipped. Every other suite that touches this module mocks it: the public
+// submit route's gate tests replace `@/lib/triage/repository` wholesale, the
+// drain's pipeline tests replace every module's outbox reader, and the J2
+// scenario drives the real code but only along the happy path, in a single
+// simulated instant, with nothing failing. So this file runs the REAL functions
+// — the exact ones the submit route and the shared messaging drain import —
+// against an in-memory database that applies migration 0097's own column
+// defaults, and makes the failures happen.
+//
+//   1. A PATIENT NEVER LOSES THEIR ANSWERS (ruling W3/6). recordResponse spends
+//      the link before it writes the answers, so a failure on that write has to
+//      hand the link back.
+//   2. A PRE-VISIT LINK IS NEVER SENT AFTER THE VISIT (ruling W3/5). The queue
+//      had a floor (`not_before_at`) and no ceiling.
+//   3. A COUNT IS A TOTAL OR IT SAYS IT IS NOT (charter §0/5, ruling W3/11).
+//      The interest tallies came off an unranged select, which PostgREST clips
+//      at its max-rows with `error: null`.
+//   4. AND IT COSTS WHAT IT IS WORTH. That scan runs inside the module page's
+//      own server render, so its query shape is the page's latency: one page's
+//      worth of rows must cost one round trip, and a table past the ceiling
+//      must cost the count that proves it rather than twenty pages ending in
+//      "The totals could not be read."
+// ===========================================================================
+
+const fake = createFakeSupabase();
+
+// ---------------------------------------------------------------------------
+// THE INTEREST SCAN'S OWN DATABASE DOUBLE.
+//
+// The shared fake has no `.or()`, because a keyset cursor is a PostgREST filter
+// STRING rather than a chain of typed calls — and the things worth pinning about
+// this scan are properties OF THE QUERY, which the shared fake cannot see: how
+// many round trips one answer costs, that each page asks for "strictly older than
+// the row I stopped at" rather than "skip the first N rows", and that the filter
+// string is a shape PostgREST would actually understand. So SELECTs on
+// treatment_interest go through this, and everything else — every other table, and
+// the inserts on this one — stays on the shared fake.
+//
+// `.range()` is deliberately present and deliberately fatal: OFFSET paging is the
+// defect this replaced, and if it ever comes back it fails loudly here rather than
+// passing every assertion until a scan spends its budget re-reading rows.
+// ---------------------------------------------------------------------------
+
+interface FakeInterestRow extends Record<string, string> {
+  id: string;
+  site_id: string;
+  dentally_patient_id: string;
+  treatment: string;
+  answer: string;
+  created_at: string;
+}
+
+const interest = {
+  /** One entry per SELECT that reached treatment_interest, in order. */
+  queries: [] as Array<"page" | "count">,
+  /** Every keyset filter string the repository built, in order. */
+  filters: [] as string[],
+  /** Force the count read to fail, so the scan's life without it is testable. */
+  failCount: false,
+  /** Force the next page read to fail, for the fail-closed direction. */
+  failPage: false,
+  /** Fires after each page is served — the seam for a concurrent insert. */
+  onPage: null as ((pageIndex: number) => void) | null,
+  reset() {
+    this.queries.length = 0;
+    this.filters.length = 0;
+    this.failCount = false;
+    this.failPage = false;
+    this.onPage = null;
+  },
+};
+
+/**
+ * Read back the keyset filter the repository wrote, and apply it.
+ *
+ * Doubles as a syntax check: if the string ever stops being the shape PostgREST
+ * would understand, this throws rather than quietly passing.
+ */
+function applyKeyset(rows: FakeInterestRow[], filter: string): FakeInterestRow[] {
+  const m = filter.match(
+    /^created_at\.lt\."([^"]+)",and\(created_at\.eq\."([^"]+)",id\.gt\."([^"]+)"\)$/,
+  );
+  if (!m) throw new Error(`unrecognised keyset filter: ${filter}`);
+  const [, ltTs, eqTs, gtId] = m;
+  expect(ltTs).toBe(eqTs);
+  return rows.filter((r) => r.created_at < ltTs! || (r.created_at === eqTs! && r.id > gtId!));
+}
+
+function interestSelect(opts?: { count?: string; head?: boolean }) {
+  const head = opts?.head === true;
+  const pageIndex = interest.queries.length;
+  interest.queries.push(head ? "count" : "page");
+  const eqs: Array<[string, string]> = [];
+  let sites: string[] = [];
+  let keyset: string | null = null;
+  const orderBy: Array<[string, boolean]> = [];
+  let max: number | null = null;
+
+  function result() {
+    if (head && interest.failCount) return { data: null, error: { message: "count read down" }, count: null };
+    if (!head && interest.failPage) return { data: null, error: { message: "page read down" }, count: null };
+    let rows = (fake.rows("treatment_interest") as unknown as FakeInterestRow[])
+      .filter((r) => sites.includes(r.site_id))
+      .filter((r) => eqs.every(([k, v]) => r[k] === v));
+    if (keyset) rows = applyKeyset(rows, keyset);
+    for (const [col, asc] of [...orderBy].reverse()) {
+      rows = [...rows].sort((a, b) => (asc ? 1 : -1) * (a[col]! < b[col]! ? -1 : a[col]! > b[col]! ? 1 : 0));
+    }
+    if (head) return { data: [], error: null, count: rows.length };
+    const page = (max === null ? rows : rows.slice(0, max)).map((r) => ({ ...r }));
+    interest.onPage?.(pageIndex);
+    return { data: page, error: null, count: null };
+  }
+
+  const api = {
+    eq(col: string, val: string) {
+      eqs.push([col, val]);
+      return api;
+    },
+    in(_col: string, vals: string[]) {
+      sites = vals;
+      return api;
+    },
+    or(filter: string) {
+      keyset = filter;
+      interest.filters.push(filter);
+      return api;
+    },
+    order(col: string, o?: { ascending?: boolean }) {
+      orderBy.push([col, o?.ascending !== false]);
+      return api;
+    },
+    limit(n: number) {
+      max = n;
+      return api;
+    },
+    range() {
+      throw new Error("OFFSET paging (.range) is not allowed on the interest scan");
+    },
+    then<T>(onfulfilled?: (v: ReturnType<typeof result>) => T, onrejected?: (r: unknown) => T) {
+      return Promise.resolve(result()).then(onfulfilled, onrejected);
+    },
+  };
+  return api;
+}
+
+/**
+ * treatment_interest gets the double for its SELECTs and the shared fake for its
+ * INSERTs (recordResponse's, which the tests above read back with `fake.rows`).
+ * Every other table is untouched. Anything else called on this table is a method
+ * this double does not have, which fails loudly rather than silently.
+ */
+const client = {
+  from(table: string) {
+    if (table !== "treatment_interest") return fake.client.from(table);
+    type Insert = Parameters<ReturnType<typeof fake.client.from>["insert"]>[0];
+    return {
+      insert: (rows: Insert) => fake.client.from(table).insert(rows),
+      select: (_cols?: string, opts?: { count?: string; head?: boolean }) => interestSelect(opts),
+    };
+  },
+};
+
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/supabase/server", () => ({ serviceClient: () => client }));
+
+const {
+  recordResponse,
+  listQueuedOutbox,
+  countInterestByTreatment,
+  countInterestByTreatmentDetailed,
+} = await import("./repository");
+
+const SITE = "site-ng";
+const OTHER_SITE = "site-n17";
+
+/** A fixed instant, so nothing here depends on when the suite runs. */
+const NOW = Date.now();
+function iso(offsetMs: number): string {
+  return new Date(NOW + offsetMs).toISOString();
+}
+const HOUR = 3_600_000;
+
+function target(overrides: Partial<TriageTarget> = {}): TriageTarget {
+  return {
+    id: `${SITE}:appt-1`,
+    siteId: SITE,
+    dentallyPatientId: "dp-1",
+    appointmentId: "appt-1",
+    patientName: "Amara Okafor",
+    fork: "brief",
+    appointmentAt: iso(12 * HOUR),
+    dueAt: iso(-1 * HOUR),
+    status: "sent",
+    stopReason: null,
+    consentSms: true,
+    linkToken: "tok-aaaaaaaaaaaaaaaaaaaa",
+    createdAt: iso(-24 * HOUR),
+    updatedAt: iso(-24 * HOUR),
+    ...overrides,
+  };
+}
+
+function seedTarget(t: TriageTarget): void {
+  fake.seed("previsit_target", {
+    id: t.id,
+    site_id: t.siteId,
+    dentally_patient_id: t.dentallyPatientId,
+    appointment_id: t.appointmentId,
+    patient_name: t.patientName,
+    fork: t.fork,
+    appointment_at: t.appointmentAt,
+    due_at: t.dueAt,
+    status: t.status,
+    stop_reason: t.stopReason,
+    consent_sms: t.consentSms,
+    link_token: t.linkToken,
+  });
+}
+
+const ANSWERS = [
+  { key: "attending", value: "yes", kind: "logistics" as const },
+  { key: "smile-change", value: "Straighter front teeth", kind: "cosmetic" as const },
+];
+const INTEREST = [
+  { treatment: "whitening" as const, answer: "yes" as const },
+  { treatment: "implants" as const, answer: "not_now" as const },
+];
+
+beforeEach(() => {
+  fake.reset();
+  interest.reset();
+});
+
+// ---------------------------------------------------------------------------
+// 1. W3/6
+// ---------------------------------------------------------------------------
+describe("recordResponse: a failed write hands the link back (W3/6)", () => {
+  it("a response insert that fails leaves the link SPENDABLE and loses nothing", async () => {
+    const t = target();
+    seedTarget(t);
+
+    // The one write that can fail between spending the link and storing the
+    // answers. 'answered' is terminal and both public doors refuse it, so a claim
+    // left standing here would take the patient's answers with it for good.
+    fake.failTable("previsit_response");
+    await expect(
+      recordResponse({ target: t, answers: ANSWERS, interest: INTEREST, submittedAt: iso(0) }),
+    ).rejects.toBeDefined();
+
+    expect(fake.rows("previsit_response")).toHaveLength(0);
+    expect(fake.rows("previsit_target")[0].status, "the link was left spent for answers that were never stored").toBe(
+      "sent",
+    );
+
+    // AND THE PATIENT'S RETRY WORKS, which is the whole point: the sentence the
+    // route shows them is "please try again", and trying again has to be a thing
+    // they can do.
+    fake.clearFailures();
+    const retry = await recordResponse({ target: t, answers: ANSWERS, interest: INTEREST, submittedAt: iso(0) });
+    expect(retry.ok).toBe(true);
+    expect(fake.rows("previsit_response")).toHaveLength(1);
+    expect(fake.rows("previsit_target")[0].status).toBe("answered");
+    expect(fake.rows("treatment_interest")).toHaveLength(2);
+  });
+
+  it("restores the status the link resolved under, not a status it never had", async () => {
+    const t = target({ status: "queued" });
+    seedTarget(t);
+    fake.failTable("previsit_response");
+    await expect(
+      recordResponse({ target: t, answers: ANSWERS, interest: [], submittedAt: iso(0) }),
+    ).rejects.toBeDefined();
+    expect(fake.rows("previsit_target")[0].status).toBe("queued");
+  });
+
+  it("still spends the link exactly once on the happy path, so a double submit is a duplicate", async () => {
+    // The property the claim-first order exists for. The rollback must not have
+    // turned the at-most-once guarantee into a retry loop.
+    const t = target();
+    seedTarget(t);
+    const first = await recordResponse({ target: t, answers: ANSWERS, interest: INTEREST, submittedAt: iso(0) });
+    expect(first.ok).toBe(true);
+    const second = await recordResponse({ target: t, answers: ANSWERS, interest: INTEREST, submittedAt: iso(0) });
+    expect(second).toEqual({ ok: false, reason: "duplicate" });
+    expect(fake.rows("previsit_response")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2. W3/5
+// ---------------------------------------------------------------------------
+describe("listQueuedOutbox: never a pre-visit link after the visit (W3/5)", () => {
+  function seedQueued(args: {
+    outboxId: string;
+    touchId: string;
+    targetId: string | null;
+    appointmentAt?: string;
+    siteId?: string;
+  }): void {
+    const siteId = args.siteId ?? SITE;
+    if (args.targetId) {
+      seedTarget(
+        target({
+          id: args.targetId,
+          siteId,
+          appointmentAt: args.appointmentAt ?? iso(12 * HOUR),
+          status: "queued",
+        }),
+      );
+    }
+    fake.seed("previsit_touch", {
+      id: args.touchId,
+      target_id: args.targetId ?? "no-such-target",
+      site_id: siteId,
+      channel: "sms",
+      body: "Before your visit, a few quick questions.",
+      status: "queued",
+    });
+    fake.seed("previsit_outbox", {
+      id: args.outboxId,
+      touch_id: args.touchId,
+      site_id: siteId,
+      channel: "sms",
+      to_ref: "dp-1",
+      body: "Before your visit, a few quick questions.",
+      status: "queued",
+      not_before_at: iso(-1 * HOUR),
+      created_at: iso(-2 * HOUR),
+    });
+  }
+
+  it("hands over a link whose appointment is still ahead", async () => {
+    seedQueued({ outboxId: "ob-ahead", touchId: "touch-ahead", targetId: `${SITE}:ahead`, appointmentAt: iso(12 * HOUR) });
+    const rows = await listQueuedOutbox([SITE]);
+    expect(rows.map((r) => r.id)).toEqual(["ob-ahead"]);
+    expect(fake.rows("previsit_outbox")[0].status).toBe("queued");
+  });
+
+  it("RETIRES a link whose appointment has already started, and never returns it", async () => {
+    // The outage case the drain's own 48h staleness ceiling does not cover: the
+    // link was composed inside the lead window, so it is hours old, not days.
+    seedQueued({ outboxId: "ob-past", touchId: "touch-past", targetId: `${SITE}:past`, appointmentAt: iso(-30 * 60_000) });
+    expect(await listQueuedOutbox([SITE])).toEqual([]);
+
+    const outbox = fake.rows("previsit_outbox")[0];
+    expect(outbox.status).toBe("failed");
+    expect(outbox.provider).toBe("expired");
+    expect(fake.rows("previsit_touch")[0].status).toBe("failed");
+    const t = fake.rows("previsit_target")[0];
+    expect(t.status).toBe("stopped");
+    expect(t.stop_reason).toBe("expired");
+  });
+
+  it("retires rather than hides, so a dead row cannot sit at the head of the batch for ever", async () => {
+    seedQueued({ outboxId: "ob-past", touchId: "touch-past", targetId: `${SITE}:past`, appointmentAt: iso(-1 * HOUR) });
+    await listQueuedOutbox([SITE]);
+    // A second tick sees nothing at all: the row is no longer 'queued'.
+    expect(await listQueuedOutbox([SITE])).toEqual([]);
+    expect(fake.rows("previsit_outbox").filter((r) => r.status === "queued")).toHaveLength(0);
+  });
+
+  it("FAILS CLOSED on a row whose appointment cannot be read at all", async () => {
+    // Not sent. Staleness we cannot establish is not staleness we may ignore —
+    // the same direction decideSend takes for an undatable appointment.
+    seedQueued({ outboxId: "ob-orphan", touchId: "touch-orphan", targetId: null });
+    expect(await listQueuedOutbox([SITE])).toEqual([]);
+    expect(fake.rows("previsit_outbox")[0].status).toBe("failed");
+  });
+
+  it("sorts the sendable from the expired in one batch rather than dropping both", async () => {
+    seedQueued({ outboxId: "ob-past", touchId: "touch-past", targetId: `${SITE}:past`, appointmentAt: iso(-1 * HOUR) });
+    seedQueued({ outboxId: "ob-ahead", touchId: "touch-ahead", targetId: `${SITE}:ahead`, appointmentAt: iso(6 * HOUR) });
+    const rows = await listQueuedOutbox([SITE]);
+    expect(rows.map((r) => r.id)).toEqual(["ob-ahead"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. §0/5 + W3/11
+// ---------------------------------------------------------------------------
+describe("interest counts are read to the end, or say they were not (W3/11)", () => {
+  function seedInterest(rows: Array<{ id: string; treatment: string; patient: string; answer?: string; site?: string }>) {
+    let n = 0;
+    for (const r of rows) {
+      fake.seed("treatment_interest", {
+        id: r.id,
+        site_id: r.site ?? SITE,
+        dentally_patient_id: r.patient,
+        patient_name: r.patient,
+        treatment: r.treatment,
+        answer: r.answer ?? "yes",
+        response_id: "resp-1",
+        created_at: iso(-(++n) * 60_000),
+      });
+    }
+  }
+
+  const FIVE = [
+    { id: "i-1", treatment: "whitening", patient: "dp-1" },
+    { id: "i-2", treatment: "whitening", patient: "dp-1" }, // the SAME person, twice
+    { id: "i-3", treatment: "whitening", patient: "dp-2" },
+    { id: "i-4", treatment: "implants", patient: "dp-3" },
+    { id: "i-5", treatment: "implants", patient: "dp-3" },
+  ];
+
+  it("PAGES to the end of the table rather than stopping at one page", async () => {
+    // The defect, in miniature: one page held two rows and the truth needed five.
+    // An unranged select looks identical to this until the table outgrows the
+    // server's max-rows, at which point it starts under-reporting in silence.
+    seedInterest(FIVE);
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 2 });
+    expect(summary.counts).toEqual({ whitening: 2, implants: 1 });
+    expect(summary.scanned).toBe(5);
+    expect(summary.capped).toBe(false);
+    // Three pages, and the one count read that asks whether the ceiling is even
+    // reachable — issued after the first FULL page, never before it.
+    expect(interest.queries).toEqual(["page", "count", "page", "page"]);
+  });
+
+  it("costs ONE query when one page holds the answer, which is every practice for a long while", async () => {
+    // The pre-visit page renders this inside its own Promise.all, on every load,
+    // in both trees, with nothing caching it. A second round trip for a table that
+    // fits in a single page would be a latency regression on the common case, so
+    // the count read is only ever asked after a page has come back full.
+    seedInterest(FIVE);
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 10 });
+    expect(summary).toEqual({ counts: { whitening: 2, implants: 1 }, capped: false, scanned: 5 });
+    expect(interest.queries).toEqual(["page"]);
+  });
+
+  it("counts DISTINCT PATIENTS, and only the yeses, and only the sites in view", async () => {
+    seedInterest([
+      ...FIVE,
+      { id: "i-6", treatment: "whitening", patient: "dp-9", answer: "not_now" },
+      { id: "i-7", treatment: "whitening", patient: "dp-8", site: OTHER_SITE },
+    ]);
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 2 });
+    expect(summary.counts).toEqual({ whitening: 2, implants: 1 });
+  });
+
+  it("says CAPPED when the scan hits its ceiling instead of returning a floor as a total", async () => {
+    seedInterest(FIVE);
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 2, ceiling: 4 });
+    expect(summary.capped).toBe(true);
+    // And it STOPS at the count that proved the ceiling unreachable rather than
+    // walking every page to the same conclusion: at the real numbers that is two
+    // round trips instead of twenty, for a panel that then prints a sentence
+    // rather than a figure. `scanned` is what was actually read, as it always was.
+    expect(interest.queries).toEqual(["page", "count"]);
+    expect(summary.scanned).toBe(2);
+  });
+
+  it("keeps paging when the count read fails, because that read only ever saves time", async () => {
+    // Fail direction: not knowing the total may cost round trips and must never
+    // cost accuracy. The scan carries on to its own short page and the figures are
+    // the true totals, not floors.
+    seedInterest(FIVE);
+    interest.failCount = true;
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 2 });
+    expect(summary).toEqual({ counts: { whitening: 2, implants: 1 }, capped: false, scanned: 5 });
+    expect(interest.queries).toEqual(["page", "count", "page", "page"]);
+  });
+
+  it("THROWS when a page read fails rather than tallying the pages it did get", async () => {
+    // The other fail direction, and the opposite answer: a page decides the
+    // figures, so a page that did not come back cannot be quietly left out of them.
+    seedInterest(FIVE);
+    interest.failPage = true;
+    await expect(countInterestByTreatmentDetailed([SITE], { pageSize: 2 })).rejects.toBeDefined();
+  });
+
+  it("the bare Record<string, number> shape REFUSES a capped read rather than printing a floor", async () => {
+    // The two callers render this map as a headline number and as "distinct
+    // patients who answered yes". Neither shape can say "at least", so the honest
+    // answer is the sentence they already have for a read that did not work.
+    seedInterest(FIVE);
+    await expect(countInterestByTreatment([SITE], { pageSize: 2, ceiling: 4 })).rejects.toThrow(/floors rather than totals/);
+    await expect(countInterestByTreatment([SITE], { pageSize: 2 })).resolves.toEqual({ whitening: 2, implants: 1 });
+  });
+
+  it("pages by CURSOR, not by OFFSET: each page asks for the rows after the one it stopped at", async () => {
+    // `.range()` is fatal in this file's double, so the OFFSET walk this replaced
+    // cannot come back unnoticed; this pins the thing that took its place. The
+    // filter is a PostgREST string built by hand, so its exact shape is the
+    // contract — applyKeyset re-parses it and blows up if it drifts.
+    seedInterest(FIVE);
+    await countInterestByTreatmentDetailed([SITE], { pageSize: 2 });
+    const secondRow = fake.rows("treatment_interest").find((r) => r.id === "i-2")!;
+    expect(interest.filters[0]).toBe(
+      `created_at.lt."${secondRow.created_at}",and(created_at.eq."${secondRow.created_at}",id.gt."i-2")`,
+    );
+    expect(interest.filters).toHaveLength(2); // one per page after the first
+  });
+
+  it("holds its place across rows that share an instant, which one submit always writes", async () => {
+    // A submitted form writes up to four interest rows inside the same instant, so
+    // `created_at` alone is not a cursor: without the id tiebreak a page boundary
+    // landing inside such a batch either re-reads it for ever or steps over it.
+    const sameInstant = iso(-5 * 60_000);
+    for (const [id, patient] of [
+      ["i-a", "dp-1"],
+      ["i-b", "dp-2"],
+      ["i-c", "dp-3"],
+      ["i-d", "dp-4"],
+    ] as const) {
+      fake.seed("treatment_interest", {
+        id,
+        site_id: SITE,
+        dentally_patient_id: patient,
+        patient_name: patient,
+        treatment: "whitening",
+        answer: "yes",
+        response_id: "resp-1",
+        created_at: sameInstant,
+      });
+    }
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 2 });
+    expect(summary).toEqual({ counts: { whitening: 4 }, capped: false, scanned: 4 });
+  });
+
+  it("does not re-read rows when the public form writes while the scan is running", async () => {
+    // treatment_interest is written by the PUBLIC submit endpoint, so rows arrive
+    // mid-scan. Under OFFSET every such insert shifts the result set down and the
+    // next page hands back a row the last one already had — which spends a scan's
+    // fixed budget on rows it has already counted and pushes real ones past the
+    // ceiling. A cursor cannot be moved by an insert above it.
+    seedInterest(FIVE);
+    interest.onPage = (i) => {
+      if (i !== 0) return;
+      interest.onPage = null;
+      fake.seed("treatment_interest", {
+        id: "i-0",
+        site_id: SITE,
+        dentally_patient_id: "dp-99",
+        patient_name: "dp-99",
+        treatment: "whitening",
+        answer: "yes",
+        response_id: "resp-1",
+        created_at: iso(0), // newer than everything already there
+      });
+    };
+    const summary = await countInterestByTreatmentDetailed([SITE], { pageSize: 2 });
+    // Five rows read once each — not six reads for five rows. The row written
+    // after the scan passed that point belongs to the next read, not this one.
+    expect(summary.scanned).toBe(5);
+    expect(summary.counts).toEqual({ whitening: 2, implants: 1 });
+    expect(summary.capped).toBe(false);
+  });
+
+  it("an empty site scope reads nothing at all", async () => {
+    seedInterest(FIVE);
+    expect(await countInterestByTreatmentDetailed([])).toEqual({ counts: {}, capped: false, scanned: 0 });
+  });
+});

@@ -379,8 +379,12 @@ registration carried a `first_name`, a `date_of_birth` and a `mobile_phone` with
 holding one character of any of them. Error text is truncated and stripped of
 anything shaped like an email address or a phone number before it is stored.
 
-**Still owed.** Migration 0096 is written and NOT applied — until a human applies it
-the ledger records nothing (every insert is fail-soft and cannot affect a booking),
-and the Sync Status page says so in words rather than showing an empty table as if it
-were an answer. The `queued` status has no producer yet: replaying months of
-accumulated intent into a real diary is a decision for the owner, not a build step.
+**Still owed.** Migration 0096 is **applied** — `dentally_write_intent` exists in
+production and held 0 rows when it was last read (4 September 2026) — so the ledger
+records every intent a write path produces from now on, and each insert is fail-soft
+and cannot affect a booking. What is still owed is upstream of it: the master
+`dentally-write-back` switch is off, `DENTALLY_WRITE_ENABLED` is off and the
+production write key is a placeholder, so every intent is recorded `dry_run` or
+`blocked`/`writes_disabled` and nothing reaches Dentally. The `queued` status has no
+producer yet: replaying months of accumulated intent into a real diary is a decision
+for the owner, not a build step.

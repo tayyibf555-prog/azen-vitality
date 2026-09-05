@@ -46,9 +46,15 @@ import "server-only";
 // WHO SEES A TILE is decided by ONE predicate and not by a second list: a tile
 // appears only if `canRoleAccessModule` says the role may open the module the
 // tile links to. So the practice manager's band is her operational subset by
-// construction — she has the pre-visit questions, the equipment register and the
-// IT desk, and she has no System controls, so she has no write-back or
-// automations tile — and a clinician, who has none of them, gets no band at all.
+// construction — she has Leads, the pre-visit questions, the equipment register
+// and the IT desk, and she has no System controls, so she has no write-back or
+// automations tile. A clinician and a member of staff get exactly two tiles,
+// Equipment and the IT desk, because ruling W2-A/1 (3 Sep 2026) widened those
+// two modules to all five clearances; the band followed with no edit of its
+// own, which is the whole point of gating on the module guard. This paragraph
+// is pinned to behaviour by "the header's account of who sees a tile is the one
+// the code gives" — if a module widens or narrows again, that test goes red
+// here rather than leaving a false contract in the file a later lane reads.
 // ===========================================================================
 
 import { canRoleAccessModule } from "@/lib/nav";
@@ -56,10 +62,11 @@ import type { Role } from "@/lib/types";
 import { SYSTEM_BY_SLUG } from "@/lib/systems/catalog";
 import { firstStepFor } from "@/lib/systems/first-steps";
 import { getSystemStates } from "@/lib/systems/repository";
-import { countWriteIntents } from "@/lib/dentally/sync-ledger";
+import { COUNT_CAP, countWriteIntents } from "@/lib/dentally/sync-ledger";
 import { ASSET_ROW_CAP, listAssets } from "@/lib/equipment/repository";
 import { getItContact } from "@/lib/itdesk/repository";
 import { listLeads } from "@/lib/speed-to-lead/repository";
+import { londonDayKey } from "@/lib/time/london";
 import { listTargets } from "@/lib/triage/repository";
 
 /** The most rows any one tile's read will pull. A tile is a figure, not a report. */
@@ -273,6 +280,24 @@ async function readTile(
       return figure(rows.length, "awaiting first contact", "attention");
     }
     case "pre-visit": {
+      // WHAT `sent` MEANS HERE, AND WHY THE FIGURE IS ONE THE PRACTICE CAN
+      // CLEAR. A target sits at `sent` from the moment its link goes out until
+      // the patient answers — and, if nobody ever does, until the pre-visit
+      // sweep's third pass retires it as `expired` once its appointment has
+      // started (ruling W3/5). That pass is load-bearing FOR THIS TILE: without
+      // it the count would only ever grow and would saturate permanently at the
+      // bound, printing "at least 200 sent, awaiting an answer" as a backlog
+      // nobody could ever work off — an alarm on the front door that no action
+      // switches off. "the sweep still retires a sent link its appointment has
+      // overtaken" pins it, so a lane that drops the retirement gets a red here
+      // rather than leaving this noun quietly untrue.
+      //
+      // AND DO NOT FILTER THIS BY DATE AFTER THE READ. `listTargets` orders by
+      // appointment_at ASCENDING and this read is bounded, so at the bound the
+      // rows in hand are the OLDEST ones. Dropping the past-dated rows from a
+      // page that is entirely past-dated yields ~0 while the practice may have
+      // hundreds of live links out — a wrong number where there was at least an
+      // honest floor. Retirement at the source is what keeps this tile true.
       const rows = await attempt("listTargets", () =>
         listTargets({ siteIds: input.siteIds, statuses: ["sent"], limit: TILE_ROW_CAP + 1 }),
       );
@@ -285,7 +310,16 @@ async function readTile(
       if (assets.length === 0) {
         return { kind: "empty", firstStep: firstStepFor("equipment")?.step ?? null };
       }
-      const today = new Date().toISOString().slice(0, 10);
+      // THE PRACTICE'S DAY, NOT THE SERVER'S. `next_service_due` is a London
+      // calendar date, and the app runs on UTC hosts: between midnight and 01:00
+      // BST a UTC day key is still YESTERDAY, so a machine that went overdue at
+      // midnight would read as fine here while the equipment desk — which is
+      // handed `londonDayKey(new Date())` by its route, and by the co-pilot tool
+      // — calls it overdue and appends the take-out-of-use sentence (W1-D/2).
+      // Two surfaces of the same OS disagreeing about a statutory test is not
+      // something an hour a night makes acceptable, so the band uses the same
+      // day the rest of the equipment feature uses.
+      const today = londonDayKey(new Date());
       const overdue = assets.filter((a) => a.nextServiceDue !== null && a.nextServiceDue < today);
       // THE REGISTER READ IS ITSELF BOUNDED (ASSET_ROW_CAP), so a practice at the
       // bound has been counted only as far as the bound. Both figures below are
@@ -325,15 +359,32 @@ async function readTile(
       const counted = await attempt("countWriteIntents", () => countWriteIntents(input.clientId));
       if (counted === null) return { kind: "unreadable" };
       const blocked = counted.counts.blocked;
-      return blocked === 0
-        ? { kind: "fact", text: "Nothing held back", tone: "neutral" }
-        : {
-            kind: "figure",
-            value: blocked,
-            noun: "held back",
-            atLeast: counted.capped,
-            tone: "attention",
-          };
+      if (blocked > 0) {
+        return {
+          kind: "figure",
+          value: blocked,
+          noun: "held back",
+          atLeast: counted.capped,
+          tone: "attention",
+        };
+      }
+      // A ZERO OFF A CAPPED READ IS NOT A ZERO. `countWriteIntents` scans the
+      // NEWEST COUNT_CAP intents only, so `blocked === 0` under `capped` means
+      // "none of the most recent N was held back", never "nothing has been held
+      // back" — and a held-back write is permanent (W1-A/1: no replay, ever), so
+      // this is a cumulative claim about the whole ledger. "Nothing held back"
+      // printed off a truncated read is precisely the sentence that stops the
+      // owner opening Sync Status, which is the only reason this tile is allowed
+      // to count while its system is off. It therefore wears the same qualifier
+      // the equipment branch above wears for its own bound (rule 4, and the
+      // programme's honest-numbers ruling W3/11).
+      return {
+        kind: "fact",
+        text: counted.capped
+          ? `None held back in the most recent ${COUNT_CAP.toLocaleString("en-GB")} writes`
+          : "Nothing held back",
+        tone: "neutral",
+      };
     }
     case "automations": {
       if (states === null) return { kind: "unreadable" };

@@ -363,6 +363,22 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
   // recorded rather than vanishing into a 503. Everything about the ordering is
   // unchanged: still before any client is constructed, still before the day is
   // read, and the message the diary shows is the same one.
+  //
+  // WHY THE SOURCE IS `diary` FOR EVERY CALLER, THE CO-PILOT INCLUDED, here and
+  // at the write below. Since ruling W3/1 the co-pilot's `diary_write` move
+  // drives THIS function instead of making its own gate call, so the ledger row
+  // it produces is filed as a diary move -- which is what it was, and what the
+  // registry says happens (see the `copilot` entry in
+  // src/lib/dentally/write-vocabulary.ts). The door it came through is not lost:
+  // the ctx carries the asking user's opaque id, the diary's own move audit row
+  // names the person (actor_email), and the co-pilot files its own
+  // `copilot_action` row for the same turn. Handoff H33 asked for an optional
+  // per-call `source` override so Sync Status could show a co-pilot move apart
+  // from a desk drag; that is a product question about what the ledger CLAIMS,
+  // the charter does not settle it, and this lane left it for a ruling rather
+  // than guessing. Nothing about safety turns on it either way: `diary` and
+  // `copilot` resolve the SAME `calendar-writes` switch for appointment.update,
+  // which write-gate.test.ts pins.
   const writeRefused = await precheckDentallyWrite({
     ctx: { source: "diary", siteId: body.siteId, clientId: site.clientId, actor: user?.id ?? null },
     kind: "appointment.update",

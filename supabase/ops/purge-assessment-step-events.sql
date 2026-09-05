@@ -1,11 +1,27 @@
 -- purge-assessment-step-events.sql  —  register the step-drop-off telemetry
 -- retention purge on pg_cron
 -- ---------------------------------------------------------------------------
--- STATUS: NOT YET APPLIED, and it cannot be applied before its table exists.
--- Migration 0080_assessment_step_events.sql is itself still a FILE (see its
--- header); apply that first, then run this once. Same method as every other file
--- in supabase/ops: the app's Supabase role is read-only on the cron.job TABLE, so
--- use the cron.* FUNCTIONS, which are SECURITY DEFINER.
+-- STATUS: APPLIED (verify against cron.job).
+--
+-- Same correction as register-outreach-cron.sql, register-anomaly-cron.sql and
+-- register-landing-promote-cron.sql under ruling W3/22: the read-only
+-- `select jobname, schedule, active from cron.job` against production on
+-- 4 September 2026 found 'app-purge-assessment-step-events' registered and active
+-- on `43 4 * * *` — the schedule this file proposes. The header's other claim, the
+-- one that made it read like a blocked step, has expired with it: a cron job that
+-- deletes from public.assessment_step_event could not run at all unless migration
+-- 0080_assessment_step_events.sql had been applied first, so it has been. Verify
+-- rather than trust either sentence:
+--
+--   select jobname, schedule, active from cron.job where jobname = 'app-purge-assessment-step-events';
+--
+-- The statement below is a harmless re-registration of a job that already exists
+-- (identical name, schedule and command; cron.schedule keeps the current active
+-- flag). Run it only to rebuild the job on a fresh project, or after somebody has
+-- unscheduled it — and only once the table exists, since the delete names it.
+-- Same method as every other file in supabase/ops: the app's Supabase role is
+-- read-only on the cron.job TABLE, so use the cron.* FUNCTIONS, which are
+-- SECURITY DEFINER.
 --
 -- WHY THIS EXISTS AT ALL. assessment_step_event is the only table in the schema an
 -- ANONYMOUS stranger can put rows in (the public beacon endpoint,

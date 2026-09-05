@@ -10,6 +10,8 @@ import {
   SYNC_GROUP_TITLES,
   sourcesForKind,
   syncFacts,
+  syncGroupTitle,
+  syncGroupTitles,
   syncHeadline,
 } from "./sync-surface";
 
@@ -93,10 +95,15 @@ describe("the three groups say what flows and what does not", () => {
     // this lane closes, so the list is computed from the source registry.
     expect(sourcesForKind("appointment.update")).toEqual([
       "Booking agent (the 24/7 SMS and WhatsApp assistant)",
-      // ADDED BY WAVE 2, LANE A. The co-pilot's `diary_write` moves an
-      // appointment through this gate, so the page that tells a practice what
-      // changes their diary now names it. An assertion that did not change here
-      // would mean the page had stopped being complete.
+      // ADDED BY WAVE 2, LANE A, and KEPT deliberately in wave 3. The co-pilot's
+      // `diary_write` moves an appointment when an owner asks for it, so the page
+      // that tells a practice what changes their diary names it. Since ruling
+      // W3/1 the confirmed move travels through the diary's own performMove and
+      // the LEDGER ROW is filed under `diary` — but this list answers "which
+      // surfaces can change this?", not "which name is on the row", and dropping
+      // the co-pilot would tell an owner that asking cannot move an appointment.
+      // An assertion that did not change here would mean the page had stopped
+      // being complete.
       "Co-pilot (the owner adding a patient, or booking, moving or cancelling, by asking)",
       "Diary (moving, resizing or reassigning an appointment)",
     ]);
@@ -144,6 +151,36 @@ describe("the three groups say what flows and what does not", () => {
     for (const g of SYNC_GROUP_ORDER) expect(SYNC_GROUP_TITLES[g].length).toBeGreaterThan(10);
   });
 
+  it("heads the pending group with the switch that is actually in the way", () => {
+    // THE HEADING HAS TO AGREE WITH THE BULLETS UNDER IT. Both ways of not
+    // flowing land in this one group, so a heading that names the write key is
+    // false whenever it is the owner's own switch that is off — and false in the
+    // direction that sends him to wait on his agency for a control on the next
+    // tab. Same precedence as the headline and the bullets: his switch first.
+    const hisSwitch = syncGroupTitle("pending_on_key", true);
+    expect(hisSwitch).toMatch(/System controls/);
+    expect(hisSwitch).not.toMatch(/write key/i);
+    // With his switch on, the key really is the thing missing, and it is named.
+    expect(syncGroupTitle("pending_on_key", false)).toMatch(/Dentally write key/);
+    // The static record is the fallback for a caller that does not know which
+    // switch is off, so it may not assert either cause.
+    expect(SYNC_GROUP_TITLES.pending_on_key).not.toMatch(/write key/i);
+    expect(SYNC_GROUP_TITLES.pending_on_key).not.toMatch(/System controls/);
+    // The other two headings are facts about Dentally, not about a switch.
+    for (const g of ["mirrored", "blocked_by_governance"] as const) {
+      expect(syncGroupTitle(g, true)).toBe(SYNC_GROUP_TITLES[g]);
+      expect(syncGroupTitle(g, false)).toBe(SYNC_GROUP_TITLES[g]);
+    }
+    // The whole-record form a renderer uses says the same thing, for every group
+    // and both states — it is one page's headings, so it cannot disagree with
+    // itself group by group.
+    for (const masterOff of [true, false]) {
+      const titles = syncGroupTitles(masterOff);
+      expect(Object.keys(titles).sort()).toEqual([...SYNC_GROUP_ORDER].sort());
+      for (const g of SYNC_GROUP_ORDER) expect(titles[g]).toBe(syncGroupTitle(g, masterOff));
+    }
+  });
+
   it("every blocked reason has owner-facing wording, so none can render as an enum", () => {
     for (const reason of BLOCKED_REASONS) {
       expect(BLOCKED_REASON_COPY[reason].length, reason).toBeGreaterThan(40);
@@ -179,13 +216,36 @@ function render(payload: SyncStatusPayloadShape): string {
 describe("the Sync Status panel renders the answer, not the enum", () => {
   it("shows all three headings and the governance sentences", () => {
     const html = render(BASE);
-    expect(html).toContain(SYNC_GROUP_TITLES.pending_on_key);
+    // THE PAGE DERIVES THIS HEADING from the master switch on its own payload
+    // (BASE.master.off is false, so it is the write-key wording that is correct
+    // here). The static record stays the fallback for a caller that does not
+    // know which switch is in the way — asserted on its own, above.
+    expect(html).toContain(syncGroupTitle("pending_on_key", BASE.master.off));
     expect(html).toContain(SYNC_GROUP_TITLES.blocked_by_governance);
     // The mirrored heading is NOT drawn while nothing is mirrored: an empty
     // heading reads as "there is something here we could not show you".
     expect(html).not.toContain(SYNC_GROUP_TITLES.mirrored);
     expect(html).toContain("Clinical and practice notes");
     expect(html).toContain("Text messages sent to patients");
+  });
+
+  it("never blames the write key on the page once the key is armed and HIS switch is off", () => {
+    // THE DAY THE AGENCY ARMS THE KEY is the day this page is read, and it is the
+    // one state in which every other sentence on it is right and the middle
+    // heading was wrong: headline "because you have switched it off", connection
+    // "Armed for writing", five bullets "waiting on ONE thing you control". A
+    // heading between them naming the write key points the owner at the party
+    // who has already done their part. Nothing on this page may say it.
+    const html = render({
+      ...BASE,
+      mode: "live",
+      master: { slug: "dentally-write-back", off: true },
+      headline: syncHeadline("live", true),
+      facts: syncFacts("live", true),
+    });
+    expect(html).not.toMatch(/write key/i);
+    expect(html).toContain("because you have switched it off");
+    expect(html).toContain("System controls");
   });
 
   it("renders a BLOCKED intent with its reason in plain English", () => {
@@ -209,7 +269,14 @@ describe("the Sync Status panel renders the answer, not the enum", () => {
         },
       ],
     });
-    expect(html).toContain("Refused here");
+    // THE ROW'S OWN PILL, not the count strip above it (W3/17: a key-independent
+    // assertion is not an assertion). This used to read `toContain("Refused
+    // here")`, which was satisfied by a STAT CARD LABEL that is on the page
+    // whatever the table holds — so it passed for the wrong reason, and went on
+    // passing while the two held-back cards counted each other's statuses. The
+    // pill is a <span>; a stat label is a <p>, so this fragment can only come
+    // from the row.
+    expect(html).toContain(">Held back</span>");
     expect(html).toContain(BLOCKED_REASON_COPY.system_off);
     // The raw enum never reaches the screen.
     expect(html).not.toContain("system_off");
@@ -291,7 +358,8 @@ describe("the Sync Status panel renders the answer, not the enum", () => {
         },
       ],
     });
-    expect(html).toContain("Held back");
+    // The row's pill again, not the stat card that carries the same two words.
+    expect(html).toContain(">Held back</span>");
     expect(html).toContain(BLOCKED_REASON_COPY.writes_disabled);
     expect(html).not.toContain("writes_disabled");
   });

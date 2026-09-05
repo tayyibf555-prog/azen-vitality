@@ -6,9 +6,9 @@ import { isSystemEnabled, isSystemEnabledStrict, isSystemExplicitlyDisabled } fr
 import { recordWriteIntent, sanitiseWriteError } from "./sync-ledger";
 import {
   DENTALLY_WRITE_MASTER_SLUG,
-  DENTALLY_WRITE_SOURCES,
   sanitiseActor,
   summariseWritePayload,
+  writeSlugFor,
   type BlockedReason,
   type DentallyWriteKind,
   type DentallyWriteMode,
@@ -320,8 +320,13 @@ async function evaluateGate(
   ids: { appointmentId?: string | null; patientId?: string | null; requires?: { id: string; label: string } },
   payload: Record<string, unknown>,
 ): Promise<GateDecision> {
-  const def = DENTALLY_WRITE_SOURCES[ctx.source];
+  // THE SLUG IS RESOLVED PER KIND, not per source. Most sources are one surface
+  // doing one job and answer the same slug for every kind they make; the co-pilot
+  // is one door acting in two modules, and ruling W3/2 puts its diary writes under
+  // the diary's own switch. Asking writeSlugFor(source) alone here is what let a
+  // co-pilot move go round `calendar-writes`.
   const siteId = ctx.siteId ?? null;
+  const moduleSlug = writeSlugFor(ctx.source, kind);
   const clientId = ctx.clientId ?? (siteId ? (getSite(siteId)?.clientId ?? null) : null);
   const mode = dentallyWriteMode();
   const target = dentallyWriteTarget();
@@ -331,7 +336,7 @@ async function evaluateGate(
     siteId,
     kind,
     source: ctx.source as string,
-    moduleSlug: def.slug,
+    moduleSlug,
     dentallyPatientId: ids.patientId ?? ctx.patientId ?? null,
     dentallyAppointmentId: ids.appointmentId ?? null,
     target: target.host,
@@ -377,15 +382,15 @@ async function evaluateGate(
   //    LIVE an unreadable switch counts as OFF — a skipped write self-heals on
   //    the next click, a write made against an owner's explicit instruction does
   //    not.
-  if (def.slug) {
+  if (moduleSlug) {
     const enabled =
       mode === "live"
-        ? await isSystemEnabledStrict(base.clientId, def.slug)
-        : await isSystemEnabled(base.clientId, def.slug);
+        ? await isSystemEnabledStrict(base.clientId, moduleSlug)
+        : await isSystemEnabled(base.clientId, moduleSlug);
     if (!enabled) {
       return refuse(
         "system_off",
-        `Refusing ${kind}: ${SYSTEM_BY_SLUG.get(def.slug)?.label ?? def.slug} is switched off in System controls.`,
+        `Refusing ${kind}: ${SYSTEM_BY_SLUG.get(moduleSlug)?.label ?? moduleSlug} is switched off in System controls.`,
       );
     }
   }
@@ -462,13 +467,22 @@ async function runWrite<T>(spec: RunSpec<T>): Promise<T> {
     { appointmentId: spec.appointmentId, patientId: spec.patientId, requires: spec.requires },
     spec.payload,
   );
-  const { base, mode } = decision;
+  const { base, mode, target } = decision;
   if (decision.refusal) throw await recordAndRefuse(decision);
 
   // Perform. `sent` means it went to the live practice book; a write that only
   // reached the local mock is a `dry_run` with a response, never a `sent`.
+  //
+  // BOTH HALVES, and the second one is the one that was missing. The MODE says
+  // only that the three DENTALLY_WRITE_* variables are set; it says nothing about
+  // WHERE the write is aimed. An armed deployment pointed at the local mock — the
+  // rehearsal configuration the repo itself ships as `azen-web-mockwrite-3002` —
+  // used to file every rehearsal booking as `sent`, so the Sync Status count of
+  // writes that reached the practice's book described writes that never left the
+  // building. The target is already resolved two lines above; asking it costs
+  // nothing and is the difference between an honest number and a wrong one.
   const client = spec.ctx.client ?? dentallyAgentClient();
-  const status: WriteIntentStatus = mode === "live" ? "sent" : "dry_run";
+  const status: WriteIntentStatus = mode === "live" && target.live ? "sent" : "dry_run";
   try {
     const result = await spec.perform(client);
     await recordWriteIntent({ ...base, status, responseId: spec.responseId(result) });

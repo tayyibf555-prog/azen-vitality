@@ -40,10 +40,16 @@ import type {
 //    retried tap, a browser replaying a POST — cannot produce two responses for
 //    one appointment, and a link that has been used stops opening the form.
 //
-// 3. AN INTEREST TICK IS NEVER LOST. `recordResponse` writes the response row
-//    FIRST, then the interest rows, then moves the target. If the target update
-//    fails the answers still exist and still surface; the reverse order would
-//    give us a target marked 'answered' with nothing behind it.
+// 3. A PATIENT NEVER LOSES THEIR ANSWERS. `recordResponse` spends the link first
+//    (rule 2 needs the claim to come first, or two concurrent submits both write
+//    a response), so the claim is RELEASED if the response insert then fails: the
+//    target goes back to the status the link resolved under and the patient's
+//    retry opens the same form. 'answered' is terminal and both public doors
+//    refuse it, so a claim left standing over a failed insert would lose the
+//    answers permanently and show the practice a target marked 'answered' with
+//    nothing behind it — the state this rule exists to prevent (ruling W3/6).
+//    The interest rows are written last and are the one thing that may fail
+//    without a rollback: the response is already stored and already visible.
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -419,10 +425,11 @@ function rowToResponse(r: ResponseRow): TriageResponse {
 /**
  * Store one completed questionnaire, its interest rows, and spend the link.
  *
- * THE ORDER IS THE SAFETY PROPERTY (rule 3 in this file's header). The response
- * lands first, then the interest rows, then the target moves. A failure part way
- * through leaves answers a person can read rather than a target marked 'answered'
- * with nothing behind it.
+ * THE ORDER IS THE SAFETY PROPERTY (rule 3 in this file's header). The link is
+ * claimed, the response lands, then the interest rows. A failure on the response
+ * RELEASES the claim, so the failure a patient sees is "please try again" on a
+ * link that still works rather than a target marked 'answered' with nothing behind
+ * it and a form that will never open again.
  *
  * THE TARGET TRANSITION IS CONDITIONAL on the row still being 'queued' or 'sent',
  * which is what makes a double submit impossible: the second call finds no row to
@@ -455,21 +462,56 @@ export async function recordResponse(input: {
   if (claimErr) throw claimErr;
   if ((claimed?.length ?? 0) === 0) return { ok: false, reason: "duplicate" };
 
-  const { data, error } = await db
-    .from("previsit_response")
-    .insert({
-      target_id: target.id,
-      site_id: target.siteId,
-      dentally_patient_id: target.dentallyPatientId,
-      fork: target.fork,
-      answers: input.answers,
-      interest: input.interest,
-      submitted_at: input.submittedAt,
-    })
-    .select(RESPONSE_COLUMNS)
-    .single();
-  if (error) throw error;
-  const response = rowToResponse(data as ResponseRow);
+  // THE CLAIM IS RELEASED IF THE ANSWERS DO NOT LAND (ruling W3/6). Spending the
+  // link first is what makes a double submit impossible, but a link spent for a
+  // response that was never written is the worse failure of the two: 'answered' is
+  // terminal (migration 0097), and both public doors — /pv/[token] and
+  // /api/previsit/submit — refuse anything that is not 'queued' or 'sent'. So a
+  // transient failure on this one insert would take the patient's answers AND
+  // their interest ticks with it, permanently, while showing the practice a target
+  // marked 'answered' with an empty summary behind it that nobody would chase.
+  //
+  // The rollback is CONDITIONAL on the row still being 'answered', so it cannot
+  // overwrite a state something else has since moved it to, and it restores the
+  // status the link resolved under so the patient's retry opens the same form.
+  let response: TriageResponse;
+  try {
+    const { data, error } = await db
+      .from("previsit_response")
+      .insert({
+        target_id: target.id,
+        site_id: target.siteId,
+        dentally_patient_id: target.dentallyPatientId,
+        fork: target.fork,
+        answers: input.answers,
+        interest: input.interest,
+        submitted_at: input.submittedAt,
+      })
+      .select(RESPONSE_COLUMNS)
+      .single();
+    if (error) throw error;
+    response = rowToResponse(data as ResponseRow);
+  } catch (err) {
+    const restoreTo: TriageTargetStatus =
+      target.status === "queued" || target.status === "sent" ? target.status : "sent";
+    try {
+      const { error: releaseErr } = await db
+        .from("previsit_target")
+        .update({ status: restoreTo, updated_at: new Date().toISOString() })
+        .eq("id", target.id)
+        .eq("status", "answered");
+      if (releaseErr) throw releaseErr;
+    } catch (releaseFailed) {
+      // Both writes failed, which means the database is unreachable rather than
+      // fussy. Loud, because this is the one path that can still cost a patient
+      // their answers and the practice needs to know the link needs reopening.
+      console.error(
+        `[previsit] target ${target.id} is marked answered with no response behind it; the link must be reopened by hand`,
+        releaseFailed,
+      );
+    }
+    throw err;
+  }
 
   if (input.interest.length > 0) {
     const { error: iErr } = await db.from("treatment_interest").insert(
@@ -571,30 +613,240 @@ export async function listInterest(args: {
   return ((data ?? []) as InterestRow[]).map(rowToInterest);
 }
 
-/** How many patients said yes to each treatment. The list view's headline row. */
-export async function countInterestByTreatment(
+/**
+ * The headline row: how many DISTINCT PATIENTS said yes to each treatment, and
+ * whether the scan that produced those figures reached the end of the table.
+ *
+ * PAGED, WITH AN ABSOLUTE CEILING, and both halves are load-bearing.
+ *
+ * This select used to be unbounded, which quietly relied on PostgREST's max-rows:
+ * past that ceiling it returns a clipped page with `error: null`, so a truncated
+ * scan is indistinguishable from a complete one in the returned shape. The same
+ * trap has already been fixed and documented three times in this tree
+ * (src/lib/task-queue/repository.ts, src/lib/coordinator/repository.ts,
+ * src/lib/telemetry.ts) and these figures are printed to the owner under the words
+ * "The count is people, not answers" and handed to the co-pilot as "distinct
+ * patients who answered yes" — a floor wearing a total's clothes, in the one place
+ * a campaign gets sized (charter §0/5, ruling W3/11).
+ *
+ * The ceiling exists because the paging must terminate: one row accrues per
+ * (patient, treatment, response), so a practice that has run this for a year has
+ * hundreds of thousands, and a loop with no end would trade a wrong number for an
+ * exhausted function. `capped` is how the caller tells the two apart, and a capped
+ * result is a FLOOR: the caller must render it as "at least N", never as N.
+ */
+export interface InterestCountSummary {
+  /** Distinct patients per treatment key, over the rows actually read. */
+  counts: Record<string, number>;
+  /** True when the scan hit its ceiling: every count is a floor, not a total. */
+  capped: boolean;
+  /** How many interest rows were read to produce it. */
+  scanned: number;
+}
+
+/** One PostgREST page. 1000 is the server's own default max-rows. */
+const INTEREST_COUNT_PAGE = 1000;
+/** The absolute ceiling on one scan: 20 pages, then we say so rather than guess. */
+const INTEREST_COUNT_CEILING = 20_000;
+
+/** Where one page stopped, in the scan's own (created_at desc, id asc) order. */
+interface InterestCursor {
+  createdAt: string;
+  id: string;
+}
+
+/**
+ * The characters a cursor value may hold.
+ *
+ * Both values come straight out of this table — a timestamptz and a uuid — so this
+ * can only fire on something that is not a cursor at all. It exists because the
+ * values are interpolated into the PostgREST filter string below, and a value
+ * carrying a quote or a backslash could break out of the quoting that makes that
+ * string safe. Same belt-and-braces as the step-event scan
+ * (src/lib/smile-assessment/step-events-repository.ts).
+ */
+const INTEREST_CURSOR_SAFE = /^[A-Za-z0-9:.+-]+$/;
+
+/**
+ * "Strictly after this row, in (created_at desc, id asc) order": an older
+ * timestamp, OR the same timestamp with a higher id.
+ *
+ * The values are double-quoted because a timestamptz literal contains `.`, `:` and
+ * `+`, every one of which is a structural character in PostgREST's filter grammar.
+ */
+function interestKeysetFilter(c: InterestCursor): string {
+  return `created_at.lt."${c.createdAt}",and(created_at.eq."${c.createdAt}",id.gt."${c.id}")`;
+}
+
+/**
+ * How many interest rows are in scope at all, as ONE count read with no rows
+ * returned (`head: true`), or null if the database would not say.
+ *
+ * Only ever asked once, and only after a full page has already come back, so a
+ * practice below one page — which is every practice for a long while — still pays
+ * exactly one query for its counts.
+ *
+ * Null on error rather than a throw: this read only ever makes the scan STOP
+ * EARLIER than it otherwise would, so not knowing costs time and never accuracy.
+ * The page reads themselves still throw, because those decide the figures.
+ */
+async function countInterestRowsInScope(
+  db: ReturnType<typeof serviceClient>,
   siteIds: string[],
-): Promise<Record<string, number>> {
-  const out: Record<string, number> = {};
-  if (siteIds.length === 0) return out;
-  const db = serviceClient();
-  const { data, error } = await db
+): Promise<number | null> {
+  const { count, error } = await db
     .from("treatment_interest")
-    .select("treatment, dentally_patient_id")
+    .select("id", { count: "exact", head: true })
     .in("site_id", siteIds)
     .eq("answer", "yes");
-  if (error) throw error;
+  if (error) return null;
+  return typeof count === "number" ? count : null;
+}
+
+/**
+ * KEYSET PAGED, NOT OFFSET PAGED, and NEVER MORE PAGES THAN THE ANSWER IS WORTH.
+ *
+ * This scan runs inside the pre-visit module page's own server render (both trees,
+ * `force-dynamic`, nothing caching it), so its query shape is the page's latency.
+ * Two things were wrong with the `.range(from, from + want - 1)` walk it replaces:
+ *
+ *  1. OFFSET MOVES UNDER A TABLE THAT IS BEING WRITTEN TO, and this one is
+ *     written by the PUBLIC submit endpoint — up to four rows in a single insert.
+ *     Every row that arrives above the scan's position shifts the result set down,
+ *     so the next page hands back a row the last page already had. The tally
+ *     de-duplicates into sets, so a repeat does not double-count anybody; it
+ *     spends this scan's FIXED budget on rows already counted and pushes real ones
+ *     towards the ceiling, which is how a complete count quietly becomes a floor.
+ *     A concurrent DELETE (previsit_response cascades into this table) shifts the
+ *     other way and drops a row outright — a patient missing from the number a
+ *     campaign is sized on. Ordering deterministically fixes neither; only
+ *     carrying the last row's (created_at, id) and asking for "strictly older than
+ *     the row I stopped at" does, because no concurrent write can move that
+ *     boundary. The tiebreak is still load-bearing and still for the same reason:
+ *     one submit writes up to four rows in one instant, so `created_at` alone is
+ *     not a cursor.
+ *  2. DEEP OFFSET GETS SLOWER AS IT DEEPENS. This filter (site_id, answer) is not
+ *     the leading edge of 0097's `(site_id, treatment, answer, created_at desc)`
+ *     index, so Postgres sorts the matching set — and page 20 sorted the whole set
+ *     again to throw the first 19,000 rows away. A keyset page carries its own
+ *     `created_at <` predicate, so the work shrinks page by page instead.
+ *
+ * AND THE CEILING IS NOW DETECTED, NOT WALKED INTO. Past 20,000 rows the old loop
+ * paid all twenty round trips and twenty thousand rows to arrive at `capped`, which
+ * the module page renders as "The totals could not be read." — maximum cost for
+ * zero information. One `count: 'exact', head: true` read after the first full page
+ * settles it (charter §0/5 asks for exactly that read where a true total is cheap),
+ * so the honest sentence now costs two queries rather than twenty.
+ *
+ * What has NOT changed is every number and flag this returns: `capped` still means
+ * "these are floors", it is still conservative at the exact boundary (a table
+ * holding precisely `ceiling` rows reports capped, because the scan stops on a full
+ * page without asking again), `scanned` is still the rows actually read, and the
+ * counts are still distinct patients. A one-query answer needs a Postgres
+ * `count(distinct …)` aggregate behind an RPC — a migration, and a handoff.
+ */
+export async function countInterestByTreatmentDetailed(
+  siteIds: string[],
+  opts: { pageSize?: number; ceiling?: number } = {},
+): Promise<InterestCountSummary> {
+  const counts: Record<string, number> = {};
+  if (siteIds.length === 0) return { counts, capped: false, scanned: 0 };
+  const page = Math.max(1, Math.floor(opts.pageSize ?? INTEREST_COUNT_PAGE));
+  const ceiling = Math.max(page, Math.floor(opts.ceiling ?? INTEREST_COUNT_CEILING));
+  const db = serviceClient();
+
   // DISTINCT PATIENTS, not rows. A patient who filled the form in before two
   // appointments and said yes to whitening both times is ONE person interested in
   // whitening, and a count that said two would be a number nobody could act on.
   const seen = new Map<string, Set<string>>();
-  for (const raw of (data ?? []) as Array<{ treatment: string; dentally_patient_id: string }>) {
-    const set = seen.get(raw.treatment) ?? new Set<string>();
-    set.add(raw.dentally_patient_id);
-    seen.set(raw.treatment, set);
+  let scanned = 0;
+  let capped = true;
+  let cursor: InterestCursor | null = null;
+  let totalAsked = false;
+  while (scanned < ceiling) {
+    const want = Math.min(page, ceiling - scanned);
+    let q = db
+      .from("treatment_interest")
+      // id and created_at are read for the cursor, not for the tally.
+      .select("id, created_at, treatment, dentally_patient_id")
+      .in("site_id", siteIds)
+      .eq("answer", "yes");
+    if (cursor) q = q.or(interestKeysetFilter(cursor));
+    const { data, error } = await q
+      .order("created_at", { ascending: false })
+      // The tiebreak, so paging cannot repeat or skip a row when two ticks share
+      // an instant — which they do, because one submit writes up to four at once.
+      .order("id", { ascending: true })
+      .limit(want);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<{
+      id: string;
+      created_at: string;
+      treatment: string;
+      dentally_patient_id: string;
+    }>;
+    scanned += rows.length;
+    for (const raw of rows) {
+      const set = seen.get(raw.treatment) ?? new Set<string>();
+      set.add(raw.dentally_patient_id);
+      seen.set(raw.treatment, set);
+    }
+    // A short page is the end of the table — measured against what this page ASKED
+    // for, not against the page size, so the last part-page of the ceiling cannot
+    // be misread as the end of the data. Only then is the scan complete.
+    if (rows.length < want) {
+      capped = false;
+      break;
+    }
+    const last = rows[rows.length - 1];
+    if (!INTEREST_CURSOR_SAFE.test(String(last.created_at)) || !INTEREST_CURSOR_SAFE.test(String(last.id))) {
+      // No cursor we trust, so stop and SAY the figures are floors rather than page
+      // on a filter string we did not mean to write. Fails closed: `capped` stands.
+      break;
+    }
+    cursor = { createdAt: last.created_at, id: last.id };
+    if (!totalAsked) {
+      totalAsked = true;
+      const total = await countInterestRowsInScope(db, siteIds);
+      // More rows in scope than this scan is allowed to read: the remaining pages
+      // could only produce floors the caller must not print, so stop now.
+      if (total !== null && total > ceiling) break;
+    }
   }
-  for (const [treatment, patients] of seen) out[treatment] = patients.size;
-  return out;
+  for (const [treatment, patients] of seen) counts[treatment] = patients.size;
+  if (capped) {
+    console.warn(
+      `[previsit] interest counts hit the ${ceiling}-row ceiling for sites ${siteIds.join(", ")}; the figures are floors`,
+    );
+  }
+  return { counts, capped, scanned };
+}
+
+/**
+ * The same counts in the bare shape the two existing callers read, and it REFUSES
+ * rather than returning a floor a caller would print as a total.
+ *
+ * A `Record<string, number>` cannot say "at least". The module page renders each
+ * figure as a headline number with exactly two states — the number, or "The totals
+ * could not be read" — and the co-pilot's `interest_lists` labels the same map
+ * "distinct patients who answered yes". Neither can qualify a capped figure, so
+ * this throws when the scan capped and the honest sentence is shown instead:
+ * honest numbers or no numbers (charter §0/5), failing closed.
+ *
+ * Callers that CAN say "at least N" should use countInterestByTreatmentDetailed
+ * and read `capped`; when both of them do, this wrapper goes away.
+ */
+export async function countInterestByTreatment(
+  siteIds: string[],
+  opts: { pageSize?: number; ceiling?: number } = {},
+): Promise<Record<string, number>> {
+  const summary = await countInterestByTreatmentDetailed(siteIds, opts);
+  if (summary.capped) {
+    throw new Error(
+      "There are more interest rows than one read can total, so these counts would be floors rather than totals. Ask for one treatment by name to see the list itself.",
+    );
+  }
+  return summary.counts;
 }
 
 // ---------------------------------------------------------------------------
@@ -615,11 +867,33 @@ export interface QueuedOutbox {
 /**
  * Queued rows for the drain.
  *
- * TWO load-bearing filters. `status = 'queued'` makes the send at-most-once (a
- * claimed row is 'sending'). `not_before_at <= now()` is this module's QUIET
- * HOURS, and it lives here rather than in the drain because the drain has no
- * time-of-day gate at all: the diary and post-op do exactly the same thing for
- * exactly the same reason.
+ * THREE load-bearing filters, and the third is the one this module cannot do
+ * without. `status = 'queued'` makes the send at-most-once (a claimed row is
+ * 'sending'). `not_before_at <= now()` is this module's QUIET HOURS, and it lives
+ * here rather than in the drain because the drain has no time-of-day gate at all:
+ * the diary and post-op do exactly the same thing for exactly the same reason.
+ *
+ * THE THIRD IS THE UPPER BOUND: a link is never handed to the drain once the
+ * appointment it refers to has started (ruling W3/5). `not_before_at` is a floor
+ * and there was no ceiling anywhere: ./schedule.ts rule 3 — "a link that would
+ * arrive after the appointment it refers to is not sent" — was enforced ONLY by
+ * decideSend, which runs once, at queue time, and only over targets still
+ * 'pending'. Once a row was queued nothing re-examined it, so an owner switching
+ * the system off for a day (or any drain outage inside the drain's own 48h
+ * staleness ceiling) would send "Before your visit, a few quick questions" AFTER
+ * the visit, with a live token whose form still opened and whose answers landed
+ * dated after the appointment they were asked about.
+ *
+ * The instant lives on the TARGET, not on the outbox row, so it is read here
+ * rather than filtered in the query — a column would need a migration, and the
+ * ruling allows either. Expired rows are RETIRED, not merely hidden: hiding them
+ * would leave them at the head of a 100-row batch for ever.
+ *
+ * FAIL CLOSED. A row whose target cannot be read, or whose appointment instant
+ * cannot be parsed, is not sent — the same direction decideSend takes for an
+ * undatable appointment, and for the same reason: staleness we cannot establish
+ * is not staleness we may ignore. A lookup that ERRORS throws, which leaves every
+ * row queued for the next tick rather than sending any of them.
  */
 export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[]> {
   if (siteIds.length === 0) return [];
@@ -633,7 +907,7 @@ export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[
     .order("created_at", { ascending: true })
     .limit(100);
   if (error) throw error;
-  return ((data ?? []) as Array<{
+  const rows = ((data ?? []) as Array<{
     id: string;
     touch_id: string;
     site_id: string;
@@ -650,6 +924,81 @@ export async function listQueuedOutbox(siteIds: string[]): Promise<QueuedOutbox[
     body: r.body,
     createdAt: r.created_at,
   }));
+  if (rows.length === 0) return [];
+  return dropRowsPastTheirAppointment(rows);
+}
+
+/**
+ * Split the queued batch on the appointment each row is ahead of, retiring the
+ * ones that are no longer ahead of anything.
+ *
+ * Two reads, both keyed and bounded by the batch (at most 100 rows), because the
+ * appointment instant is two hops away: outbox -> touch -> target.
+ */
+async function dropRowsPastTheirAppointment(rows: QueuedOutbox[]): Promise<QueuedOutbox[]> {
+  const db = serviceClient();
+  const nowMs = Date.now();
+
+  const { data: touchData, error: touchErr } = await db
+    .from("previsit_touch")
+    .select("id, target_id")
+    .in("id", rows.map((r) => r.touchId));
+  if (touchErr) throw touchErr;
+  const targetIdByTouch = new Map<string, string>();
+  for (const t of (touchData ?? []) as Array<{ id: string; target_id: string }>) {
+    targetIdByTouch.set(t.id, t.target_id);
+  }
+
+  const targetIds = [...new Set([...targetIdByTouch.values()])];
+  const appointmentAtByTarget = new Map<string, string>();
+  if (targetIds.length > 0) {
+    const { data: targetData, error: targetErr } = await db
+      .from("previsit_target")
+      .select("id, appointment_at")
+      .in("id", targetIds);
+    if (targetErr) throw targetErr;
+    for (const t of (targetData ?? []) as Array<{ id: string; appointment_at: string }>) {
+      appointmentAtByTarget.set(t.id, t.appointment_at);
+    }
+  }
+
+  const sendable: QueuedOutbox[] = [];
+  for (const row of rows) {
+    const targetId = targetIdByTouch.get(row.touchId);
+    const appointmentAt = targetId ? appointmentAtByTarget.get(targetId) : undefined;
+    const startMs = appointmentAt ? Date.parse(appointmentAt) : NaN;
+    if (Number.isFinite(startMs) && nowMs < startMs) {
+      sendable.push(row);
+      continue;
+    }
+    console.warn(
+      `[previsit] outbox ${row.id} is for an appointment at ${appointmentAt ?? "an instant we could not read"}; retired unsent rather than delivered after the visit`,
+    );
+    await expireOutbox(row.id);
+  }
+  return sendable;
+}
+
+/**
+ * Retire one queued row that can no longer be a PRE-visit message.
+ *
+ * `status = 'failed'` with `provider = 'expired'` rather than a new status value:
+ * migration 0097's CHECK has no 'expired', and the same idiom already carries the
+ * reason for a suppressed row (markOutboxBlocked writes provider 'suppressed').
+ * The outbox update is conditional on the row still being 'queued' so it cannot
+ * overwrite a row the drain has already claimed.
+ */
+async function expireOutbox(outboxId: string): Promise<void> {
+  const db = serviceClient();
+  const { error } = await db
+    .from("previsit_outbox")
+    .update({ status: "failed", provider: "expired" })
+    .eq("id", outboxId)
+    .eq("status", "queued");
+  if (error) throw error;
+  // The shared tail: the touch fails and the target stops, exactly as it does for
+  // an undeliverable number. One attempt, then the practice asks at the desk.
+  await recordNonDelivery(outboxId, "expired");
 }
 
 /** Atomically claim a queued row (queued -> sending). True only if THIS call

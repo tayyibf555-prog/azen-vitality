@@ -1,10 +1,24 @@
 -- register-landing-promote-cron.sql  —  register the landing-page split-test
 -- auto-promotion sweep on pg_cron
 -- ---------------------------------------------------------------------------
--- STATUS: NOT YET APPLIED. Run this once (Fable applies cron SQL; the app's
--- Supabase role is read-only on the cron.job TABLE, so use the cron.* FUNCTIONS,
--- which are SECURITY DEFINER — same method as supabase/ops/enable-24-7-cron.sql
--- and register-outreach-cron.sql).
+-- STATUS: APPLIED (verify against cron.job).
+--
+-- Same correction as register-outreach-cron.sql and register-anomaly-cron.sql
+-- under ruling W3/22: the read-only `select jobname, schedule, active from
+-- cron.job` against production on 4 September 2026 found
+-- 'app-sweep-landing-promote' registered and active on `17 3 * * *` — the
+-- schedule this file proposes — so the header was the only thing that was wrong.
+-- Verify rather than trust it:
+--
+--   select jobname, schedule, active from cron.job where jobname = 'app-sweep-landing-promote';
+--
+-- The statement below is a harmless re-registration of a job that already exists
+-- (identical name, schedule and command; cron.schedule keeps the current active
+-- flag). Run it only to rebuild the job on a fresh project, or after somebody has
+-- unscheduled it — and when you do: Fable applies cron SQL; the app's Supabase
+-- role is read-only on the cron.job TABLE, so use the cron.* FUNCTIONS, which are
+-- SECURITY DEFINER — same method as supabase/ops/enable-24-7-cron.sql and
+-- register-outreach-cron.sql.
 --
 -- WHY: landing-page auto-promotion used to fire ONLY when an owner opened the
 -- split-test results card (GET /api/funnel-event/summary). With auto-promote on

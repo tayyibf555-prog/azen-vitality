@@ -74,19 +74,70 @@ export async function listBranchNames(clientId: string): Promise<string[]> {
   return (data as { title: string }[]).map((r) => r.title);
 }
 
-/** Find a top-level branch by name (case-insensitive) or create it. Returns its id. */
+/**
+ * Fold a branch name to the key two names are "the same branch" under.
+ *
+ * Trimmed and lower-cased, which is what `ilike` used to be asked for and all it
+ * was ever wanted for. `toLowerCase()` rather than `toLocaleLowerCase()` on
+ * purpose: Unicode default case folding does not move with the server's locale,
+ * so the key a branch is found under is the same key on every machine that runs
+ * this. The one place it can disagree with Postgres' collation is the Turkish
+ * dotted/dotless i, and the cost of that disagreement is a second branch in the
+ * tree, not a wrong answer.
+ */
+function branchKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/**
+ * Find a top-level branch by name (case-insensitive) or create it. Returns its id.
+ *
+ * THE NAME IS UNTRUSTED TEXT, SO IT IS NEVER A PATTERN (programme ruling W3/12).
+ * This used to read `.ilike("title", trimmed)`, and `trimmed` is not a constant:
+ * it reaches here as `result.branch` off the `create` request body, as the
+ * classifier's own model output on `learn`, and as `body.branch` on
+ * `resolve-review`. `plainLabel` in the route strips controls and caps the
+ * length; it does not — and should not — strip `%` or `_`, because those are
+ * ordinary characters in a branch name someone might genuinely type.
+ *
+ * As a LIKE pattern they are not ordinary. A branch of `%` matched whatever the
+ * database returned first and filed the note under a branch nobody named; worse,
+ * the tier step below then LOWERED that unrelated branch's tier to this item's,
+ * which is a visibility change in the tree UI. (The per-node clearance filter in
+ * `visibleNodes` still governs what the co-pilot may read, so this was
+ * mis-filing rather than disclosure — but mis-filing the practice's own
+ * knowledge is exactly what this function exists to prevent.)
+ *
+ * ESCAPING WAS NOT THE FIX. `%` and `_` could be backslash-escaped, but
+ * PostgREST additionally rewrites `*` to `%` inside a like/ilike pattern before
+ * Postgres ever sees it, and there is no escape for that rewrite: `\*` becomes
+ * `\%`, which then matches a literal per-cent sign rather than a literal
+ * asterisk. So the pattern goes entirely and the match happens here, on values,
+ * the same way `serialKey` does it in src/lib/equipment/repository.ts.
+ *
+ * The read is the same set `listBranchNames` already reads unbounded on every
+ * classify — one client's top-level branches, a handful of rows — ordered oldest
+ * first so that a tree which already contains two same-named branches (from
+ * before this fix) resolves to the same one every time. A read FAILURE throws
+ * rather than falling through to the insert: silently creating a duplicate
+ * branch is how the tree would rot without anyone being told, and `createItem`
+ * on the next line would throw on the same outage anyway.
+ */
 export async function ensureBranch(clientId: string, name: string, tier: Tier): Promise<string> {
   const trimmed = name.trim();
-  const { data: existing } = await serviceClient()
+  const { data: branches, error: readError } = await serviceClient()
     .from(TABLE)
-    .select("id, tier")
+    .select("id, tier, title")
     .eq("client_id", clientId)
     .eq("kind", "branch")
     .is("parent_id", null)
-    .ilike("title", trimmed)
-    .limit(1);
-  if (existing && existing.length > 0) {
-    const row = existing[0] as { id: string; tier: number };
+    .order("created_at", { ascending: true });
+  if (readError) throw new Error(readError.message);
+  const wanted = branchKey(trimmed);
+  const existing = ((branches ?? []) as { id: string; tier: number; title: string }[])
+    .filter((b) => branchKey(String(b.title ?? "")) === wanted);
+  if (existing.length > 0) {
+    const row = existing[0];
     // A branch is structure: its tier must be the MINIMUM of its children so that
     // anyone who can see any child can see the branch. If this item is more
     // accessible (lower tier) than the branch was first created at, lower the

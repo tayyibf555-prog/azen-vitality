@@ -44,8 +44,33 @@ import "server-only";
 /** Recorded on every manual row, so a future extractor swap is visible in the data. */
 export const EXTRACTOR = "unpdf";
 
-/** Hard ceilings. A manual outside these is refused with a sentence, never truncated silently. */
-export const MAX_PDF_BYTES = 25 * 1024 * 1024;
+// ---------------------------------------------------------------------------
+// HARD CEILINGS. A manual outside these is refused with a sentence, never
+// truncated silently.
+//
+// THE SIZE CEILING IS THE PLATFORM'S, NOT A TASTE DECISION (programme ruling
+// W3/13). `/api/equipment/manual` is a multipart POST that streams the whole
+// file into a Vercel Function, and Vercel refuses a request body over 4.5 MB at
+// the edge — before this module, before the route handler, before any guard —
+// with FUNCTION_PAYLOAD_TOO_LARGE and a non-JSON body. Nothing in the
+// application can catch that or explain it, so a ceiling above it is not a
+// ceiling: it is a promise the platform breaks on our behalf, and the practice
+// sees a generic "please try again" for a file that can never work however many
+// times they retry.
+//
+// So we advertise and enforce 4 MB, comfortably under the edge's 4.5 MB once
+// multipart framing is counted, and the refusal is a sentence somebody can act
+// on. Local `next dev`, `next build` and vitest have no such limit, which is
+// exactly why the number has to be written down here rather than discovered.
+//
+// LEDGER (for the client): manuals above 4 MB need a direct-to-storage upload —
+// a signed URL straight to the bucket, with ingestion triggered afterwards —
+// which is a provisioning decision, not a code change.
+// ---------------------------------------------------------------------------
+
+/** The advertised ceiling, in the words the practice reads. Keep in step with MAX_PDF_BYTES. */
+export const MAX_PDF_SIZE_LABEL = "4MB";
+export const MAX_PDF_BYTES = 4 * 1024 * 1024;
 export const MAX_PDF_PAGES = 400;
 
 export class PdfExtractionError extends Error {
@@ -94,7 +119,9 @@ function tidy(raw: string): string {
 export async function extractPdfText(bytes: Uint8Array): Promise<ExtractedPdf> {
   if (bytes.byteLength === 0) throw new PdfExtractionError("That file was empty.");
   if (bytes.byteLength > MAX_PDF_BYTES) {
-    throw new PdfExtractionError("That PDF is larger than 25MB. Split it, or upload the section that covers use and troubleshooting.");
+    throw new PdfExtractionError(
+      `That PDF is larger than ${MAX_PDF_SIZE_LABEL}, which is the most an upload can carry. Split it, or upload just the section that covers use and troubleshooting.`,
+    );
   }
   // The magic number, checked before handing anything to the parser: a JPEG
   // renamed to .pdf should fail here with a sentence, not deep inside pdf.js.

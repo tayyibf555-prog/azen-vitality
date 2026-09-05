@@ -56,12 +56,26 @@ export async function assembleSyncStatus(clientId: string, limit = 50): Promise<
   const mode = dentallyWriteMode();
   const target = dentallyWriteTarget();
   const masterOff = await isDentallyWriteMasterOff(clientId, mode);
+  // WHAT THE SENTENCES ARE ABOUT IS NOT THE SAME QUESTION AS `mode`.
+  //
+  // `mode` answers "is this deployment armed for writing" — the three
+  // DENTALLY_WRITE_* variables — and that is what the screen prints beside "The
+  // connection itself", correctly. The GROUPS and the HEADLINE answer a different
+  // question: does what this platform does reach the practice's real Dentally
+  // book? An armed deployment pointed at the local mock (the repo's own
+  // `azen-web-mockwrite-3002` rehearsal) is armed and reaches nothing, and telling
+  // an owner "appointments made here are written to your Dentally book" in that
+  // state is the same untruth the ledger's `sent` status carried until the gate
+  // learned to ask both halves. So the prose is composed on the CONJUNCTION, and
+  // the payload keeps `mode` meaning exactly what it always meant.
+  const reachesTheBook = mode === "live" && target.live;
+  const proseMode: DentallyWriteMode = reachesTheBook ? "live" : "dry_run";
   const base = {
     mode,
     target,
     master: { slug: DENTALLY_WRITE_MASTER_SLUG, off: masterOff },
-    headline: syncHeadline(mode, masterOff),
-    facts: syncFacts(mode, masterOff),
+    headline: syncHeadline(proseMode, masterOff),
+    facts: syncFacts(proseMode, masterOff),
     pageSize: Math.max(1, Math.min(limit, ROW_CAP)),
   };
   try {

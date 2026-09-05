@@ -22,7 +22,7 @@ import {
   updateCadence,
 } from "./repository";
 import { offerSlotToNextCandidate } from "./fill";
-import { dentallyWrite } from "@/lib/dentally/write-gate";
+import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate";
 
 // Anchored to the start so "no problem" / "not sure" do not read as a cancel.
 function isYes(body: string): boolean {
@@ -211,22 +211,75 @@ export async function handleNoshowInbound(input: {
       // (writes disabled, wrong key, transient error) strands them as a recorded
       // no-show — and offering the "freed" slot to the waitlist double-books it.
       let dentallyCancelled = false;
-      if (target && writesEnabled) {
-        try {
-          await dentallyWrite.cancelAppointment(
-            {
-              source: "noshow",
-              siteId: target.siteId,
-              actor: "agent:no-show-defence",
-              patientId: target.dentallyPatientId,
-              // The webhook's own client, shared with this handler's reads.
-              client: input.dentally,
-            },
-            target.appointmentId,
-          );
-          dentallyCancelled = true;
-        } catch {
-          // Fall through to the reception handoff reply below.
+      if (target) {
+        if (writesEnabled) {
+          try {
+            await dentallyWrite.cancelAppointment(
+              {
+                source: "noshow",
+                siteId: target.siteId,
+                actor: "agent:no-show-defence",
+                patientId: target.dentallyPatientId,
+                // The webhook's own client, shared with this handler's reads.
+                client: input.dentally,
+              },
+              target.appointmentId,
+            );
+            dentallyCancelled = true;
+          } catch {
+            // Fall through to the reception handoff reply below.
+          }
+        } else {
+          // RECORD, THEN REFUSE — the same order, and the same gate, the DESK
+          // cancel keeps (src/app/api/noshow/[action]/route.ts, which stopped
+          // wrapping its write in an env check for exactly this reason).
+          //
+          // A patient's CANCEL is a cancellation the practice made. While
+          // write-back is off it has to leave the same trace on the Sync Status
+          // screen as the receptionist's, or "what did we try to send to
+          // Dentally while write-back was off" shows the desk's cancellations
+          // and not the patients' — and the day the write key arrives, nothing
+          // records that these appointments were cancelled here and not there.
+          //
+          // NO `client` IS HANDED TO THE PRECHECK, deliberately. The injected
+          // client exists so this handler's reads and its write cannot disagree
+          // about which Dentally instance they are talking to; nothing is being
+          // performed here, so there is nothing to keep in agreement. What
+          // withholding it buys is that the gate can PRE-EMPT — it cannot see an
+          // injected client's base URL, so it never refuses on one — which is
+          // what makes this row carry the SAME blocked reason the desk's cancel
+          // carries. The reason is the gate's single policy to decide
+          // (writes_disabled, master_off, system_off), never a second spelling
+          // invented at this door. Where the gate would have ALLOWED the write —
+          // a deployment pointed at the local mock — there is no refusal and so
+          // no row; this door still performs nothing, which is the pre-existing
+          // safety property (`writesEnabled`) that this records-only branch
+          // deliberately leaves exactly as it was.
+          //
+          // LEDGER-ONLY, and it may never change what the patient is told: the
+          // recorder is fail-soft by contract, but a contract is not a guarantee
+          // and an escaped error here would become a 500 on a Twilio webhook —
+          // which Twilio retries, re-running this whole turn. `dentallyCancelled`
+          // stays false either way, so the reply below hands off to reception and
+          // the slot is not offered to the waitlist.
+          try {
+            await precheckDentallyWrite({
+              ctx: {
+                source: "noshow",
+                siteId: target.siteId,
+                actor: "agent:no-show-defence",
+                patientId: target.dentallyPatientId,
+              },
+              kind: "appointment.cancel",
+              appointmentId: target.appointmentId,
+            });
+          } catch (err) {
+            console.error(
+              `[noshow] inbound cancel: could not record the blocked Dentally intent for ${target.appointmentId}; ` +
+                "the patient's cancellation is unaffected",
+              err,
+            );
+          }
         }
       }
       if (target && dentallyCancelled) {

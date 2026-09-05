@@ -52,12 +52,34 @@ export const FIRST_STEPS: Record<string, FirstStep> = {
       "Add the practice's IT contact — the person or company a problem goes to when the playbooks run out — " +
       "then switch the desk on.",
   },
+  // THE SWITCH IS NOT THE LAST STEP HERE, AND THIS SENTENCE USED TO SAY IT WAS
+  // (wave-3 review, ruling W3/7 — registration truth on the screens an owner
+  // reads). It ended "switch the system on. Nothing is sent to a patient until
+  // you do", which is true and, on its own, misleading in the one direction that
+  // costs the practice a month: this module's sweep
+  // (src/app/api/previsit/sweep) has never been registered with the scheduler,
+  // so switching on starts nothing at all. It is named in
+  // SWEEPS_WITH_NO_CRON_JOB in src/components/client/systems/systems-view.tsx,
+  // which is the tree's browser-side record of that fact and is itself pinned
+  // against the runbook's cron table by cron-registration.test.ts.
+  //
+  // The control panel prints the missing-cron fact twice already — under "Needs
+  // first" while the row is off, and as a warning once it is on — but this
+  // sentence is ALSO printed where neither of those is: the module's own empty
+  // state (src/components/client/previsit/previsit-workspace.tsx) and the
+  // Operating system band on Home. So it says it itself, in the practice's
+  // words rather than by pointing at a label that only exists on one of the
+  // three screens. os-copy-sweep.test.ts holds it in BOTH directions: the day
+  // the job is registered and the slug leaves that list, the warning here is
+  // stale and the test says so.
   "pre-visit-triage": {
     key: "pre-visit-triage",
     surface: "Pre-visit questions",
     step:
       "Review the two question lists and edit anything you would not ask, then switch the system on. " +
-      "Nothing is sent to a patient until you do.",
+      "Nothing is sent to a patient until you do — and nothing is sent after that either until this " +
+      "system's scheduled job is registered, which has not been done yet. Ask the agency for it when " +
+      "you switch on.",
   },
   "dentally-write-back": {
     key: "dentally-write-back",

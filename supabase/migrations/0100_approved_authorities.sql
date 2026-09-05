@@ -50,14 +50,53 @@
 -- This is not a send surface. It writes no outbox row, registers no source with the
 -- shared messaging drain, runs no sweep, has no cron entry and no scheduled work of
 -- any kind. Nothing here can reach a patient, and there is nothing to halt. It is a
--- passive list an owner types into, read only when the co-pilot builds a prompt —
--- and the co-pilot has its own kill switch ('co-pilot'), which already stops every
--- read of this table by stopping the module that performs it.
+-- passive list an owner types into, read only when the co-pilot builds a prompt.
 --
--- Adding a toggle for it would therefore be a switch that turns off a list nobody
--- is being sent, i.e. a control that reads as a safety control and is not one, and
--- one more row in the owner's System controls panel to be understood and ignored.
--- The safety story here is the ceilings, the citation, and the empty default.
+-- ---------------------------------------------------------------------------
+-- CORRECTION, MADE AFTER THIS MIGRATION WAS APPLIED (programme ruling W3/18).
+--
+-- This paragraph used to finish by saying that the co-pilot "has its own kill
+-- switch", quoting a system slug for it, and that switching that off already
+-- stopped every read of this table. It was false, and it is deleted here rather
+-- than softened, because a comment describing a safety control the reader cannot
+-- find is worse than no comment at all: an owner goes hunting for the lever in
+-- System controls, an auditor records a control that is not there, and the next
+-- engineer reasons from it.
+--
+-- `co-pilot` is a NAV MODULE slug (src/lib/nav.ts). It is not, and never was, a
+-- SYSTEMS slug: it is absent from SYSTEMS (src/lib/systems/catalog.ts), whose own
+-- header gives the reason — owner tools have no sweep, queue or send to halt, so
+-- there is no switch for them. `isControllableSystem` therefore rejects it, POST
+-- /api/systems answers "Unknown system" for it, and no surface in this platform
+-- can create that row. A row inserted by hand would still stop nothing here:
+-- `defaultEnabledFor` treats a slug that is not in the catalog as default-ON, and
+-- neither /api/copilot nor src/lib/knowledge consults a switch before the brief is
+-- built.
+--
+-- The CONCLUSION was right and stands — no toggle. Only the stated reason was
+-- wrong. Editing a comment does not alter applied state: 0100 is already applied,
+-- this file is not re-run, and nothing in the schema below changes.
+-- ---------------------------------------------------------------------------
+--
+-- THE CONTROLS THAT DO EXIST HERE, none of them a switch:
+--   * The door is OWNER ONLY, on the read as well as the writes:
+--     /api/authorities/[action] runs requireUser -> requireClientAccess ->
+--     requireModuleApiAccess -> requireOwnerRole. Nobody but the principal can put
+--     words into every answer the co-pilot gives the practice.
+--   * The single reader is /api/copilot (listActiveAuthorities, then
+--     authoritiesBrief), behind the module guard AND the per-person
+--     `system.copilot.ask` capability. Revoking that grant is how a PERSON is
+--     stopped from asking, which is the granularity that actually fits here.
+--   * Archiving a row excludes it from every prompt at once (listActiveAuthorities
+--     filters on status), which is the lever an owner actually wants: stop leaning
+--     on ONE source without stopping the brain.
+--
+-- Adding a toggle would therefore be a switch that turns off a list nobody is being
+-- sent, i.e. a control that reads as a safety control and is not one, and one more
+-- row in the owner's System controls panel to be understood and ignored. The safety
+-- story here is the ceilings, the citation, the empty default and the owner-only
+-- door — all of it pinned by src/lib/knowledge/gating.test.ts, which also sweeps
+-- every migration in the tree for the mistake this correction fixes.
 --
 -- ===========================================================================
 -- POST-0012 LOCKED POSTURE: RLS enabled, NO anon/authenticated grants. All access

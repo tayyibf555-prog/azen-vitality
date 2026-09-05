@@ -9,6 +9,8 @@ import {
   isControllableSystem,
 } from "./catalog";
 import { CLIENT_NAV } from "@/lib/nav";
+import { writeSlugFor } from "@/lib/dentally/write-vocabulary";
+import { TRIAGE_SYSTEM_SLUG } from "@/lib/triage/types";
 
 // Headless systems: they DO server-side work (a public surface) but have no
 // dashboard page, so no CLIENT_NAV slug exists for them. The systems control
@@ -140,5 +142,82 @@ describe("systems catalog", () => {
     expect(isControllableSystem("recall")).toBe(true);
     expect(isControllableSystem("settings")).toBe(false); // owner tool, not a system
     expect(isControllableSystem("nope")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A `halts` sentence names every door the switch closes (ruling W3/9).
+// ---------------------------------------------------------------------------
+//
+// `halts` is not decoration. It is the sentence the control panel prints under a
+// running system — "Running. <halts>" (src/components/client/systems/
+// systems-view.tsx) — and it is what an owner reads while deciding whether one
+// flip is enough. A switch that closes two doors and describes one is a switch
+// the owner will believe he has not fully thrown.
+//
+// BOTH assertions below derive the requirement from the code that does the work
+// rather than from the sentence itself, which is the only shape that survives a
+// later edit: the day the co-pilot's diary kinds stop resolving `calendar-writes`,
+// or the day the implant scan stops asking for `pre-visit-triage`, the copy
+// requirement is wrong and these go red in the other direction rather than
+// standing as stale prose nobody re-reads.
+
+describe("what a switch halts is described in full", () => {
+  it("the diary switch says it stops the co-pilot booking, moving and cancelling too", () => {
+    // THE DERIVATION. `writeSlugFor("copilot", kind)` is what the write gate
+    // actually asks (src/lib/dentally/write-gate.ts) before a co-pilot
+    // appointment write, so this is the co-pilot's real dependence on this
+    // switch, not a claim about it.
+    const kinds = ["appointment.create", "appointment.update", "appointment.cancel"] as const;
+    for (const kind of kinds) {
+      expect(
+        writeSlugFor("copilot", kind),
+        `copilot ${kind} no longer resolves calendar-writes — the halts sentence below is now wrong`,
+      ).toBe("calendar-writes");
+    }
+    const halts = SYSTEM_BY_SLUG.get("calendar-writes")?.halts ?? "";
+    expect(halts, "the calendar-writes row lost its halts sentence").not.toBe("");
+    expect(
+      halts,
+      "the diary switch also stops the co-pilot booking, moving and cancelling, and the owner is not told",
+    ).toMatch(/co-pilot/i);
+    expect(
+      halts,
+      "it says the co-pilot is affected but not what it can no longer do",
+    ).toMatch(/\bbook\b[\s\S]*\bcancel\b/i);
+    // The desk half is still described: the sentence gained a clause, it did not
+    // trade one fact for another.
+    expect(halts).toMatch(/from the diary/i);
+  });
+
+  it("the pre-visit switch says the implant list stops growing, because it does", () => {
+    // THE DERIVATION. Both doors onto the implant scan gate on this slug before
+    // reading anything, which is what makes the list fail-closed under the one
+    // switch (ruling W3/21). Read out of the routes so that a door which stops
+    // asking turns this red.
+    const doors = ["src/app/api/previsit/mining-sweep/route.ts", "src/app/api/previsit/mining-run/route.ts"];
+    for (const door of doors) {
+      const src = readFileSync(join(process.cwd(), door), "utf8");
+      expect(src, `${door} no longer imports the triage slug`).toContain("TRIAGE_SYSTEM_SLUG");
+      expect(
+        src,
+        `${door} no longer gates on the pre-visit switch — the implant list is not fail-closed any more`,
+      ).toMatch(/isSystemEnabled\([^)]*TRIAGE_SYSTEM_SLUG\)/);
+    }
+    expect(TRIAGE_SYSTEM_SLUG).toBe("pre-visit-triage");
+    const halts = SYSTEM_BY_SLUG.get("pre-visit-triage")?.halts ?? "";
+    expect(halts, "the pre-visit row lost its halts sentence").not.toBe("");
+    expect(
+      halts,
+      "switching pre-visit questions off also stops the implant-candidate list being built, and the owner is not told",
+    ).toMatch(/implant-candidate list/i);
+    // BOTH callers named, because an owner who knows only about the scan would
+    // reasonably expect his own button still to work.
+    expect(halts, "the halts sentence does not name the scan").toMatch(/nightly scan/i);
+    expect(halts, "the halts sentence does not name the owner's own button").toMatch(
+      /Build \/ refresh candidates/i,
+    );
+    // The questionnaire half is still described.
+    expect(halts).toMatch(/no pre-visit questionnaires are sent/i);
   });
 });

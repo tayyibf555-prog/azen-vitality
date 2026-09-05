@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { INTEREST_TREATMENTS, TRIAGE_BANK, defaultConfigFor } from "@/lib/triage/bank";
 import type { TriageTarget } from "@/lib/triage/types";
 
@@ -22,6 +22,21 @@ import type { TriageTarget } from "@/lib/triage/types";
 
 const SITE = { id: "site-cc", clientId: "vitality", name: "N15 Vitality Dental" };
 
+/**
+ * A FIXED "now", and every instant below is stated as an offset from it.
+ *
+ * THE FIXTURE USED TO BE A TIME BOMB. `appointmentAt` was the hard-coded literal
+ * "2026-09-11T12:00:00.000Z" with no clock control at all, which meant two things
+ * at once: this file proved NOTHING about where the appointment sits relative to
+ * the present (it was simply in the future while the tree was young), and from 11
+ * Sep 2026 onwards every 200 asserted here would have gone red the moment the
+ * appointment-start bound landed in route.ts. Both are fixed by pinning the clock,
+ * the pattern src/app/pv/[token]/link-expiry.test.ts already uses for the other
+ * public door.
+ */
+const NOW = Date.parse("2026-09-10T09:00:00.000Z");
+const HOUR = 60 * 60 * 1000;
+
 function target(over: Partial<TriageTarget> = {}): TriageTarget {
   return {
     id: "site-cc:appt-1",
@@ -30,14 +45,16 @@ function target(over: Partial<TriageTarget> = {}): TriageTarget {
     appointmentId: "appt-1",
     patientName: "Alex Berry",
     fork: "full",
-    appointmentAt: "2026-09-11T12:00:00.000Z",
-    dueAt: "2026-09-10T12:00:00.000Z",
+    // AHEAD of NOW by default, so every other test in this file runs against a
+    // link that is genuinely still live.
+    appointmentAt: new Date(NOW + 27 * HOUR).toISOString(),
+    dueAt: new Date(NOW - HOUR).toISOString(),
     status: "sent",
     stopReason: null,
     consentSms: true,
     linkToken: "AbCdEfGhIjKlMnOpQrStUv",
-    createdAt: "2026-09-09T00:00:00.000Z",
-    updatedAt: "2026-09-09T00:00:00.000Z",
+    createdAt: new Date(NOW - 24 * HOUR).toISOString(),
+    updatedAt: new Date(NOW - 24 * HOUR).toISOString(),
     ...over,
   };
 }
@@ -132,6 +149,12 @@ beforeEach(() => {
   h.state.savedConfig = null;
   h.state.duplicate = false;
   h.state.recorded = null;
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function expectNothingStored(): void {
@@ -167,6 +190,11 @@ describe("the link is the identity", () => {
       () => { h.state.target = target({ status: "answered" }); },
       () => { h.state.systemOn = false; },
       () => { h.state.target = target({ siteId: "site-unknown" }); },
+      // The cause added under W3/5: the appointment has already started. It must
+      // be indistinguishable from the other four, or a caller holding a guessed
+      // token learns that it named a real, past appointment.
+      () => { h.state.target = target({ appointmentAt: new Date(NOW - HOUR).toISOString() }); },
+      () => { h.state.target = target({ appointmentAt: "not a date" }); },
     ]) {
       beforeEachState();
       setup();
@@ -183,6 +211,84 @@ describe("the link is the identity", () => {
     h.state.target = target();
     h.state.duplicate = false;
   }
+});
+
+// ===========================================================================
+// THE APPOINTMENT-START BOUND (ruling W3/5), on the SECOND public door.
+//
+// The bound was implemented on the drain (dropRowsPastTheirAppointment), which
+// can only retire a link that has not gone out yet, and on the page
+// (/pv/[token]). Neither touches THIS route: `sent` has no terminal transition in
+// the module, so without the check below a hand-rolled POST carrying an expired
+// token still writes a previsit_response and its treatment_interest rows — the
+// page fix would have closed the browser door and left the API open.
+// ===========================================================================
+describe("an appointment that has already started stores nothing (W3/5)", () => {
+  it("CONTROL: a SENT target whose appointment is still ahead is accepted", async () => {
+    // Without this the whole block would pass against a route that refused
+    // everything, which is the failure mode a bound test invites.
+    const res = await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }));
+    expect(res.status).toBe(200);
+    expect(h.recordResponse).toHaveBeenCalled();
+  });
+
+  it("refuses a SENT target whose appointment has already started", async () => {
+    // The live case: the link was delivered, the patient did not open it, they
+    // attended, and weeks later they scroll back through their texts.
+    h.state.target = target({ appointmentAt: new Date(NOW - HOUR).toISOString() });
+    const res = await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }));
+    expect(res.status).toBe(403);
+    expectNothingStored();
+  });
+
+  it("refuses a SENT target a MONTH after the visit", async () => {
+    h.state.target = target({ appointmentAt: new Date(NOW - 30 * 24 * HOUR).toISOString() });
+    const res = await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }));
+    expect(res.status).toBe(403);
+    expectNothingStored();
+  });
+
+  it("refuses a QUEUED target too, so a drain outage cannot leave a writable door", async () => {
+    h.state.target = target({ status: "queued", appointmentAt: new Date(NOW - HOUR).toISOString() });
+    const res = await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }));
+    expect(res.status).toBe(403);
+    expectNothingStored();
+  });
+
+  it("the boundary is EXCLUSIVE: at the appointment instant itself the link is already dead", async () => {
+    h.state.target = target({ appointmentAt: new Date(NOW).toISOString() });
+    expect((await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }))).status).toBe(403);
+    expectNothingStored();
+    // ...and one millisecond earlier it still stores, so this is a bound and not
+    // an unconditional refusal.
+    h.state.target = target({ appointmentAt: new Date(NOW + 1).toISOString() });
+    expect((await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }))).status).toBe(200);
+    expect(h.recordResponse).toHaveBeenCalled();
+  });
+
+  it("FAILS CLOSED on an appointment instant that cannot be parsed", async () => {
+    // An appointment we cannot date is not an appointment we may assume is still
+    // ahead of us — the direction decideSend takes for `undatable`.
+    for (const bad of ["", "not a date", "2026-13-45T99:99:00Z"]) {
+      vi.clearAllMocks();
+      h.state.target = target({ appointmentAt: bad });
+      const res = await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }));
+      expect(res.status, `"${bad}" was accepted`).toBe(403);
+      expect(h.recordResponse, `"${bad}" was stored`).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses AFTER the budgets and BEFORE the bank, so it is neither a free oracle nor a further read", async () => {
+    h.state.target = target({ appointmentAt: new Date(NOW - HOUR).toISOString() });
+    await POST(req({ token: TOKEN, answers: requiredAnswers("full"), interest: grid() }));
+    // Both durable budgets were spent: an expired token cannot be replayed
+    // thousands of times to probe cheaply.
+    expect(h.consumeBudget).toHaveBeenCalledWith("previsit-ip:203.0.113.7", expect.any(Number), expect.any(Number));
+    expect(h.consumeBudget).toHaveBeenCalledWith(`previsit-token:${TOKEN}`, expect.any(Number), expect.any(Number));
+    // ...and nothing beyond the one target query was paid for.
+    expect(h.getBank).not.toHaveBeenCalled();
+    expect(h.isSystemEnabledStrict).not.toHaveBeenCalled();
+  });
 });
 
 describe("the kill switch", () => {

@@ -6,7 +6,7 @@ import { SONNET, NO_THINKING } from "@/lib/ai/models";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
-import { sanitiseName } from "@/lib/agent/free-text";
+import { FREE_TEXT_IS_DATA, sanitiseName } from "@/lib/agent/free-text";
 
 const RECALL_TYPE_GUIDANCE: Record<RecallType, string> = {
   dentist:
@@ -56,6 +56,12 @@ export function buildRecallPrompt(
     `Channel: ${channel}`,
     `Cadence step: ${step.step} (${step.purpose})`,
     // SANITISED: the name is Dentally free text (src/lib/agent/free-text.ts).
+    //
+    // AND THE BOUNDARY IS SAID OUT LOUD, immediately above the values it is about,
+    // exactly as the live booking agent's own prompt says it (ruling W1-B/3, charter
+    // §0.8). The sanitiser strips the SHAPE of an injected instruction; this line
+    // strips its AUTHORITY. Either alone is weaker than both.
+    FREE_TEXT_IS_DATA,
     `Patient: ${sanitiseName(t.patientName)}`,
     `Recall type: ${t.recallType}`,
     `Recall due: ${t.dueAt} (${overdue})`,
