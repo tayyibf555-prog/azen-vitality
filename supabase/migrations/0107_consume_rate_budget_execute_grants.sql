@@ -1,6 +1,6 @@
--- 0105_consume_rate_budget_execute_grants.sql
+-- 0107_consume_rate_budget_execute_grants.sql
 --
--- NOT YET APPLIED. A lane writes the migration FILE; Fable reads it and applies
+-- APPLIED 6 September 2026 by Fable via the Supabase MCP, and renumbered from 0105 to 0107 because 0105 and 0106 were already taken (the fake Supabase client replays this directory sorted by filename, so two files sharing a number is a trap waiting for a third). A lane writes the migration FILE; Fable reads it and applies
 -- it via the Supabase MCP (ruling W3/33). Nothing here is destructive and every
 -- statement is safe to run twice.
 --

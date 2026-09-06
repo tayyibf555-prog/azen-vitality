@@ -159,6 +159,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
   try {
     // Unlock: verify a per-user password and issue the signed session cookie.
     if (action === "unlock") {
+      // W3/46: THE PASSWORD IS NOT ENOUGH ON ITS OWN. This route is excluded from
+      // the login proxy (src/proxy.ts's matcher omits "api"), so until this check
+      // existed POST /api/practice-brain/unlock was reachable from the open
+      // internet by anyone holding the password — and that password is published
+      // in supabase/migrations/0003_practice_brain.sql, in the 2026-06-19 plan
+      // document and in this repository's PUBLIC history, and the live credential
+      // still answers to it. A password-only door into the whole knowledge base is
+      // a second, weaker authentication system standing beside the real one.
+      //
+      // The only caller is src/components/client/practice-brain/password-gate.tsx,
+      // which renders inside an already-guarded page, so every legitimate unlock
+      // already carries a platform session and nothing legitimate changes.
+      //
+      // Checked BEFORE the rate limits below, so an anonymous caller cannot burn
+      // the shared 100-per-hour unlock budget and lock the practice out either.
+      // No-op when auth enforcement is off (requireUser returns null), so the
+      // un-enforced local demo is unchanged.
+      const authedForUnlock = await requireUser();
+      if (authedForUnlock instanceof Response) return fail("Sign in to unlock Practice Brain.", 401);
+
       const password = String(body.password ?? "");
       if (!password) return fail("Password required.");
       if (!secret) return fail("Server missing PRACTICE_BRAIN_SESSION_SECRET.", 500);
@@ -190,10 +210,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     if (!session) return fail("Locked. Unlock Practice Brain first.", 401);
     const maxTier = session.maxTier as Tier;
 
-    // Owner-only WRITES. The brain is a password-gated PORTAL: unlock + the read
-    // actions (tree, ask, needs-review, gaps, qa-feedback, classify) are protected
-    // by the per-tier password alone, with no platform login, by design — this
-    // route is excluded from the login proxy and never gates reads on requireUser.
+    // Owner-only WRITES. The brain is a password-gated portal layered ON TOP of
+    // the platform login: since W3/46 the unlock above requires a platform session
+    // as well as the per-tier password, so the read actions (tree, ask,
+    // needs-review, gaps, qa-feedback, classify) are reachable only with a valid
+    // unlock cookie, which in turn can only have been minted by a signed-in user.
+    // The per-tier password still decides WHICH tiers those reads return.
     // But WRITING into the shared knowledge base (which the co-pilot then treats as
     // authoritative grounding) is owner business, so the content-mutating actions
     // additionally require a platform session with an owner/agency role, the same

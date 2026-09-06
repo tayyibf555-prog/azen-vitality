@@ -306,7 +306,10 @@ describe("a function revoke in supabase/migrations names PUBLIC, or it revokes n
 
 describe("the two migrations that carry the consume_rate_budget correction (finding: 0023's ineffective revoke)", () => {
   const FILE_0023 = "0023_api_budget.sql";
-  const FILE_0105 = "0105_consume_rate_budget_execute_grants.sql";
+  // Renumbered 0105 -> 0107 by Fable when it was applied: 0105 and 0106 were
+  // already taken, and the fake Supabase client replays this directory sorted by
+  // filename, so two files sharing a number is a trap waiting for a third.
+  const FILE_0105 = "0107_consume_rate_budget_execute_grants.sql";
   const SIGNATURE = "consume_rate_budget(text, integer, integer)";
 
   it("0023 is corrected in place, so a database replayed from scratch gets the right grant", () => {
@@ -323,7 +326,7 @@ describe("the two migrations that carry the consume_rate_budget correction (find
     ).toEqual(["public", "anon", "authenticated"]);
   });
 
-  it("0105 exists and carries the same correction to the already-applied database", () => {
+  it("0107 exists and carries the same correction to the already-applied database", () => {
     // Correcting 0023 alone fixes fresh replays and leaves production exactly as
     // it was — 0023 ran years ago — so the fix is only real if the follow-up
     // migration exists and names the same function. Same argument 0102 makes for

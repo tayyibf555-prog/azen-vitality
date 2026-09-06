@@ -1,10 +1,12 @@
 // Owner-only WRITE gate for the practice brain.
 //
-// The brain is a password-gated PORTAL: unlock + the read actions (tree, ask,
-// needs-review, gaps, qa-feedback, classify) are protected by the per-tier
-// password ALONE, with no platform login — the route is excluded from the login
-// proxy by design, and Fable removes the non-owner tier passwords data-side. This
-// suite covers the gate layered on top: the content-mutating actions (create,
+// The brain is a password-gated portal layered ON TOP of the platform login.
+// Since ruling W3/46 the unlock itself requires a platform session as well as the
+// per-tier password (pinned in route.unlock-session-gate.test.ts), so the read
+// actions (tree, ask, needs-review, gaps, qa-feedback, classify) are reachable
+// only with an unlock cookie that a signed-in user minted; the per-tier password
+// decides WHICH tiers those reads return. This
+// suite covers the gate layered on top of that: the content-mutating actions (create,
 // learn, resolve-gap, resolve-review) ALSO require a platform session with an
 // owner/agency role, so a practice manager (client_coordinator) is refused even
 // with a valid unlock cookie, while the read/unlock portal actions are unchanged.
