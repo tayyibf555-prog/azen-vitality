@@ -1,5 +1,12 @@
 import { randomBytes } from "node:crypto";
 
+import {
+  EMPTY_LABEL,
+  PLAIN_LABEL_MAX,
+  plainLabel,
+  stripControls,
+} from "@/lib/text/prompt-safety";
+
 // ===========================================================================
 // AUTHOR-WRITTEN TEXT GOES INSIDE A FENCE THE AUTHOR CANNOT CLOSE.
 //
@@ -77,28 +84,14 @@ export function fenceRule(nonce: string): string {
   );
 }
 
-/**
- * Strip what must never survive into a prompt: C0 controls, DEL and the C1
- * block. Whitespace is otherwise LEFT ALONE — unlike the closer's treatment
- * name, a knowledge body's paragraphs are meaning, and flattening them would
- * change what a staff member wrote.
- *
- * THERE IS A SECOND COPY OF THIS CHARACTER CLASS, and it is deliberate. The
- * approved-authorities seam has its own `stripControls` (src/lib/knowledge/
- * authorities.ts) over the same range, because THIS module opens with
- * `import { randomBytes } from "node:crypto"` and that one is imported by
- * src/components/client/copilot/authorities-panel.tsx, a `"use client"`
- * component — importing this file there would pull node:crypto into the browser
- * bundle. If the two ever have to agree, neither is the right home: the shared
- * definition belongs in a crypto-free module both import, with `newFenceNonce`
- * / `fenceRule` / `fence` staying here. Change one and change the other.
- */
-function stripControls(text: string): string {
-  // Newline, tab and carriage return are DELIBERATELY spared: a knowledge
-  // body's paragraphs are part of what the author wrote, and flattening them
-  // would change the note. Everything else in C0, DEL and C1 goes.
-  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/g, " ");
-}
+// `stripControls` and the plain-label helpers now live in @/lib/text/prompt-safety
+// and are re-exported at the foot of this file. They were duplicated here and in
+// src/lib/knowledge/authorities.ts — same character class, same reasoning, two
+// definitions — because THIS module opens with `import { randomBytes } from
+// "node:crypto"` and that one is imported by a "use client" component. The shared
+// module has no imports at all, so both can reach it; the nonce machinery stays
+// here, where the crypto belongs. Every existing import site of this file is
+// unchanged.
 
 /**
  * Wrap author-written text in a fence the author cannot close.
@@ -157,36 +150,14 @@ export function fence(text: string | null | undefined, nonce: string): string {
 // ===========================================================================
 
 /**
- * The most a platform label may be. Long enough for any real branch name or the
- * classifier's "max 8 words" title, short enough that a wall of text cannot bury
- * the labels around it.
- */
-export const PLAIN_LABEL_MAX = 120;
-
-/** Stands in for an empty label, so a `title:` line is never blank. */
-export const EMPTY_LABEL = "Untitled note";
-
-/**
- * Force a value into the shape of a single platform-written label.
+ * The label helpers this file's fence rule depends on, re-exported so every
+ * existing import site keeps working (classify.ts, copilot.ts,
+ * prompt-injection.test.ts, the practice-brain route and its label-sanitisation
+ * test all import them from here).
  *
- * In order: the nonce goes (a label must not be able to close a fence either),
- * then `stripControls` takes C0, DEL and C1 (the same class the fence uses, so
- * there is one definition of a control character in this module), then EVERY
- * remaining run of whitespace collapses to one space. That collapse is the
- * load-bearing step, because it is the newline that turns a value into a line
- * and a line into an item. JS `\s` covers the separators a naive `\n` strip
- * misses (U+2028 LINE SEPARATOR and the U+2000 block; U+0085 NEL goes with the
- * C1 controls). The length cap ends it.
- *
- * PURE. `nonce` is optional so a non-prompt caller can normalise a label too.
+ * They are DEFINED in @/lib/text/prompt-safety because that module has no
+ * imports and can therefore be reached from the "use client" side of the tree
+ * too — see the note where `stripControls` used to be declared. This file keeps
+ * the fence, because the fence needs a nonce and the nonce needs node:crypto.
  */
-export function plainLabel(text: string | null | undefined, nonce?: string): string {
-  const raw = String(text ?? "");
-  const withoutNonce = nonce ? raw.split(nonce).join(" ") : raw;
-  const oneLine = stripControls(withoutNonce)
-    .replace(/\s+/g, " ")
-    .trim();
-  if (oneLine.length === 0) return EMPTY_LABEL;
-  if (oneLine.length <= PLAIN_LABEL_MAX) return oneLine;
-  return `${oneLine.slice(0, PLAIN_LABEL_MAX).trimEnd()}...`;
-}
+export { EMPTY_LABEL, PLAIN_LABEL_MAX, plainLabel };

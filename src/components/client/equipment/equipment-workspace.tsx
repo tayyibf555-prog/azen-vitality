@@ -325,11 +325,25 @@ export function EquipmentWorkspace({
       {/* THE SAME COURTESY FOR THE MANUALS, and for the same reason: without it
           every machine on both tabs reads "No manual uploaded" and somebody
           re-uploads a document the platform already holds — or rings the
-          engineer because we told them the practice has no manual for it. */}
+          engineer because we told them the practice has no manual for it.
+
+          TWO CAUSES, ONE SENTENCE, AND ONLY ONE OF THEM CLEARS ON ITS OWN
+          (ruling W3/9: copy matches code). `listManuals` returns null both when
+          the read FAILS — transient, gone on the next load — and when it comes
+          back at its 999-row bound (MANUAL_INDEX_ROW_CAP, ruling W3/32), which
+          no amount of waiting will clear because the index has simply outgrown
+          one read. "Try again in a moment" alone is true of the first and false
+          of the second, and the second is the one where somebody needs to ring
+          the agency rather than refresh. So the sentence offers the retry AND
+          names the other cause, without claiming to know which of the two this
+          is: the caller collapses them deliberately (the answer for any given
+          machine is unknown either way) and the log is where they are still
+          told apart. */}
       {manualsUnreadable ? (
         <p className="rounded-[8px] border border-line bg-tile px-3 py-2 text-[12.5px] text-navy">
           Whether each machine has a manual could not be read just now, so this page cannot say which do. Nothing
-          has been lost, and no manual has been removed — try again in a moment.
+          has been lost, and no manual has been removed — try again in a moment, and if this keeps showing, the
+          register has grown past what this page can index in one go.
         </p>
       ) : null}
 
@@ -648,7 +662,8 @@ export function EquipmentWorkspace({
                           for every machine when the manuals could not be read,
                           so a plain "Upload" would invite somebody to overwrite
                           a manual this screen has wrongly implied is absent —
-                          and the upload REPLACES (delete then insert). */}
+                          and the upload REPLACES (the new manual is written
+                          first, then the old one is retired). */}
                       {manualsUnreadable ? "Upload or replace" : a.manual ? "Replace" : "Upload"}
                     </button>
                     {a.manual ? (

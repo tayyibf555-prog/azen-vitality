@@ -5,6 +5,7 @@ import { AGENTS } from "@/lib/agent-wiring/roster";
 import { SYSTEMS, SYSTEM_SLUGS } from "./catalog";
 import { FIRST_STEPS, firstStepFor } from "./first-steps";
 import { AUTHORED_VOCABULARY_SLUGS, SYSTEM_VOCABULARY, vocabularyFor } from "./vocabulary";
+import { writeSlugFor } from "@/lib/dentally/write-vocabulary";
 
 // ===========================================================================
 // THE SWITCH-ON SENTENCE ON THE SCREEN IS THE SWITCH-ON SENTENCE IN THE RUNBOOK.
@@ -99,6 +100,34 @@ describe("the switch-on vocabulary is derived, not retyped", () => {
       // punctuation rule that is easy to break in a hurry.
       expect(vocab.starts).not.toContain("!");
     }
+  });
+
+  it("the Onboarding switch-on sentence names the co-pilot door the switch also arms", () => {
+    // THE DERIVATION. Ruling W3/19 routes `copilot::patient.create` through the
+    // Onboarding module's switch, so switching Onboarding ON is what stops the
+    // write gate refusing the co-pilot's create with `system_off`. `starts` is
+    // the sentence the systems view prints under an OFF system AND the one the
+    // co-pilot's own agent_status reads back, so an owner deciding to flip this
+    // has to be told both doors it opens — and told that the master
+    // dentally-write-back switch is the second lock, or they will flip this one
+    // and wonder why nothing reached Dentally.
+    expect(
+      writeSlugFor("copilot", "patient.create"),
+      "copilot patient.create no longer resolves onboarding (W3/19) — the starts sentence below is now wrong",
+    ).toBe("onboarding");
+    const starts = SYSTEM_VOCABULARY["onboarding"].starts;
+    expect(starts, "the onboarding starts-sentence does not name the co-pilot").toMatch(/co-pilot/i);
+    expect(
+      starts,
+      "it names the co-pilot but not what switching this on lets it do",
+    ).toMatch(/creat\w*\s+a\s+patient/i);
+    expect(
+      starts,
+      "it promises a Dentally write without naming the master write-back switch that also has to be on",
+    ).toMatch(/write-back/i);
+    // The public-form half survives: this sentence gained a clause, it did not
+    // trade one fact for another.
+    expect(starts).toMatch(/\/onboard/);
   });
 });
 

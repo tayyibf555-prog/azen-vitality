@@ -256,6 +256,25 @@ export type TriageStopReason =
    */
   | "expired"
   | "undeliverable"
+  /**
+   * THE SHARED DRAIN BLOCKED THE SEND, AND DID NOT SAY WHY.
+   *
+   * `OutboxSource.markBlocked(id)` takes an id and nothing else, yet the drain
+   * calls it from four different places: an opt-out on the ref or the resolved
+   * address, the output guardrail, an undeliverable address, and the
+   * cross-module once-per-day cap. Only the first of those is the patient
+   * asking us to stop.
+   *
+   * This module used to record every one of them as `opted_out`, which is a
+   * statement about CONSENT the platform had no evidence for: a number Twilio
+   * Lookup calls a landline would have been written into the patient's record
+   * as a person who opted out of being contacted. The closer and the collection
+   * agent both refuse the same reuse in their own comments, for the same reason
+   * ("reusing `opted_out` would claim the patient asked"). So the reason we
+   * record is the one thing we actually know — the drain would not send it —
+   * until the drain's contract carries a reason of its own.
+   */
+  | "blocked"
   | "no_link"
   | "staff_stopped";
 

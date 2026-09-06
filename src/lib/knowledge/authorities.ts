@@ -9,6 +9,8 @@
  * DISTILLED from sources it trusts, not a copy of those sources.
  */
 
+import { stripControls } from "@/lib/text/prompt-safety";
+
 import {
   AUTHORITY_KINDS,
   AUTHORITY_KIND_LABELS,
@@ -290,25 +292,20 @@ export const NOTE_LINE_MARKER = "| ";
 /** What a name reduced to nothing renders as, so a bullet is never "-  — Regulator". */
 export const UNNAMED_SOURCE = "Unnamed source";
 
-/**
- * Strip what must never reach a prompt: the C0 controls, DEL, and the C1 block
- * (U+0080-U+009F, which includes NEL U+0085).
- *
- * Newline, tab and carriage return are DELIBERATELY spared: a note's paragraphs
- * are part of what the practice wrote. `oneLineLabel` collapses them where a
- * value has to be a single line; `noteBlock` keeps them and marks each line.
- *
- * The same character class as `stripControls` in src/lib/practice-brain/fencing.ts,
- * duplicated on purpose rather than imported: that module opens with
- * `import { randomBytes } from "node:crypto"`, and THIS module is imported by
- * src/components/client/copilot/authorities-panel.tsx, which is a "use client"
- * component. Importing it would pull node:crypto into the browser bundle. If the
- * two definitions ever have to agree, the shared one belongs in a crypto-free
- * module both can import.
- */
-function stripControls(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/g, " ");
-}
+// `stripControls` is imported from @/lib/text/prompt-safety (see the import at
+// the top of this file). It used to be declared here, byte-identical to the copy
+// in src/lib/practice-brain/fencing.ts, because that module opens with
+// `import { randomBytes } from "node:crypto"` and THIS one is imported by
+// src/components/client/copilot/authorities-panel.tsx, a "use client" component —
+// importing fencing.ts there would pull node:crypto into the browser bundle. The
+// shared module has no imports at all, so both sides can reach it and the
+// character class has one definition again.
+//
+// What it does is unchanged: C0, DEL and the C1 block (U+0080-U+009F, NEL U+0085
+// included) become a space; newline, tab and carriage return are spared, because
+// a note's paragraphs are part of what the practice wrote. `oneLineLabel` below
+// collapses them where a value has to be a single line; `noteBlock` keeps them
+// and marks each line.
 
 /**
  * Force a value into the shape of a single platform-written label: no controls,

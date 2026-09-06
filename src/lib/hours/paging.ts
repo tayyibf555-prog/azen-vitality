@@ -41,8 +41,25 @@ export interface Collected<T> {
   pages: number;
 }
 
-/** Big enough that a normal month is one or two queries, small enough to be a bounded read. */
-export const DEFAULT_PAGE_SIZE = 1000;
+/**
+ * Big enough that a normal month is one or two queries, small enough to be a
+ * bounded read — and ONE ROW UNDER the server's ceiling rather than ON it.
+ *
+ * W3/32. PostgREST clips every response at 1,000 rows silently: same status, same
+ * shape, no flag anywhere on the response. This loop's only end-of-data signal is
+ * a page that comes back SHORTER than it asked for, so at a page size of exactly
+ * 1,000 a CLIPPED first page and a FINAL first page are the same observation — the
+ * month would return `truncated: false` over whatever fraction the server felt
+ * like handing back, and this module exists precisely because a quiet undercount
+ * here is a quiet undercount of somebody's pay. At 999 the two are different: a
+ * full page always means "ask again", and a short page is short because the rows
+ * ran out. The cost is one extra row of headroom per query.
+ *
+ * It is not divisible into DEFAULT_MAX_ROWS, which is deliberate too: a month that
+ * runs past the hard ceiling now OVERSHOOTS it and comes back `truncated: true`
+ * (the fail-CLOSED direction) instead of landing on it and needing the probe.
+ */
+export const DEFAULT_PAGE_SIZE = 999;
 
 /**
  * Ten thousand clock events is roughly a hundred staff clocking four times a day

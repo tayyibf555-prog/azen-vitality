@@ -7,7 +7,10 @@
 //   - the AI is prompt-injection resistant: a model reply that tries to pick a
 //     question id OUTSIDE the bank, or to inject an em-dash / overlong transition,
 //     is coerced back to a safe in-bank id + a cleaned short transition,
-//   - a hostile "answers" payload is coerced to known-question/known-option only.
+//   - a hostile "answers" payload is coerced to known-question/known-option only,
+//   - the ONE model-written string this endpoint paints on a patient's phone - the
+//     transition line - is both PROMPTED against the funding-jargon rule and
+//     SCANNED for it before it leaves (charter section 0 item 7).
 //
 // Every I/O seam (Anthropic, campaign repo, budget) is mocked; the REAL route runs.
 
@@ -144,6 +147,102 @@ describe("smile-assessment/next — prompt-injection resistance", () => {
     expect(res.status).toBe(200);
     const j = (await res.json()) as { ok: boolean };
     expect(j.ok).toBe(true);
+  });
+});
+
+// ===========================================================================
+// THE FUNDING-JARGON RULE ON THE PLATFORM'S BUSIEST PATIENT-FACING SURFACE.
+//
+// Charter section 0 item 7 is absolute: patient-facing copy never says NHS or
+// private, in ANY agent, form or message. Everything else /next emits is ours -
+// bank prompts and option labels, pinned by the static patient-copy crawl. The
+// transition is the model's own sentence and all three quiz shells render it
+// verbatim (assessment-quiz.tsx, guided-assessment-quiz.tsx,
+// deterministic-assessment-quiz.tsx), so it needs both halves: the RULE in the
+// prompt and the SCAN on the way out. A source crawl cannot see a missing rule,
+// which is why these drive the real route.
+// ===========================================================================
+describe("smile-assessment/next — the transition line and the funding-jargon rule", () => {
+  function systemPromptOf(call: number): string {
+    const args = createMsg.mock.calls[call]![0] as { system?: unknown };
+    return typeof args.system === "string" ? args.system : "";
+  }
+
+  // MUTATION: delete the funding sentence from the Rules line in route.ts and this
+  // goes red. It is the only assertion in the tree that reads THIS prompt.
+  it("PROMPTS the model against NHS, private, plans, schemes, bands and funding", async () => {
+    await POST(req({ answers: { treatment_interest: "implants" } }, { "x-real-ip": "198.51.100.20" }));
+    expect(createMsg).toHaveBeenCalled();
+    const system = systemPromptOf(0);
+    // The same sentence flow-generate.ts's COPY_RULES carries, so the two
+    // patient-facing generators cannot drift into allowing different words.
+    expect(system).toContain(
+      "Never mention NHS or private care, plans, schemes, bands or funding of any kind.",
+    );
+  });
+
+  // MUTATION: return `transition` straight from pickNext instead of
+  // safeTransition(...) and every case below goes red. The prompt on its own is a
+  // soft control, and this endpoint asks the model to cover "how they would fund
+  // treatment", so the slip it is most likely to make is exactly this one.
+  it("REPLACES a transition that names the NHS with the neutral line", async () => {
+    h.state.aiReply = JSON.stringify({
+      nextId: "timeline",
+      transition: "Thanks, we can look at what the NHS covers.",
+    });
+    const res = await POST(req({ answers: { treatment_interest: "implants" } }, { "x-real-ip": "198.51.100.21" }));
+    const j = (await res.json()) as { ok: boolean; done?: boolean; transition?: string };
+    expect(j.ok).toBe(true);
+    expect(j.done).toBe(false);
+    expect(j.transition).toBe("Thanks. Just a couple more quick questions.");
+    expect(j.transition).not.toMatch(/nhs/i);
+  });
+
+  it("REPLACES a transition that talks about going private", async () => {
+    h.state.aiReply = JSON.stringify({
+      nextId: "timeline",
+      transition: "Great, going private means we can start sooner.",
+    });
+    const res = await POST(req({ answers: { treatment_interest: "implants" } }, { "x-real-ip": "198.51.100.22" }));
+    const j = (await res.json()) as { done?: boolean; transition?: string };
+    expect(j.done).toBe(false);
+    expect(j.transition).toBe("Thanks. Just a couple more quick questions.");
+  });
+
+  it("REPLACES a transition that gives clinical advice, the other universal rule", async () => {
+    h.state.aiReply = JSON.stringify({
+      nextId: "timeline",
+      transition: "From that, you need a crown. When suits you?",
+    });
+    const res = await POST(req({ answers: { treatment_interest: "implants" } }, { "x-real-ip": "198.51.100.23" }));
+    const j = (await res.json()) as { done?: boolean; transition?: string };
+    expect(j.done).toBe(false);
+    expect(j.transition).toBe("Thanks. Just a couple more quick questions.");
+  });
+
+  // THE CONTROL. Without it a scan that refused everything would pass the three
+  // above, and the funnel would have lost its warmth to a guard nobody noticed.
+  it("leaves an ordinary warm transition exactly as the model wrote it", async () => {
+    h.state.aiReply = JSON.stringify({
+      nextId: "timeline",
+      transition: "Thanks for that, and when were you hoping to start?",
+    });
+    const res = await POST(req({ answers: { treatment_interest: "implants" } }, { "x-real-ip": "198.51.100.24" }));
+    const j = (await res.json()) as { done?: boolean; transition?: string };
+    expect(j.done).toBe(false);
+    expect(j.transition).toBe("Thanks for that, and when were you hoping to start?");
+  });
+
+  // The funnel must still answer when the guard fires: a refused line is a
+  // replaced line, never a stalled quiz or a 500.
+  it("still returns a real bank question when the transition is refused", async () => {
+    h.state.aiReply = JSON.stringify({ nextId: "timeline", transition: "On the NHS that is a band 2." });
+    const res = await POST(req({ answers: { treatment_interest: "implants" } }, { "x-real-ip": "198.51.100.25" }));
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { done?: boolean; question?: { id: string; prompt: string } };
+    expect(j.done).toBe(false);
+    expect(j.question!.id).toBe("timeline");
+    expect(j.question!.prompt).not.toMatch(/\bnhs\b/i);
   });
 });
 

@@ -76,7 +76,11 @@ vi.mock("@/lib/cron-lock", () => ({ acquireCronLock: async () => true, releaseCr
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-1", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
 }));
-vi.mock("@/lib/systems/repository", () => ({ getDisabledSlugs: async () => new Set<string>(), getDisabledSlugsForSend: async () => new Set<string>() }));
+vi.mock("@/lib/systems/repository", () => ({
+  getDisabledSlugs: async () => new Set<string>(),
+  getDisabledSlugsForSend: async () => new Set<string>(),
+  isSystemEnabledForSend: async () => true,
+}));
 // The daily log, in memory: the drain calls these; the cap + priority logic is real.
 vi.mock("@/lib/messaging/frequency", () => ({
   wasContactedToday: async (siteId: string, address: string, day: string) =>

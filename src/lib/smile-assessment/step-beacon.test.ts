@@ -10,10 +10,11 @@
 // same campaign. So the importer list is asserted from the filesystem rather than
 // remembered.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
+import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
 import { isValidNonce, MAX_EVENTS_PER_BATCH } from "./step-events";
 import { createStepBeacon } from "./step-beacon";
 
@@ -98,24 +99,34 @@ const OPTS = { clientSlug: "vitality", campaignSlug: "invisalign-spring", flowVe
  * ------------------------------------------------------------------------- */
 
 describe("the beacon has exactly one caller", () => {
-  const SRC_ROOT = resolve(process.cwd(), "src");
-
-  function walk(dir: string, out: string[] = []): string[] {
-    for (const name of readdirSync(dir)) {
-      const full = join(dir, name);
-      if (statSync(full).isDirectory()) walk(full, out);
-      else if (/\.(ts|tsx)$/.test(name)) out.push(full);
-    }
-    return out;
-  }
-
+  // MIGRATED onto @/lib/test-support/walk-src in wave 3d. This sweep used to root
+  // itself at `resolve(process.cwd(), "src")` and hand-roll a recursive walk that
+  // descended EVERY directory, which was wrong twice over:
+  //
+  //   * cwd is the RUNNER's directory, not this file's. Agent work in this repo
+  //     happens in .claude/worktrees/<name>/ — a complete second checkout — so a
+  //     run from one tree swept the other's src/, found one importer, and reported
+  //     "still exactly one caller" about source nobody had touched.
+  //   * descending every directory meant meeting walk-src.test.ts's own
+  //     `.walk-fixture-XXXX/`, a real dot-directory created under
+  //     src/lib/test-support and deleted a few milliseconds later. The finder
+  //     reproduced `ENOENT ... .walk-fixture-1Q4dbv/.git/route.ts` from this file.
+  //     The fixture cannot be made race-free from its side — it has to appear under
+  //     src/ for the walk's dot-directory claim to mean anything — so the fix is
+  //     here, on the walker's side.
+  //
+  // walkSrc takes the default `includeDotDirs: false`, which is the right default
+  // for a WHOLE-SRC sweep: the only dot-directory such a walk meets is a nested
+  // checkout, and descending one counts every importer twice. `includeTests: true`
+  // keeps the old breadth — a test file importing the beacon would still be a
+  // second importer — and step-beacon's own two files are filtered out below as
+  // they always were. Pinned from the other side by MIGRATED in walk-src.test.ts.
   function importers(): string[] {
-    return walk(SRC_ROOT)
+    return walkSrc({ includeTests: true })
       .filter((file) => {
         if (file.endsWith("step-beacon.ts") || file.endsWith("step-beacon.test.ts")) return false;
-        return /from\s+["'][^"']*step-beacon["']/.test(readFileSync(file, "utf8"));
+        return /from\s+["'][^"']*step-beacon["']/.test(readFileSync(srcPath(file), "utf8"));
       })
-      .map((f) => f.slice(SRC_ROOT.length + 1).split(sep).join("/"))
       .sort();
   }
 
@@ -135,7 +146,7 @@ describe("the beacon has exactly one caller", () => {
   // the browser is a chart quietly describing the wrong screens.
   it("is called with an ordinal that came from the shared numbering", () => {
     const quiz = readFileSync(
-      join(SRC_ROOT, "components/assess/deterministic-assessment-quiz.tsx"),
+      srcPath("components/assess/deterministic-assessment-quiz.tsx"),
       "utf8",
     );
     expect(quiz).toMatch(/from\s+["']@\/lib\/smile-assessment\/step-numbering["']/);

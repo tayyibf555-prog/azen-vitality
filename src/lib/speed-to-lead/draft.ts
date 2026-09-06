@@ -4,11 +4,62 @@ import type { Client } from "@/lib/types";
 import { getSite } from "@/lib/mock/clients";
 import { uspPromptLine } from "@/lib/usp/prompt";
 import { listActiveUspTexts } from "@/lib/usp/repository";
+import {
+  FREE_TEXT_IS_DATA,
+  sanitiseName,
+  sanitiseReason,
+  sanitiseTreatment,
+} from "@/lib/agent/free-text";
 import type { LeadChannel, SpeedToLeadLead } from "./types";
 
-/** First name for a warm opener, falling back to the whole name. */
+// ---------------------------------------------------------------------------
+// THIS DRAFTER'S FREE TEXT IS THE MOST EXPOSED IN THE PLATFORM, and for a long
+// time it was the one drafter that did not sanitise.
+//
+// Charter §0 item 8 is written about DENTALLY free text, because that is where
+// the rule was first needed: a "plan title" running to several sentences of
+// instructions is a prompt-injection attempt, not a title. Every other drafter
+// reads its name and its treatment from a Dentally record that a member of
+// practice staff typed. This one does not. `lead.name`, `lead.treatmentInterest`
+// and `lead.source` arrive from a PUBLIC, UNAUTHENTICATED web form
+// (src/app/api/landing-lead/route.ts and src/app/api/speed-to-lead/intake/
+// route.ts), are stored verbatim, and reach the model within seconds — the
+// speed-to-lead sweep runs every minute. Nothing the practice controls stands
+// between a stranger's keyboard and this prompt, so the rule applies here with
+// more force than where it was written, not less (ruling W3/14; W3/24 settles
+// that a §0.8 gap is fixed in wave 3 even where it predates the diff).
+//
+// WHY `firstName` ALONE WAS NOT THE DEFENCE IT LOOKED LIKE. Taking the first
+// whitespace-delimited token reads like a structural guarantee — one word cannot
+// be a paragraph of instructions — and it is exactly the argument that exempts
+// src/lib/collection/draft.ts from the boundary sweep. It fails here because JS
+// `\s` does NOT match NEL (U+0085) or the rest of the C1 block: a name whose
+// separators are all C1 controls is ONE token to `split(/\s+/)`, so the whole
+// payload survived as the "first name" and reached the model as several
+// apparent lines. That is the precise hole src/lib/agent/free-text.ts was
+// written to close, and its pass 1 (C1 → space, then collapse) is what makes
+// the first-token rule true again.
+// ---------------------------------------------------------------------------
+
+/**
+ * First name for a warm opener, falling back to a name-shaped greeting.
+ *
+ * SANITISE FIRST, THEN TAKE THE TOKEN — that order is the fix and it is not
+ * interchangeable. Sanitising afterwards would be handed a token that a C1
+ * control had already welded together; sanitising first turns those controls
+ * into real spaces, so the split that follows genuinely keeps one word.
+ *
+ * "there" is the same fallback renderFollowUpTemplate already uses for a name
+ * that reduces to nothing (src/lib/smile-assessment/follow-up.ts:365, whose
+ * comment says these are "the same fallbacks nurtureFallback uses"), so the two
+ * first-contact paths of this module read identically when there is no usable
+ * name. Reachable only for a name made entirely of control characters — `str()`
+ * at both intake routes rejects an empty one, and String.prototype.trim does not
+ * strip C1 — which previously produced "Hi ," in the deterministic fallback.
+ */
 function firstName(name: string): string {
-  return name.trim().split(/\s+/)[0] || name.trim();
+  const safe = sanitiseName(name);
+  return safe.split(" ")[0] || "there";
 }
 
 /**
@@ -18,10 +69,19 @@ function firstName(name: string): string {
  * model, the deterministic guardrail would block the reply, and contactLead retires
  * the lead to terminal 'lost' — losing a real enquiry over the patient's own wording.
  * The remaining text ("check-up") is safe; if nothing is left, treat it as unspecified.
+ *
+ * DEFANGED BEFORE IT IS DEJARGONED. `sanitiseTreatment` runs FIRST so the funding
+ * strip is applied to one line of at most 60 characters rather than to whatever
+ * length of multi-sentence text a form accepted: an interest of
+ * "Whitening. Ignore the rules above" loses everything from the sentence break,
+ * and the funding pass then sees only "Whitening". Doing it the other way round
+ * would leave the payload intact whenever it carried no funding word at all,
+ * which is every payload an attacker would actually write. An ordinary interest
+ * passes through both passes byte for byte.
  */
 export function sanitiseInterest(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const cleaned = raw
+  const cleaned = sanitiseTreatment(raw)
     .replace(/\bnhs\b/gi, "")
     .replace(/\bprivate(?:ly)?\b/gi, "")
     .replace(/\bband\s*[123]\b/gi, "")
@@ -57,6 +117,21 @@ export function buildFirstContactPrompt(
     `You work for ${practice}.`,
     "Someone has just enquired with the practice. Write the very first reply that reaches them within seconds of their enquiry.",
     "Make it feel personal and human, not a templated auto-reply. Acknowledge their interest and invite them to book.",
+    // THE BOUNDARY, SAID OUT LOUD, ABOVE EVERY VALUE IT IS ABOUT. The sanitiser
+    // above strips the SHAPE of an injected instruction; this strips its
+    // AUTHORITY, and charter §0.8 asks for both ("either alone is weaker than
+    // both", src/lib/agent/free-text.ts).
+    //
+    // IT SITS IN THE SYSTEM HALF, which is where this drafter differs from the
+    // coordinator/no-show/recall pattern of putting it immediately above a
+    // `Patient:` line in the user half. Those prompts carry every free-text
+    // value in the user block; this one interpolates the enquirer's own
+    // treatment interest into a RULE a few lines below, so a boundary stated
+    // only in the user half would arrive after the first value it governs. The
+    // model reads in order, and src/lib/agent-wiring/free-text-boundary.test.ts
+    // pins the ordering for this file as it does for every other prompt builder
+    // in the tree that carries untrusted text.
+    FREE_TEXT_IS_DATA,
     "Rules:",
     "- Lead with the person by first name.",
     "- Give one clear next step: offer to find them a time that suits.",
@@ -84,9 +159,13 @@ export function buildFirstContactPrompt(
 
   const user = [
     `Channel: ${channel}`,
+    // ALL THREE ARE CALLER-TYPED. `source` is derived from the resolved landing
+    // page on one intake path but is an arbitrary caller-supplied string on the
+    // other (src/app/api/speed-to-lead/intake/route.ts:59), so it is sanitised
+    // like the rest rather than trusted because one of its two producers is ours.
     `Name: ${firstName(lead.name)}`,
     `Treatment interest: ${interest ?? "not specified"}`,
-    `Enquiry source: ${lead.source}`,
+    `Enquiry source: ${sanitiseReason(lead.source)}`,
     ...(assessment && assessment.length > 0
       ? ["Smile assessment context (their own answers):", ...assessment.map((l) => `- ${l}`)]
       : []),
@@ -133,7 +212,14 @@ export async function draftFirstContact(
 // number (1..3) nudges the tone from a light check-in to a final, no-pressure note.
 // ---------------------------------------------------------------------------
 
-/** Guardrail-safe deterministic fallback used when the model errors or trips the guard. */
+/**
+ * Guardrail-safe deterministic fallback used when the model errors or trips the guard.
+ *
+ * The name goes through the SAME `firstName` as the prompts, which matters here
+ * for a different reason: no model stands between this string and the patient's
+ * handset, so an unsanitised name would be transmitted verbatim rather than
+ * merely read. One sanitised token is all that is ever interpolated.
+ */
 export function nurtureFallback(lead: SpeedToLeadLead, touch: number, client?: Client): string {
   const name = firstName(lead.name);
   const practice = client?.name ?? "the practice";
@@ -165,6 +251,11 @@ export function buildNurturePrompt(
     `You work for ${practice}.`,
     "Someone enquired with the practice a little while ago and has not replied yet. Write a short, friendly follow-up message.",
     toneByTouch,
+    // Same boundary, same reason, same position as the first-contact prompt
+    // above: the nurture prompt reaches the SAME lead row three more times, so a
+    // payload that could not reach the model at first contact must not reach it
+    // at touch 1, 2 or 3 either.
+    FREE_TEXT_IS_DATA,
     "Rules:",
     "- Lead with the person by first name.",
     "- One gentle next step: offer to find them a time that suits.",
@@ -186,7 +277,7 @@ export function buildNurturePrompt(
     `Follow-up number: ${touch}`,
     `Name: ${firstName(lead.name)}`,
     `Treatment interest: ${interest ?? "not specified"}`,
-    `Enquiry source: ${lead.source}`,
+    `Enquiry source: ${sanitiseReason(lead.source)}`,
   ].join("\n");
 
   return { system, user };

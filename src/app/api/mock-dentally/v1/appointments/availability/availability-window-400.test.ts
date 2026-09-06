@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GET } from "./route";
-import { diaryAvailabilityRequest } from "@/lib/calendar/availability";
+import { diaryAvailabilityRequest, londonInstantMs, nextDayKey } from "@/lib/calendar/availability";
 import { londonDayKey } from "@/lib/time/london";
 
 // ===========================================================================
@@ -87,9 +87,14 @@ describe("mock availability: the windows live refuses", () => {
   });
 
   it("names BOTH params when both rules are broken — the today 00:00 -> today 23:59 case", async () => {
-    const now = new Date();
-    const dayKey = londonDayKey(now);
-    const res = await ask(`${dayKey}T00:00:00.000Z`, `${dayKey}T23:59:00.000Z`);
+    // The live case this models is a whole calendar day: a start already past, and a
+    // span of 23h59m. It is built from `now` rather than from a day key, because a
+    // LONDON day key stamped with a UTC "Z" is up to an hour in the FUTURE between
+    // 23:00 and 00:00 UTC — so through BST this test failed for one hour every night
+    // (the start was not yet past, and only the span rule fired) and passed the rest
+    // of the time. The shape under test is the two broken rules, not today's date.
+    const start = Date.now() - 60_000;
+    const res = await ask(iso(start), iso(start + 23 * HOUR + 59 * 60_000));
 
     expect(res.status).toBe(400);
     expect(res.params).toEqual({
@@ -161,19 +166,43 @@ describe("mock availability: the windows live refuses", () => {
     // is the seam where that is cheap to discover.
     const now = Date.now();
     const today = londonDayKey(new Date(now));
-    const tomorrow = londonDayKey(new Date(now + 24 * HOUR));
+    // The next London day comes from the day KEY, never from `now + 24h`: the
+    // October fall-back day is twenty-five hours long, so between 00:00 and 01:00
+    // BST that arithmetic lands back on TODAY and all three legs below collapse
+    // into one, silently.
+    const tomorrow = nextDayKey(today);
 
-    for (const [from, to] of [
-      [today, today],
-      [today, tomorrow],
-      [tomorrow, tomorrow],
+    // WHY THE PAST-ISH LEG CARRIES ITS OWN `now`.
+    //
+    // diaryAvailabilityRequest deliberately returns null when the requested range
+    // ends within AVAILABILITY_START_BUFFER_MS (2 minutes) of `now` — there is
+    // nothing left to ask Dentally about. For a range of [today, today] that is
+    // true from 23:58 Europe/London, so a leg driven by the real clock reddened
+    // this file for the last two minutes of every day while the product code was
+    // exactly right. That is the sibling of the London-day-key-stamped-with-a-UTC-Z
+    // bomb fixed three tests above, and it is invisible to a grep because the
+    // fixture holds no date literal at all.
+    //
+    // What this leg is about is the SHAPE — a SINGLE day whose midnight has already
+    // gone by, which is the booking picker's `?from=X&to=X`, the window live 400s —
+    // and not today's date. Pinning its `now` to noon of the day reproduces that
+    // shape exactly (the start clamps forward, the span expands to the 25-hour
+    // minimum) at every instant of the real clock. The day is TOMORROW so the
+    // window the helper hands back is still strictly in the real future, which is
+    // what the mock actually validates against.
+    const noonTomorrow = londonInstantMs(tomorrow, 12, 0);
+
+    for (const leg of [
+      { label: "a single day whose midnight has passed", from: tomorrow, to: tomorrow, nowMs: noonTomorrow },
+      { label: "today through tomorrow", from: today, to: tomorrow, nowMs: now },
+      { label: "a single day still entirely ahead", from: tomorrow, to: tomorrow, nowMs: now },
     ]) {
-      const built = diaryAvailabilityRequest({ fromDayKey: from, toDayKey: to, nowMs: now });
-      expect(built, `the diary must build a request for ${from}..${to}`).not.toBeNull();
+      const built = diaryAvailabilityRequest({ fromDayKey: leg.from, toDayKey: leg.to, nowMs: leg.nowMs });
+      expect(built, `the diary must build a request for ${leg.label} (${leg.from}..${leg.to})`).not.toBeNull();
       const res = await ask(built!.startTime, built!.finishTime);
       expect(
         res.status,
-        `live would refuse the window the diary built for ${from}..${to}: ${JSON.stringify(res.params)}`,
+        `live would refuse the window the diary built for ${leg.label}: ${JSON.stringify(res.params)}`,
       ).toBe(200);
     }
   });

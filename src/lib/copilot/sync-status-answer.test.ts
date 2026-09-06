@@ -62,6 +62,8 @@ const state = vi.hoisted(() => ({
   mode: "dry_run" as "dry_run" | "live",
   target: { host: "api.dentally.co", live: true },
   masterOff: false,
+  /** Ledger rows, in the machine vocabulary the table really stores. */
+  intents: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@/lib/dentally/sync-status", () => ({
@@ -78,7 +80,7 @@ vi.mock("@/lib/dentally/sync-status", () => ({
     counts: { dry_run: 0, queued: 0, sent: 0, failed: 0, blocked: 0 },
     total: 0,
     countCapped: false,
-    intents: [],
+    intents: state.intents,
     more: false,
     pageSize: limit,
     ledgerError: null,
@@ -98,6 +100,7 @@ beforeEach(() => {
   state.mode = "dry_run";
   state.target = { host: "api.dentally.co", live: true };
   state.masterOff = false;
+  state.intents = [];
 });
 
 describe("sync_status separates 'armed' from 'reaching the practice's book'", () => {
@@ -168,5 +171,76 @@ describe("sync_status names the switch the owner can flip", () => {
       expect(titles.mirrored).toBe(SYNC_GROUP_TITLES.mirrored);
       expect(titles.blocked_by_governance).toBe(SYNC_GROUP_TITLES.blocked_by_governance);
     }
+  });
+});
+
+// ===========================================================================
+// AND THE ROWS THEMSELVES, IN THE WORDS THE OWNER'S SCREEN USES (ruling W3/11).
+//
+// The derivations above were added in wave 3 and the ledger rows underneath them
+// were not: they travelled as the stored enums — "appointment.create",
+// "patient-admin", "blocked", "writes_disabled" — into an answer whose OTHER
+// half had been deliberately translated (`groupTitles`, `writtenBy`). The Sync
+// Status tab renders these same rows and says in its own header that it never
+// prints an internal name. Two owner surfaces, one ledger, two languages.
+//
+// This fixture's `intents` was empty, which is why nothing here ever noticed.
+// ===========================================================================
+describe("sync_status hands over ledger rows in the practice's own words", () => {
+  const HELD_BACK = {
+    createdAt: "2026-09-05T10:00:00Z",
+    kind: "appointment.create",
+    source: "patient-admin",
+    status: "blocked",
+    blockedReason: "writes_disabled",
+    target: "api.dentally.co",
+    dentallyPatientId: "pat-1",
+    dentallyAppointmentId: null,
+    payloadSummary: { fields: ["patient_id", "start_time"] },
+    error: null,
+  };
+
+  it("TRANSLATES ALL FOUR MACHINE FIELDS, and keeps the codes beside them", async () => {
+    state.intents = [HELD_BACK];
+    const out = await syncStatus();
+    const row = (out.recentIntents as Array<Record<string, unknown>>)[0];
+
+    // The kind's words come from this tool's OWN fact list, so the row and the
+    // three group lists above it stop describing one kind two ways.
+    expect(row.whatInWords).toBe("New appointments");
+    // The source registry's label, exactly as the page prints it above its table.
+    expect(String(row.madeByInWords)).toMatch(/^Patient record editing/);
+    expect(row.statusInWords).toBe("Held back");
+    // The blocked reason as a sentence an owner can act on: this one is the
+    // agency's key, and `master_off` would be his own switch.
+    expect(String(row.heldBackBecauseInWords)).toMatch(/switched off for this deployment/i);
+    expect(String(row.heldBackBecauseInWords)).not.toMatch(/writes_disabled/);
+
+    // THE CODES STAY. The cross-module journey suite names a row by them
+    // (os-scenarios/j1-enquiry-to-booked.test.ts step 9), and a code is the
+    // right thing for a machine to match on.
+    expect(row.what).toBe("appointment.create");
+    expect(row.madeBy).toBe("patient-admin");
+    expect(row.status).toBe("blocked");
+    expect(row.heldBackBecause).toBe("writes_disabled");
+
+    // ...and the payload says which half to read out, rather than trusting a
+    // prompt to remember it.
+    expect(String(out.recentIntentsNote)).toMatch(/never the code/i);
+  });
+
+  it("a row this build cannot name reads as its stored value, never as blank", async () => {
+    // A ledger row written by a source or a status a later build knows about is
+    // still a real row in the practice's ledger. Printing the only identifier we
+    // have is the honest answer; printing nothing is not.
+    state.intents = [
+      { ...HELD_BACK, kind: "patient.merge", source: "some-future-desk", status: "half_sent", blockedReason: null },
+    ];
+    const row = ((await syncStatus()).recentIntents as Array<Record<string, unknown>>)[0];
+    expect(row.whatInWords).toBe("patient.merge");
+    expect(row.madeByInWords).toBe("some-future-desk");
+    expect(row.statusInWords).toBe("half_sent");
+    // Not held back at all: no reason, and none invented.
+    expect(row.heldBackBecauseInWords).toBeNull();
   });
 });

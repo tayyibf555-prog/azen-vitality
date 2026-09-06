@@ -217,7 +217,15 @@ export async function listOpportunities(args: {
   // short list would retire opportunities that are still open. Paging in fixed blocks
   // makes the read complete, with an absolute ceiling so a runaway table cannot
   // exhaust memory, and a loud warning if that ceiling is ever reached.
-  const PAGE = 1000;
+  // ONE ROW UNDER THE SERVER'S CEILING (ruling W3/32). `batch.length < PAGE` is
+  // what this loop treats as "the whole table", and Supabase clips every response
+  // at a max-rows ceiling measured at 1,000 (POSTGREST_MAX_ROWS in
+  // src/lib/test-support/fake-supabase.ts). At exactly 1,000 a clipped page and a
+  // final page are the same observation, so a server cap below the page size
+  // would RETURN EARLY with a truncated list that claims to be complete — and the
+  // retire step would then retire opportunities that are still open. At 999 a
+  // short page can only mean the rows ran out.
+  const PAGE = 999;
   const MAX_ROWS = 50_000;
   const rows: OpportunityRow[] = [];
   for (let from = 0; from < MAX_ROWS; from += PAGE) {
@@ -583,6 +591,16 @@ export async function setSyncState(
  * sync_state columns (backfill_page is an integer page number, backfill_done a flag)
  * — high_water_mark is a timestamptz and cannot hold a page number. `done=false`
  * (the default on any existing row) means the full pass has not finished yet.
+ *
+ * THOSE TWO COLUMNS ARE NOT IN 0001, WHICH CREATES THE REST OF sync_state. They
+ * were added straight in Supabase by commit e28db19 and no migration carried
+ * them, so production had six columns and a database replayed from
+ * supabase/migrations had four — this read then threw 42703 on the first tick of
+ * all three syncs that call it (coordinator, recall, reactivation). Declared by
+ * 0106_sync_state_backfill_cursor_columns.sql; the drift is pinned for the class,
+ * not just for these two names, by sync-state-backfill-columns.test.ts. The fake
+ * client cannot catch it: it ignores the select projection, so a sync_state with
+ * neither column answers `undefined` for both and reads as "not started yet".
  */
 export async function getBackfillCursor(
   siteId: string,

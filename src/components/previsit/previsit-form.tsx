@@ -50,19 +50,49 @@ export interface PreVisitFormProps {
 }
 
 /**
- * Did the patient rate any discomfort scale at or above the help threshold?
+ * Did the patient rate any DISCOMFORT scale at or above the help threshold?
  *
  * PURE and exported, so "a 7 shows the line and a 6 does not" is assertable
- * without driving the form. It reads EVERY scale question rather than the
- * `pain-now` key, because a practice can add a scale question of its own and a
- * high score on it deserves the same sentence.
+ * without driving the form.
+ *
+ * It reads every SYMPTOM-kind scale rather than the `pain-now` key, because a
+ * practice can add a discomfort scale of its own and a high score on it deserves
+ * the same sentence. It is keyed on the KIND and not on the type, and that is the
+ * fix rather than a preference: `urgentHelpLine` says "if you're in severe pain
+ * right now", which is a sentence about discomfort, and 0-10 is the only scale
+ * this module renders — so a rule written as `type === "scale"` fired on every
+ * 0-10 question the practice could write, whatever it was about.
+ *
+ * `usableCustom` accepts `scale` beside all three kinds (its CUSTOM_TYPES x
+ * CUSTOM_KINDS is a full cross-product) and `admit` refuses a question from the
+ * BRIEF bank only when it is symptom-kind or carries a forbidden term. So a
+ * cosmetic "How confident do you feel about your smile?" as a 0-10 reached the
+ * short form legitimately, and a 9 there printed a severe-pain notice to the one
+ * patient this fork exists to keep away from pain framing. Reading the
+ * classification the projection already carries makes the line unreachable on the
+ * brief bank BY CONSTRUCTION: `admit` cannot put a symptom question on it.
+ *
+ * AND THE TWO HALVES OF THE MODULE NOW AGREE ABOUT WHAT A SCALE MEANS. They did
+ * not: this side read every scale and the practice's record read one key, so a
+ * patient could be told on their phone to ring about severe pain while
+ * `discomfortReported` stayed false and neither the clinician's banner nor the
+ * manager's flag (ruling W1-C/2) ever mentioned it. Both sides were fixed towards
+ * the same rule — `highestDiscomfort` in src/lib/triage/summary.ts takes the top
+ * scale across the `clinical` lines, which are exactly the symptom-kind ones, and
+ * raises the flag at DISCOMFORT_NOTICE_THRESHOLD. So an owner-authored discomfort
+ * slider both shows this line and reaches the record, and a cosmetic slider does
+ * neither. Change one side's rule without the other and you have re-opened the
+ * gap; `urgent-help-scope.test.ts` and `summary.test.ts` hold the two ends.
+ *
+ * Pinned by `urgent-help-scope.test.ts` (both directions: a cosmetic 10 is
+ * silent, an owner-authored symptom scale still speaks).
  */
 export function hasUrgentScore(
   questions: ProjectedQuestion[],
   answers: Record<string, string>,
 ): boolean {
   return questions.some((q) => {
-    if (q.type !== "scale") return false;
+    if (q.type !== "scale" || q.kind !== "symptom") return false;
     const n = Number((answers[q.key] ?? "").trim());
     return Number.isFinite(n) && n >= URGENT_HELP_THRESHOLD;
   });
@@ -137,8 +167,14 @@ export function PreVisitFormView({
                 bottom of the form. A patient who has just said their pain is a 9
                 may not scroll any further, and nothing in this module acts on that
                 9 by itself, so this sentence is the whole of the route to help.
+
+                THE CONDITION IS `hasUrgentScore` AND NOTHING ELSE. It used to be
+                `q.type === "scale" && hasUrgentScore(...)`, which was a no-op
+                twice over and read as if the rule were "a scale" — the exact idea
+                that put a severe-pain notice under a cosmetic 0-10. The rule
+                lives in one function; this only asks it.
               */}
-              {q.type === "scale" && hasUrgentScore([q], answers) ? (
+              {hasUrgentScore([q], answers) ? (
                 <p
                   role="status"
                   className="mt-2.5 rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-[13px] leading-[1.5] text-ink"

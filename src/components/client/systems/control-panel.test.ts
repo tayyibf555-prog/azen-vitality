@@ -99,4 +99,48 @@ describe("the panel and its route agree about what a row carries", () => {
   it("the route takes them from the shared vocabulary, not from a literal", () => {
     expect(source).toContain("vocabularyFor");
   });
+
+  // =========================================================================
+  // A FLIPPED SWITCH HAS TO REACH THE SERVER-RENDERED SCREENS THAT READ IT
+  // (wave-3d review, 6 September 2026; Next 16 client router cache).
+  //
+  // `toggle` POSTs to /api/systems and flips its own React state. That updates
+  // this panel and nothing else — and `system_toggle` is read on the SERVER by
+  // the sidebar (`getDisabledSlugs`, src/app/c/[client]/layout.tsx), by Home's
+  // Operating system band (`readOsBand`/`getSystemStates`) and by the module
+  // banners. next.config.ts sets `experimental.staleTimes = { dynamic: 30,
+  // static: 120 }`, so a route the owner has already visited comes back from the
+  // client router cache on a <Link> navigation with no server render at all, and
+  // a plain `fetch` to a Route Handler invalidates none of it (only
+  // `router.refresh()` and a Server Action do). The owner switches a system off
+  // during an incident, clicks Home to check it stopped, and reads the state
+  // from before he touched it — indistinguishable on screen from a save that
+  // never landed.
+  //
+  // A SOURCE PIN, AND HONEST ABOUT BEING ONE. `toggle` is a closure inside a
+  // client component; this suite is node-environment `src/**/*.test.ts` and
+  // renders to static markup, so there is no click to drive and no router to
+  // observe. What it catches is the regression that actually happens — the
+  // refresh being dropped in a refactor of the handler — in the same shape
+  // src/components/client/previsit/mining-run-button.test.ts uses for the same
+  // decision next door ("if (outcome.refresh) router.refresh()").
+  // =========================================================================
+  it("a flipped switch invalidates the server-rendered screens that read it", () => {
+    expect(view, "the panel no longer imports the router").toMatch(
+      /import \{ useRouter \} from "next\/navigation";/,
+    );
+    const toggle = view.slice(
+      view.indexOf("async function toggle(slug: string, next: boolean)"),
+    );
+    expect(toggle, "the toggle handler scan went stale").toContain("/api/systems");
+    const body = toggle.slice(0, toggle.indexOf("\n  }\n"));
+    expect(
+      body,
+      "the toggle writes the switch and never tells the sidebar, Home's band or the module banners",
+    ).toContain("router.refresh()");
+    // AND ONLY ON A WRITE THAT LANDED, outside the try: a throw from the refresh
+    // caught by the handler's own catch would revert the optimistic flip and
+    // tell the owner the switch failed, for a switch that was written.
+    expect(body).toContain("if (wrote) router.refresh()");
+  });
 });

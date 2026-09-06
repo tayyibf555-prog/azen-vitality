@@ -286,3 +286,47 @@ describe("the wiring is visible in the file, so it is not silently unpicked", ()
     expect(routeSrc).not.toMatch(/reply: result\.replyText/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE REFUSAL SENTENCE, WHICH IS THE ONLY THING THE REFUSED PERSON EVER SEES.
+//
+// Every KNOWN role has a co-pilot catalog since W1-E/2, so `access === "none"` —
+// the fail-CLOSED default — is now reachable only by a role the clearance map does
+// not place: an account whose role is unset, mis-spelled, or newer than the map.
+// The sentence used to read "The co-pilot is available to the practice owner",
+// which was true when the route was owner-only and has been false since; it sent
+// the wrong person to ask for the wrong thing, and told a reader of the file the
+// wrong boundary.
+//
+// This drives the REAL handler with the REAL guards (only the session read is
+// faked), so it pins the sentence a person actually receives, not a stub of it.
+// The client half — that a 403 body reaches the chat instead of the generic
+// apology — is pinned in src/components/platform/copilot-page-chat.test.ts.
+// ---------------------------------------------------------------------------
+describe("a role the clearance map does not place is refused, and told why", () => {
+  // MUTATION: put the old owner-only sentence back. Nothing else in the tree goes
+  // red — it is a string in a 403 body — and a clinician with a mis-set role is
+  // told the co-pilot is for the owner, when in fact every known role has one.
+  it("names the ROLE as the boundary, and never says the co-pilot is owner-only", async () => {
+    store.user = { id: "u9", email: "who@example.com", role: "not_a_role", clientId: "vitality", siteIds: ["site-cc"] };
+    const { status, body } = await ask(["what is outstanding today?"], async () => "should never run");
+
+    expect(status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.reply, "a refused turn must not carry an answer").toBeUndefined();
+    expect(body.error).toBe(
+      "Your account's role is not one the co-pilot serves. Ask the practice owner to check your access.",
+    );
+    expect(body.error, "the stale owner-only claim is back").not.toMatch(/available to the practice owner/i);
+    // A refusal, not a hint: it names no role, no catalog and no tool.
+    expect(body.error).not.toMatch(/not_a_role|clinician|manager|staff|catalog/i);
+  });
+
+  // The other half of "fail CLOSED": a known role still gets through, so the
+  // refusal above cannot be made to pass by refusing everybody.
+  it("still admits a known role, so the refusal is about the unknown one", async () => {
+    store.user = { id: "u2", email: "nurse@example.com", role: "client_staff", clientId: "vitality", siteIds: ["site-cc"] };
+    const { status } = await ask(["when is the steriliser next due?"], async () => "It is due on 1 June 2026.");
+    expect(status).toBe(200);
+  });
+});

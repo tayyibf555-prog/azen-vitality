@@ -1,0 +1,86 @@
+-- register-previsit-mining-cron.sql  —  register the implant-interest scan on pg_cron
+-- ---------------------------------------------------------------------------
+-- STATUS: NOT YET APPLIED. `app-sweep-previsit-mining` is not in cron.job
+-- (read-only `select jobname, schedule, active from cron.job`, production,
+-- 4 September 2026), so this is a genuinely outstanding step. Run it once (Fable
+-- applies cron SQL; the app's Supabase role is read-only on the cron.job TABLE,
+-- so use the cron.* FUNCTIONS, which are SECURITY DEFINER).
+--
+-- The same statement is printed verbatim in §2 of docs/runbooks/agent-switch-on.md.
+-- Ruling W3/7 put it there when this directory carried nothing for it; ruling
+-- W3/30 asks for the file as well, so both places hold it and
+-- src/lib/agent-wiring/runbook.test.ts pins them to each other and to
+-- src/lib/agent-wiring/scheduler.ts.
+--
+-- WHAT IT RUNS: /api/previsit/mining-sweep, the scan behind "People who might
+-- want to hear about implants". Read-only against Dentally, bounded, resumable,
+-- BACKGROUND priority, and it messages NOBODY — it writes only its own candidate
+-- and coverage tables. The list it fills is the owner's crude proxy (18+ with
+-- extractions), not fit-for-implant screening, and the screen says so.
+--
+-- NIGHTLY, because the engine is built around a night. Each run walks
+-- MINING_DAYS_PER_RUN more days backwards (30 today), so about five weeks of
+-- nights reach the three-year horizon (MINING_HORIZON_DAYS = 1095).
+--
+-- MINUTE 02:20 deliberately, checked against cron.job rather than chosen freely:
+-- it is clear of the 03:xx daily jobs (app-sync-patient-count at 03:15,
+-- app-sweep-landing-promote at 03:17), clear of app-purge-assessment-step-events
+-- at 04:43, and clear of the hourly Dentally prewarm at minute 40. A new job name
+-- is registered here, so applying this file moves nothing that already runs.
+--
+-- WHAT A NIGHT COSTS, so that nobody registers this blind. The scan reads the
+-- book ONE DAY AT A TIME per site, because a day it did not read is a day it must
+-- not claim. That is
+--     31 days x 3 mapped sites = about 93 appointment requests
+-- a run (a day carrying more than 100 appointments adds a page, up to 12), plus
+--     at most 120 patient reads (MINING_MAX_PATIENT_READS_PER_RUN)
+-- split evenly between the sites so that none starves another (ruling W3/25).
+-- All of it at BACKGROUND priority against the shared 3,600/hour Dentally budget,
+-- so it yields to the diary and to anything a member of staff is waiting on, and
+-- a run that is refused simply resumes tomorrow having lost nothing.
+-- If that is too much for this practice the lever is MINING_DAYS_PER_RUN in
+-- src/lib/triage/mining.ts — read a smaller window, never a coarser slice: the
+-- day-at-a-time reading is what makes the coverage sentence on screen true.
+--
+-- IT SHARES THE 'pre-visit-triage' SWITCH, and it is fail-closed under it
+-- (ruling W3/21): the scan reads real patient history, so it does not run while
+-- the module is off. With the switch off every run returns
+-- {"ok":true,"skipped":"system off"} and reads nothing.
+--
+-- THERE IS A SECOND DOOR ONTO THE SAME ENGINE, and it already has a button:
+-- POST /api/previsit/mining-run, gated on the owner's session and on the same
+-- switch, driven by "Build / refresh candidates" on the pre-visit page's Implants
+-- tab (rulings W3/8, W3/21, W3/27). It takes the same lease as this job, so a
+-- manual run during a scheduled one is answered rather than doubling the
+-- practice's Dentally reads. So an owner can fill the list by hand today;
+-- registering this job is what makes it fill itself overnight instead of a
+-- window at a time, by hand.
+--
+-- CRON_SECRET is NOT written here; it lives inside public.trigger_app_cron().
+-- ---------------------------------------------------------------------------
+
+select cron.schedule(
+  'app-sweep-previsit-mining',
+  '20 2 * * *',
+  $$select public.trigger_app_cron('/api/previsit/mining-sweep')$$
+);
+
+-- cron.schedule() on an existing job named 'app-sweep-previsit-mining' updates
+-- its schedule/command but KEEPS the current active flag. If it was ever created
+-- inactive, activate it explicitly (find the id in cron.job first):
+--   select cron.alter_job(job_id := (select jobid from cron.job
+--                                    where jobname = 'app-sweep-previsit-mining'),
+--                         active := true);
+
+-- Verify after applying:
+--   select jobname, schedule, active from cron.job where jobname = 'app-sweep-previsit-mining';
+--   select jobname, status, return_message, start_time
+--     from cron.job_run_details
+--     where jobname = 'app-sweep-previsit-mining'
+--     order by start_time desc limit 5;
+--
+-- A healthy run with the system OFF returns HTTP 200 and {"ok":true,"skipped":
+-- "system off"}. With it ON, the body carries the window it covered, the patient
+-- reads it spent and which sites it stopped in — the same figures the Implants
+-- tab prints, so a night that covered less than a whole window says so rather
+-- than letting the list look complete.

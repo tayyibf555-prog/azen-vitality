@@ -39,6 +39,7 @@
 import type { AssessmentBand } from "./types";
 import { scanFlowCopyText, type FlowCopyHit } from "./flow-copy";
 import { checkAgentReply, type GuardrailCategory } from "@/lib/agent/guardrail";
+import { stripControls } from "@/lib/text/prompt-safety";
 
 /* ---------------------------------------------------------------------------
  * 1. The trigger.
@@ -323,16 +324,47 @@ export function describeFollowUpTemplateFailures(
  * ------------------------------------------------------------------------- */
 
 /**
- * First name for a warm opener, falling back to the whole name.
+ * First name for a warm opener, falling back to an empty string.
  *
- * A DELIBERATE THREE-LINE DUPLICATE of the private helper in draft.ts, and the
- * duplication is the cheaper of the two options: draft.ts imports the Anthropic
- * SDK at module scope, and importing it here to save three lines would drag the
- * SDK into a module the API route, the public submit route and the client panel
- * all load. The two are pinned to the same answers in follow-up.test.ts.
+ * A DELIBERATE NEAR-DUPLICATE of the private `firstName` helper in
+ * src/lib/speed-to-lead/draft.ts, and the duplication is the cheaper of the two
+ * options: draft.ts imports the Anthropic SDK at module scope, and importing it
+ * here to save three lines would drag the SDK into a module the API route, the
+ * public submit route and the client panel all load. The two are pinned to the
+ * same answers in follow-up.test.ts.
+ *
+ * DEFANG FIRST, THEN TAKE THE TOKEN — that order is the fix, and it is not
+ * interchangeable. `name` here is `lead.name`: text a stranger typed into a
+ * public web form (src/lib/speed-to-lead/contact.ts hands it straight to
+ * renderFollowUpTemplate). Taking the first whitespace-delimited token reads
+ * like a structural guarantee — one word cannot be a paragraph — and it is not
+ * one, because JS `\s` does NOT match NEL (U+0085) or the rest of the C1 block.
+ * A name whose separators are all C1 controls was therefore ONE token to
+ * `split(/\s+/)`, so the WHOLE payload survived as the "first name" and was
+ * transmitted verbatim in the practice's own first text. `stripControls` turns
+ * those controls into real spaces first, which makes the first-token rule true
+ * again. Exactly the fix draft.ts's `firstName` carries; the hole was closed on
+ * that side and left open on this one.
+ *
+ * WHY `stripControls` AND NOT `sanitiseName`. This is a template renderer, not a
+ * prompt builder: no model reads the output, so the model-facing half of
+ * @/lib/agent/free-text (the boundary sentence, the sweep in
+ * src/lib/agent-wiring/free-text-boundary.test.ts that every importer of that
+ * module must appear in) has nothing to say about it. @/lib/text/prompt-safety
+ * holds the tree's ONE definition of the control-character class and imports
+ * nothing at all, so it is reachable from the client panel this module is loaded
+ * by. What is NOT taken from `sanitiseName` and is deliberately left: its
+ * sentence cut and its 40-character cap. Both are about what a MODEL should be
+ * handed; capping a patient's name in the text they receive is a different
+ * decision, and the parity gap is ledgered rather than guessed at.
+ *
+ * The empty result is unchanged and still reachable only for a name made
+ * entirely of control characters — `str()` at both intake routes rejects a blank
+ * one, and String.prototype.trim does not strip C1. renderFollowUpTemplate turns
+ * it into "there" (W3/37), the same fallback draft.ts uses.
  */
 export function firstNameOf(name: string | null | undefined): string {
-  const trimmed = (name ?? "").trim();
+  const trimmed = stripControls(name ?? "").trim();
   return trimmed.split(/\s+/)[0] || trimmed;
 }
 

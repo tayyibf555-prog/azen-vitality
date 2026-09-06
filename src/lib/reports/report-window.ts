@@ -119,7 +119,12 @@ export function windowLabel(w: DayWindow): string {
  * matched no presetWindow case, the window came back undefined, and the reports
  * page 500d at render while tsc, vitest (plain node ignores the directive) and
  * the production build all stayed green. Render-time only, invisible to every
- * gate — which is why the constant lives HERE and reports-view.test.ts pins the
- * import path.
+ * gate — which is why the constant lives HERE and
+ * src/components/client/reports/rsc-value-import.test.ts pins the import path
+ * ("reports-view imports PAY_DEFAULT_PRESET from the pure module, never the
+ * client one"). Until ruling W3/17's sweep caught it on 5 September 2026 this
+ * line named a reports-view test file instead, which has never existed: a reader
+ * who went looking would have found nothing and concluded the pin was gone — for
+ * a trap whose whole danger is that every gate stays green.
  */
 export const PAY_DEFAULT_PRESET: ReportPreset = "last_7";

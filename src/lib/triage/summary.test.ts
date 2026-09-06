@@ -12,7 +12,7 @@ import {
 } from "./summary";
 import { INTEREST_QUESTION_KEY, TRIAGE_BANK } from "./bank";
 import { FORBIDDEN_PATIENT_WORDS } from "./forbidden";
-import { UNKNOWN_ANSWER_KIND, readStoredAnswers } from "./kind";
+import { UNKNOWN_ANSWER_KIND, readStoredAnswers, readStoredInterest } from "./kind";
 import type { CustomQuestionIndex } from "./kind";
 import { PreVisitSummaryPanel } from "@/components/client/patients/record/previsit-summary-panel";
 import type { Role } from "@/lib/types";
@@ -323,6 +323,271 @@ describe("an owner-authored question's KIND decides who reads it", () => {
     );
     expect(manager.clinical).toBeNull();
     expect(JSON.stringify(manager)).not.toContain(OWN_WORDS);
+  });
+});
+
+// ===========================================================================
+// A PRACTICE-WRITTEN QUESTION IS A REAL QUESTION, and the summary has to read it
+// the way the patient answered it.
+//
+// The projection used to take a line's TYPE from the shipped bank alone. A
+// `custom-` key is by definition not in the shipped bank, so every question the
+// practice wrote itself was typeless: `scale` was always null and `freeText` was
+// always true. Two things followed, and the second is the one that matters.
+//
+//   The number was printed in quotation marks, as if the patient had typed it.
+//   And `discomfortReported` — the flag the practice manager gets INSTEAD of the
+//   words (ruling W1-C/2) — was read off the shipped key `pain-now` alone, so a
+//   patient who rated their discomfort 9 on the practice's own slider was recorded
+//   as `false`. The PATIENT-facing half already handled this case: the public form
+//   shows the help-now line for every symptom-kind scale. The two halves of one
+//   module disagreed about what a number on a slider means.
+// ===========================================================================
+describe("an owner-authored 0-10 scale is a discomfort scale (the flag is not one key)", () => {
+  /** The practice's own slider, as `customQuestionsFor` would index it. */
+  const ownSlider: CustomQuestionIndex = new Map([
+    [
+      "custom-discomfort",
+      {
+        label: "How uncomfortable is your tooth right now?",
+        kind: "symptom" as const,
+        type: "scale" as const,
+      },
+    ],
+  ]);
+
+  function rated(score: string): TriageResponse {
+    return response({
+      answers: [
+        { key: "attending", value: "yes", kind: "logistics" },
+        { key: "custom-discomfort", value: score, kind: "symptom" },
+      ],
+    });
+  }
+
+  it("owner-authored-discomfort-scale-raises-the-flag", () => {
+    const summary = projectSummary(rated("9"), "client_owner", ownSlider);
+    expect(summary.discomfortReported, "a 9 out of 10 on the practice's own slider was not flagged").toBe(true);
+
+    const line = summary.clinical?.lines.find((l) => l.key === "custom-discomfort");
+    expect(line?.scale, "the number was not passed as a number").toBe(9);
+    expect(line?.freeText, "a slider reading was quoted as the patient's own words").toBe(false);
+  });
+
+  it("and the FLAG reaches the practice manager, who has nothing else to go on", () => {
+    // She gets the count and the flag and never the words. With the flag false she
+    // had a bare count of one and no reason to ring anybody.
+    const manager = projectSummary(rated("9"), "client_coordinator", ownSlider);
+    expect(manager.clinical).toBeNull();
+    expect(manager.flaggedForClinician).toBe(1);
+    expect(manager.discomfortReported).toBe(true);
+  });
+
+  it("the threshold is the same threshold, not a second one", () => {
+    expect(projectSummary(rated(String(DISCOMFORT_NOTICE_THRESHOLD - 1)), "client_owner", ownSlider).discomfortReported).toBe(false);
+    expect(projectSummary(rated(String(DISCOMFORT_NOTICE_THRESHOLD)), "client_owner", ownSlider).discomfortReported).toBe(true);
+  });
+
+  it("a COSMETIC scale never raises it, because 10 there is good news", () => {
+    // "How happy are you with how your smile looks?" is not a pain scale, and a
+    // flag that fired on it would train the front desk to ignore the flag.
+    const smile: CustomQuestionIndex = new Map([
+      ["custom-smile-score", { label: "How happy are you with your smile?", kind: "cosmetic" as const, type: "scale" as const }],
+    ]);
+    const summary = projectSummary(
+      response({ answers: [{ key: "custom-smile-score", value: "10", kind: "cosmetic" }] }),
+      "client_owner",
+      smile,
+    );
+    expect(summary.discomfortReported).toBe(false);
+    // It is still rendered as a number, in the half every role reads.
+    expect(summary.logistics.lines.find((l) => l.key === "custom-smile-score")?.scale).toBe(10);
+  });
+
+  it("a DELETED question keeps the old fallback: quoted, and no scale claimed", () => {
+    // Nothing can say what control it rendered as, so the answer is printed as the
+    // patient's words rather than as a reading. An answer must never disappear.
+    const summary = projectSummary(rated("9"), "client_owner");
+    const line = summary.clinical?.lines.find((l) => l.key === "custom-discomfort");
+    expect(line?.scale).toBeNull();
+    expect(line?.freeText).toBe(true);
+    expect(summary.discomfortReported).toBe(false);
+  });
+
+  it("a custom CHOICE answer renders the label the patient tapped, not its stored value", () => {
+    const index: CustomQuestionIndex = new Map([
+      [
+        "custom-travel",
+        {
+          label: "How are you getting here?",
+          kind: "logistics" as const,
+          type: "choice" as const,
+          options: [
+            { value: "car", label: "By car" },
+            { value: "bus", label: "By bus" },
+          ],
+        },
+      ],
+    ]);
+    const summary = projectSummary(
+      response({ answers: [{ key: "custom-travel", value: "bus", kind: "logistics" }] }),
+      "client_coordinator",
+      index,
+    );
+    const line = summary.logistics.lines.find((l) => l.key === "custom-travel");
+    expect(line?.answer).toBe("By bus");
+    expect(line?.freeText, "a tapped option is not the patient's own words").toBe(false);
+  });
+});
+
+// ===========================================================================
+// THE CHECK ON THE OWNER'S DROPDOWN RUNS ON BOTH FORKS (W1-C/2).
+//
+// `admit` in project.ts scans a custom question's own words and says why: "a
+// custom question the owner classified as 'logistics' and wrote as 'Is anything
+// hurting before you come in?' is a symptom question whatever the dropdown said."
+// That scan sits behind `if (fork !== "brief") return null`, because REFUSING the
+// question is a brief-bank rule — the full bank exists to ask those questions.
+//
+// But the classification decides a second thing that is not fork-scoped: whether
+// the patient's own words reach the practice manager. On the full bank that
+// question was admitted unscanned, resolved to logistics from every source, and
+// its answer landed in the section the front desk reads, with
+// `flaggedForClinician: 0`.
+// ===========================================================================
+describe("a symptom-WORDED custom question is restricted on the FULL bank too", () => {
+  const THROBBING = "my back molar has been throbbing all week and the gum is swollen";
+
+  it("symptom-worded-custom-question-is-restricted-on-every-fork", () => {
+    // Exactly the fixture project.test.ts uses for the brief fork, on the full one.
+    const index: CustomQuestionIndex = new Map([
+      ["custom-hurting", { label: "Is anything hurting before you come in?", kind: "logistics" as const, type: "textarea" as const }],
+    ]);
+    const manager = projectSummary(
+      response({ answers: [{ key: "custom-hurting", value: THROBBING, kind: "logistics" }] }),
+      "client_coordinator",
+      index,
+    );
+    expect(manager.clinical, "the manager was handed a clinical section").toBeNull();
+    expect(JSON.stringify(manager), "the patient's own symptom words reached the practice manager").not.toContain(THROBBING);
+    expect(manager.flaggedForClinician, "the count that stands in for the words said there was nothing").toBe(1);
+
+    // And the clinician, who may read it, still does.
+    const clinician = projectSummary(
+      response({ answers: [{ key: "custom-hurting", value: THROBBING, kind: "logistics" }] }),
+      "client_clinician",
+      index,
+    );
+    expect(clinician.clinical?.lines.map((l) => l.answer)).toContain(THROBBING);
+  });
+
+  it("an OPTION's words count too, exactly as they do in the projection (W3/3)", () => {
+    // The label is innocuous and the symptom is in the answer the patient tapped.
+    // Which option they chose is itself the disclosure.
+    const index: CustomQuestionIndex = new Map([
+      [
+        "custom-visit-reason",
+        {
+          label: "How can we help at this visit?",
+          kind: "logistics" as const,
+          type: "choice" as const,
+          options: [
+            { value: "routine", label: "Just my usual check-up" },
+            { value: "second", label: "A broken tooth" },
+          ],
+        },
+      ],
+    ]);
+    const manager = projectSummary(
+      response({ answers: [{ key: "custom-visit-reason", value: "second", kind: "logistics" }] }),
+      "client_coordinator",
+      index,
+    );
+    expect(manager.clinical).toBeNull();
+    expect(JSON.stringify(manager)).not.toContain("A broken tooth");
+    expect(manager.flaggedForClinician).toBe(1);
+  });
+
+  it("and it is NOT a blanket ban: a real logistics question stays the manager's", () => {
+    // The scan only moves a question whose own words read like a symptom question.
+    // A practice question that reads like what it is stays where the front desk
+    // can act on it, which is the whole point of them having it.
+    const index: CustomQuestionIndex = new Map([
+      ["custom-access", { label: "Do you need step-free access?", kind: "logistics" as const, type: "yesno" as const }],
+    ]);
+    const summary = projectSummary(
+      response({ answers: [{ key: "custom-access", value: "yes", kind: "logistics" }] }),
+      "client_coordinator",
+      index,
+    );
+    expect(summary.logistics.lines.map((l) => l.key)).toEqual(["custom-access"]);
+    expect(summary.flaggedForClinician).toBe(0);
+  });
+
+  it("a SHIPPED question's kind is never re-read from its words", () => {
+    // The word list is deliberately over-broad and the shipped kinds are in-code
+    // and authoritative, so the scan is custom-keys-only. `health-changed` is
+    // logistics and stays logistics even with an index that names its key.
+    const hostile: CustomQuestionIndex = new Map([
+      ["health-changed", { label: "Is anything hurting?", kind: "logistics" as const }],
+    ]);
+    const summary = projectSummary(
+      response({ answers: [{ key: "health-changed", value: "no", kind: "logistics" }] }),
+      "client_coordinator",
+      hostile,
+    );
+    expect(summary.logistics.lines.map((l) => l.key)).toEqual(["health-changed"]);
+    expect(summary.flaggedForClinician).toBe(0);
+  });
+});
+
+// ===========================================================================
+// THE OTHER JSONB COLUMN. `answers` stopped being a cast in the wave-2 fix lane;
+// `interest` was still `Array.isArray(...) ? (raw as ...) : []` three lines below
+// it, which checks the ARRAY and nothing inside it.
+// ===========================================================================
+describe("the stored interest grid is read, not cast", () => {
+  it("stored-interest-drops-what-it-cannot-read", () => {
+    const rows = readStoredInterest([
+      { treatment: "whitening", answer: "yes" },
+      null,                                          // threw a TypeError out of a pure projection
+      "implants",                                    // not an object at all
+      { treatment: "veneers", answer: "yes" },       // near miss: the key is "veneers-bonding"
+      { treatment: "implants", answer: "maybe" },    // an answer the grid never offers
+      { answer: "yes" },                             // no treatment at all
+      { treatment: "implants", answer: "not_now" },
+    ]);
+    expect(rows).toEqual([
+      { treatment: "whitening", answer: "yes" },
+      { treatment: "implants", answer: "not_now" },
+    ]);
+  });
+
+  it("a null element no longer takes the record screen down with it", () => {
+    // projectSummary is pure and both callers place it OUTSIDE their catch, so a
+    // throw here is a 500 on the patient record rather than a degraded panel.
+    const summary = projectSummary(
+      response({ interest: readStoredInterest([null, { treatment: "whitening", answer: "yes" }]) }),
+      "client_owner",
+    );
+    expect(summary.interest).toEqual([{ treatment: "whitening", label: "Whitening", answer: "yes" }]);
+  });
+
+  it("a near-miss treatment never reaches a clinician or the co-pilot as a real one", () => {
+    // The `treatment_interest` table has a CHECK on both columns; this jsonb copy
+    // of the same fact had none, so "veneers"/"maybe" rendered as a treatment the
+    // practice offers and was handed to a model by the previsit_summary tool.
+    const summary = projectSummary(
+      response({ interest: readStoredInterest([{ treatment: "veneers", answer: "maybe" }]) }),
+      "client_owner",
+    );
+    expect(summary.interest).toEqual([]);
+  });
+
+  it("a non-array column is an empty grid, not a crash", () => {
+    for (const junk of [null, undefined, {}, "", 7]) {
+      expect(readStoredInterest(junk)).toEqual([]);
+    }
   });
 });
 

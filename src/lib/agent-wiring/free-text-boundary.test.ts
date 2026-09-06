@@ -55,6 +55,19 @@
 // Adding a third exemption means writing the reason here and the proof beside
 // it. Deleting a module from the sweep is not an option: the crawl finds the
 // importers itself.
+//
+// ONE ENTRY HERE IS NOT ABOUT DENTALLY (added 6 September 2026, wave 3c).
+// src/lib/speed-to-lead/draft.ts reads its name, treatment interest and enquiry
+// source from a PUBLIC, UNAUTHENTICATED web form rather than from a Dentally
+// record, and until that day it was the one patient-facing drafter in the tree
+// that sanitised none of them: `firstName` took the first `\s`-delimited token,
+// which is not a token boundary at all for the C1 block that free-text.ts pass 1
+// exists to remove. It belongs in THIS sweep and not in the "Dentally free text"
+// battery at src/lib/agent/free-text.test.ts, whose BUILDERS registry is scoped
+// by its own header to prompts built from Dentally text and whose count pins
+// that scope. The rule the sweep enforces is about untrusted text reaching a
+// prompt, and web-form text is the same hazard from a less trusted source
+// (ruling W3/14; W3/24 makes a pre-existing §0.8 gap in-scope for wave 3).
 // ===========================================================================
 
 import { readFileSync } from "node:fs";
@@ -69,6 +82,7 @@ import { buildNoshowPrompt } from "@/lib/noshow/draft";
 import { buildOutreachPrompt } from "@/lib/outreach/draft";
 import { buildCloserPrompt, projectCloserFacts } from "@/lib/closer/draft";
 import { buildCollectionPrompt } from "@/lib/collection/draft";
+import { buildFirstContactPrompt } from "@/lib/speed-to-lead/draft";
 import { DEFAULT_CADENCE } from "@/lib/reactivation/cadence";
 import { RECALL_CADENCE } from "@/lib/recall/cadence";
 import { NOSHOW_CADENCE } from "@/lib/noshow/cadence";
@@ -82,6 +96,7 @@ import type { ReactivationTarget } from "@/lib/reactivation/types";
 import type { RecallTarget } from "@/lib/recall/types";
 import type { NoshowTarget } from "@/lib/noshow/types";
 import type { OutreachCampaign, OutreachTarget } from "@/lib/outreach/types";
+import type { SpeedToLeadLead } from "@/lib/speed-to-lead/types";
 
 /**
  * The value a hostile Dentally record would carry. Used as the patient name in
@@ -204,6 +219,33 @@ const outreachTarget: OutreachTarget = {
   updatedAt: "2026-09-01T00:00:00Z",
 };
 
+/**
+ * The one fixture in this file that is NOT a Dentally record: a speed-to-lead
+ * row exactly as a public enquiry form writes it. Both caller-typed fields carry
+ * the same attempted instruction, so the assertions below are about a prompt
+ * built from a stranger's keyboard rather than from practice staff's typing.
+ */
+const enquiryLead: SpeedToLeadLead = {
+  id: "11111111-1111-1111-1111-111111111111",
+  siteId: "site-cc",
+  dentallyPatientId: null,
+  name: HOSTILE,
+  email: null,
+  phone: "+447700900111",
+  channel: "sms",
+  treatmentInterest: `Invisalign. ${HOSTILE.slice(HOSTILE.indexOf(" ") + 1)}`,
+  source: "web",
+  score: null,
+  stage: "new",
+  consent: { sms: true },
+  createdAt: "2026-09-01T09:00:00.000Z",
+  firstResponseAt: null,
+  conversationId: null,
+  updatedAt: "2026-09-01T09:00:00.000Z",
+  nurtureStep: 0,
+  nurtureNextAt: null,
+};
+
 const agentContext: AgentContext = {
   patientId: "p-1",
   siteId: "site-cc",
@@ -298,6 +340,21 @@ const SURFACES: readonly PromptSurface[] = [
       joined(buildOutreachPrompt(outreachTarget, outreachCampaign, "sms", OUTREACH_CADENCE[0], "a")),
     boundary: "shared",
     firstValue: `Patient: ${HOSTILE_SURVIVES}`,
+  },
+  {
+    // THE ONE NON-DENTALLY SURFACE. See the header's last paragraph: this
+    // drafter's name, treatment interest and enquiry source come from a public,
+    // unauthenticated form, and it stated no boundary and sanitised nothing
+    // until 6 September 2026. It is "shared", not an exemption: the first-token
+    // argument that excuses src/lib/collection/draft.ts does not hold for text
+    // an attacker chooses, because `\s` is not a token boundary for the C1 block.
+    file: "src/lib/speed-to-lead/draft.ts",
+    build: () => joined(buildFirstContactPrompt(enquiryLead, "sms")),
+    boundary: "shared",
+    // The boundary sits in the SYSTEM half here rather than beside this line,
+    // because the sanitised interest is interpolated into a rule above it; the
+    // ordering assertion below is what proves that placement is early enough.
+    firstValue: `Name: ${HOSTILE_SURVIVES}`,
   },
   {
     // EXEMPT FROM THE SHARED CONSTANT, not from the rule. See the header.

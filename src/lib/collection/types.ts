@@ -20,8 +20,12 @@
 // where a wrong message is not a tone problem, it is a false statement about
 // somebody's finances made by a machine on the practice's letterhead. A person
 // reads every message before it leaves. There is deliberately no flag below that
-// could change that, and `collection-no-autosend.test.ts` proves no such path
-// exists anywhere in the module.
+// could change that, and `gating.test.ts`, "no configuration anywhere in the
+// module could enable an auto-send", proves no such path exists anywhere in the
+// module: it reads this file and five others as source. (This line named a
+// no-auto-send test file that has never existed, until ruling W3/17's sweep
+// caught it on 5 September 2026. The rule was pinned the whole time, under
+// another name — only the signpost pointed into thin air.)
 
 import type { TouchChannel } from "@/lib/coordinator/types";
 

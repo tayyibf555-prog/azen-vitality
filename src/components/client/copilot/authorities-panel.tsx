@@ -11,6 +11,14 @@ import {
   COPYRIGHT_RULE,
   citationFor,
 } from "@/lib/knowledge/authorities";
+// What the co-pilot is actually handed, said in the owner's words. The bound is
+// the brief's own (AUTHORITY_BRIEF_MAX), imported there and never retyped.
+import {
+  NOT_IN_USE_LABEL,
+  authoritiesBoundNote,
+  authoritiesInScope,
+  authoritiesSubtitle,
+} from "./authorities-scope";
 import {
   AUTHORITY_KINDS,
   AUTHORITY_KIND_LABELS,
@@ -181,7 +189,13 @@ export function AuthoritiesPanel({ clientSlug }: { clientSlug: string }) {
     }
   }
 
-  const active = rows.filter((r) => r.status === "active");
+  // WHAT IS STORED IS NOT WHAT IS IN SCOPE. `authoritiesBrief` is handed the
+  // first AUTHORITY_BRIEF_MAX active sources and no more, so the count on this
+  // panel and the sentence attached to it have to come apart above that bound.
+  // See authorities-scope.ts for why the rows in scope are the ones at the top
+  // of this list.
+  const { active, inBrief, overBound } = authoritiesInScope(rows);
+  const boundNote = authoritiesBoundNote(active.length);
 
   return (
     <section className="rounded-card bg-card ring-1 ring-line">
@@ -200,9 +214,7 @@ export function AuthoritiesPanel({ clientSlug }: { clientSlug: string }) {
             <span className="block truncate text-[11.5px] text-muted">
               {open
                 ? "Outside sources the co-pilot may lean on, in your own words."
-                : active.length > 0
-                  ? `${active.length} source${active.length === 1 ? "" : "s"} the co-pilot may cite.`
-                  : "None yet — the co-pilot answers from the practice's own records."}
+                : authoritiesSubtitle(active.length)}
             </span>
           </span>
         </span>
@@ -225,6 +237,16 @@ export function AuthoritiesPanel({ clientSlug }: { clientSlug: string }) {
             them here and it will cite them by name when they inform an answer. Nothing is fetched from the
             internet: what the co-pilot reads is what you write below.
           </p>
+
+          {/* AND THE BOUND, ON THE SCREEN AND NOT ONLY IN THE PROMPT. The brief
+              carries at most AUTHORITY_BRIEF_MAX sources; above that the honest
+              "Showing 8 of 12" line goes into the system prompt, where nobody
+              can read it. This is the same fact where the owner is. */}
+          {boundNote ? (
+            <p className="mt-2 max-w-2xl rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-[12px] leading-5 text-status-amber">
+              {boundNote}
+            </p>
+          ) : null}
 
           {loadError ? (
             <p className="mt-3 rounded-lg border border-tint-red-line bg-tint-red px-3 py-2 text-[12.5px] text-status-red">
@@ -253,6 +275,13 @@ export function AuthoritiesPanel({ clientSlug }: { clientSlug: string }) {
                         <StatusPill tone={row.status === "active" ? "info" : "neutral"}>
                           {row.status === "active" ? AUTHORITY_KIND_LABELS[row.kind] : "Archived"}
                         </StatusPill>
+                        {/* THE ROWS THE MODEL WILL NOT SEE, marked where the
+                            owner is looking at them. Only above the bound: with
+                            eight or fewer every row is in scope and a marker on
+                            none of them would be noise. */}
+                        {overBound && row.status === "active" && !inBrief.has(row.id) ? (
+                          <StatusPill tone="warning">{NOT_IN_USE_LABEL}</StatusPill>
+                        ) : null}
                       </p>
                       {row.summary ? (
                         <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-muted">{row.summary}</p>

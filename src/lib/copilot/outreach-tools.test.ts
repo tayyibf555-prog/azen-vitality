@@ -29,6 +29,10 @@ const store = vi.hoisted(() => ({
   buildDone: true,
   buildStopped: null as "403" | "429" | null,
   buildOk: true,
+  // The refused tick: ok:true, done:false, stopped:null, and `skipped` the only
+  // thing that says the build declined to run (the do-not-contact list could not
+  // be read while messaging is live).
+  buildSkipped: null as string | null,
   variantCounts: {
     a: { assigned: 20, sent: 18, replied: 3, booked: 1 },
     b: { assigned: 20, sent: 19, replied: 5, booked: 2 },
@@ -89,6 +93,7 @@ vi.mock("@/lib/outreach/build", () => ({
     stopped: store.buildStopped,
     counts: store.buildCounts,
     cursor: null,
+    ...(store.buildSkipped === null ? {} : { skipped: store.buildSkipped }),
   }),
 }));
 vi.mock("@/lib/systems/repository", () => ({ isSystemEnabled: async () => store.isSystemEnabled }));
@@ -121,6 +126,7 @@ beforeEach(() => {
   store.buildDone = true;
   store.buildStopped = null;
   store.buildOk = true;
+  store.buildSkipped = null;
 });
 
 describe("create_outreach_campaign", () => {
@@ -217,6 +223,45 @@ describe("create_outreach_campaign", () => {
     const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
     expect(out.buildStatus).toBe("building");
     expect(out.note).toMatch(/climbing/i);
+  });
+
+  it("a refused build tick is reported as paused, never as building", async () => {
+    // THE DEFECT THIS PINS. When the targeting-exclusion list (inactive /
+    // do-not-contact) cannot be read while messaging is LIVE, the build refuses:
+    // nobody is enrolled, no Dentally page is walked, the cursor does not move
+    // (ruling W1-B/2). The tick reports that as ok:true / stopped:null /
+    // done:false with `skipped` set — which fell straight through to
+    // buildStatus 'building', so the co-pilot told the owner the count would
+    // "keep climbing" while nothing whatsoever was happening. A number that is
+    // not true is the shape charter §0/5 forbids outright.
+    store.buildDone = false;
+    store.buildStopped = null;
+    store.buildOk = true;
+    store.buildSkipped = "exclusions unavailable";
+    const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
+    expect(out.buildStatus).toBe("paused");
+    expect(out.note).not.toMatch(/climbing/i);
+    // The sentence the owner needs: nothing is broken, nobody was added, nothing
+    // was sent, and it retries itself.
+    expect(out.note).toMatch(/could not be checked just now/i);
+    expect(out.note).toMatch(/NOBODY was added/i);
+    expect(out.note).toMatch(/nothing has been sent/i);
+    // ...and it is NOT dressed up as the generic failure, which would send the
+    // owner looking for a problem that is not there.
+    expect(out.note).not.toMatch(/hit a temporary problem/i);
+  });
+
+  it("a SKIPPED-BECAUSE-ALREADY-BUILT tick is still 'ready', not paused", async () => {
+    // The other producer of `skipped`, and it means the opposite: the cursor is
+    // already done, so there is nothing left to build. Reporting that as a pause
+    // would be its own dishonest number, in the other direction.
+    store.buildDone = true;
+    store.buildStopped = null;
+    store.buildOk = true;
+    store.buildSkipped = "already built";
+    const out = JSON.parse(await dispatch("create_outreach_campaign", { messageAngle: "a hygiene visit" }));
+    expect(out.buildStatus).toBe("ready");
+    expect(out.note).toMatch(/fully built/i);
   });
 
   it("reports a FAILED build tick (!ok) as paused, never as building", async () => {

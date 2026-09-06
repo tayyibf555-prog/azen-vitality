@@ -99,6 +99,18 @@ async function continueBuilds(): Promise<BuildContinuationSummary> {
         ticks += 1;
         if (res.done) { completed += 1; break; }   // flipped to 'ready' by the build path
         if (!res.ok || res.stopped) break;          // paused/failed: resume next sweep
+        // A SKIPPED TICK DID NO WORK, BY DEFINITION, so re-running it does none
+        // either. The one reachable case here is "exclusions unavailable": the
+        // targeting-exclusion list could not be read while messaging is LIVE, so
+        // the tick refused, enrolled nobody, issued no Dentally read and left the
+        // cursor unadvanced (ruling W1-B/2, and the fail-direction law W1-B/1-5).
+        // Without this line the loop retried the same unreadable table
+        // MAX_BUILD_TICKS_PER_CAMPAIGN times per campaign, burning the whole
+        // continuation budget on a read that was never going to succeed inside
+        // one sweep. Nothing about the fail direction changes — nobody was
+        // enrolled either way — and the campaign stays in 'building', so the next
+        // sweep picks it up when the table is readable again.
+        if (res.skipped) break;
       } catch (err) {
         // A build blip on one campaign must never abort the pass (or the send pass).
         console.error(`[outreach] build-continuation: tick failed for campaign ${campaign.id}`, err);

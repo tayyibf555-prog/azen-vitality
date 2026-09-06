@@ -81,7 +81,15 @@ describe("the harness's live-Dentally invariant reports what it should", () => {
   it("names a row in status `sent`, which is the one status that means the real book", () => {
     intent({ status: "sent", target: MOCK_DENTALLY_HOST });
     const problems = liveDentallyViolations(world, cleanGuard);
-    expect(problems.some((p) => p.includes('is status "sent"'))).toBe(true);
+    // Assert the words only the `sent` branch can emit. A `sent` row against the
+    // mock also trips the mock-target branch, whose message ends `expected dry_run
+    // or blocked` but still contains the substring `is status "sent"` — so
+    // asserting on that substring would keep this test green with the `sent` check
+    // deleted, which is the exact opposite of the job this test is named for.
+    expect(problems.some((p) => p.includes("that status means the live practice book was written"))).toBe(true);
+    // And the row is still reported by the mock-target branch beside it, so this
+    // fixture pins both checks rather than trading one for the other.
+    expect(problems.some((p) => p.includes(`against the mock ${MOCK_DENTALLY_HOST}`))).toBe(true);
   });
 
   it("names a row that RAN against the live host rather than being refused", () => {

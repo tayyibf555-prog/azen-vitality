@@ -53,6 +53,18 @@ const store = vi.hoisted(() => ({
   // FLOOR it can say "at least" in front of, not as the wrapper's thrown error.
   // Mutable so one scenario can put the scan against its ceiling.
   interestCounts: { counts: { whitening: 3, implants: 1 } as Record<string, number>, capped: false, scanned: 4 },
+  // How many rows the PER-TREATMENT read has to give back. One by default, which
+  // is what every scenario before the capped one assumed; raised above the tool's
+  // limit to drive the branch where the read stops short of the list.
+  interestRowCount: 1,
+  // WAVE 3d. WHOSE those rows are. `treatment_interest` holds one row per
+  // (patient, treatment, response), so a patient who fills the form in before two
+  // appointments and ticks whitening both times is genuinely TWO rows and ONE
+  // person — but every fixture before this one minted a distinct patient id per
+  // row, which made rows == people in all of them and left the de-duplication the
+  // grid, the export and the co-pilot all perform untestable here. Null keeps the
+  // historic shape: `interestRowCount` rows, one per distinct patient.
+  interestPatientIds: null as string[] | null,
 }));
 
 vi.mock("@/lib/mock", () => ({
@@ -154,6 +166,8 @@ vi.mock("@/lib/copilot/actions", () => ({ logCopilotAction: async () => {} }));
 vi.mock("@/lib/systems/repository", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isSystemEnabled: async () => true,
+  // nudge_lead reads its switch through the send door (W1-B/1-5).
+  isSystemEnabledForSend: async () => true,
   // The equipment desk, the IT desk and the master Dentally write-back switch all
   // ask the systems layer. Answered here so a scenario tests the CLEARANCE and the
   // module's own gate rather than a database that is not there.
@@ -243,9 +257,30 @@ vi.mock("@/lib/triage/repository", async (importOriginal) => ({
       submittedAt: "2026-09-02T18:30:00Z",
     },
   ],
-  listInterest: async () => [
-    { id: "int-1", siteId: "site-cc", dentallyPatientId: "p1", patientName: "Amina Ahmed", treatment: "whitening", answer: "yes", responseId: "resp-1", createdAt: "2026-09-02T18:30:00Z" },
-  ],
+  // THE READ IS BOUNDED, AND THE FAKE HONOURS THE BOUND. A stub that ignored
+  // `limit` could never produce the state the tool has to describe honestly —
+  // a full page back, with more rows behind it — so the cap would be untestable.
+  listInterest: async ({ limit }: { limit?: number }) => {
+    // WHOSE rows these are comes from `interestPatientIds` when a scenario sets
+    // it (see the store), so a returning patient's repeat answer is expressible;
+    // otherwise one distinct patient per row, exactly as before.
+    const ids = store.interestPatientIds ?? Array.from({ length: store.interestRowCount }, (_, i) => `p${i + 1}`);
+    return ids.slice(0, limit ?? ids.length).map((patientId, i) => ({
+      id: `int-${i + 1}`,
+      siteId: "site-cc",
+      dentallyPatientId: patientId,
+      // The NAME follows the id, because the name of one patient does not change
+      // between their two answers.
+      patientName: patientId === "p1" ? "Amina Ahmed" : `Patient ${patientId.slice(1)}`,
+      treatment: "whitening",
+      answer: "yes",
+      responseId: `resp-${i + 1}`,
+      // NEWEST FIRST, which is the order `listInterest` promises and the order
+      // "keep their most recent answer" is defined against. One shared instant
+      // across every row could not tell a kept row from a dropped one.
+      createdAt: new Date(Date.parse("2026-09-02T18:30:00Z") - i * 60_000).toISOString(),
+    }));
+  },
   // THE DETAILED READ, not the bare wrapper. The wrapper THROWS on a capped
   // scan (honest, and useless to a caller that can say "at least"), and the
   // tool now asks the question the wrapper cannot answer.
@@ -1401,6 +1436,132 @@ describe("what the answers themselves prove", () => {
     expect(result?.capped).toBe(false);
     expect(String(result?.countsAre)).not.toMatch(/at least/i);
     expect(String(result?.countsAre)).toMatch(/distinct patients/i);
+  });
+
+  it("W3C: A CAPPED PER-TREATMENT LIST IS A FLOOR IN WORDS, not a bare figure beside a boolean", async () => {
+    // THE DEFECT this pins. `listInterest` is bounded (50 by default, 200 at
+    // most), so a full page back means the list is longer than the read. The
+    // branch shipped `count` and a naked `capped: true` with nothing telling the
+    // assistant what the boolean meant, and the co-pilot's system prompt has no
+    // general rule about caps — so "50 patients are interested in whitening" was
+    // the natural reading of a figure that is a floor, on the number a campaign
+    // gets sized on. Charter §0 item 5, ruling W3/11: the words travel WITH the
+    // figure, exactly as they do on the aggregate branch twelve lines above it.
+    const before = store.interestRowCount;
+    store.interestRowCount = 140;
+    try {
+      const { result } = await ask(OWNER, "Who is interested in whitening?", {
+        name: "interest_lists",
+        input: { treatment: "whitening" },
+      });
+      // The read stopped at the default limit, and the tool says so.
+      expect(result?.count).toBe(50);
+      expect(result?.capped).toBe(true);
+      // ...and the sentence the assistant has to say is in the payload, not left
+      // to be inferred from a boolean.
+      expect(String(result?.peopleAre)).toMatch(/at least 50/i);
+      expect(String(result?.peopleAre)).toMatch(/never report it as a total/i);
+      // ...and it names the door that produces the WHOLE audience (W3/29).
+      expect(String(result?.peopleAre)).toMatch(/Copy as audience/i);
+    } finally {
+      store.interestRowCount = before;
+    }
+  });
+
+  it("an UNCAPPED per-treatment list says so, so the floor wording cannot be hardcoded", async () => {
+    // The other direction. A read that reached the end of the list is a total and
+    // is allowed to be spoken as one — otherwise the fix above would be a
+    // permanent hedge on every answer, which is its own dishonesty.
+    const { result } = await ask(OWNER, "Who is interested in whitening?", {
+      name: "interest_lists",
+      input: { treatment: "whitening" },
+    });
+    expect(result?.count).toBe(1);
+    expect(result?.capped).toBe(false);
+    expect(String(result?.peopleAre)).not.toMatch(/at least/i);
+    expect(String(result?.peopleAre)).toMatch(/it is a total/i);
+  });
+
+  it("W3D: THE PER-TREATMENT LIST COUNTS PEOPLE, NOT ANSWERS, and agrees with the count grid", async () => {
+    // THE DEFECT this pins. `treatment_interest` holds one row per (patient,
+    // treatment, response) and carries no unique constraint across responses, so a
+    // returning patient who fills a pre-visit form in before two appointments and
+    // ticks whitening both times is TWO rows and ONE person to ring. This branch
+    // read those rows straight off the bounded `listInterest` and reported
+    // `count: rows.length` under the words "<N> people ... it is a total", with the
+    // same patient named twice in the list somebody rings.
+    //
+    // Every other surface over the same data de-duplicates by patient and says so:
+    // the aggregate branch twelve lines above it ("distinct patients"), migration
+    // 0101's `interest_counts_by_treatment` (count(distinct ...)), the pre-visit
+    // grid's own card copy ("The count is people, not answers"), and
+    // `interestAudience` behind the one export door (ruling W3/29). So the
+    // co-pilot handed the owner a bigger figure than the screen and the CSV give
+    // for the same list — on the number a campaign gets sized on (charter §0
+    // item 5, ruling W3/11).
+    //
+    // WHY NO TEST CAUGHT IT: every fixture before this one minted a distinct
+    // patient id per row, so rows == people in all of them.
+    const ids = ["p1", "p2", "p1", "p3", "p2", "p4"]; // six answers, four people
+    const distinct = new Set(ids).size;
+    const beforeIds = store.interestPatientIds;
+    const beforeCounts = store.interestCounts;
+    store.interestPatientIds = ids;
+    // The SAME DATA through the aggregate door, so the two figures can be compared
+    // rather than each asserted against its own literal.
+    store.interestCounts = { counts: { whitening: distinct }, capped: false, scanned: ids.length };
+    try {
+      const { result } = await ask(OWNER, "Who is interested in whitening?", {
+        name: "interest_lists",
+        input: { treatment: "whitening" },
+      });
+      // FOUR, not six.
+      expect(result?.count).toBe(distinct);
+      const patients = result?.patients as Array<{ dentallyPatientId: string; on: string }>;
+      expect(patients).toHaveLength(distinct);
+      expect(new Set(patients.map((p) => p.dentallyPatientId)).size).toBe(distinct);
+      // ...and the sentence the assistant reads out carries the same figure.
+      expect(String(result?.peopleAre)).toMatch(/^4 people/);
+      expect(String(result?.peopleAre)).toMatch(/it is a total/i);
+      // THE ROW KEPT IS THEIR MOST RECENT ANSWER — `interestAudience`'s rule. The
+      // read arrives newest first, so p1's surviving row is the first of its two
+      // (18:30), never the older one behind it (18:28).
+      expect(patients.find((p) => p.dentallyPatientId === "p1")?.on).toBe("2026-09-02T18:30:00.000Z");
+      // AND THE TWO SURFACES AGREE. The grid and this list are the same list, so a
+      // practice that asks the count question and the who question gets one number.
+      const grid = await ask(OWNER, "How many want whitening?", { name: "interest_lists", input: {} });
+      const gridRows = grid.result?.treatments as Array<{ treatment: string; patients: number }>;
+      expect(gridRows.find((t) => t.treatment === "whitening")?.patients).toBe(result?.count);
+    } finally {
+      store.interestPatientIds = beforeIds;
+      store.interestCounts = beforeCounts;
+    }
+  });
+
+  it("W3D: a CAPPED per-treatment list still measures `capped` on the read, not on the people", async () => {
+    // THE OTHER HALF OF THE FIX, and the direction it could have broken in. `capped`
+    // answers "did the bound stop this read?" — a fact about the LIMIT — so it is
+    // taken before the de-duplication. Measured after, this page (50 rows back,
+    // 25 people) would look like a short page, `capped` would go false, and a floor
+    // would be spoken as a total: exactly the failure W3/11 is about, arrived at
+    // from the other side.
+    const beforeIds = store.interestPatientIds;
+    // 140 answers from 70 people, each of whom ticked twice.
+    store.interestPatientIds = Array.from({ length: 140 }, (_, i) => `p${Math.floor(i / 2) + 1}`);
+    try {
+      const { result } = await ask(OWNER, "Who is interested in whitening?", {
+        name: "interest_lists",
+        input: { treatment: "whitening" },
+      });
+      // The read stopped at the default limit of 50 rows...
+      expect(result?.capped).toBe(true);
+      // ...which is 25 people, and the figure and its words are both the people.
+      expect(result?.count).toBe(25);
+      expect(String(result?.peopleAre)).toMatch(/AT LEAST 25 people/);
+      expect(String(result?.peopleAre)).toMatch(/never report it as a total/i);
+    } finally {
+      store.interestPatientIds = beforeIds;
+    }
   });
 
   it("a dispatch built with no self-service seam refuses my_work rather than guessing", async () => {

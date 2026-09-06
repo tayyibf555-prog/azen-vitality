@@ -24,10 +24,26 @@ import { describe, it, expect } from "vitest";
 // Programme ruling W3/17: comments naming tests that do not exist are corrected
 // or the test is written. This sweep is what stops the fourth one.
 //
-// SCOPED TO THIS MODULE ON PURPOSE. The same class exists elsewhere in the tree
-// (four citations outside `git diff 6b93b40` that predate this programme), and a
-// sweep committed tree-wide would go red on work this lane may not touch. Those
-// are on the ledger; widening the glob below is the fix when they are.
+// SCOPED TO THIS MODULE, AND NO LONGER THE ONLY SWEEP. When this was written the
+// same class existed in four files elsewhere that predated the programme's diff,
+// so a tree-wide sweep would have gone red on work this lane could not touch.
+// All four were corrected on 5 September 2026 and
+// src/lib/copilot/cited-tests-resolve.test.ts now runs the file-exists rule over
+// the whole of src/ (ruling W3/17).
+//
+// THIS FILE STAYS, because it is not a subset of that one. The tree-wide sweep
+// asks whether a cited test exists ANYWHERE under src/; this one asks whether an
+// EQUIPMENT citation resolves inside SEARCH_ROOTS below — the directories an
+// equipment comment could honestly be pointing at. A comment here naming a
+// `prompt.test.ts` that lives only under src/lib/outreach passes there and fails
+// here, which is the failure this module actually had: three citations that were
+// each a real rule pinned somewhere else, under another name. Deleting this would
+// trade a specific check for a general one and call it consolidation.
+//
+// Its header is exempt from the tree-wide sweep by path, because the paragraph
+// above NAMES `chunk.test.ts` — the citation that never resolved — and a rule
+// with no worked example is a rule the next reader rewrites. The exemption list
+// and its floor are in that file.
 // ===========================================================================
 
 const DIR = "src/lib/equipment";

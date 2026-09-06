@@ -14,6 +14,7 @@ import {
 } from "./copilot-page-chat";
 import {
   COPILOT_FAILED_REPLY,
+  COPILOT_FORBIDDEN_REPLY,
   COPILOT_STARTERS,
   COPILOT_UNREACHABLE_REPLY,
   copilotStartersFor,
@@ -338,12 +339,49 @@ describe("the transport both surfaces send through", () => {
     );
   });
 
-  it("surfaces the 403 sentence, which is written for the owner to read", async () => {
-    // /api/copilot is owner-only. Swallowing this into the generic apology is
+  it("surfaces the 403 sentence, which is written for a person to read", async () => {
+    // The route's own clearance refusal, verbatim. /api/copilot is NOT owner-only
+    // any more (W1-E/2 gave every clearance a catalog), so this 403 belongs to a
+    // role the clearance map does not place — an account whose role is unset,
+    // mis-spelled or newer than the map. Swallowing it into the generic apology is
     // how a permissions problem gets mistaken for a broken feature.
-    await expect(
-      send(stub({ status: 403, body: { ok: false, error: "The co-pilot is available to the practice owner." } })),
-    ).resolves.toBe("The co-pilot is available to the practice owner.");
+    const refusal =
+      "Your account's role is not one the co-pilot serves. Ask the practice owner to check your access.";
+    await expect(send(stub({ status: 403, body: { ok: false, error: refusal } }))).resolves.toBe(refusal);
+  });
+
+  it("never renders a guard's machine token as the co-pilot's answer", async () => {
+    // THE CLEARANCE REFUSAL IS NOT THE ONLY 403 THIS ROUTE MAKES, which is what
+    // the branch above used to assume. Three other guards refuse the same call
+    // with the codebase's standing token instead of a sentence:
+    //
+    //   requireClientAccess       -> { error: "forbidden" }        (guard.ts)
+    //   requireModuleApiAccess    -> { ok: false, error: "forbidden" }
+    //   requireCapability(
+    //     "system.copilot.ask")   -> { ok: false, error: "forbidden" }
+    //                                (capability-guard.ts)
+    //
+    // The capability one is the SUPPORTED way an owner takes the co-pilot off one
+    // named login (src/lib/copilot/clearance.ts), and nothing then hides the
+    // ask-bar from that person: she types a question and — before this fix — the
+    // thread answered her with the single word "forbidden". Both body shapes are
+    // stubbed here because the two guard families disagree about `ok`.
+    for (const body of [
+      { error: "forbidden" },
+      { ok: false, error: "forbidden" },
+      { ok: false, error: "" },
+      { ok: false },
+      null,
+    ]) {
+      await expect(send(stub({ status: 403, body }))).resolves.toBe(COPILOT_FORBIDDEN_REPLY);
+    }
+    // It is a sentence about ACCESS, not a fault, and it names no role, no
+    // capability and no tool — the same posture the route's own refusal takes.
+    expect(COPILOT_FORBIDDEN_REPLY).toMatch(/\bco-pilot\b/);
+    expect(COPILOT_FORBIDDEN_REPLY).toMatch(/[.!?]$/);
+    expect(COPILOT_FORBIDDEN_REPLY, "the refusal apologises instead of explaining").not.toBe(
+      COPILOT_FAILED_REPLY,
+    );
   });
 
   it("does not surface a 500's log line as an answer", async () => {

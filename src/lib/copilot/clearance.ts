@@ -57,17 +57,35 @@ import type { Tier } from "@/lib/practice-brain/types";
 //     before a turn starts, so an owner can take the co-pilot away from a named
 //     login without editing anything here. This table decides what a session
 //     that IS allowed to ask may reach; it never decides that a session may ask.
-//   * THE MODULE LOCK (src/lib/nav.ts + requireModuleApiAccess). "co-pilot" is
-//     not in CLINICIAN_SLUGS or STAFF_SLUGS today, so a clinician or staff
-//     session is refused at the route whatever this table says. Their rows below
-//     are therefore DECLARED AND PROVEN BUT NOT YET REACHABLE — see the note on
-//     each row. Making them reachable is a deliberate widening of the nav and of
-//     `COPILOT_ACCESS` in capabilities/defaults.ts, and is an owner decision,
-//     not a side effect of this file.
+//   * THE MODULE LOCK (src/lib/nav.ts + requireModuleApiAccess). This used to be
+//     the reason the clinician and staff rows below were inert, and it is NOT any
+//     more: ruling W1-E/2 of 3 Sep 2026 put "co-pilot" into CLINICIAN_SLUGS AND
+//     STAFF_SLUGS and widened `COPILOT_ACCESS` in capabilities/defaults.ts to all
+//     five roles, so EVERY ROW OF THIS TABLE IS LIVE. The door is open for all of
+//     them and this table is what decides the room each one gets — which is the
+//     whole reason the boundary moved here (see the decisions log's "CO-PILOT
+//     BOUNDARY MOVED"). Narrowing a row is now a real narrowing of a live
+//     surface, and widening one is a real widening: neither is an edit to dead
+//     code. `reachableToday` on the role view carries the same fact per row, and
+//     clearance.test.ts §9 asserts this paragraph against the real predicates so
+//     it cannot drift back.
+//     (Still true, and a different claim: no clinician or staff LOGIN exists in
+//     production yet, so no session has ever used these two rows. The programme's
+//     live-verification note records it, and prompt.ts keeps the same sentence.
+//     Reachable is not in use.)
 //   * THE KILL SWITCH (src/lib/systems/*). Every tool that DOES something —
-//     nudge_lead, launch_outreach_campaign, publish_meta_campaign — consults
-//     `isSystemEnabled` inside tools.ts and refuses when its system is off. A
-//     domain grant here is permission to try, never permission to bypass.
+//     nudge_lead, launch_outreach_campaign, publish_meta_campaign — consults the
+//     system's switch inside tools.ts and refuses when its system is off. The
+//     send doors read it through `isSystemEnabledForSend`, which fails CLOSED
+//     once messaging is live (ruling W1-B/1-5); the spending door
+//     (publish_meta_campaign, which creates objects in the practice's real Meta
+//     ad account) reads `isSystemEnabledStrict`, where an unreadable toggle is
+//     off; the read-only desks use `isSystemEnabled`. A domain grant here is
+//     permission to try, never permission to bypass.
+//     (This sentence has been wrong once. It named publish_meta_campaign as a
+//     tool that consults its switch while that case read no toggle at all — so
+//     clearance.test.ts now asserts the CALL in tools.ts for each of the three
+//     tools it names, not only for nudge_lead.)
 //
 // PURE. No `server-only`, no DB, no env, no Anthropic import. Everything is a
 // total function of its arguments, which is what lets clearance.test.ts
@@ -81,9 +99,9 @@ import type { Tier } from "@/lib/practice-brain/types";
  *               tier-4 knowledge, unprojected results.
  * - `manager`   the practice manager: operational reads only.
  * - `clinician` a dentist or hygienist: their clinical reads plus second-opinion
- *               decision support. NOT REACHABLE YET (module lock, see above).
- * - `staff`     a nurse, receptionist or administrator: their OWN work and
- *               nothing else. NOT REACHABLE YET (module lock, see above).
+ *               decision support. LIVE since W1-E/2 (see the module-lock note).
+ * - `staff`     a nurse, receptionist or administrator: their OWN work and the
+ *               two desks that hold no patient data. LIVE since W1-E/2.
  * - `none`      no co-pilot at all. The route answers 403 before a turn starts.
  */
 export type CopilotAccess = "full" | "manager" | "clinician" | "staff" | "none";
@@ -408,12 +426,15 @@ export const ACCESS_DOMAINS: Record<CopilotAccess, AccessClearance> = {
    *                      the register would be narrower than the page she is
    *                      looking at while she asks.
    *   it-desk            the same: front-desk IT lands on her, the nav entry names
-   *                      her, and the charter says owner/manager. NOT widened to
-   *                      the clinician or to staff, however universal an IT
-   *                      question feels: the charter settles the module at
-   *                      owner/manager, neither role's nav allow-list contains the
-   *                      slug, and a co-pilot that answered for a login the module
-   *                      itself refuses would be the widening, not the module.
+   *                      her, and the charter says owner/manager. It was placed at
+   *                      owner/manager first and DID NOT STAY THERE: ruling W2-A/1
+   *                      of 3 Sep 2026 widened BOTH desks to all five clearances,
+   *                      so the clinician and staff rows below hold `equipment`
+   *                      and `it-desk` too, and CLINICIAN_SLUGS/STAFF_SLUGS carry
+   *                      both slugs. The rule the earlier note was reaching for
+   *                      still holds and is what makes the widening safe: the
+   *                      co-pilot is never wider than the module it answers for,
+   *                      so the MODULE PAGES widened in the same step (W2-B).
    *
    * Both of those tools call the module's OWN gate before they answer, so the
    * owner's kill switch and the module's safety refusals apply to a question
@@ -427,10 +448,13 @@ export const ACCESS_DOMAINS: Record<CopilotAccess, AccessClearance> = {
   },
 
   /**
-   * THE CLINICIAN (client_clinician). NOT REACHABLE YET — "co-pilot" is not in
-   * CLINICIAN_SLUGS, so the route refuses this role before a turn starts. The row
-   * is declared and proven so that switching it on is a nav edit and an owner
-   * decision rather than a design exercise under time pressure.
+   * THE CLINICIAN (client_clinician). LIVE — ruling W1-E/2 put "co-pilot" into
+   * CLINICIAN_SLUGS and into `COPILOT_ACCESS`, so this row is what a real dentist
+   * session reaches, not a declaration waiting for a nav edit. (No clinician login
+   * exists in production yet, which is a different claim: the row is reachable and
+   * unused, and §6 of clearance.test.ts proves the reachability — "THE DOOR IS
+   * OPEN TO ALL FIVE" — never the use.) Editing this row now changes a live
+   * surface.
    *
    * What it is FOR: the dentist chairside with a patient in front of them, asking
    * about that patient's record and, in second-opinion mode, for decision SUPPORT

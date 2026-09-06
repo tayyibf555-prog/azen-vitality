@@ -151,6 +151,19 @@ function countValue(n: number, capped: boolean): string | number {
   return n > 0 ? `At least ${n.toLocaleString("en-GB")}` : "None counted";
 }
 
+/**
+ * The instant a write intent was recorded, in the practice's own clock.
+ *
+ * `timeZone: "Europe/London"` is not decoration. This column is the evidence
+ * record of what the platform did to real patient records, and it is read
+ * beside Dentally's own audit trail; without the zone the string is whatever
+ * the VIEWER's browser reports (the fetch is client-side), so a UTC-configured
+ * machine dates a 00:30 BST write to the previous day and a CET viewer reads it
+ * an hour late — two people comparing the same row to the same Dentally entry
+ * and disagreeing. Same calibration, same reason, as src/lib/time/london.ts.
+ * Not `londonDateTimeLabel` itself: this column is deliberately weekday-less
+ * and guards an unparseable instant to "—" rather than "soon".
+ */
 function when(iso: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return "—";
@@ -159,6 +172,7 @@ function when(iso: string): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Europe/London",
   });
 }
 

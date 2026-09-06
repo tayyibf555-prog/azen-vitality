@@ -3,7 +3,7 @@ import type { AuthedUser } from "@/lib/auth/session";
 import { getLead, setLeadStage, claimLeadFromStage } from "@/lib/speed-to-lead/repository";
 import { contactLead } from "@/lib/speed-to-lead/contact";
 import { getSite } from "@/lib/mock/clients";
-import { isSystemEnabled } from "@/lib/systems/repository";
+import { isSystemEnabledForSend } from "@/lib/systems/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -47,8 +47,35 @@ export async function POST(
   const denied = siteDenied(auth, lead.siteId);
   if (denied) return denied;
 
-  const _clientId = getSite(lead.siteId)?.clientId;
-  if (_clientId && !(await isSystemEnabled(_clientId, "speed-to-lead"))) {
+  // THE KILL SWITCH, READ THE WAY A SEND DOOR HAS TO READ IT (ruling W1-B/1-5).
+  //
+  // `resend` below calls `contactLead`, which dispatches through `sendMessage`
+  // DIRECTLY — speed is the point of the module, so there is no outbox row and no
+  // drain to re-gate it with `getDisabledSlugsForSend`. This line is therefore the
+  // WHOLE distance between a receptionist's click and a real first-contact SMS.
+  //
+  // `isSystemEnabled` — what this used to call — resolves a toggle-table READ
+  // ERROR to the slug's catalog default, and `speed-to-lead` is default-ON, so a
+  // transient blip on system_toggle answered "enabled" for a system the owner had
+  // explicitly switched off. `isSystemEnabledForSend` is identical while
+  // MESSAGING_DRY_RUN is on and counts an unreadable switch as DISABLED once
+  // messaging is live. A refused resend is a click the receptionist repeats; a
+  // text sent out of a system the owner had turned off is not retractable. Every
+  // other door onto this same primitive already reads it this way:
+  // /api/speed-to-lead/intake, /api/speed-to-lead/sweep,
+  // /api/webhooks/twilio/voice, /api/smile-assessment/submit and the co-pilot's
+  // nudge_lead. This was the last one.
+  //
+  // UNCONDITIONAL, for the same reason intake's is. The client used to be read as
+  // `getSite(lead.siteId)?.clientId` and the check skipped entirely when that came
+  // back undefined, so a lead on a site id SITES no longer maps — a renamed or
+  // retired site — reached the send with no switch consulted at all. Site access
+  // normally refuses that lead first (`requireSiteAccess` derives the user's sites
+  // from SITES), but that guard is a no-op while AUTH_ENFORCED is off, and a
+  // kill switch that depends on another guard being armed is not a kill switch.
+  // The practice's own client id is the fallback, exactly as intake does it.
+  const clientId = getSite(lead.siteId)?.clientId ?? "vitality";
+  if (!(await isSystemEnabledForSend(clientId, "speed-to-lead"))) {
     return Response.json({ ok: false, error: "This system is switched off." }, { status: 409 });
   }
 

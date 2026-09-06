@@ -195,8 +195,29 @@ describe("the opaque link", () => {
     expect(() => JSON.parse(Buffer.from(tail, "base64url").toString("utf8"))).toThrow();
   });
 
-  it("falls back to a root-relative path when no public origin is configured", () => {
-    expect(buildTriageLink("A".repeat(22), undefined)).toBe(`/pv/${"A".repeat(22)}`);
+  // FAIL CLOSED ON THE ORIGIN, which is what this used to get wrong. It returned
+  // "/pv/<token>" when PUBLIC_BASE_URL was unset or scheme-less, and the sweep
+  // put that straight into an SMS: a text ending in a bare path that no phone
+  // renders as a link, one credit spent per appointment, the target marked sent,
+  // and zero completions with nothing on screen to explain it. The sibling links
+  // (medical history, FP17, preferences) keep their root-relative fallback
+  // because a person copies those off a screen; this one is transmitted.
+  it("returns null rather than a root-relative path when no public origin is configured", () => {
+    expect(buildTriageLink("A".repeat(22), undefined)).toBeNull();
+    expect(buildTriageLink("A".repeat(22), "")).toBeNull();
+  });
+
+  it("returns null for an origin with no http(s) scheme, which is the misconfiguration that reaches production", () => {
+    // The shape a deployment actually gets wrong: the host with the scheme left
+    // off. Nothing else in the tree checks PUBLIC_BASE_URL's shape.
+    expect(buildTriageLink("A".repeat(22), "azen-vitality.vercel.app")).toBeNull();
+    expect(buildTriageLink("A".repeat(22), "ftp://azen-vitality.vercel.app")).toBeNull();
+  });
+
+  it("accepts http as well as https, because local dev and the mock serve http://localhost:3000", () => {
+    expect(buildTriageLink("A".repeat(22), "http://localhost:3000")).toBe(`http://localhost:3000/pv/${"A".repeat(22)}`);
+    // A trailing slash on the origin does not become a double slash in the link.
+    expect(buildTriageLink("A".repeat(22), "https://x.co/")).toBe(`https://x.co/pv/${"A".repeat(22)}`);
   });
 
   it("returns null for a malformed token rather than a link to nowhere", () => {

@@ -52,7 +52,9 @@ import { copilotAccessForRole, copilotClearanceForRole, copilotKnowledgeTier, co
 //   5. staff and clinician: what they are, and what they emphatically are not;
 //   6. composition — the capability layer, the module lock and the kill switch
 //      all still sit around this and none of them was widened by it;
-//   7. the wiring — the model really is what the schema filter and the gate use.
+//   7. the wiring — the model really is what the schema filter and the gate use;
+//   8. the role view — the same model read one row per login;
+//   9. THE FILE'S OWN PROSE — it says what §6 proves about who gets in.
 // ===========================================================================
 
 const OWNER_ROLES: Role[] = ["agency_admin", "client_owner"];
@@ -794,5 +796,142 @@ describe("8. the role view is the same model, read the other way round", () => {
       "client_clinician|clinician|9|tier1|live",
       "client_staff|staff|3|tier1|live",
     ]);
+  });
+});
+
+// ===========================================================================
+// 9. THE FILE'S OWN COMMENTS SAY WHAT THIS SUITE PROVES (charter §0/1, W3/17).
+//
+// WHY A COMMENT IS WORTH A TEST HERE, and it is not tidiness. `route.ts` sends a
+// reader who asks "who can actually reach the co-pilot today?" to this file —
+// "THE BOUNDARY IS NOW ACCESS_BY_ROLE ... and the catalog it indexes
+// (src/lib/copilot/clearance.ts)". So this file is the end of that trail, and
+// until this fix it answered the question WRONG in five places, all written
+// before ruling W1-E/2 and left behind by it:
+//
+//   * the module-lock bullet: "co-pilot" is "not in CLINICIAN_SLUGS or
+//     STAFF_SLUGS today", so those rows were "DECLARED AND PROVEN BUT NOT YET
+//     REACHABLE";
+//   * the `clinician` and `staff` lines of the CopilotAccess doc: "NOT REACHABLE
+//     YET (module lock, see above)";
+//   * the clinician row's own header: "NOT REACHABLE YET — ... the route refuses
+//     this role before a turn starts";
+//   * the manager row's it-desk note: the desks were "NOT widened to the
+//     clinician or to staff" because "neither role's nav allow-list contains the
+//     slug" — contradicted by W2-A/1 and by the two rows directly below it.
+//
+// THE COST IS SPECIFIC. A lane that believes the clinician row is inert reads a
+// widening of it as an edit to dead code that an owner would still have to switch
+// on separately. It is live for both roles, so that edit ships as a real widening
+// with no second gate. The same reader, asked whether a nurse should be able to
+// reach the IT desk, reads "neither role's nav allow-list contains the slug" and
+// files the desk she can see on her screen as a bug.
+//
+// SAME SHAPE AS route-comment-truth.test.ts, and deliberately: the truth is
+// asserted FIRST, from the real predicates, and only then is the prose checked
+// against it. If the co-pilot is ever narrowed again the first half fails and
+// somebody rewrites these comments on purpose, instead of the pin decaying into a
+// grep for a sentence nobody says any more.
+// ===========================================================================
+
+/**
+ * clearance.ts's prose as one flat string.
+ *
+ * The claims wrap wherever the line length fell, and across two comment styles
+ * (`//` for the header, ` * ` for the row docs), so a regex over the raw source
+ * would match or miss on formatting rather than on meaning. Strip both markers,
+ * collapse the whitespace, and a claim is one searchable sentence however it was
+ * laid out.
+ */
+const clearanceProse = readFileSync(new URL("./clearance.ts", import.meta.url), "utf8")
+  .replace(/^\s*(?:\/\/|\*)\s?/gm, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
+describe("9. the file's comments agree with the model about who gets in", () => {
+  it("does not call the clinician or staff rows unreachable while the nav lets both in", () => {
+    // THE TRUTH, from the allow-lists and the predicate the API guard consults —
+    // never retyped, and never read off a comment.
+    expect(CLINICIAN_SLUGS.has("co-pilot"), "W1-E/2 put the slug in CLINICIAN_SLUGS").toBe(true);
+    expect(STAFF_SLUGS.has("co-pilot"), "W1-E/2 put the slug in STAFF_SLUGS").toBe(true);
+    for (const role of ["client_clinician", "client_staff"] as Role[]) {
+      expect(canRoleAccessModule(role, "co-pilot"), `${role} is refused the module`).toBe(true);
+      expect(copilotClearanceForRole(role).reachableToday, `${role} is not reachable`).toBe(true);
+    }
+
+    // THEREFORE the file may not say the opposite. Each phrase is one the stale
+    // blocks actually carried.
+    for (const claim of [
+      "NOT REACHABLE YET",
+      "not in CLINICIAN_SLUGS or STAFF_SLUGS today",
+      "DECLARED AND PROVEN BUT NOT YET REACHABLE",
+      "so the route refuses this role before a turn starts",
+    ]) {
+      expect(clearanceProse, `clearance.ts still claims: ${claim}`).not.toContain(claim);
+    }
+    // ...and the half that IS still true is kept, because "reachable" and "in use"
+    // are two claims and only the first one has come true (no clinician or staff
+    // login exists in production yet).
+    expect(clearanceProse).toContain("EVERY ROW OF THIS TABLE IS LIVE");
+    expect(clearanceProse).toContain("W1-E/2");
+  });
+
+  it("does not claim the two desks stop at owner/manager, which is where W2-A/1 moved them from", () => {
+    // The truth first: both desks really are on both of the rows the stale note
+    // said they were withheld from, and both slugs really are in both allow-lists.
+    for (const level of ["clinician", "staff"] as CopilotAccess[]) {
+      for (const domain of ["equipment", "it-desk"] as ReadDomain[]) {
+        expect(ACCESS_DOMAINS[level].reads as readonly string[], `${level} lost ${domain}`).toContain(domain);
+      }
+    }
+    for (const slug of ["equipment", "it-desk"]) {
+      expect(CLINICIAN_SLUGS.has(slug), `CLINICIAN_SLUGS lost ${slug}`).toBe(true);
+      expect(STAFF_SLUGS.has(slug), `STAFF_SLUGS lost ${slug}`).toBe(true);
+    }
+
+    for (const claim of [
+      "NOT widened to the clinician or to staff",
+      "neither role's nav allow-list contains the slug",
+    ]) {
+      expect(clearanceProse, `clearance.ts still claims: ${claim}`).not.toContain(claim);
+    }
+    expect(clearanceProse).toContain("W2-A/1");
+  });
+
+  it("names the fail direction the send doors actually use", () => {
+    // The kill-switch bullet used to say every acting tool consults
+    // `isSystemEnabled`. That helper resolves a toggle-table READ ERROR to
+    // "enabled" for a default-ON slug, which is the wrong direction for a door
+    // that sends (ruling W1-B/1-5), and nudge_lead — the tool the bullet names
+    // first — no longer uses it. Asserted against the real source of tools.ts so
+    // the sentence cannot outlive the call again.
+    const toolsSource = readFileSync(new URL("./tools.ts", import.meta.url), "utf8");
+    expect(toolsSource).toContain('isSystemEnabledForSend(clientId, "speed-to-lead")');
+    expect(clearanceProse).toContain("isSystemEnabledForSend");
+    expect(clearanceProse).toContain("fails CLOSED");
+  });
+
+  it("EVERY acting tool the kill-switch bullet NAMES really does read a switch", () => {
+    // The same sentence was wrong a second time, in the other half. It named
+    // three tools — nudge_lead, launch_outreach_campaign, publish_meta_campaign
+    // — and the third read no toggle at all: switching Meta Ads off hid the
+    // workspace and left the publishing act reachable by asking for it in a
+    // sentence. Correcting the prose for ONE of the tools it names is what let
+    // that survive, so the assertion is now made for all three.
+    const toolsSource = readFileSync(new URL("./tools.ts", import.meta.url), "utf8");
+    for (const [tool, call] of [
+      ["nudge_lead", 'isSystemEnabledForSend(clientId, "speed-to-lead")'],
+      ["launch_outreach_campaign", 'isSystemEnabled(clientId, "outreach")'],
+      // The STRICT reader: `meta-ads` is default-ON, so a failed toggle read must
+      // not authorise objects in the practice's real ad account.
+      ["publish_meta_campaign", 'isSystemEnabledStrict(clientId, "meta-ads")'],
+    ] as const) {
+      expect(clearanceProse, `the bullet no longer names ${tool}`).toContain(tool);
+      expect(toolsSource, `${tool} does not make the call the bullet claims`).toContain(call);
+    }
+    // ...and the bullet names the strict reader it now describes.
+    expect(clearanceProse).toContain("isSystemEnabledStrict");
+    // The whole act catalog — not only the three named here — is swept by
+    // act-tools-consult-their-switch.test.ts.
   });
 });

@@ -27,20 +27,35 @@ const store = vi.hoisted(() => ({
   touches: [] as TouchRec[],
   outbox: [] as OutboxRec[],
   seq: 0,
+  // The system_toggle row isSystemEnabledForSend reads. null = no row, which for
+  // the default-ON 'no-show-defence' slug reads as ENABLED — the state every
+  // orchestration case below wants.
+  toggleRow: null as { enabled: boolean } | null,
+  // Which (client_id, module_slug) pair the switch was actually asked about, so a
+  // test can prove the read HAPPENED and not merely that nothing was queued.
+  toggleReads: [] as Array<{ clientId: string; slug: string }>,
 }));
 
 function id(p: string): string { store.seq += 1; return `${p}-${store.seq}`; }
 
-// fill.ts now reads the owner kill switch itself (see the header comment on
-// offerSlotToNextCandidate). These cases are about the ORCHESTRATION with the
-// system switched on, so the toggle table is faked as empty — no row, and
+// fill.ts reads the owner kill switch itself (see the header comment on
+// offerSlotToNextCandidate). Most cases here are about the ORCHESTRATION with the
+// system switched on, so store.toggleRow stays null — no row, and
 // 'no-show-defence' is a default-ON slug, so that reads as enabled. The switch's
-// own behaviour is proved separately in src/lib/agent-wiring/scenarios.test.ts.
+// live/dry-run FAIL DIRECTION is proved in src/lib/agent-wiring/scenarios.test.ts;
+// what is proved HERE is that the read is unconditional (see the last describe).
 vi.mock("@/lib/supabase/server", () => ({
   serviceClient: () => ({
     from: () => ({
       select: () => ({
-        eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+        eq: (_c: string, clientId: string) => ({
+          eq: (_s: string, slug: string) => ({
+            maybeSingle: async () => {
+              store.toggleReads.push({ clientId, slug });
+              return { data: store.toggleRow, error: null };
+            },
+          }),
+        }),
       }),
     }),
   }),
@@ -151,6 +166,8 @@ beforeEach(() => {
   store.touches.length = 0;
   store.outbox.length = 0;
   store.seq = 0;
+  store.toggleRow = null;
+  store.toggleReads.length = 0;
   vi.clearAllMocks();
 });
 
@@ -309,5 +326,65 @@ describe("offerSlotToNextCandidate — dry-run safe + idempotent sender path", (
     await offerSlotToNextCandidate(SLOT, new Date("2026-07-01T09:00:00Z"));
     expect(store.outbox).toHaveLength(0);
     expect(a.status).toBe("waiting");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE KILL SWITCH IS READ UNCONDITIONALLY (ruling W1-B/1-5, charter §0 item 6).
+//
+// fill.ts's own header calls itself "the ONLY thing in the platform that queues
+// a waitlist slot offer", and the guard was centralised here precisely so no
+// caller could reach the send without it. But the guard was written
+//
+//   const clientId = getSite(slot.siteId)?.clientId;
+//   if (clientId && !(await isSystemEnabledForSend(clientId, "no-show-defence")))
+//
+// so a slot carrying a site id SITES no longer maps short-circuited past the
+// switch entirely — and then drafted, created the offer, wrote a noshow_touch
+// and queued a real patient SMS for a system the owner had switched off. The
+// only thing that stopped delivery was the drain listing by vitalitySiteIds()
+// off the SAME table, i.e. a second lookup failing the same way. These are the
+// named tests the mutation `?? "vitality"` -> `clientId && ...` reddens; the
+// identical property is pinned for the other centralised send door at
+// src/app/api/speed-to-lead/[action]/resend-switch.test.ts
+// ("resend-consults-the-switch-for-a-lead-on-an-unmapped-site").
+// ---------------------------------------------------------------------------
+describe("offerSlotToNextCandidate — the owner's switch is never skipped", () => {
+  const UNMAPPED: FreedSlot = { ...SLOT, siteId: "site-gone" };
+
+  it("fill-consults-the-switch-for-a-slot-on-an-unmapped-site", async () => {
+    store.waitlist.push(waiting({ siteId: "site-gone", patientName: "A" }));
+    store.toggleRow = { enabled: false }; // the owner switched No-show defence OFF
+
+    const res = await offerSlotToNextCandidate(UNMAPPED, new Date("2026-07-01T09:00:00Z"));
+
+    expect(res, "an unrecognised site id must not skip the kill switch").toBeNull();
+    expect(store.offers, "a switched-off system created an offer").toHaveLength(0);
+    expect(store.touches, "a switched-off system drafted a touch").toHaveLength(0);
+    expect(store.outbox, "a switched-off system queued a patient SMS").toHaveLength(0);
+  });
+
+  it("fill-falls-back-to-the-practice-client-id-for-an-unmapped-site", async () => {
+    // Not just "nothing was queued" — the switch was actually ASKED, under the
+    // practice's own client id, the same fallback /api/speed-to-lead/intake uses.
+    store.waitlist.push(waiting({ siteId: "site-gone", patientName: "A" }));
+    store.toggleRow = { enabled: false };
+
+    await offerSlotToNextCandidate(UNMAPPED, new Date("2026-07-01T09:00:00Z"));
+
+    expect(store.toggleReads).toEqual([{ clientId: "vitality", slug: "no-show-defence" }]);
+  });
+
+  it("still reads the switch under the SITE's own client id when the site is mapped", async () => {
+    // The mapped path is unchanged by the fix — the fallback only fires when
+    // getSite misses. (Every SITES row is client 'vitality' today, so this cannot
+    // yet distinguish site-derived from fallback; it pins that the happy path
+    // asks the switch exactly once, for the right slug, and then queues.)
+    store.waitlist.push(waiting({ patientName: "A" }));
+
+    await offerSlotToNextCandidate(SLOT, new Date("2026-07-01T09:00:00Z"));
+
+    expect(store.toggleReads).toEqual([{ clientId: "vitality", slug: "no-show-defence" }]);
+    expect(store.outbox, "the system is ON here, so the offer SMS is queued").toHaveLength(1);
   });
 });

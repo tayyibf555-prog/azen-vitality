@@ -76,6 +76,10 @@ vi.mock("@/lib/mock/clients", () => ({
 vi.mock("@/lib/systems/repository", () => ({
   getDisabledSlugsForSend: async () => new Set(hoisted.disabledSlugs),
   getDisabledSlugs: async () => new Set(hoisted.disabledSlugs),
+  // The drain's per-row gate reads the switch through this same module, so the
+  // fake answers the single-slug question the same way it answers the set one — a
+  // mock looser than live here would make the mid-run stop untestable.
+  isSystemEnabledForSend: async (_clientId: string, slug: string) => !hoisted.disabledSlugs.has(slug),
 }));
 // Real resolvePreferredChannel (the routing logic under test); only getChannelPref
 // (the DB read) is faked so we can drive a 'whatsapp' preference without Supabase.

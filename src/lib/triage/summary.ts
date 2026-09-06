@@ -174,7 +174,37 @@ export interface PreVisitSummary {
  */
 export const DISCOMFORT_NOTICE_THRESHOLD = 7;
 
-const DISCOMFORT_KEY = "pain-now";
+/**
+ * The flag is raised by ANY symptom-kind 0-10 answer, not by one key.
+ *
+ * It used to read `clinical.find((l) => l.key === "pain-now")`, the shipped
+ * question's key, and that was wrong twice over for a practice that had written
+ * its own discomfort slider in the bank editor — which the editor offers ("0 to
+ * 10"), which `usableCustom` explicitly admits ("A custom SCALE is allowed and is
+ * always 0-10"), and which the PATIENT-facing half already handles: the public
+ * form shows the help-now line for EVERY symptom-kind scale at or above this
+ * threshold, not just for `pain-now`.
+ *
+ * So a patient could be told on their phone to ring the practice about severe
+ * pain, and the record the practice reads would say `discomfortReported: false` —
+ * no amber banner for the clinician, and for the practice manager, who by ruling
+ * W1-C/2 gets only the count and the flag, no signal at all. The two halves of the
+ * same module disagreed about what a number on a slider means.
+ *
+ * SYMPTOM-KIND ONLY, which is why this reads the `clinical` array rather than
+ * every line: a cosmetic scale ("how happy are you with your smile?") is a
+ * question where 9 is good news, and flagging it would train the front desk to
+ * ignore the flag. `clinical` holds exactly the symptom-kind lines, resolved by
+ * `resolveAnswerKind`, so the two rules cannot drift apart.
+ */
+function highestDiscomfort(lines: readonly SummaryLine[]): number | null {
+  let top: number | null = null;
+  for (const line of lines) {
+    if (line.scale === null) continue;
+    if (top === null || line.scale > top) top = line.scale;
+  }
+  return top;
+}
 
 /**
  * Project a stored response into the summary a viewer with this role may read.
@@ -213,19 +243,25 @@ export function projectSummary(
     const custom = customQuestions.get(answer.key);
     const question = bank?.label ?? custom?.label ?? answer.key;
     const kind = resolveAnswerKind(answer, customQuestions);
-    const type = bank?.type;
+    // THE SHIPPED BANK FIRST, THEN THE PRACTICE'S OWN QUESTION. A `custom-` key is
+    // by definition absent from the shipped bank, so reading the type from `bank`
+    // alone left every practice-written question typeless: its scale was dropped
+    // and its answer was quoted as free text whatever control it had rendered as.
+    // UNDEFINED IS STILL A REAL STATE — a question the practice has deleted — and
+    // it keeps the old fallback: quote it, claim no scale.
+    const type = bank?.type ?? custom?.type;
     const line: SummaryLine = {
       key: answer.key,
       question,
-      answer: renderAnswer(answer.value, bank?.options),
+      answer: renderAnswer(answer.value, bank?.options ?? custom?.options),
       kind,
-      freeText: type === "textarea" || type === "text" || !bank,
+      freeText: type === undefined || type === "textarea" || type === "text",
       scale: type === "scale" ? clampScale(answer.value) : null,
     };
     (kind === "symptom" ? clinical : logistics).push(line);
   }
 
-  const discomfort = clinical.find((l) => l.key === DISCOMFORT_KEY)?.scale ?? null;
+  const discomfort = highestDiscomfort(clinical);
   const labelByKey = new Map(INTEREST_TREATMENTS.map((t) => [t.key as string, t.label]));
 
   return {

@@ -253,14 +253,24 @@ describe("a question the practice wrote is visible, and can be written and remov
     expect(text(render("full", config))).toContain("1 written so far");
   });
 
-  it("warns about the fallback that would silently discard them", () => {
+  it("says what switching them all off does, and no longer claims they are lost", () => {
+    // THE COPY DEFECT this pins (W3/9: copy matches code, never the reverse).
     // `usableConfig` falls back to the fork's shipped defaults whenever
-    // `enabledKeys` is empty, and the fallback replaces the WHOLE config — the
-    // stored `custom` array goes with it. Until that is fixed in the projection,
-    // the editor says so rather than letting somebody find out from an empty form.
+    // `enabledKeys` is empty, and the fallback USED to replace the whole config —
+    // the stored `custom` array went with it, so the warning correctly said the
+    // owner's own questions were not asked. The projection now parses `custom`
+    // first and carries it onto the fallback, so that sentence became false while
+    // still on screen: an owner reading it would keep a question switched on to
+    // protect questions that were never at risk. What is true, and stays, is that
+    // switching them all off brings the shipped list back rather than leaving a
+    // form of only their own questions.
     const config: TriageBankConfig = { enabledKeys: [], required: {}, custom: [CUSTOM] };
     const markup = text(render("full", config));
     expect(markup).toContain("Keep at least one of the questions above switched on");
+    expect(markup).toContain("your own questions are still asked");
+    expect(markup, "the editor still claims the owner's questions are discarded").not.toContain(
+      "your own questions are not asked",
+    );
   });
 
   it("does not warn when a shipped question is still on", () => {

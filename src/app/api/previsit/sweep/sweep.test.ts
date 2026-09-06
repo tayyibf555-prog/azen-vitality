@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TriageTarget } from "@/lib/triage/types";
+import { POSTGREST_MAX_ROWS } from "@/lib/test-support/fake-supabase";
 
 // ===========================================================================
 // THE PRE-VISIT SWEEP: what it queues, and — mostly — what it refuses to.
@@ -78,6 +79,13 @@ const h = vi.hoisted(() => {
     upserted: [] as Array<Record<string, unknown>>,
     queued: [] as Array<Record<string, unknown>>,
     stopped: [] as Array<{ id: string; reason: string }>,
+    /**
+     * THE `previsit_target` PRIMARY KEYS THAT ALREADY EXIST, which is what makes
+     * `upsertTargetIfNew`'s `ignoreDuplicates` real in this fake. Pass 1 asks
+     * `getTarget` before it pays for a Dentally patient read, so a fake that
+     * always answered null would make the whole cross-tick economy invisible.
+     */
+    targetIds: new Set<string>(),
   };
   return {
     state,
@@ -101,13 +109,31 @@ const h = vi.hoisted(() => {
     // wants `pending`, pass 3 wants the `queued`/`sent` rows an appointment may
     // have overtaken. A mock that answered the same list to both would hand pass 3
     // rows it can never see in production and prove nothing about either.
-    listTargets: vi.fn(async (args: { statuses: string[] }) =>
-      args.statuses.includes("pending") ? state.pending : state.live,
-    ),
+    //
+    // AND IT HONOURS `limit`, TWICE OVER (charter §0/11: the mock is at least as
+    // strict as live). The real listTargets puts the caller's limit on the query
+    // (src/lib/triage/repository.ts) and PostgREST then clips the response at the
+    // server's own max-rows ceiling — measured on this project at 1,000, silently,
+    // with `error: null`. A fake that handed back its whole fixture whatever was
+    // asked for made pass 3's `expiredMore` UNFALSIFIABLE: the route's `+ 1`
+    // over-fetch could be deleted and every honest-numbers assertion below would
+    // still pass, against a route that could no longer detect truncation at all.
+    listTargets: vi.fn(async (args: { statuses: string[]; limit?: number }) => {
+      const rows = args.statuses.includes("pending") ? state.pending : state.live;
+      return rows.slice(0, Math.min(args.limit ?? 500, POSTGREST_MAX_ROWS));
+    }),
+    // THE REAL `ignoreDuplicates` SEMANTICS (charter §0/11: the mock is at least
+    // as strict as live). `upsertTargetIfNew` returns null for a row that already
+    // exists and only then does the route count a flag — a fake that always
+    // returned a row would report a re-read window as freshly flagged.
     upsertTargetIfNew: vi.fn(async (input: Record<string, unknown>) => {
       state.upserted.push(input);
-      return { ...target(), ...input };
+      const id = `${String(input.siteId)}:${String(input.appointmentId)}`;
+      if (state.targetIds.has(id)) return null;
+      state.targetIds.add(id);
+      return { ...target(), ...input, id };
     }),
+    getTarget: vi.fn(async (id: string) => (state.targetIds.has(id) ? target({ id }) : null)),
     enqueueSend: vi.fn(async (input: Record<string, unknown>) => {
       state.queued.push(input);
       return { touchId: "t", outboxId: "o" };
@@ -162,6 +188,12 @@ vi.mock("@/lib/triage/repository", () => ({
   upsertTargetIfNew: h.upsertTargetIfNew,
   enqueueSend: h.enqueueSend,
   stopTarget: h.stopTarget,
+  getTarget: h.getTarget,
+  // The REAL key derivation, copied rather than stubbed to a constant: the whole
+  // point of the memo is that the sweep can build a target's primary key without
+  // a database round trip, so the fake has to agree with `repository.ts` about
+  // what that key is.
+  triageTargetId: (siteId: string, appointmentId: string) => `${siteId}:${appointmentId}`,
 }));
 
 import { POST } from "./route";
@@ -187,6 +219,7 @@ beforeEach(() => {
   h.state.upserted = [];
   h.state.queued = [];
   h.state.stopped = [];
+  h.state.targetIds = new Set();
   process.env.PUBLIC_BASE_URL = "https://azen-vitality.vercel.app";
   // The bound two of the pass-3 tests shrink. Cleared here rather than in those
   // tests: an env var left set is the quietest way to make a later test in this
@@ -282,6 +315,85 @@ describe("the fork is resolved from the payment plan, server-side", () => {
       expect(h.state.upserted, `a ${state} appointment was flagged`).toEqual([]);
       expect(h.getPatient).not.toHaveBeenCalled();
     }
+  });
+});
+
+// ===========================================================================
+// THE COST ACROSS TICKS, WHICH IS THE ONE THIS SUITE COULD NOT SEE.
+//
+// "reads each DISTINCT patient once" above measures the economy WITHIN a run.
+// It was the whole of the proof, and pass 1 memoised nothing between runs: the
+// `facts` map is per-run and nothing consulted `previsit_target` before paying
+// for `GET /v1/patients/:id`, so an appointment flagged at 09:00 cost the same
+// Dentally read again at 09:10 and on every tick until it started — and the
+// answer was discarded, because `upsertTargetIfNew` returns null for a row that
+// already exists and `if (created)` is its only consumer.
+//
+// At the `*/10` cadence the registration SQL asks for, that is up to 2,400
+// Dentally reads an hour from this sweep alone against a background class
+// ceiling of 2,160 — the drain, five syncs and six other sweeps share it. The
+// module is default-OFF and unregistered today (W3/7), which is the only reason
+// this was not already an outage.
+// ===========================================================================
+
+describe("an appointment is read from Dentally once, not once per tick", () => {
+  const appointment = {
+    id: "appt-1",
+    patient_id: "p-1",
+    start_time: APPOINTMENT_AT,
+    state: "booked",
+  };
+
+  it("previsit-sweep-second-tick-issues-no-patient-reads", async () => {
+    h.state.appointments = [
+      appointment,
+      { ...appointment, id: "appt-2", patient_id: "p-2" },
+      { ...appointment, id: "appt-3", patient_id: "p-3" },
+    ];
+
+    const first = (await (await run()).json()) as Record<string, unknown>;
+    expect(first.flagged, "the first tick must actually flag the window").toBe(3);
+    expect(first.patientReads).toBe(3);
+    expect(first.alreadyFlagged).toBe(0);
+    expect(h.getPatient).toHaveBeenCalledTimes(3);
+
+    // Same window, same book, ten minutes later.
+    vi.clearAllMocks();
+    const second = (await (await run()).json()) as Record<string, unknown>;
+    expect(
+      h.getPatient,
+      "the same three appointments cost three more Dentally patient reads",
+    ).not.toHaveBeenCalled();
+    expect(second.patientReads).toBe(0);
+    expect(second.alreadyFlagged, "the report must say why the tick was cheap").toBe(3);
+    expect(second.flagged).toBe(0);
+  });
+
+  it("a NEW appointment in an already-swept window is still read and flagged", async () => {
+    // The fail direction: the memo must skip the read, not the patient. Without
+    // this half the test above would pass against a pass 1 that flagged nothing
+    // after its first tick.
+    h.state.appointments = [appointment];
+    await run();
+
+    vi.clearAllMocks();
+    h.state.appointments = [appointment, { ...appointment, id: "appt-2", patient_id: "p-2" }];
+    const second = (await (await run()).json()) as Record<string, unknown>;
+    expect(h.getPatient, "the new patient was never read").toHaveBeenCalledTimes(1);
+    expect(second.flagged).toBe(1);
+    expect(second.alreadyFlagged).toBe(1);
+    expect(h.state.upserted.at(-1)?.appointmentId).toBe("appt-2");
+  });
+
+  it("a worklist read that throws falls through to the old behaviour rather than skipping the patient", async () => {
+    // The memo is a COST optimisation, not a safety guard: failing it closed
+    // would silently drop a patient's link to save one Dentally read. The upsert
+    // is idempotent and is what actually decides.
+    h.state.appointments = [appointment];
+    h.getTarget.mockRejectedValueOnce(new Error("previsit_target read failed"));
+    const res = (await (await run()).json()) as Record<string, unknown>;
+    expect(res.flagged, "a database blip lost a patient's pre-visit link").toBe(1);
+    expect(h.getPatient).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -499,6 +611,38 @@ describe("PASS 3: a link its appointment has overtaken is retired", () => {
     const res = await run();
     expect(h.state.stopped.length).toBe(3);
     expect(await res.json()).toMatchObject({ expired: 3, expiredMore: true });
+  });
+
+  // MUTATION: delete `Math.min(config.maxExaminedPerRun, RETIRE_BOUND_CAP)` and
+  // ask for `config.maxExaminedPerRun + 1` again — this goes red, and the two
+  // tests above do not, because they run far below the ceiling where the operator
+  // has not raised the bound past it.
+  it("CLAMPS its own bound below the server's row ceiling, so `at least` survives a raised env var", async () => {
+    // PREVISIT_MAX_EXAMINED is an operator env var whose legal range runs to
+    // 5,000, and pass 1 (three sites of Dentally appointment rows) is exactly why
+    // somebody raises it. Unclamped, pass 3 would then ask for 2,001 rows, receive
+    // the server's 1,000 with `error: null`, and evaluate `1000 > 2000` — an
+    // arithmetically impossible test that reports a page the server cut as a
+    // complete `expired` figure (ruling W3/32, charter §0/5).
+    process.env.PREVISIT_MAX_EXAMINED = "2000";
+    h.state.live = Array.from({ length: POSTGREST_MAX_ROWS + 5 }, (_, i) =>
+      target({ id: `t-${i}`, status: "sent", appointmentAt: BEHIND }),
+    );
+    const res = await run();
+    const body = (await res.json()) as { expired: number; expiredMore: boolean };
+    // The clamp, exactly: 900 retired this tick, the rest on the next one.
+    expect(body.expired).toBe(900);
+    expect(h.state.stopped.length).toBe(900);
+    // And the honest sentence survives, which is the whole point of the clamp.
+    expect(body.expiredMore).toBe(true);
+    // The read never asks for more than the server will hand back, so the
+    // over-fetch is a real over-fetch rather than a request the ceiling eats.
+    const pass3 = h.listTargets.mock.calls
+      .map((c) => c[0] as { statuses: string[]; limit?: number })
+      .filter((a) => !a.statuses.includes("pending"));
+    expect(pass3.length).toBe(1);
+    expect(pass3[0]!.limit).toBe(901);
+    expect(pass3[0]!.limit!).toBeLessThanOrEqual(POSTGREST_MAX_ROWS);
   });
 
   it("does NOT say `at least` when the list simply ended", async () => {

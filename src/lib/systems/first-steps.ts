@@ -72,6 +72,19 @@ export const FIRST_STEPS: Record<string, FirstStep> = {
   // three screens. os-copy-sweep.test.ts holds it in BOTH directions: the day
   // the job is registered and the slug leaves that list, the warning here is
   // stale and the test says so.
+  //
+  // WHERE THE MODULE PAGE PRINTS IT — CORRECTED, because the sentence above was
+  // true of the SWITCHED-OFF page only, and that gap is what let the defect
+  // through. The workspace now carries registration truth in BOTH states, by two
+  // different routes: the off banner prints THIS sentence verbatim
+  // (`firstStepFor("pre-visit-triage")?.step`), and the switched-on banner
+  // prints its own equivalent — "Switched on, but nothing is being sent yet" —
+  // because an owner who has done what this sentence asked must not find the
+  // warning gone while nothing has changed. The two are not one string on
+  // purpose; what they share is the derivation, since the on-state banner takes
+  // its flag from `slugsWithNoScheduledJob()` (W3/31, the single home of
+  // registration truth). So registering the cron clears both, and this sentence,
+  // in one edit — there is no second copy to chase.
   "pre-visit-triage": {
     key: "pre-visit-triage",
     surface: "Pre-visit questions",

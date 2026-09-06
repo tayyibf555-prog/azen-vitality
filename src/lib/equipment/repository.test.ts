@@ -176,7 +176,9 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 
-const { importAssets, SERIAL_INDEX_CAP } = await import("./repository");
+const { importAssets, updateAsset, listManuals, SERIAL_INDEX_CAP, MANUAL_INDEX_ROW_CAP } = await import(
+  "./repository",
+);
 
 type ImportRow = Parameters<typeof importAssets>[1][number];
 
@@ -389,5 +391,125 @@ describe("3. the fail direction is closed, and the practice is told which row an
       op: "eq",
       value: "vitality",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. PROVENANCE. Who entered a row is part of what a CQC/insurance register is
+// for, and only ONE of the two doors that write this table used to know it.
+// ---------------------------------------------------------------------------
+
+describe("4. a re-import corrects the practice's data, not the record of who entered it", () => {
+  it("the serial-matched UPDATE does not rewrite created_by", async () => {
+    // THE DEFECT. `assetPayload` carries `created_by: actor`; `updateAsset`
+    // destructured it out with "created_by belongs to the row's author, not to
+    // whoever edits it" in a comment beside it; the importer's update branch
+    // passed the very same object straight through. So the practice manager
+    // imports the register in September, the owner corrects three service dates
+    // in the same spreadsheet and re-imports it in November, and every
+    // serial-matched row — the whole file, not the three she changed — records
+    // the owner as its author. Reported as `updated: 47`, unrecoverably.
+    const autoclave = registered({ serial: "SN-1234", name: "Autoclave", created_by: "manager-blerta" });
+
+    const result = await importAssets(
+      "vitality",
+      [ROW({ serial: "SN-1234", name: "Autoclave", nextServiceDue: "2028-06-01" })],
+      "owner-jawad",
+    );
+
+    expect(result.updated).toBe(1);
+    // The correction landed...
+    expect(find(autoclave.id).next_service_due).toBe("2028-06-01");
+    // ...and the authorship did not move.
+    expect(find(autoclave.id).created_by).toBe("manager-blerta");
+  });
+
+  it("an INSERT still records who entered it — the rule is about updates only", async () => {
+    // The other direction, so this is not "fixed" by never writing the column.
+    // A row's author is set once, by the import that created it.
+    await importAssets("vitality", [ROW({ serial: "SN-NEW", name: "New compressor" })], "owner-jawad");
+    expect(db.rows.find((r) => r.serial === "SN-NEW")!.created_by).toBe("owner-jawad");
+  });
+
+  it("the hand-edit door obeys the same rule from the same place", async () => {
+    // `updateAsset` and the importer's update branch now share
+    // `payloadWithoutAuthor`. Two writers to one table cannot be trusted to
+    // remember the same rule twice, so this pins that they are one rule.
+    const autoclave = registered({ serial: "SN-1234", name: "Autoclave", created_by: "manager-blerta" });
+    await updateAsset("vitality", autoclave.id, ROW({ name: "Autoclave (decon)" }), "owner-jawad");
+    expect(find(autoclave.id).name).toBe("Autoclave (decon)");
+    expect(find(autoclave.id).created_by).toBe("manager-blerta");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. THE MANUAL INDEX IS A BOUNDED READ, AND A BOUNDED READ IS NOT A COMPLETE
+// ANSWER (charter §0/5, programme rulings W3/11 and W3/32).
+// ---------------------------------------------------------------------------
+
+describe("5. a truncated manual index is 'we cannot say', never 'no manual uploaded'", () => {
+  /** Manual rows, the way `equipment_manual` holds them. */
+  function seedManuals(count: number) {
+    for (let i = 0; i < count; i += 1) {
+      db.rows.push({
+        id: `m-${i}`,
+        client_id: "vitality",
+        serial: null,
+        name: `manual ${i}`,
+        next_service_due: null,
+        supplier: null,
+        asset_id: `asset-${i}`,
+        filename: `m${i}.pdf`,
+        byte_size: 1,
+        page_count: 1,
+        extractor: "pdf",
+        extracted_chars: 10,
+        status: "ready",
+        uploaded_at: "2026-09-01T00:00:00Z",
+      } as unknown as Row);
+    }
+  }
+
+  it("a read AT its own bound comes back as null, not as a short list", async () => {
+    // THE DEFECT. The index is keyed by asset id and consulted per asset, but
+    // the ASSETS are read separately (category then name) and the manuals by
+    // `uploaded_at desc`, so two differently-ordered pages do not cover the same
+    // rows. An asset on screen but outside the manual page got a hard `false`:
+    // "No manual uploaded" on the Register tab and `manualUploaded: false` to
+    // the model, about a manual that is stored, indexed and searchable — which
+    // `search_manual` would then quote page 14 of, in the same turn.
+    //
+    // Null is what every consumer of this function already handles correctly, so
+    // the truncated read degrades into the posture the FAILED read already has:
+    // no manual column in the prompt, the key omitted from every tool summary,
+    // and "could not be read" on both tabs. Fail closed.
+    seedManuals(MANUAL_INDEX_ROW_CAP);
+    expect(await listManuals("vitality")).toBeNull();
+  });
+
+  it("one row BELOW the bound is a real answer, and is returned", async () => {
+    // The other direction, which is what stops this being "fixed" by returning
+    // null always: an index that fits was genuinely read, and every machine's
+    // manual state is then a fact worth stating.
+    seedManuals(MANUAL_INDEX_ROW_CAP - 1);
+    const manuals = await listManuals("vitality");
+    expect(manuals).toHaveLength(MANUAL_INDEX_ROW_CAP - 1);
+    expect(manuals![0].assetId).toBe("asset-0");
+  });
+
+  it("an empty register of manuals is [] and NOT null — the two facts stay apart", async () => {
+    // The distinction the whole module rests on: "this practice has uploaded no
+    // manuals" is a thing to say; "we could not tell" is a different thing to
+    // say; and telling a practice the first when the second is true is how they
+    // conclude the platform lost their documents.
+    expect(await listManuals("vitality")).toEqual([]);
+  });
+
+  it("the read is bounded BELOW PostgREST's ceiling, so the bound can be observed", async () => {
+    // W3/32. At exactly 1,000 the server clips silently and `rows.length >= CAP`
+    // is structurally false, so the truncation above could never be detected.
+    await listManuals("vitality");
+    expect(db.limits).toContainEqual({ table: "equipment_manual", n: MANUAL_INDEX_ROW_CAP });
+    expect(MANUAL_INDEX_ROW_CAP).toBeLessThan(1000);
   });
 });

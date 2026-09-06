@@ -92,7 +92,7 @@ import { getThreadForPatient } from "@/lib/inbox/repository";
 import {
   getTarget,
   listInterest,
-  countInterestByTreatment,
+  countInterestByTreatmentDetailed,
   listResponsesForPatient,
   triageTargetId,
 } from "@/lib/triage/repository";
@@ -353,7 +353,15 @@ describe("JOURNEY 2 — pre-visit triage: appointment → link → answers → i
     const notNow = await listInterest({ siteIds: [SITE], answer: "not_now" });
     expect(notNow.map((r) => r.treatment).sort()).toEqual(["implants", "veneers-bonding"]);
 
-    const counts = await countInterestByTreatment([SITE]);
+    // THE DETAILED FORM, WHICH IS THE ONE PRODUCTION CALLS. Both surfaces that
+    // read these counts — the module page and the co-pilot's `interest_lists` —
+    // moved to `countInterestByTreatmentDetailed` when the honest-numbers rule
+    // made `capped` something a screen has to render as "at least N"; the bare
+    // wrapper beside it throws the whole grid away instead, and this journey was
+    // the last caller keeping it alive. A cross-module journey should drive what
+    // the practice actually runs, so it drives that.
+    const { counts, capped } = await countInterestByTreatmentDetailed([SITE]);
+    expect(capped, "this journey's handful of rows should never reach a ceiling").toBe(false);
     expect(counts.whitening).toBe(1);
     expect(counts.implants ?? 0).toBe(0);
   });

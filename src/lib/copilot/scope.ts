@@ -76,7 +76,7 @@ const ACCESS_BY_ROLE = {
   client_owner: "full",
   // THE POINT OF THE MANAGER LANE. The practice manager tier.
   client_coordinator: "manager",
-  // THE TWO NEW ROWS, AND WHAT THEY DO AND DO NOT MEAN.
+  // THE TWO NEWEST ROWS, AND WHAT THEY NOW MEAN.
   //
   // Both used to be "none": a clinician and a staff member had no co-pilot at
   // all, and widening either was called out as "a written decision, made here,
@@ -85,17 +85,24 @@ const ACCESS_BY_ROLE = {
   // clinician / staff", and second-opinion mode is FOR the clinician), so the
   // rows are now named levels with their own catalogs and their own tests.
   //
-  // WHAT THIS DOES NOT DO IS LET THEM IN. Reaching /api/copilot needs THREE
-  // things and this is only the third:
-  //   1. the nav module lock — "co-pilot" is in neither CLINICIAN_SLUGS nor
-  //      STAFF_SLUGS, so `requireModuleApiAccess(auth, "co-pilot")` refuses both
-  //      roles at the route today;
-  //   2. the capability `system.copilot.ask`, whose default holders are owner,
-  //      agency and the coordinator (capabilities/defaults.ts COPILOT_ACCESS);
+  // AND THEY ARE LIVE. Ruling W1-E/2 of 3 Sep 2026 switched both on, so the two
+  // locks that used to sit in front of this map no longer refuse either role:
+  //   1. the nav module lock — "co-pilot" IS in CLINICIAN_SLUGS and in
+  //      STAFF_SLUGS (src/lib/nav.ts), so `requireModuleApiAccess(auth,
+  //      "co-pilot")` admits every known role;
+  //   2. the capability `system.copilot.ask`, whose default holders are now all
+  //      five roles (capabilities/defaults.ts COPILOT_ACCESS), narrowed per
+  //      PERSON by a grant rather than per role;
   //   3. this map, which decides what a session that got through 1 and 2 reaches.
-  // So both rows are DECLARED, TESTED AND INERT until an owner decision widens
-  // (1) and (2). That ordering is on purpose: the safe thing to have written in
-  // advance is the narrow catalog, not the open door.
+  // So THIS RECORD IS THE SECURITY BOUNDARY, not the third of three locks (the
+  // decisions log: "CO-PILOT BOUNDARY MOVED (consequence of W1-E/2) ... the
+  // ACCESS_BY_ROLE clearance Record IS the security boundary"). Narrowing or
+  // widening either row below changes what a real receptionist or a real
+  // clinician is answered with on the next deploy, with no second gate in front
+  // of it and no owner switch to flip: edit them the way a live surface is
+  // edited. REACHABLE_TODAY below carries the same fact, `reachableToday` is
+  // true for all five, and scope.test.ts §9 asserts it from the real predicates
+  // before it reads a word of this comment.
   client_clinician: "clinician",
   client_staff: "staff",
 } as const satisfies Record<Role, CopilotAccess>;

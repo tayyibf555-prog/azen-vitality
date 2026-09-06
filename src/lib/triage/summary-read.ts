@@ -4,7 +4,7 @@ import { getBanks } from "./repository";
 import { projectSummary } from "./summary";
 import type { PreVisitSummary } from "./summary";
 import { TRIAGE_FORKS } from "./types";
-import type { TriageQuestionKind, TriageResponse } from "./types";
+import type { TriageFieldType, TriageOption, TriageQuestionKind, TriageResponse } from "./types";
 
 // ===========================================================================
 // THE PRE-VISIT SUMMARY, RESOLVED — the impure seam in front of the pure one.
@@ -36,10 +36,21 @@ import type { TriageQuestionKind, TriageResponse } from "./types";
  * `resolveAnswerKind` applies for the same reason: neither answer to "which one is
  * current?" is safe on its own.
  *
+ * THE TYPE IS CARRIED FOR THE SAME REASON THE KIND IS: it is the only thing that
+ * can tell the summary a practice-written question was a 0-10 scale, and without
+ * it a patient's 9 out of 10 was neither flagged nor printed as a number (see
+ * DISCOMFORT_NOTICE_THRESHOLD in ./summary.ts). A disagreement between the two
+ * banks about a type resolves towards `scale`, on the same logic: reading a scale
+ * that is not one costs a null — `clampScale` refuses anything outside 0-10 — and
+ * missing one costs a patient in pain nobody rings.
+ *
  * Never throws. An unreadable config is logged and returns an empty index.
  */
 export async function customQuestionsFor(clientId: string): Promise<CustomQuestionIndex> {
-  const index = new Map<string, { label: string; kind: TriageQuestionKind }>();
+  const index = new Map<
+    string,
+    { label: string; kind: TriageQuestionKind; type?: TriageFieldType; options?: readonly TriageOption[] }
+  >();
   if (!clientId) return index;
 
   try {
@@ -48,7 +59,14 @@ export async function customQuestionsFor(clientId: string): Promise<CustomQuesti
       for (const q of stored[fork]?.config.custom ?? []) {
         const existing = index.get(q.key);
         const kind = existing?.kind === "symptom" || q.kind === "symptom" ? "symptom" : q.kind;
-        index.set(q.key, { label: existing?.label ?? q.label, kind });
+        const type =
+          existing?.type === "scale" || q.type === "scale" ? "scale" : (existing?.type ?? q.type);
+        index.set(q.key, {
+          label: existing?.label ?? q.label,
+          kind,
+          type,
+          options: existing?.options ?? q.options,
+        });
       }
     }
   } catch (err) {

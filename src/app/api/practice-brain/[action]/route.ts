@@ -25,6 +25,67 @@ const UNLOCK_IP_LIMIT = 20; // unlock attempts per IP per hour
 const UNLOCK_GLOBAL_LIMIT = 100; // unlock attempts per hour across all instances
 const HOUR_MS = 60 * 60 * 1000;
 
+// ---------------------------------------------------------------------------
+// THE MODEL DOORS ARE METERED, AND WHAT GOES INTO THEM IS BOUNDED.
+//
+// Charter section 0 item 10: "budget consumed before the client is constructed,
+// `api_budget` on any public AI endpoint." Three actions here reach Anthropic —
+// `ask` (Sonnet, a retrieval then a completion), `classify` and `learn` (Sonnet,
+// max_tokens 4000) — and until this block existed the ONLY consumeBudget in the
+// file was `pb-unlock`, spent on the unlock ATTEMPT. So one successful unlock
+// bought an eight-hour cookie with unlimited, unmetered, unbounded-size model
+// calls against the practice's own Anthropic key. That is a cost surface, not a
+// data leak, but nothing in the platform counted it, capped it or refused it, and
+// nothing on any screen would have shown the bill growing.
+//
+// THIS IS A PASSWORD-GATED PORTAL, WHICH IS NOT AN EXEMPTION. The route's own
+// header (below) says reads are protected "by the per-tier password alone, with
+// no platform login, by design", and the closest sibling in the tree — the public
+// pre-visit submit — is signed-token-gated and STILL carries both a per-IP and a
+// per-token budget. A bearer credential is not treated as a substitute for a
+// spend cap anywhere else here.
+//
+// PER CREDENTIAL, THEN GLOBALLY, and deliberately NOT per IP. The password is
+// shared per tier, so the credential id off the signed cookie is the identity a
+// caller must actually hold; keying on the address as well would add a dimension
+// the attacker already controls for free (a loop from twenty IPs still holds one
+// credential) while doubling the round trips. The global ceiling is the one that
+// bounds the practice's bill when a whole tier's password is loose.
+//
+// `consumeBudget` fails OPEN on a database error, by design (src/lib/rate-budget.ts):
+// a transient outage degrades the cost cap rather than breaking the portal.
+//
+// THE INPUT CEILING IS THE OTHER HALF. `ask` and `classify` used to read
+// `String(body.question ?? "")` / `body.rawInput` with no length check at all —
+// the one AI door in this tree with no size gate (the equipment desk caps a chat
+// message at 4,000 characters; the pre-visit submit caps the whole body at 16KB),
+// so a 500KB "question" went into the prompt verbatim. A capped call is still a
+// call somebody pays for, so the size gate is what stops each one being the most
+// expensive call it could be. Refused BEFORE the budget is spent, exactly as the
+// pre-visit submit refuses an oversized body before its two budgets.
+const HOUR_SECONDS = 3600;
+/** A question is a sentence somebody typed; the equipment desk's own per-message cap. */
+const ASK_INPUT_MAX = 4_000;
+/** A note pasted for classification is longer prose, so a looser ceiling — still a ceiling. */
+const NOTE_INPUT_MAX = 8_000;
+/** Model calls per hour for one unlocked credential. A human asking questions is nowhere near this. */
+const AI_BUDGET_PER_CREDENTIAL = 60;
+/** Model calls per hour across every instance and every credential: the practice's bill, bounded. */
+const AI_BUDGET_GLOBAL = 600;
+
+/**
+ * True when this model call must NOT be made. Per-credential first (the cheap,
+ * targeted refusal), then the shared ceiling. Each action keeps its own pair of
+ * keys so a runaway `ask` loop cannot starve the owner's `learn`.
+ */
+async function outOfAiBudget(action: string, credentialId: string): Promise<boolean> {
+  if (!(await consumeBudget(`pb-${action}:${credentialId}`, AI_BUDGET_PER_CREDENTIAL, HOUR_SECONDS))) return true;
+  return !(await consumeBudget(`pb-${action}`, AI_BUDGET_GLOBAL, HOUR_SECONDS));
+}
+
+/** One sentence for every metered refusal: it says nothing about which cap was hit. */
+const AI_BUSY = "Practice Brain is busy. Please try again shortly.";
+
 const unlockHits = new Map<string, number[]>();
 function tooManyUnlocksForIp(ip: string, now: number): boolean {
   const cutoff = now - HOUR_MS;
@@ -154,6 +215,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     if (action === "classify") {
       const rawInput = String(body.rawInput ?? "").trim();
       if (!rawInput) return fail("Note is empty.");
+      if (rawInput.length > NOTE_INPUT_MAX) return fail("That note is too long to classify.", 413);
+      if (await outOfAiBudget("classify", session.credentialId)) return fail(AI_BUSY, 429);
       const branches = await listBranchNames(CLIENT_ID);
       const result = await classifyKnowledge(rawInput, branches);
       return ok(result);
@@ -206,6 +269,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     if (action === "ask") {
       const question = String(body.question ?? "").trim();
       if (!question) return fail("Question is empty.");
+      if (question.length > ASK_INPUT_MAX) return fail("That question is too long.", 413);
+      // Ahead of the retrieval as well as the completion: a refused call costs no
+      // database work either.
+      if (await outOfAiBudget("ask", session.credentialId)) return fail(AI_BUSY, 429);
       const ranked = await searchKnowledge(CLIENT_ID, question, maxTier, 6);
       const result = await askCopilot(question, ranked);
       // The gap + QA writes are best-effort audit logging: a transient DB error must
@@ -235,6 +302,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     if (action === "learn") {
       const text = String(body.text ?? "").trim();
       if (!text) return fail("Nothing to save.");
+      if (text.length > NOTE_INPUT_MAX) return fail("That note is too long to save.", 413);
+      // `learn` clears requireUser + requireOwnerRole above, so it is far less
+      // exposed than the two reads — and it is still a Sonnet call on the same key.
+      if (await outOfAiBudget("learn", session.credentialId)) return fail(AI_BUSY, 429);
       const branches = await listBranchNames(CLIENT_ID);
       const result = await classifyKnowledge(text, branches);
       // Same publish gate as `create`: the classifier output is not authoritative

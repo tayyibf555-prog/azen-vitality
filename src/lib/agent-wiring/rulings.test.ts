@@ -645,6 +645,22 @@ describe("ruling 5: a switch flipped mid-run stops the run", () => {
       // src/app/api/outreach/sweep/switch-recheck.test.ts, which also pins that
       // the bound belongs to the RUN and not to each campaign.
       "src/app/api/outreach/sweep/route.ts",
+      // NAMED DELTA, 6 Sep 2026 (wave-3d review). The shared messaging DRAIN is
+      // not a sweep — it is the send path itself — and it is on this list for
+      // exactly that reason. Every route above only DRAFTS; live-switch.ts's own
+      // header justifies their ten-row bound by noting that with the old
+      // behaviour "nothing was delivered (the drain re-reads the switch and
+      // refuses the source)". The drain was written as their backstop and had
+      // none of its own: it read `getDisabledSlugsForSend` once, then gated all
+      // eleven sources on that one verdict for up to 300 seconds (a 310-second
+      // lease), so a module switched off before its turn still drained in full
+      // and the module in flight kept sending. It now re-reads the set for every
+      // source AND carries the shared gate per row. Added here rather than the
+      // assertion being loosened: the list grows, the rule does not bend.
+      // Behaviour is proven against the real handler in
+      // src/app/api/messaging/drain/switch-recheck.test.ts, which also pins that
+      // a module switched off before its turn is never listed at all.
+      "src/app/api/messaging/drain/route.ts",
     ]) {
       const src = readFileSync(route, "utf8");
       expect(src, route).toContain("liveSwitch(");

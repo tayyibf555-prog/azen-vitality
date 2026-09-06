@@ -81,7 +81,32 @@ export async function POST(request: Request): Promise<Response> {
   // that stays "full".)
   const access = auth ? copilotAccessForRole(auth.role) : "full";
   if (access === "none") {
-    return Response.json({ ok: false, error: "The co-pilot is available to the practice owner." }, { status: 403 });
+    // WHAT THIS SENTENCE HAS TO DESCRIBE, AND WHAT IT USED TO. It read "The
+    // co-pilot is available to the practice owner", which was true while the
+    // route was owner-only and became false on W1-E/2: every KNOWN role now has a
+    // catalog (owner and agency admin `full`, manager, clinician, staff), so the
+    // only way to reach this line is a role the clearance map does not place —
+    // an account whose role is unset, mis-spelled, or newer than the map. Telling
+    // that person the co-pilot is "for the owner" sends them to ask for the wrong
+    // thing, and tells a reader of this file the wrong boundary.
+    //
+    // A person on the wrong CLIENT never gets here: requireClientAccess above has
+    // already refused them. So this is about the role and says only that.
+    //
+    // It is a refusal, not a hint: it names no role, no catalog and no tool, and
+    // the behaviour is unchanged — 403, nothing else runs, fail-CLOSED. The
+    // sentence reaches the person because copilot-thread.ts surfaces a 403 body
+    // that reads as prose; the other three guards on this route answer with the
+    // token `forbidden` and the chat shows its own permissions sentence for
+    // those.
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "Your account's role is not one the co-pilot serves. Ask the practice owner to check your access.",
+      },
+      { status: 403 },
+    );
   }
   // ===========================================================================
   // THE SECURITY BOUNDARY FOR THIS ROUTE HAS MOVED. READ THIS BEFORE EDITING.
@@ -207,7 +232,14 @@ export async function POST(request: Request): Promise<Response> {
     // for the same stated reason: that check is a fuzzy match on generated prose
     // whose failure direction is silence on the one sentence that must never be
     // missing. It covers the fallback string below as well, which the model did
-    // not write. On an ordinary turn it returns the reply unchanged.
+    // not write.
+    //
+    // AND THE SAME FOR THE CLINICAL DOOR. When any `second_opinion` call was made
+    // in this turn — the answer or any of its refusals — the decision-support
+    // label is appended here too, for the reason the charter gives (§2 W1-E DoD:
+    // decision support is "always labelled as such"): it was in the tool result
+    // and in the prompt, and both of those are read by the model, not by the
+    // clinician. On an ordinary turn it returns the reply unchanged.
     return Response.json({
       ok: true,
       reply: finaliseCopilotReply(result.replyText || "Sorry, I could not respond just now.", turn),

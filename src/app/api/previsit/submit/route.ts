@@ -3,16 +3,12 @@ import { consumeBudget } from "@/lib/rate-budget";
 import { getSite } from "@/lib/mock/clients";
 import { isSystemEnabledStrict } from "@/lib/systems/repository";
 import { isKnownInterestKey, INTEREST_TREATMENTS } from "@/lib/triage/bank";
+import { resolveAnswerKind, type CustomQuestionIndex } from "@/lib/triage/kind";
 import { isTriageLinkTokenShaped } from "@/lib/triage/link";
-import { projectBank } from "@/lib/triage/project";
+import { projectBank, type ProjectedQuestion } from "@/lib/triage/project";
 import { getBank, getTargetByLinkToken, recordResponse } from "@/lib/triage/repository";
 import { SCALE_MAX, SCALE_MIN, TRIAGE_SYSTEM_SLUG } from "@/lib/triage/types";
-import type {
-  InterestAnswer,
-  InterestTreatmentKey,
-  TriageAnswer,
-  TriageQuestionKind,
-} from "@/lib/triage/types";
+import type { InterestAnswer, InterestTreatmentKey, TriageAnswer } from "@/lib/triage/types";
 
 export const dynamic = "force-dynamic";
 
@@ -236,11 +232,19 @@ export async function POST(request: Request): Promise<Response> {
  */
 function parseAnswers(
   raw: unknown,
-  allowed: ReadonlyMap<
-    string,
-    { type: string; kind: TriageQuestionKind; options?: readonly { value: string }[] }
-  >,
+  allowed: ReadonlyMap<string, ProjectedQuestion>,
 ): TriageAnswer[] | null {
+  // THE PRACTICE'S OWN QUESTIONS, in the shape `resolveAnswerKind` reads. Only
+  // the ones the practice wrote — `custom` is the projection's own word for that
+  // — because a shipped key's classification is in-code and authoritative, and
+  // running an over-broad word list over it could only re-classify the module's
+  // own logistics questions against their own definition (the same scoping
+  // ./kind.ts applies on the read side).
+  const custom: CustomQuestionIndex = new Map(
+    [...allowed.values()]
+      .filter((q) => q.custom)
+      .map((q) => [q.key, { label: q.label, kind: q.kind, type: q.type, options: q.options }]),
+  );
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw) || raw.length > MAX_ANSWERS) return null;
   const out: TriageAnswer[] = [];
@@ -276,7 +280,28 @@ function parseAnswers(
     // even after the question is deleted. An unstamped answer resolves to `symptom`
     // downstream (src/lib/triage/kind.ts), so forgetting is safe but lossy —
     // hence `kind` being required on TriageAnswer rather than optional.
-    out.push({ key, value, kind: q.kind });
+    //
+    // AND IT IS THE RESOLVED KIND, NOT THE DROPDOWN'S. `resolveAnswerKind` is the
+    // one place that decides this, and its fourth opinion is the question's OWN
+    // WORDS: a custom question the owner filed as `logistics` and wrote as "Is
+    // anything hurting before you come in?" is a symptom question whatever the
+    // dropdown said (ruling W1-C/2, and the same strings ruling W3/3 scans — the
+    // label and every option label and value).
+    //
+    // Stamping `q.kind` here meant that check ran only at READ time, off the live
+    // bank config — so it closed the leak while the question existed and reopened
+    // the moment the practice DELETED it: nothing is left to scan, and the stamp
+    // in the jsonb column still says `logistics`. The patient's own words about
+    // their mouth would then land in the half the front desk reads, permanently,
+    // with no configuration anywhere that could still say otherwise. Resolving at
+    // submit writes the safe answer down while the evidence is still here.
+    //
+    // It cannot loosen anything: `resolveAnswerKind` takes the MOST RESTRICTIVE of
+    // every source that has an opinion, and `q.kind` is one of those sources, so
+    // the result is `q.kind` or `symptom` and never anything wider. Read time
+    // still re-resolves against the live config as well, so an owner who
+    // re-classifies a question afterwards is still heard.
+    out.push({ key, value, kind: resolveAnswerKind({ key, value, kind: q.kind }, custom) });
   }
   return out;
 }

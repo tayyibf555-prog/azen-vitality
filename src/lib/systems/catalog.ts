@@ -192,10 +192,31 @@ export const SYSTEMS: SystemDef[] = [
     // supervised client test the owner explicitly switches on from the control
     // panel. Being in this catalog is what makes the drain fail-closed for outreach
     // (getDisabledSlugsForSend returns SYSTEM_SLUGS on a live-messaging read error).
+    //
+    // THE SWEEP DOES NOT HALT, AND THIS SENTENCE USED TO SAY IT DID (ruling W3/9,
+    // "copy matches code, never the reverse"). src/app/api/outreach/sweep/route.ts
+    // takes the cron lease and runs its build-continuation pass BEFORE it reads this
+    // switch, on every ten-minute tick, and that pass reads Dentally to advance any
+    // campaign left in `building`. Only the send section below the switch is gated —
+    // deliberately, because building a patient list is not sending — and the
+    // switch-on runbook says so twice in the words the owner would be given if he
+    // asked (docs/runbooks/agent-switch-on.md, "Already running with the switch off"
+    // and "Stop"). So "their sweep halts" was the one place the practice was told the
+    // opposite of what the tick does, on the screen where the decision is made.
+    //
+    // The replacement names both halves: sending stops (which is what the switch is
+    // for) and list-building continues (which is what the owner would otherwise
+    // discover from the Dentally read budget). catalog.test.ts derives the
+    // requirement from the ORDER of the two calls in the route, so the day the build
+    // pass moves below the switch this sentence is free to say the sweep stops — and
+    // is required to change, rather than standing as stale prose.
     slug: "outreach",
     label: "Segment outreach",
     group: "Patient lifecycle",
-    halts: "Segment outreach campaigns stop drafting and sending, and their sweep halts.",
+    halts:
+      "Segment outreach campaigns stop drafting and sending, so nothing further reaches a patient. " +
+      "Campaign list-building deliberately continues in the background, so a campaign left part-built " +
+      "still finishes its list.",
   },
   {
     slug: "after-hours",
@@ -217,10 +238,22 @@ export const SYSTEMS: SystemDef[] = [
     halts: "The public assessment goes offline and its follow-up stops.",
   },
   {
+    // THE SWITCH STOPS TWO DOORS, NOT ONE (ruling W3/19). Creating a patient in
+    // Dentally is the New-patient onboarding module's job whichever door asks
+    // for it, so `writeSlugFor("copilot", "patient.create")` resolves to THIS
+    // slug and the write gate refuses the co-pilot's create with `system_off`
+    // once this is switched off. An owner reading only the first half of this
+    // sentence would believe they had closed the public form and left the
+    // co-pilot able to add people to the practice's real book — the exact
+    // misreading ruling W3/9 ("copy matches code, never the reverse") exists to
+    // prevent. catalog.test.ts derives the requirement from the write registry,
+    // so the day patient.create stops resolving `onboarding` this sentence goes
+    // red rather than quietly over-promising.
     slug: "onboarding",
     label: "Onboarding",
     group: "Acquisition",
-    halts: "The public new-patient onboarding form goes offline.",
+    halts:
+      "The public new-patient onboarding form goes offline, and the co-pilot can no longer create a patient in Dentally when the owner asks.",
   },
   {
     // The FP17/PR consent + exemption declaration capture. Ships DORMANT (seeded

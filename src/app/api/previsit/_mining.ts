@@ -439,7 +439,7 @@ export async function runMiningSweep(args: {
     // Counters for days claimed but NOT yet written to the coverage row. They
     // are committed with the claim, never before it: an exclusion counted for a
     // day we did not claim would be counted again when that day is re-read.
-    let pending = { examined: 0, candidates: 0, excludedNoDob: 0, excludedUnderAge: 0 };
+    let pending = { examined: 0, candidates: 0, excludedNoDob: 0, excludedUnderAge: 0, excludedUnreadable: 0 };
     let claimed: string | null = null;
     let committed: string | null = null;
 
@@ -456,13 +456,17 @@ export async function runMiningSweep(args: {
         candidates: pending.candidates,
         excludedNoDob: pending.excludedNoDob,
         excludedUnderAge: pending.excludedUnderAge,
+        // The third exclusion, carried the same way as the other two: counted per
+        // day and committed with the claim, so a patient we could not look up on
+        // a day we did not claim is counted when that day is re-read, not twice.
+        excludedUnreadable: pending.excludedUnreadable,
         // There is more to read while any of this window is unread, and after
         // that while the horizon is still ahead of us.
         moreToRead: claimed !== window.from || nextWindow({ coveredFrom: claimed }, now) !== null,
         now: now.toISOString(),
       });
       committed = claimed;
-      pending = { examined: 0, candidates: 0, excludedNoDob: 0, excludedUnderAge: 0 };
+      pending = { examined: 0, candidates: 0, excludedNoDob: 0, excludedUnderAge: 0, excludedUnreadable: 0 };
     };
 
     // NEWEST DAY FIRST, so what is claimed is always a contiguous range ending at
@@ -479,6 +483,7 @@ export async function runMiningSweep(args: {
       }
       report.matched += outcome.matched;
       report.unreadable += outcome.unreadable;
+      pending.excludedUnreadable += outcome.unreadable;
       pending.examined += outcome.examined;
       pending.excludedNoDob += outcome.excludedNoDob;
       pending.excludedUnderAge += outcome.excludedUnderAge;

@@ -31,6 +31,12 @@ const store = vi.hoisted(() => ({
   // what every size test above wants; the passage-count tests at the foot of
   // this file replace it to drive the real chunker over a long manual.
   pages: ["text"] as string[],
+  // THE TWO WRITES THIS ROUTE PERFORMS, counted. The write-lock section at the
+  // foot of this file asserts a refused role reached NEITHER, which a status
+  // assertion on its own cannot prove: a 403 returned after the manual had
+  // already been replaced would pass every check that only reads the response.
+  replaced: 0,
+  deleted: 0,
 }));
 
 // PARTIAL: requireClientAccess, requireModuleApiAccess and requireApproverRole
@@ -44,8 +50,14 @@ vi.mock("@/lib/mock/clients", () => ({
 }));
 vi.mock("@/lib/equipment/repository", () => ({
   getAsset: async () => ({ id: "asset-1", clientId: "vitality", name: "Lisa steriliser" }),
-  replaceManual: async () => ({ ok: true }),
-  deleteManualForAsset: async () => true,
+  replaceManual: async () => {
+    store.replaced += 1;
+    return { ok: true };
+  },
+  deleteManualForAsset: async () => {
+    store.deleted += 1;
+    return true;
+  },
 }));
 // The extractor is stubbed so an oversized upload that slipped past the ceiling
 // would be VISIBLE (store.extracted) rather than failing for its own reasons.
@@ -65,7 +77,7 @@ vi.mock("@/lib/equipment/pdf-text", async (importOriginal) => {
   };
 });
 
-import { POST } from "./route";
+import { POST, DELETE } from "./route";
 import { MAX_PDF_BYTES, MAX_PDF_SIZE_LABEL } from "@/lib/equipment/pdf-text";
 
 /** A file of exactly `bytes` bytes that starts with the PDF magic number. */
@@ -95,6 +107,8 @@ beforeEach(() => {
   store.user = { id: "u1", role: "client_owner", clientId: "vitality", siteIds: ["site-cc"] };
   store.extracted = 0;
   store.pages = ["text"];
+  store.replaced = 0;
+  store.deleted = 0;
 });
 
 describe("an oversized manual is refused with the number this route actually enforces", () => {
@@ -203,5 +217,117 @@ describe("the upload tells the practice how much of the manual the desk will act
     expect(body.searchedInFull).toBe(true);
     expect(String(body.message)).not.toContain(String(MANUAL_CHUNK_READ_CAP));
     expect(String(body.message)).toMatch(/^Stored 40 searchable passages from \d+ pages\.$/);
+  });
+});
+
+// ===========================================================================
+// THE WRITE LOCK ON THIS FILE, DRIVEN THROUGH THE HANDLERS (charter §0/9 + /11,
+// rulings W2-A/1 and W3/17).
+//
+// WHY THIS SECTION EXISTS. On ruling W2-A/1 the `equipment` module widened to
+// every authenticated clearance — a dental nurse is a `client_staff` and the
+// desk has to answer her — so `requireModuleApiAccess(auth, "equipment")` at
+// line 107 of the route denies NOBODY and cannot be the lock here. Every method
+// on this route is a write, and `requireApproverRole` is the only boundary left.
+//
+// It was pinned in four places and all four were `expect(src).toContain(
+// "requireApproverRole(auth)")` — client-api-module-guard-coverage.test.ts,
+// destructive-route-capability-coverage.test.ts, src/lib/desk/gating.test.ts and
+// src/lib/nav.staff.test.ts. A source grep cannot see whether the call's RESULT
+// is acted on: mutating the guard's own line to `if (false && writeDenied)`
+// leaves the string in place and the whole 14,225-test suite stayed green while
+// a receptionist could replace the manual the desk quotes to the practice.
+// nav.staff.test.ts exercises the helper in ISOLATION, which proves the role
+// list and nothing about this route's wiring.
+//
+// So this drives the REAL POST and DELETE handlers (only the session read is
+// faked — see the partial auth/guard mock above, which keeps the real
+// `requireApproverRole`) for every clearance, and asserts the WRITE did not
+// happen as well as the status. `manual-write-lock-refuses-every-non-approver`
+// is the named test the inert-guard mutation reddens.
+// ===========================================================================
+
+/** Every clearance in the platform, and whether it may replace a manual. */
+const CLEARANCES: ReadonlyArray<{ role: string; mayWrite: boolean; who: string }> = [
+  { role: "agency_admin", mayWrite: true, who: "the agency" },
+  { role: "client_owner", mayWrite: true, who: "the practice owner" },
+  { role: "client_coordinator", mayWrite: true, who: "the practice manager" },
+  { role: "client_clinician", mayWrite: false, who: "a dentist" },
+  { role: "client_staff", mayWrite: false, who: "a nurse or receptionist" },
+];
+
+function asRole(role: string) {
+  store.user = { id: "u1", role, clientId: "vitality", siteIds: ["site-cc"] };
+}
+
+function removeManual(): Promise<Response> {
+  return DELETE(
+    new Request("http://localhost/api/equipment/manual", {
+      method: "DELETE",
+      body: JSON.stringify({ client: "vitality", assetId: "asset-1" }),
+    }),
+  );
+}
+
+describe("only an approver may replace or remove a manual", () => {
+  it("manual-write-lock-refuses-every-non-approver", async () => {
+    for (const c of CLEARANCES.filter((x) => !x.mayWrite)) {
+      store.replaced = 0;
+      store.deleted = 0;
+      store.extracted = 0;
+      asRole(c.role);
+
+      const upload = await POST(
+        (() => {
+          const form = new FormData();
+          form.append("client", "vitality");
+          form.append("assetId", "asset-1");
+          form.append("file", pdfOf(1024));
+          return new Request("http://localhost/api/equipment/manual", { method: "POST", body: form });
+        })(),
+      );
+      expect(upload.status, `${c.who} (${c.role}) uploaded a manual`).toBe(403);
+      expect(store.replaced, `${c.who} replaced the manual the desk quotes from`).toBe(0);
+      expect(store.extracted, `${c.who} reached the PDF extractor`).toBe(0);
+
+      const removed = await removeManual();
+      expect(removed.status, `${c.who} (${c.role}) deleted a manual`).toBe(403);
+      expect(store.deleted, `${c.who} deleted the manual the desk quotes from`).toBe(0);
+    }
+  });
+
+  it("manual-write-lock-admits-every-approver", async () => {
+    // The fail direction is CLOSED, not shut. Without this half the guard could
+    // be tightened to refuse everybody and the refusal test above would still
+    // pass against a route no practice manager could use.
+    for (const c of CLEARANCES.filter((x) => x.mayWrite)) {
+      store.replaced = 0;
+      store.deleted = 0;
+      asRole(c.role);
+
+      const form = new FormData();
+      form.append("client", "vitality");
+      form.append("assetId", "asset-1");
+      form.append("file", pdfOf(1024));
+      const upload = await POST(
+        new Request("http://localhost/api/equipment/manual", { method: "POST", body: form }),
+      );
+      expect(upload.status, `${c.who} (${c.role}) could not upload a manual`).toBe(200);
+      expect(store.replaced).toBe(1);
+
+      const removed = await removeManual();
+      expect(removed.status, `${c.who} (${c.role}) could not delete a manual`).toBe(200);
+      expect(store.deleted).toBe(1);
+    }
+  });
+
+  it("the refused clearances are exactly the ones outside APPROVER_ROLES", async () => {
+    // Pins the TABLE above against the shipped role list, so a role added to
+    // APPROVER_ROLES without a decision here is red rather than silently
+    // admitted by a table nobody updated.
+    const { APPROVER_ROLES } = await import("@/lib/absence/rules");
+    expect(CLEARANCES.filter((c) => c.mayWrite).map((c) => c.role).sort()).toEqual(
+      [...APPROVER_ROLES].sort(),
+    );
   });
 });

@@ -1,0 +1,118 @@
+-- 0102_interest_counts_search_path.sql
+--
+-- APPLIED 6 September 2026 by Fable via the Supabase MCP, after reading it in
+-- full (ruling W3/33: a lane writes the FILE, Fable applies it), and verified
+-- live afterwards. One line of hardening on a function that was already live:
+-- `interest_counts_by_treatment(text[])`, added by 0101 and applied on 5 September
+-- 2026, keeps its body, its grants and its behaviour, and gains `pg_temp` at the
+-- end of its pinned `search_path`. 0101's file and the live database now say the
+-- same thing; the paragraph below headed "BEFORE THIS WAS APPLIED" describes the
+-- state this file closed, and still governs any environment where it has not run.
+--
+-- ===========================================================================
+-- WHY A WHOLE MIGRATION FOR ONE CLAUSE
+-- ===========================================================================
+-- 0101 said, in its own header, that "`search_path` is pinned to public so a
+-- definer-rights body cannot be resolved against a caller-controlled schema". That
+-- sentence describes the property everybody wants from a SECURITY DEFINER function
+-- and `set search_path = public` does not provide it.
+--
+-- Postgres searches the session's OWN temporary schema FIRST — ahead of every
+-- schema named in the path, and ahead of pg_catalog — PRECISELY WHEN pg_temp is
+-- not named in the path. Naming it moves it to where it is named. The temporary
+-- schema is searched for RELATION names, and `treatment_interest` inside the
+-- function is a relation, so with the short pin a caller who can create a temp
+-- table of that name has the definer-rights body read THEIR table and return
+-- whatever they planted — which the pre-visit screen prints as the practice's
+-- headline interest figures and the co-pilot reads out as a campaign's size.
+--
+-- Reproduced, not reasoned about: on a throwaway PostgreSQL 17 instance the exact
+-- function body with `set search_path = public` returned a planted temp table's
+-- rows; with `set search_path = public, pg_temp` it returned the real ones.
+--
+-- ===========================================================================
+-- WHAT THE REACH ACTUALLY IS — STATED SO NOBODY OVER-READS THIS FILE
+-- ===========================================================================
+-- Nil, today. 0101 revokes EXECUTE from public, anon and authenticated and grants
+-- it to service_role alone. Service_role already bypasses RLS on
+-- `treatment_interest` and can read the table directly, so the function hands it
+-- no privilege it does not have. And anon/authenticated reach this database only
+-- through PostgREST, which exposes no way to CREATE TEMP TABLE. Nothing in
+-- production is exploitable through this and nothing was.
+--
+-- It is fixed because a header is a claim about the system (W3/9: copy matches
+-- code, never the reverse), and because 0101 is the file the NEXT security-definer
+-- function in this tree will be copied from. The day one of those is granted to a
+-- narrower role — an analytics role, or `authenticated` behind an RLS policy — on
+-- the strength of that header, the short pin stops being harmless. Fixing it while
+-- it costs one line is the whole of the argument.
+--
+-- ===========================================================================
+-- WHY `alter function` AND NOT `create or replace`
+-- ===========================================================================
+-- Because exactly one thing is wrong, and a redefinition would put a second copy
+-- of the body in the tree for the two files to drift apart on. `alter function …
+-- set search_path` replaces only the SET clause; the body, the volatility, the
+-- SECURITY DEFINER marking, the comment and the grants are all untouched by it,
+-- which is why nothing here re-states them.
+--
+-- 0101's own SET clause has been corrected in place to match, so a database built
+-- by replaying the migrations from scratch arrives at the same definition without
+-- this file, and running this file against it is a no-op that re-asserts what is
+-- already true. Both statements below are safe to run twice.
+--
+-- BEFORE THIS WAS APPLIED, NOTHING BROKE AND NOTHING LIED — which is why it could
+-- wait for a reading. The live function kept the short pin, returned exactly the
+-- numbers it returns now, and stayed callable by service_role alone; the only
+-- cost was that 0101's file and the applied database differed by one clause,
+-- which 0101's header stated plainly. That gap is closed. The same remains true
+-- of any environment where this file has not yet run.
+
+alter function public.interest_counts_by_treatment(text[])
+  set search_path = public, pg_temp;
+
+-- The comment is re-asserted rather than assumed: `alter function` leaves it in
+-- place, and re-stating it makes this file readable on its own by anyone checking
+-- what the live function is for.
+comment on function public.interest_counts_by_treatment(text[]) is
+  'Distinct patients who answered yes, per treatment, for the given sites. The exact form of countInterestByTreatmentDetailed''s keyset walk, which remains the fallback when this function is absent. search_path pins public ahead of pg_temp so a definer-rights body can never resolve treatment_interest to a caller''s temporary table.';
+
+-- NOT TOUCHED HERE, ON PURPOSE — AND SINCE ANSWERED BY 0104, WHICH IS WHY THIS
+-- PARAGRAPH IS IN THE PAST TENSE.
+--
+-- WHEN THIS FILE WAS WRITTEN, `verify_practice_brain_password` (0003) was the
+-- tree's other SECURITY DEFINER function and it pinned no search_path at all. It
+-- predates this programme, it is not in its diff, and hardening it was NOT a
+-- one-liner: its body calls `crypt()`, and Supabase installs pgcrypto into an
+-- `extensions` schema rather than `public` on a project of this vintage — which
+-- THIS lane had not verified for THIS project, and that was exactly the point. If
+-- it held, a pin naming only `public, pg_temp` would stop `crypt` resolving and
+-- break the practice-brain password gate outright. So the check had to come first
+-- (`select extnamespace::regnamespace from pg_extension where extname='pgcrypto'`),
+-- then the pin naming whatever schema that returned, then the gate exercised.
+-- Raised here rather than smuggled in.
+--
+-- THE CHECK WAS RUN AND THE ANSWER WAS `extensions` (ruling W3/35, 6 September
+-- 2026). 0104_practice_brain_password_definer_hardening.sql — two files along,
+-- applied and verified live the same day — pins
+-- `search_path = public, extensions, pg_temp` on that function, revokes EXECUTE
+-- from PUBLIC/anon/authenticated, and grants it to service_role alone. So the
+-- sentence this paragraph originally ended on — that EXECUTE "was never revoked
+-- from PUBLIC, so unlike this function it is callable by the browser keys, and
+-- PostgREST's inability to run DDL is the only thing standing in the way" —
+-- described the state 0104 closed and stopped being true on 6 September. It is
+-- corrected here in place, not quietly, because a reader working through this
+-- directory in order should not be told by one file that a credential-table
+-- definer is unpinned and anon-callable when the file two along made it neither
+-- (W3/9: copy matches code, never the reverse; W3/18's precedent: comments do not
+-- alter applied state, so correcting one is safe and saying so in the file is the
+-- price of doing it).
+--
+-- WHAT STILL GOVERNS AN ENVIRONMENT WHERE 0104 HAS NOT RUN: exactly the state
+-- above. 0003's own `create function` statement is unchanged and still carries no
+-- SET clause, so a database replayed from scratch that stops before 0104 has the
+-- unpinned, PUBLIC-executable function this paragraph describes. That is why the
+-- named exemption for `0003_practice_brain.sql::verify_practice_brain_password`
+-- in src/lib/migration-definer-search-path.test.ts is still there and still
+-- correct — it now cites 0104 as the answer rather than a check nobody had run,
+-- and it goes stale (red) only if 0003's create statement is itself pinned.

@@ -82,6 +82,10 @@ vi.mock("@/lib/mock/clients", () => ({
 vi.mock("@/lib/systems/repository", () => ({
   getDisabledSlugsForSend: async () => new Set(hoisted.disabledSlugs),
   getDisabledSlugs: async () => new Set(hoisted.disabledSlugs),
+  // The drain's per-row gate reads the switch through this same module, so the
+  // fake answers the single-slug question the same way it answers the set one — a
+  // mock looser than live here would make the mid-run stop untestable.
+  isSystemEnabledForSend: async (_clientId: string, slug: string) => !hoisted.disabledSlugs.has(slug),
 }));
 vi.mock("@/lib/messaging/channel-pref", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/messaging/channel-pref")>();

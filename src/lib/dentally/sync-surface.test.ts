@@ -117,17 +117,31 @@ describe("the three groups say what flows and what does not", () => {
     expect(syncHeadline("live")).toMatch(/is ON/);
   });
 
-  it("has THREE headline states, because 'we cannot yet' is not 'you chose not to'", () => {
-    // Only one of the two is something the reader can change, and the sentence
-    // has to say which — otherwise an owner waits on the agency for a switch
-    // sitting on the next tab.
+  it("has FOUR headline states, because 'we cannot yet' is not 'you chose not to'", () => {
+    // Only one of the two switches is something the reader can change, and the
+    // sentence has to say which — otherwise an owner waits on the agency for a
+    // switch sitting on the next tab.
     const ownerOff = syncHeadline("live", true);
     expect(ownerOff).toMatch(/because you have switched it off/i);
     expect(ownerOff).toMatch(/System controls/);
-    // The owner's own switch wins the sentence even when the key is missing too:
-    // it is the nearer of the two and the one they can act on.
-    expect(syncHeadline("dry_run", true)).toBe(ownerOff);
     expect(syncHeadline("live", false)).toMatch(/is ON/);
+    expect(syncHeadline("dry_run", false)).toMatch(/is OFF/);
+
+    // THE FOURTH, WHICH USED TO BE THE THIRD REPEATED. This assertion read
+    // `syncHeadline("dry_run", true)).toBe(ownerOff)` — the owner's switch won
+    // the sentence outright, on the reasoning that it is the nearer of the two.
+    // That reasoning assumed a switch reading OFF meant an owner had turned it
+    // off, and the write-back migration seeds it off on every database instead
+    // (see the note on syncHeadline, and seeded-master-row.test.ts, which drives
+    // the whole page in exactly that state). So when the connection is missing
+    // TOO the sentence names both, blames neither party, and says plainly that
+    // one flip is not enough.
+    const both = syncHeadline("dry_run", true);
+    expect(both).not.toBe(ownerOff);
+    expect(both).not.toMatch(/because you have switched it off/i);
+    expect(both).toMatch(/two separate things/i);
+    expect(both).toMatch(/System controls/);
+    expect(both).toMatch(/will not start sending them on its own/i);
   });
 
   it("nothing is MIRRORED while the owner's master switch is off, even with the key", () => {
@@ -144,6 +158,14 @@ describe("the three groups say what flows and what does not", () => {
     expect(mine?.detail).toMatch(/System controls/);
     const theirs = syncFacts("dry_run", false).find((f) => f.id === "appointment.create");
     expect(theirs?.detail).toMatch(/waiting on the practice's Dentally write key/);
+    // ...and when it is BOTH, it says both rather than picking the nearer one.
+    // "ONE thing you control" under a headline that has just named two is the
+    // sentence that sends an owner to flip their half of a two-key lock for no
+    // effect; the same fourth state as the headline's.
+    const ours = syncFacts("dry_run", true).find((f) => f.id === "appointment.create");
+    expect(ours?.detail).not.toMatch(/ONE thing you control/);
+    expect(ours?.detail).toMatch(/Two things have to be in place/i);
+    expect(ours?.detail).toMatch(/System controls/);
   });
 
   it("gives every group a title and an order", () => {
@@ -160,6 +182,12 @@ describe("the three groups say what flows and what does not", () => {
     const hisSwitch = syncGroupTitle("pending_on_key", true);
     expect(hisSwitch).toMatch(/System controls/);
     expect(hisSwitch).not.toMatch(/write key/i);
+    // It STATES the switch and does not instruct: this function holds one
+    // boolean and cannot tell "only your switch is off" from "your switch and
+    // the connection both are", which is the state every seeded database is in.
+    // "Waiting on your switch" would promise, above bullets that deny it, that
+    // one flip starts the writes.
+    expect(hisSwitch).not.toMatch(/waiting on your switch/i);
     // With his switch on, the key really is the thing missing, and it is named.
     expect(syncGroupTitle("pending_on_key", false)).toMatch(/Dentally write key/);
     // The static record is the fallback for a caller that does not know which

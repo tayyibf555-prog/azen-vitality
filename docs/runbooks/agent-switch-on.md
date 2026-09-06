@@ -41,8 +41,14 @@ to be open before anybody is messaged.**
    months** (every ten minutes and hourly), so for those two the switch is the
    only thing between them and their first tick. **Five sweeps have no job at
    all** — the closer, the collection run, post-op, and both pre-visit passes —
-   and switching those toggles on does **nothing at all**, with no error
-   anywhere, until the SQL in §2 is run.
+   and switching those toggles on drafts and sends **nothing at all**, with no
+   error anywhere, until the SQL in §2 is run. **`pre-visit-triage` is the one
+   exception worth knowing about**, because its switch is not inert even with
+   no cron: it messages nobody, but it is also what enables the owner-only
+   **Build / refresh candidates** scan on the pre-visit page, which reads real
+   patient history and builds the implant-candidate list with no scheduled job
+   involved at all — and what arms the public questionnaire form for the links
+   the sweep will send once its SQL is run (§3, and rulings W2-C/4 and W3/21).
 
 **What a switch actually stops.** Switching a system OFF halts everything it
 *does to patients*: its sweep, its drafting, its outbox, its agent replies, its
@@ -89,13 +95,26 @@ or cannot read the list of patients marked inactive / do-not-contact, the tick i
 The next tick retries. While dry-run is on, both of those degrade the old way
 instead, so development against a partial database still works.
 
-**Panic stop, no deploy needed.** Set `MESSAGING_DRY_RUN=true` in Vercel and
-redeploy, or pause every sweep at once:
+**Panic stop.** Two options, and the fast one is the SQL. **No deploy needed —
+pause every sweep at once:**
 
 ```sql
 select cron.alter_job(j.jobid, active := false)
   from cron.job j where j.jobname like 'app-sweep-%';
 ```
+
+**That stops the drafting, not the delivery.** `app-sweep-%` does not match
+`app-drain`, the job that actually sends: it goes on running every five minutes
+and goes on delivering rows that were already queued. To stop those too, switch
+the systems themselves off in **System controls** — the drain re-reads every
+switch and refuses a source whose system is off, so its rows sit queued — or
+pause the drain with the same call and `j.jobname = 'app-drain'`.
+
+**The other option is `MESSAGING_DRY_RUN=true` in Vercel, and it needs a
+deploy.** It stops every send everywhere, but only from the moment the redeploy
+is serving: the deployment that is running keeps the value it was built with,
+and the drain fires again on the next tick while the build runs. It is the
+setting to leave in place afterwards, not the thing to reach for first.
 
 ---
 
@@ -160,23 +179,35 @@ from cron.job` against the production project on **4 September 2026**, with
 `cron.job_run_details` to confirm the jobs actually fire rather than merely exist:
 `app-sweep-outreach` had 6,949 successful runs, the last at 19:30 UTC that day,
 and `app-sweep-anomaly` 336, the last at 18:45. The same list is held as data in
-`src/lib/agent-wiring/runbook.test.ts`, which asserts this table row by row, so
-the two cannot drift apart quietly: when a job is registered later, change the
-data there and this table in one edit.
+`src/lib/agent-wiring/scheduler.ts` — the one module registration truth lives in
+(ruling **W3/31**), which is why System controls and Home's OS band in §4 follow
+a registration without anybody editing copy. `runbook.test.ts` asserts this table
+against that module row by row, in both directions, so the two cannot drift apart
+quietly: when a job is registered later, change `SCHEDULER` there and this table
+in one edit.
 
-**An ops file's header is not evidence.** The SQL for the closer, the collection
-run and post-op is in `supabase/ops/register-*-cron.sql`, written and deliberately
-not applied. Two of those files — `register-outreach-cron.sql` and
-`register-anomaly-cron.sql` — still describe themselves as *"NOT YET APPLIED"*
-even though their jobs have been running for months. A file states its status on
-the day it was written; `cron.job` states it today. Read the table, not the
-header. Note also that `register-anomaly-cron.sql` schedules minute **40** while
-the live job runs at minute **45**, and `cron.schedule()` on an existing job name
-*updates* it — so running that file now would move a job that is already working.
+**An ops file's header is a claim, not evidence.** The SQL for the closer, the
+collection run and post-op is in `supabase/ops/register-*-cron.sql`, written and
+deliberately not applied, and each says so. Five other files —
+`register-outreach`, `register-anomaly`, `register-landing-promote`,
+`register-dentally-prewarm` and `purge-assessment-step-events` — described
+themselves as *"NOT YET APPLIED"* for months while their jobs ran; they were
+corrected on 5 September 2026 under ruling W3/22 and now open
+`-- STATUS: APPLIED (verify against cron.job)`, each carrying the one-line
+`cron.job` query that would disprove it. A file states its status on the day it
+was written; `cron.job` states it today.
+`src/lib/agent-wiring/ops-cron-registration.test.ts` holds the whole directory to
+this table in both directions — a file for a live job must say APPLIED and must
+schedule the minute that job really runs, and a file for a job the scheduler has
+never heard of must keep saying a step is outstanding. Read the table, then the
+query — never the header alone.
 
-**The two pre-visit jobs have no ops file at all**, so their SQL is here. Neither
-can be triggered any other way: both routes require the scheduler's secret, and
-the sweep is the only writer of `previsit_outbox`, so until this is run the
+**The two pre-visit jobs are the ones still outstanding.** Their SQL is both
+below and in `supabase/ops/register-previsit-cron.sql` and
+`supabase/ops/register-previsit-mining-cron.sql` (added under ruling W3/30, and
+both files open *"NOT YET APPLIED"* because both jobs genuinely are). Neither can
+be triggered any other way: both routes require the scheduler's secret, and the
+sweep is the only writer of `previsit_outbox`, so until this is run the
 `pre-visit-triage` switch prepares the module and sends nothing.
 
 ```sql
@@ -185,6 +216,14 @@ the sweep is the only writer of `previsit_outbox`, so until this is run the
 -- ahead by default and only inside 08:00-20:00 Europe/London. */10 matches the
 -- other lifecycle sweeps: there is ONE send instant per appointment, so the
 -- cadence is simply the precision with which that instant is hit.
+-- WHAT A TICK COSTS, so that nobody registers this blind either. Passes 2 and 3
+-- read Dentally not at all. Pass 1 pages the appointment window per mapped site,
+-- and pays for ONE patient read only where the appointment is new to it: it
+-- checks previsit_target before paying, so an appointment flagged at 09:00 costs
+-- no Dentally request at 09:10 or on any tick after it. The examination budget is
+-- split evenly across the mapped sites (ruling W3/25), so the busiest cannot
+-- consume the whole tick. All of it at BACKGROUND priority against the shared
+-- 3,600/hour budget, so a refused tick makes no read and resumes at the next one.
 -- Safe to register before the system is switched on — 'pre-visit-triage' is
 -- default-off, so every run returns {"ok":true,"skipped":"system off"} until an
 -- owner enables it. CRON_SECRET is not written here; it lives inside
@@ -307,8 +346,11 @@ with an attempt row and a first-response time.
 **Stop.** Switch off `speed-to-lead`. Public intake is rejected and nothing is
 auto-contacted.
 
-**Gaps.** `contactLead` reads no toggle itself; all four callers gate it, which
-is now pinned by a source crawl rather than by a guard inside the function.
+**Gaps.** `contactLead` reads no toggle itself; all six callers gate it, which
+is now pinned by a source crawl rather than by a guard inside the function. The
+number is derived, not remembered: it said "four" while six files already reached
+the primitive, so `roster.test.ts` recomputes the word from the crawl and
+`runbook.test.ts` holds this sentence to the same word.
 
 ---
 
@@ -554,12 +596,20 @@ mark live appointments cancelled — watch that on day one.
 
 **Switch:** `treatment-coordinator`. **Trigger:** `src/app/api/coordinator/sweep/route.ts`.
 
-**Day one.** Unfinished treatment opportunities scoring above
-`COORDINATOR_AUTO_SEND_THRESHOLD` are drafted and queued; the rest wait for
-approval.
+**Day one.** Unfinished treatment opportunities whose outstanding balance is
+**below** `COORDINATOR_AUTO_SEND_THRESHOLD` are drafted, auto-approved and
+queued; the ones at or above it wait for a person to approve them in the
+worklist. That way round is deliberate: the more a patient still owes, the less
+willing the platform is to text them about it unattended.
 
 **Volume bound.** The sweep's own per-run cap, then the drain's cross-module
 once-per-day-per-patient cap.
+
+**Needs first.** `COORDINATOR_AUTO_SEND_THRESHOLD` — the outstanding balance in
+**pounds** below which a draft sends itself, defaulting to **250**. The default
+is a decision, not a placeholder: leave it unset and every opportunity under
+£250 is texted without anybody reading the draft. Set it to `0` for a first week
+in which nothing auto-sends and every draft is approved by hand.
 
 **Verify in the first hour.** Treatment Coordinator worklist → touches sent;
 drain `perSource.coordinator`.
@@ -582,9 +632,13 @@ other read-only sync.
 a human to approve. Approval is the only thing that ever writes `closer_outbox`,
 and that is structural: the outbox CHECK constraint has no `draft` value at all.
 
-**Volume bound.** `CLOSER_DRAFT_BUDGET_LIMIT` drafts per
-`CLOSER_DRAFT_BUDGET_WINDOW`; `CLOSER_COOLDOWN_HOURS` between chases to one
-patient.
+**Volume bound.** At most 500 plans looked at and 25 drafts written a run
+(`CLOSER_MAX_EXAMINED_PER_RUN`, `CLOSER_MAX_DRAFTS_PER_RUN`); a plan whose draft
+was refused, or whose approved message failed to deliver, waits
+`CLOSER_COOLDOWN_HOURS` (24) before it is tried again. A separate
+`CLOSER_DRAFT_BUDGET_LIMIT` (200) per `CLOSER_DRAFT_BUDGET_WINDOW` (3600
+seconds) caps MODEL SPEND, not volume — it is not the number of patients a run
+can reach.
 
 **Needs first.** **Register the cron** (`supabase/ops/register-closer-cron.sql`,
 not applied). Set `CLOSER_BOOKING_URL`.
@@ -609,8 +663,13 @@ is blocked by the daily cap rather than arriving as a second chase.
 **Day one. NOTHING IS SENT.** Reminders about unpaid invoices are drafted for
 approval, and **no figure is quoted** by default.
 
-**Volume bound.** `COLLECTION_DRAFT_BUDGET_LIMIT` per window;
-`COLLECTION_COOLDOWN_HOURS` between reminders to one patient.
+**Volume bound.** At most 300 accounts looked at, 40 balances verified against
+Dentally and 10 drafts written a run (`COLLECTION_MAX_EXAMINED_PER_RUN`,
+`COLLECTION_MAX_VERIFY_READS_PER_RUN`, `COLLECTION_MAX_DRAFTS_PER_RUN`); an
+account that could not be verified, or whose approved reminder failed to
+deliver, waits `COLLECTION_COOLDOWN_HOURS` (24) before it is tried again. A
+separate `COLLECTION_DRAFT_BUDGET_LIMIT` (100) per
+`COLLECTION_DRAFT_BUDGET_WINDOW` (3600 seconds) caps MODEL SPEND, not volume.
 
 **Needs first.** Register the cron (`supabase/ops/register-collection-cron.sql`,
 not applied). Set `COLLECTION_PAYMENT_URL`. **Reconcile one real Dentally invoice
@@ -697,6 +756,16 @@ back on the next morning sends nothing to anyone whose appointment has already
 begun (ruling W3/5 — the invite may never arrive after the visit). Those patients
 are asked at the desk.
 
+**The worklist falls as well as climbs.** The sweep makes a third pass that
+sends nothing and reads no Dentally endpoint: a link that has already gone out is
+**retired once its appointment has started** — the target is stopped with the
+reason `expired` — so the module's own list of live invites does not climb for
+ever behind a delivered message that has nowhere left to go. The response body
+carries `expired`, and `expiredMore: true` beside it means "at least this many;
+the rest go on the next tick". Like the other two passes, it cannot run until the
+cron in §2 is registered — which is why the public form and the drain each refuse
+an overtaken link on their own rather than waiting for this to tidy up.
+
 **Gaps.** Which questions a patient is asked forks on their payment plan,
 server-side, and the form never says which. That fork is load-bearing and is not
 a switch: read the module's own notes before changing anything about it. The
@@ -718,8 +787,17 @@ has to keep pressing it.
 
 **Switch:** `reviews`. **Trigger:** `src/app/api/reviews/sweep/route.ts` (every 15 min).
 
-**Day one.** Patients who attended more than `REVIEW_DELAY_HOURS` ago are asked
-for a review, inside the `REVIEW_MORNING_HOUR`–`REVIEW_CUTOFF_HOUR` window only.
+**Day one.** A patient seen before 3pm is asked for a review three hours later
+the same day; anyone seen after that is asked at 10am the next morning. Those
+hours are the shipped defaults. (`DEFAULT_REVIEW_SCHEDULE` in
+`src/lib/reviews/schedule.ts` holds all three; `REVIEW_DELAY_HOURS`,
+`REVIEW_CUTOFF_HOUR` and `REVIEW_MORNING_HOUR` move them.)
+
+There is **no send window**. The sweep has no hour gate of its own: every request
+whose send instant has already passed goes out on the next tick. Switch `reviews`
+on at 4pm and the people seen at noon and 1pm — due at 3pm and 4pm — are asked
+straight away, outside the hours above, because those hours decide when a request
+becomes *due*, never when the sweep is allowed to send.
 
 **Volume bound.** One request per attended appointment. It drains after the
 lifecycle messages, so it yields the daily slot to all of them.
@@ -807,8 +885,8 @@ anyone** — it writes rows the in-app Notifications feed reads.
 condition **ended**, never because the collector failed to look.
 
 **Needs first.** Nothing. `app-sweep-anomaly` **is registered and active**,
-hourly at minute **45** (§2) — not minute 40, which is what its ops file would
-set if anybody ran it now.
+hourly at minute **45** (§2), and `supabase/ops/register-anomaly-cron.sql` now
+schedules that same minute, so running it could not move the working job.
 
 **Verify in the first hour.** Notifications → the alerts appear with their
 evidence.
@@ -852,7 +930,7 @@ its own defect.
 
 | Symptom | Almost always |
 |---|---|
-| Switched on, nothing happens, ever | Its cron is not registered (§2). Today that is the closer, the collection run, post-op, and both pre-visit jobs — and nothing on screen says so |
+| Switched on, nothing happens, ever | Its cron is not registered (§2). Today that is the closer, the collection run, post-op, and both pre-visit jobs. System controls now says so on the row itself ("Switched on, but it has not started"). **Home is narrower than the panel:** of those four switches only **Pre-visit questions** has a tile of its own, and it reads "On, but nothing runs it yet" rather than a zero. The other three — the closer, the collection run and post-op — have no tile at all, so the only thing Home says about them is the Automations cell subtracting them into its "not started" clause, which names no system. Go to System controls for the per-row sentence. Both screens take the list from `src/lib/agent-wiring/scheduler.ts`, so they follow a registration without anybody editing copy. The pre-visit row's tail differs from the other three, because its switch still opens a door: it says switching on is what lets an owner build the implant-candidate list by hand with **Build / refresh candidates** on the pre-visit page. The closer, the collection run and post-op are the ones that really are "on in name only" |
 | Reviews sends nothing | `REVIEW_LINK_URL` unset |
 | Drafts appear, nothing sends | Draft-for-approval by design (closer, balance, post-op) — or `MESSAGING_DRY_RUN` is not the exact string `false` |
 | Queued rows, nothing sends | The system's own switch is off, or the drain's toggle read failed while messaging is live (it fails **closed**: the whole tick is skipped) |
@@ -878,6 +956,14 @@ its own defect.
 - **A draft cannot send.** For the approval modules this is structural in three
   independent ways: the outbox CHECK constraint has no `draft` value, the insert
   writes only the touch table, and the drain lists only `status='queued'`.
-- **Patient-facing copy never says NHS or private**, in any agent, any form, any
-  message. The output guardrail in the drain blocks the row rather than sending
-  it, and logs loudly.
+- **Copy the platform writes to a patient never says NHS or private** — messages,
+  agent replies, questionnaire questions and their option labels, from any agent.
+  The output guardrail in the drain blocks the row rather than sending it, and
+  logs loudly. **The one carve-out is the public booking form**, where the patient
+  is *choosing* which service they want: naming the two options IS the question,
+  the practice's own site does the same, and the Dentally booking payload needs
+  the distinction (ruling **W3/36**, 6 September 2026). That is
+  `src/components/book/booking-calendar.tsx`, and it is the whole of the carve-out
+  — held to exactly those two option labels by the named exemption in
+  `src/lib/systems/os-copy-sweep.test.ts`, which goes red the day the labels stop
+  being there. Do not widen it, and do not "fix" the booking form.

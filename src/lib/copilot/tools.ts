@@ -31,7 +31,9 @@ import {
   listSitePractitioners,
   dentallyReadKey,
   dentallyFromEnv,
+  type AppointmentRecord,
   type PatientRecord,
+  type PlanRecord,
 } from "@/lib/dentally/read";
 // buildManualBookingPayload is the SHARED, live-calibrated derivation of an
 // appointment payload: the required fields Dentally really enforces (a finish
@@ -48,9 +50,14 @@ import {
   DentallyWriteRefused,
   dentallyWrite,
   dentallyWriteMode,
+  dentallyWriteTarget,
   isDentallyWriteMasterOff,
   targetLabel,
 } from "@/lib/dentally/write-gate";
+// THE PER-MODULE SLUG, RESOLVED THE WAY THE GATE RESOLVES IT (ruling W3/2). Asked
+// by `diary_write`'s preview so the sentence the owner is read before they confirm
+// is derived from the same table the gate consults, not from a second reading of it.
+import { type DentallyWriteKind, writeSlugFor } from "@/lib/dentally/write-vocabulary";
 import { DentallyError } from "@/lib/dentally/client";
 import { normaliseGender, ageFromDob } from "@/lib/patient/demographics";
 // The ONE live-calibrated derivation of a new Dentally patient, shared with the
@@ -130,7 +137,12 @@ import {
 import { runOutreachBuildTick } from "@/lib/outreach/build";
 import { parseFilters, parseDailyCap, describeSegment } from "@/lib/outreach/validate";
 import type { OutreachFilters } from "@/lib/outreach/types";
-import { getSystemStates, isSystemEnabled } from "@/lib/systems/repository";
+import {
+  getSystemStates,
+  isSystemEnabled,
+  isSystemEnabledForSend,
+  isSystemEnabledStrict,
+} from "@/lib/systems/repository";
 import { logCopilotAction } from "./actions";
 // THE ROLE-SCOPED TOOL LOCK. Pure decisions (which tools, which knowledge tier,
 // which fields of a patient record) live in scope.ts; this file only obeys them.
@@ -155,7 +167,7 @@ import {
 // one. It is used below on the PATIENT'S OWN pre-visit answers for the same
 // reason it is used on a Dentally note: both are free text somebody outside this
 // codebase typed, and both end up inside a model prompt (ruling W3/14).
-import { buildSecondOpinion, sanitiseClinicalText, secondOpinionRefusal } from "./second-opinion";
+import { buildSecondOpinion, MAX_NOTE_CHARS, sanitiseClinicalText, secondOpinionRefusal } from "./second-opinion";
 // THE PERSON'S OWN WORDS, and the sentence the SERVER says rather than the
 // model. See turn.ts: the equipment door must run its deterministic gate on what
 // the practice actually asked (a tool input is written by the model), and the
@@ -186,7 +198,17 @@ import { AGENTS } from "@/lib/agent-wiring/roster";
 import { SYSTEM_BY_SLUG } from "@/lib/systems/catalog";
 import { assembleSyncStatus } from "@/lib/dentally/sync-status";
 import { syncGroupTitles, type SyncGroup } from "@/lib/dentally/sync-surface";
+// THE LEDGER'S OWN WORDS (ruling W3/11). A ledger row is stored in machine
+// vocabulary and the Sync Status screen translates every field of it; this is the
+// same translation for the assistant, so one ledger is not described in two
+// languages depending on which surface an owner asked.
+import { syncBlockedReasonInWords, syncSourceInWords, syncStatusInWords } from "./sync-words";
 import { INTEREST_TREATMENTS } from "@/lib/triage/bank";
+// THE ONE PLACE A CAPPED INTEREST COUNT IS PUT INTO WORDS (charter §0/5,
+// ruling W3/11). The export route renders "at least 20,000" through this same
+// function; the co-pilot says the same sentence about the same list rather
+// than a second phrasing of it.
+import { interestPeopleLabel } from "@/lib/triage/interest-csv";
 import {
   countInterestByTreatmentDetailed,
   listInterest,
@@ -294,6 +316,30 @@ const CLINICAL_DENIED_ROLE: Role = "client_coordinator";
  * stated marker instead of travelling whole.
  */
 const PATIENT_ANSWER_MAX_CHARS = 2000;
+
+/**
+ * The bound on ONE Dentally clinical note in the `patient_record` tool.
+ *
+ * DELIBERATELY THE SAME NUMBER as the second-opinion envelope's MAX_NOTE_CHARS,
+ * and named here anyway, because the two are not the same DECISION. The
+ * second-opinion bound is a prompt-size argument: twelve notes at 1,200 characters
+ * is roughly 4k tokens, which is what fits beside the rest of that envelope.
+ * `patient_record` is the OPERATIONAL record — it is what an owner or a clinician
+ * reads when they ask the co-pilot about a patient — so its bound is a decision
+ * about what a person is shown, and it should be possible to change one without
+ * silently changing the other. Sharing the literal through
+ * `sanitiseClinicalText`'s default parameter hid that: the call site read
+ * `sanitiseClinicalText(n.body)` and nothing said which of the two bounds it was
+ * taking, or that raising the clinical one would move it.
+ *
+ * IT STILL TRACKS MAX_NOTE_CHARS today, on purpose (the same rows have been read
+ * at that length since wave 1, so a note reads the same however it is reached),
+ * and the truncation is VISIBLE either way — the sanitiser appends
+ * "[note truncated at N characters]", so a shortened note never wears a whole
+ * one's clothes (charter §0/5). If the practice wants the record tab to carry
+ * more than the prompt envelope does, this is the one number to change.
+ */
+const RECORD_NOTE_MAX_CHARS = MAX_NOTE_CHARS;
 
 /** The label that travels with every piece of patient-typed text below. */
 const PATIENT_WORDS_ARE_DATA =
@@ -784,14 +830,73 @@ export const COPILOT_TOOLS: (Anthropic.Tool & { name: CopilotToolName })[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// THE REST OF DENTALLY'S FREE TEXT, DEFUSED ON THE SAME TERMS AS A NOTE
+// (charter §0 item 8, ruling W3/24).
+//
+// A note body was the loudest of these and it was fixed first; it was not the
+// only one. A patient's NAME and their ARCHIVE REASON, an appointment's REASON
+// and the receptionist's NOTE on it ("nervous patient, allow extra time"), the
+// PRACTITIONER's display name, a treatment plan's NAME — every one of them is a
+// string somebody typed into a system this codebase does not control, and every
+// one of them travels into a model prompt through the tools below. The comment
+// beside `patient_record`'s notes used to say that path was the LAST raw source
+// in the tree; it was wrong in its own object literal, and these bounds are what
+// make the sentence true.
+//
+// THE SAME FUNCTION AND THE SAME BOUNDS as the second-opinion envelope
+// (second-opinion.ts), never a second copy of either: a second copy of a
+// sanitiser is the copy that stops being updated. The words survive — only the
+// framing (control characters including the C1 separators JS `\s` misses, and
+// the three characters that let stored text dress itself up as our own protocol)
+// and the unbounded length go.
+// ---------------------------------------------------------------------------
+
+/** A person's name as typed into Dentally. Long enough for any real one. */
+const DENTALLY_NAME_MAX_CHARS = 120;
+/** An appointment reason, and a treatment plan name. Matches second-opinion.ts. */
+const DENTALLY_REASON_MAX_CHARS = 120;
+/** The receptionist's note on a booking. Matches second-opinion.ts. */
+const DENTALLY_APPT_NOTE_MAX_CHARS = 200;
+/** A practitioner's display name. */
+const DENTALLY_PRACTITIONER_MAX_CHARS = 60;
+
+/** Null in, null out: an absent field must not become the empty string. */
+function defang(value: string | null | undefined, max: number): string | null {
+  if (value === null || value === undefined) return null;
+  return sanitiseClinicalText(value, max);
+}
+
+/** One appointment row as the model may read it. Every free-text field defused. */
+function defangAppointment(a: AppointmentRecord) {
+  return {
+    ...a,
+    patientName: defang(a.patientName, DENTALLY_NAME_MAX_CHARS) ?? "",
+    reason: defang(a.reason, DENTALLY_REASON_MAX_CHARS),
+    note: defang(a.note, DENTALLY_APPT_NOTE_MAX_CHARS),
+    practitioner: defang(a.practitioner, DENTALLY_PRACTITIONER_MAX_CHARS),
+  };
+}
+
+/** One treatment plan as the model may read it. `name` is the only free text on it. */
+function defangPlan(p: PlanRecord) {
+  return { ...p, name: sanitiseClinicalText(p.name, DENTALLY_REASON_MAX_CHARS) };
+}
 
 function patientSummary(p: PatientRecord) {
   return {
     id: p.id,
-    name: p.name,
+    name: sanitiseClinicalText(p.name, DENTALLY_NAME_MAX_CHARS),
     phone: p.phone,
     site: siteName(p.siteId),
-    status: p.active ? "active" : p.archivedReason ?? "inactive",
+    // `archivedReason` is free text a member of staff typed when they archived
+    // the record ("duplicate", "moved away"), and it is handed to the model in a
+    // field it reads as platform metadata rather than as somebody's prose — which
+    // is the worse of the two places for an injected sentence to arrive.
+    // (`||`, not `??`: an archive reason made entirely of control characters
+    // sanitises to the empty string, and an empty status field is less honest
+    // than the word the record already means.)
+    status: p.active ? "active" : defang(p.archivedReason, DENTALLY_REASON_MAX_CHARS) || "inactive",
     lastVisit: p.lastVisitAt,
     recallDue: p.recallDueAt,
   };
@@ -1048,11 +1153,22 @@ export function makeCopilotDispatch(
             // characters removed (the C1 separators JS `\s` does not match
             // included), whitespace collapsed, and the three characters that let
             // stored text dress itself up as our own protocol neutralised. This
-            // path predates the programme and was the LAST free-text source in
+            // path predates the programme and was the LOUDEST free-text source in
             // the tree still handed over raw — the second-opinion envelope has
             // always sanitised the same rows (second-opinion.ts), so this is that
             // same function rather than a second copy of it, because a second
             // copy of a sanitiser is the copy that stops being updated.
+            //
+            // IT WAS NOT THE LAST ONE, and this comment used to say it was —
+            // three lines above `treatmentPlans` and `appointmentHistory` in the
+            // same object literal, both of which were still travelling whole
+            // (plan names, appointment reasons, the receptionist's booking note,
+            // the practitioner's name). A sentence like that is worse than no
+            // sentence: it is what stops the next reader looking. They go
+            // through `defangAppointment` / `defangPlan` above now, at the same
+            // bounds the second-opinion envelope uses, and
+            // patient-words-are-data.test.ts drives dirty values through every
+            // one of them so a field added later cannot quietly reopen this.
             //
             // THE WORDS SURVIVE. Nothing is dropped for looking suspicious: a
             // note is a clinical record, and deleting half of one because it
@@ -1064,9 +1180,9 @@ export function makeCopilotDispatch(
             notes: detail.notes.map((n) => ({
               ...n,
               author: sanitiseClinicalText(n.author, 80),
-              body: sanitiseClinicalText(n.body),
+              body: sanitiseClinicalText(n.body, RECORD_NOTE_MAX_CHARS),
             })),
-            treatmentPlans: detail.plans,
+            treatmentPlans: detail.plans.map(defangPlan),
             // getPatientDetail now opts INTO cancelled and did-not-attend rows and
             // PAGES the read (it was a single unpaged 100-row call that excluded
             // both). Two knock-ons, handled here rather than assumed away:
@@ -1077,7 +1193,7 @@ export function makeCopilotDispatch(
             //     the history is bounded before it reaches the model and the true
             //     count is stated rather than silently truncated.
             appointmentHistoryCount: detail.appointments.length,
-            appointmentHistory: detail.appointments.slice(0, 40), // newest first
+            appointmentHistory: detail.appointments.slice(0, 40).map(defangAppointment), // newest first
             // So a failed Dentally read is never reported to the user as "none".
             reads: detail.reads,
           };
@@ -1090,12 +1206,15 @@ export function makeCopilotDispatch(
           return JSON.stringify({
             date,
             count: appts.length,
+            // Defused on the way out for the same reason `patient_record`'s
+            // history is: a day's diary is a list of strings the practice typed,
+            // read here for EVERY patient in it at once.
             appointments: appts.map((a) => ({
               time: a.start,
               durationMin: a.durationMin,
-              patient: a.patientName,
-              reason: a.reason,
-              practitioner: a.practitioner,
+              patient: defang(a.patientName, DENTALLY_NAME_MAX_CHARS) ?? "",
+              reason: defang(a.reason, DENTALLY_REASON_MAX_CHARS),
+              practitioner: defang(a.practitioner, DENTALLY_PRACTITIONER_MAX_CHARS),
               site: siteName(a.siteId),
               state: a.state,
             })),
@@ -1109,8 +1228,8 @@ export function makeCopilotDispatch(
             totalOutstanding: total,
             count: rows.length,
             plans: rows.slice(0, 25).map((r) => ({
-              patient: r.patientName,
-              plan: r.planName,
+              patient: defang(r.patientName, DENTALLY_NAME_MAX_CHARS) ?? "",
+              plan: sanitiseClinicalText(r.planName, DENTALLY_REASON_MAX_CHARS),
               outstanding: r.outstanding,
               planned: r.planned,
               site: siteName(r.siteId),
@@ -1507,7 +1626,7 @@ export function makeCopilotDispatch(
           let contactableKnown = false;
           let excludedMissingData = 0;
           let buildStatus: "ready" | "building" | "paused" | "unavailable" = "building";
-          let pauseReason: "rate-limit" | "error" | null = null;
+          let pauseReason: "rate-limit" | "error" | "exclusions-unreadable" | null = null;
           if (!dentallyReadKey()) {
             buildStatus = "unavailable";
           } else {
@@ -1528,6 +1647,21 @@ export function makeCopilotDispatch(
             } else if (!tick.ok) {
               buildStatus = "paused";
               pauseReason = "error";
+            } else if (tick.skipped && !tick.done) {
+              // A REFUSED TICK IS NOT A RUNNING ONE. `skipped` with `done:false`
+              // has exactly one producer: the build refused because the
+              // targeting-exclusion list (inactive / do-not-contact) could not be
+              // read while messaging is LIVE, so nobody was enrolled, no Dentally
+              // page was walked and the cursor did not move (ruling W1-B/2).
+              // `ok` is true and `stopped` is null on that path, so without this
+              // branch it landed on 'building' and the owner was told the count
+              // was climbing while nothing at all was happening — a number that
+              // is not true, which charter §0/5 forbids outright. It is its own
+              // pause reason rather than "error" because the sentence an owner
+              // needs is different: nothing is broken, a safety check could not
+              // be made, and it will be retried.
+              buildStatus = "paused";
+              pauseReason = "exclusions-unreadable";
             } else {
               buildStatus = tick.done ? "ready" : "building";
             }
@@ -1568,7 +1702,9 @@ export function makeCopilotDispatch(
                   : buildStatus === "paused"
                     ? pauseReason === "rate-limit"
                       ? "The patient scan paused on a Dentally rate limit before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. Tell the owner it paused and will continue automatically, not that the count is rising right now. "
-                      : "The patient scan hit a temporary problem before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. "
+                      : pauseReason === "exclusions-unreadable"
+                        ? "The list of patients who must never be contacted could not be checked just now, so NOBODY was added to this campaign and the scan did not run. Nothing is broken and nothing has been sent; it retries automatically. Tell the owner the count is not rising and that no one has been added yet — never that the list is building. "
+                        : "The patient scan hit a temporary problem before it finished. The matched count so far is saved and the scan resumes from where it left off when the build next runs. "
                     : "The build is still running; the matched count will keep climbing, so tell the owner it updates shortly. ") +
               (contactableKnown && contactable < matched
                 ? `Of the ${matched} matched, ${contactable} have SMS consent and can be contacted; the rest are counted but are not texted (no SMS consent). `
@@ -2119,6 +2255,49 @@ export function makeCopilotDispatch(
             });
           }
 
+          // THE KILL SWITCH, READ STRICTLY — and the reason it is here at all.
+          //
+          // clearance.ts says in writing that "every tool that DOES something —
+          // nudge_lead, launch_outreach_campaign, publish_meta_campaign —
+          // consults the system's switch inside tools.ts and refuses when its
+          // system is off". Two of those three did. This one did not: its gates
+          // were the IDOR check, the site scope, the two-step confirm and the
+          // Meta connection, and none of them is a switch. Because the co-pilot
+          // is NAV_SWITCH_EXEMPT, switching Meta Ads off in System controls hid
+          // the workspace and left the publishing act reachable by asking for it
+          // in a sentence — the exact shape ruling W3/2 closed for the diary, and
+          // a comment that describes a gate which is not there is worse than no
+          // comment, because it stops the next reader looking.
+          //
+          // STRICT rather than the fail-open reader, matching the module's own
+          // spending surface (POST /api/meta-ads/recreate): Meta Ads is a
+          // default-ON slug, so a failed toggle read would otherwise resolve to
+          // "enabled" and authorise objects in the practice's real ad account.
+          // The objects are created PAUSED and nothing spends until the owner
+          // activates them in Ads Manager — which is why this is a coverage gap
+          // rather than a spending one — but "an owner switched it off" is not a
+          // question this door should be answering with a guess.
+          if (!(await isSystemEnabledStrict(clientId, "meta-ads"))) {
+            await logCopilotAction({
+              clientId,
+              siteId: campaign.siteId,
+              actor,
+              action: "publish_meta_campaign",
+              targetRef: `meta_campaign:${campaign.id}`,
+              targetName: campaign.name,
+              channel: null,
+              body: null,
+              status: "blocked:meta_ads_off",
+            });
+            return JSON.stringify({
+              published: false,
+              reason: "system_off",
+              ...readback,
+              message:
+                "Meta Ads is switched off for this practice, so I can't publish it. Switch it on in Operations, System controls, then ask me again. Nothing has gone live.",
+            });
+          }
+
           // HONESTY GATE: publishing to Meta needs the client's Meta account connected AND
           // its credentials present. Until then this refuses and NEVER claims it went live.
           const connection = metaConnection(clientId);
@@ -2518,7 +2697,17 @@ export function makeCopilotDispatch(
               await logCopilotAction({ ...audit, targetRef: null, status: `blocked:${err.reason}` });
               return JSON.stringify({
                 created: false,
-                reason: "writes_disabled",
+                // THE GATE'S OWN REASON, NOT A GUESS AT IT (ruling W3/19 made
+                // this reachable). `reason` used to be the literal
+                // "writes_disabled" while `blockedReason` carried the truth, and
+                // for one wave that was merely redundant: the deployment switch
+                // was the only refusal this branch could see. Since patient.create
+                // answers the Onboarding switch, `system_off` and `master_off`
+                // reach here too, and a machine-readable field that says
+                // "writes_disabled" about a module the owner switched off sends
+                // the reader to the wrong control. The MESSAGE is unchanged — it
+                // relays err.message, which already names the real cause.
+                reason: err.reason,
                 blockedReason: err.reason,
                 ...readback,
                 message:
@@ -2891,8 +3080,38 @@ export function makeCopilotDispatch(
             body: null,
           };
 
-          // The kill switch, exactly where the route checks it.
-          if (!(await isSystemEnabled(clientId, "speed-to-lead"))) {
+          // THE KILL SWITCH, and it is read the way a SEND door has to read it.
+          //
+          // `isSystemEnabled` — what this line used to call — resolves a
+          // toggle-table READ ERROR to the slug's catalog default, and
+          // `speed-to-lead` is default-ON. So a
+          // transient blip on system_toggle would answer "enabled" for a system the
+          // owner had switched OFF, and here that is the whole distance to a real
+          // message: `contactLead` below sends through `sendMessage` DIRECTLY (speed
+          // is the point of the module), so there is no outbox and no drain to read
+          // the switch a second time. Every other acting tool in this file enqueues,
+          // and the drain re-gates it with `getDisabledSlugsForSend`.
+          //
+          // `isSystemEnabledForSend` is the fail-direction law (ruling W1-B/1-5)
+          // applied at a human door rather than a sweep: identical behaviour while
+          // MESSAGING_DRY_RUN is on, and a failed read counts as DISABLED once
+          // messaging is live. A refused nudge is a click the owner repeats; a
+          // nudge sent out of a system they had turned off is not retractable.
+          //
+          // AND IT IS NOW EVERY DOOR, WHICH IS WHAT MAKES THE RULE A RULE. Six
+          // files call `contactLead` (it reads no toggle itself, deliberately —
+          // the smile-assessment path needs TWO switches, which one internal
+          // slug could not express), and all six read the for-send form:
+          // /api/speed-to-lead/intake, /api/speed-to-lead/sweep,
+          // /api/speed-to-lead/[action] (the staff worklist's Resend —
+          // behaviourally pinned by resend-switch.test.ts beside it, since it
+          // used to be the one human door still on the lenient read),
+          // /api/webhooks/twilio/voice (the missed-call bridge, on its own
+          // `after-hours` slug), /api/smile-assessment/submit (both switches),
+          // and this tool. "every caller of contactLead reads the FOR-SEND form
+          // of the switch" in src/lib/agent-wiring/roster.test.ts crawls for it,
+          // so a seventh door that reaches for the lenient read goes red there.
+          if (!(await isSystemEnabledForSend(clientId, "speed-to-lead"))) {
             await logCopilotAction({ ...audit, status: "blocked:system_off" });
             return JSON.stringify({
               sent: false,
@@ -3076,6 +3295,23 @@ export function makeCopilotDispatch(
         // hand-written message would be the one unlabelled reply.
         // -------------------------------------------------------------------
         case "second_opinion": {
+          // THE LABEL IS THE SERVER'S JOB, NOT THE MODEL'S (charter §2 W1-E DoD:
+          // decision support is "always labelled as such"; §0 item 10).
+          //
+          // Raised FIRST, before a single check runs, so it covers every exit
+          // from this case — the built envelope and all four refusals alike.
+          // second-opinion.ts's rule 1 is that "EVERY reply carries the
+          // decision-support label — including every refusal, because a refusal
+          // is still a reply", and a flag set at the end of the happy path would
+          // have honoured exactly half of that.
+          //
+          // The label is in the tool RESULT too, and that is not redundancy to be
+          // tidied away: the result is read by the MODEL (so it answers in the
+          // right shape) and this flag is read by the ROUTE (so the CLINICIAN
+          // sees the sentence whatever the model wrote). Same reasoning as the
+          // equipment judgement sentence above — a fact that rests on a prompt is
+          // not a fact.
+          if (turn) turn.secondOpinionLabelRequired = true;
           const q = String(input.patient ?? "").trim();
           // REFUSE WITHOUT A NAMED PATIENT. Not a soft "I need more detail": a
           // general clinical question answered here would be answered from the
@@ -3104,11 +3340,20 @@ export function makeCopilotDispatch(
 
           return JSON.stringify(
             buildSecondOpinion({
+              // NAME AND STATUS DEFUSED, like every other Dentally string on
+              // this envelope. `status` is the one worth naming: when a record is
+              // archived it carries the REASON a member of staff typed, and the
+              // model reads a field called "status" as platform metadata rather
+              // than as somebody's prose — so an instruction planted there is the
+              // one most likely to be read as ours. This is the door where a
+              // model's sentence reaches a clinician with a patient in the chair.
               patient: {
                 id: p.id,
-                name: p.name,
+                name: sanitiseClinicalText(p.name, DENTALLY_NAME_MAX_CHARS),
                 site: siteName(p.siteId),
-                status: p.active ? "active" : p.archivedReason ?? "inactive",
+                status: p.active
+                  ? "active"
+                  : defang(p.archivedReason, DENTALLY_REASON_MAX_CHARS) || "inactive",
                 dateOfBirth: p.dateOfBirth,
                 lastVisit: p.lastVisitAt,
                 recallDue: p.recallDueAt,
@@ -3360,6 +3605,11 @@ export function makeCopilotDispatch(
             status.facts
               .filter((f) => f.group === group)
               .map((f) => ({ what: f.label, detail: f.detail, writtenBy: f.sources }));
+          // THE OWNER'S WORD FOR A WRITE KIND, TAKEN FROM THIS TOOL'S OWN ANSWER.
+          // A fact's `id` IS the write kind and its `label` is what the Sync
+          // Status page calls it, so the ledger rows below and the three group
+          // lists above stop describing the same five kinds in two vocabularies.
+          const kindWords = new Map(status.facts.map((f) => [f.id, f.label]));
           return JSON.stringify({
             // "IS IT WRITING BACK?" IS A QUESTION ABOUT THE PRACTICE'S BOOK, and
             // it takes all three halves. `mode === "live"` says this deployment
@@ -3399,12 +3649,35 @@ export function makeCopilotDispatch(
             counts: status.counts,
             total: status.total,
             countIsAFloor: status.countCapped,
+            // MACHINE CODE AND THE PRACTICE'S OWN WORDS, SIDE BY SIDE
+            // (ruling W3/11: "source slugs on screens become the human labels
+            // the page already has").
+            //
+            // These four fields used to travel as the stored enum alone —
+            // "appointment.create", "patient-admin", "blocked",
+            // "writes_disabled" — while the Sync Status tab rendering the very
+            // same rows translated every one of them, and says so in its own
+            // header. An owner asking the assistant "what has been held back?"
+            // was answered in a vocabulary that appears nowhere on his screens,
+            // and `writes_disabled` and `master_off` are precisely the two
+            // reasons he can act on: one is his own switch, the other is his
+            // agency's key.
+            //
+            // THE CODES STAY, under the same keys they have always had. They are
+            // what the cross-module journey suite names a row by, and a code is
+            // the right thing for a machine to match on. The `...InWords` half is
+            // what the assistant reads out, and `recentIntentsNote` below says
+            // so in the payload rather than trusting a prompt to remember it.
             recentIntents: status.intents.map((row) => ({
               at: row.createdAt,
               what: row.kind,
+              whatInWords: kindWords.get(row.kind) ?? row.kind,
               madeBy: row.source,
+              madeByInWords: syncSourceInWords(row.source),
               status: row.status,
+              statusInWords: syncStatusInWords(row.status),
               heldBackBecause: row.blockedReason,
+              heldBackBecauseInWords: syncBlockedReasonInWords(row.blockedReason),
               target: targetLabel(row.target),
               // IDS ONLY. The ledger holds no patient name, number or address by
               // construction (summariseWritePayload drops every personal field),
@@ -3415,6 +3688,8 @@ export function makeCopilotDispatch(
               error: row.error,
             })),
             moreIntents: status.more,
+            recentIntentsNote:
+              "Every row above carries a machine code (what, madeBy, status, heldBackBecause) and the practice's own words for it (the matching ...InWords field). ALWAYS say the words and never the code: the words are exactly what the Sync Status screen shows this owner for these same rows, and a code like 'writes_disabled' or 'patient-admin' means nothing to them.",
             ledgerError: status.ledgerError,
             ...(status.ledgerError
               ? {
@@ -3557,13 +3832,70 @@ export function makeCopilotDispatch(
           }
 
           const rows = await listInterest({ siteIds, treatment: known.key, answer, limit });
+          // A FLOOR IS A NUMBER, AND `capped` ON ITS OWN IS NOT A SENTENCE.
+          //
+          // This read is bounded (`limit`, 50 by default), so a full list comes
+          // back short of the truth and `count` is the size of the READ, not the
+          // size of the list. The aggregate branch above ships `countsAre` for
+          // exactly this reason; this branch shipped a bare boolean and left the
+          // wording to the model, on the figure the tree's own comments call "the
+          // number a campaign gets sized on". Charter §0 item 5 and ruling W3/11
+          // say a count off a bounded read renders "at least N", never a bare
+          // figure, so the words travel with the figure here as well — and they
+          // name the ONE door that can produce the whole audience (ruling W3/29,
+          // GET /api/previsit/interest/export, which pages to completion).
+          //
+          // `capped` IS MEASURED ON THE RAW READ, ON PURPOSE. It answers "did the
+          // bound stop this read?", which is a fact about the LIMIT and not about
+          // the people, so it is taken before the de-duplication below. Measured
+          // after, a page full of a returning patient's repeat answers would come
+          // back short of the limit and be read as the end of the list.
+          const capped = rows.length === limit;
+
+          // ONE ROW PER PERSON, because the figure below is spoken as PEOPLE.
+          //
+          // `treatment_interest` holds one row per (patient, treatment, response)
+          // — no unique constraint across responses, and none wanted: a patient
+          // who fills a pre-visit form in before two appointments and ticks
+          // whitening both times is TWO rows and ONE person to ring. Every other
+          // surface over this list already de-duplicates by patient and says so:
+          // `countInterestByTreatmentDetailed` ("DISTINCT PATIENTS, not rows"),
+          // migration 0101's `interest_counts_by_treatment` (count(distinct …)),
+          // the pre-visit grid's own card copy ("The count is people, not
+          // answers"), and `interestAudience` behind the one export door (ruling
+          // W3/29 — "a file with them in twice is a file somebody works twice").
+          // This branch counted ROWS and called them people, so the co-pilot could
+          // hand the owner a larger figure than the screen and the CSV give for the
+          // same data, and name the same patient twice in the list somebody rings
+          // — on the number a campaign gets sized on (charter §0 item 5, ruling
+          // W3/11). The aggregate branch above was already right; this was the one
+          // surface that was not.
+          //
+          // THE RULE IS `interestAudience`'s, UNCHANGED: the read arrives newest
+          // first, so the row kept is that patient's most recent answer — the one
+          // worth quoting back to them. Keying on the patient id alone is that
+          // function's `treatment|patient` key with the treatment held fixed,
+          // which it is here: this branch reads exactly one `known.key`. It is
+          // written out rather than imported because `interestAudience` takes the
+          // export's file-row shape, and turning an `InterestRecord` into a file
+          // row just to count people would be a second place for the site label to
+          // be wrong.
+          const seenPatients = new Set<string>();
+          const people = rows.filter((r) => {
+            if (seenPatients.has(r.dentallyPatientId)) return false;
+            seenPatients.add(r.dentallyPatientId);
+            return true;
+          });
           return JSON.stringify({
             treatment: known.key,
             label: known.label,
             answer,
-            count: rows.length,
-            capped: rows.length === limit,
-            patients: rows.map((r) => ({
+            count: people.length,
+            capped,
+            peopleAre: capped
+              ? `AT LEAST ${interestPeopleLabel(people.length, false)} people, and this is the newest ${interestPeopleLabel(people.length, false)} of a longer list. Say "${interestPeopleLabel(people.length, true)}" and never report it as a total or as the size of the audience. The whole list comes from Download / Copy as audience on the pre-visit screen, which reads it to the end.`
+              : `${interestPeopleLabel(people.length, false)} people, in the site or sites currently in view. This read reached the end of the list, so it is a total.`,
+            patients: people.map((r) => ({
               name: r.patientName,
               dentallyPatientId: r.dentallyPatientId,
               site: siteName(r.siteId),
@@ -3733,6 +4065,25 @@ export function makeCopilotDispatch(
           // redundancy is the cheap mistake here and the expensive one is a nurse
           // never hearing it.
           if (factsOnly && turn) turn.equipmentJudgementRequired = true;
+          // THE TWO NOTES ARE COMPOSED, NEVER TRADED (handoff B139).
+          //
+          // The facts-only object used to be spread AFTER `payload`, so its
+          // `note` REPLACED the dispatch's own — and the dispatch's note is
+          // where the honest-numbers caveats live: "this register read was
+          // capped, say at least, never a total" (W3/11) and "whether each
+          // machine has a manual could not be read". Losing them in facts-only
+          // mode meant losing them in exactly the turn where a machine's fitness
+          // is being judged, which is the worst turn to be quietly confident in.
+          //
+          // ONE `note` KEY, both sentences, in the order they must be read: the
+          // caveat about what this answer is made of, then the refusal. A second
+          // key beside it is a key a model may not read, which is the rule
+          // src/lib/equipment/tools.ts already follows when it joins its own two
+          // caveats.
+          const payloadNote = typeof payload.note === "string" ? payload.note : null;
+          const judgementNote =
+            "This was a question about whether a machine may go on being used. Read out the facts above and then say this, in these terms, without softening it: " +
+            EQUIPMENT_REFUSALS.judgement;
           return JSON.stringify({
             lookup,
             ...payload,
@@ -3740,7 +4091,7 @@ export function makeCopilotDispatch(
               ? {
                   factsOnly: true,
                   judgement: EQUIPMENT_REFUSALS.judgement,
-                  note: "This was a question about whether a machine may go on being used. Read out the facts above and then say this, in these terms, without softening it: " + EQUIPMENT_REFUSALS.judgement,
+                  note: [payloadNote, judgementNote].filter(Boolean).join(" "),
                 }
               : {}),
           });
@@ -3970,14 +4321,71 @@ export function makeCopilotDispatch(
             site: siteId ? siteName(siteId) : null,
           };
 
+          // WHERE A CONFIRMED WRITE WOULD LAND, resolved once and used by BOTH
+          // halves of this case — the preview below and the success notes further
+          // down. A confirmed booking used to report "Booked X into Dentally"
+          // whatever the deployment was aimed at, so an armed-at-the-mock
+          // rehearsal told the owner a real appointment existed. `runWrite` files
+          // that same combination as `dry_run`, not `sent`; this is the sentence
+          // agreeing with the ledger row.
+          const writeTarget = dentallyWriteTarget();
+          const reachedTheBook = dentallyWriteMode() === "live" && writeTarget.live;
+          const whereItLanded = reachedTheBook
+            ? "in Dentally"
+            : `against ${targetLabel(writeTarget.host)} and NOT in the practice's real Dentally book`;
+
           if (input.confirm !== true) {
-            // The honest state of the write path, read before the owner is asked
-            // to confirm rather than after. Both switches: the deployment's arming
-            // and the practice's own master switch, asked exactly as the gate asks
-            // them so the answer here and the outcome there cannot disagree.
+            // ===============================================================
+            // THE HONEST STATE OF THE WRITE PATH, read before the owner is asked
+            // to confirm rather than after — and it takes FOUR questions, not two.
+            // ===============================================================
+            //
+            // This used to be `mode === "live" && !masterOff`, which asks the
+            // deployment's arming and the practice's master switch and stops. Both
+            // of the missing halves can turn a confirmed "yes" into a write that
+            // changed nothing while the owner had just been told, in these words,
+            // that it would change their real Dentally diary:
+            //
+            //   THE TARGET. `mode === "live"` says only that the three
+            //   DENTALLY_WRITE_* variables are set; it says nothing about WHERE the
+            //   write is aimed. The rehearsal profile this repo itself ships
+            //   (`azen-web-mockwrite-3002` in .claude/launch.json) is armed AND
+            //   pointed at the local mock, and `runWrite` files exactly that
+            //   combination as `dry_run` rather than `sent`. The sibling
+            //   `sync_status` tool above folds `target.live` in for this reason,
+            //   in its own words "the one untruth this field can tell".
+            //
+            //   THE MODULE SWITCH. Ruling W3/2 put all three diary kinds under
+            //   `calendar-writes` — "Diary appointment moves" — and `performMove`
+            //   re-reads that switch STRICT before anything else it does. With it
+            //   off, a confirm gets the desk's own 503 and nothing moves, so a
+            //   preview that promised a real change promised something the very
+            //   next call refuses.
+            //
+            // STRICT for the module read, whatever the mode. It is what
+            // `performMove` asks, it is what the gate asks whenever a real write is
+            // possible, and where the two differ (a toggle-read blip while writes
+            // are only simulated) reading it closed makes this sentence
+            // under-promise rather than over-promise — the only safe direction for
+            // copy an owner says yes to.
             const mode = dentallyWriteMode();
+            const target = writeTarget;
             const masterOff = await isDentallyWriteMasterOff(clientId, mode);
-            const willReach = mode === "live" && !masterOff;
+            const writeKind: DentallyWriteKind =
+              action === "book"
+                ? "appointment.create"
+                : action === "move"
+                  ? "appointment.update"
+                  : "appointment.cancel";
+            // Resolved through the registry rather than typed out, so a future
+            // ruling that moves a co-pilot diary write onto another switch moves
+            // this sentence with it. Null is impossible today (all three kinds
+            // carry `calendar-writes`) and is read as "no module switch governs
+            // it", which is what the gate does with a null slug.
+            const moduleSlug = writeSlugFor("copilot", writeKind);
+            const moduleOn = moduleSlug === null ? true : await isSystemEnabledStrict(clientId, moduleSlug);
+            const moduleLabel = moduleSlug ? SYSTEM_BY_SLUG.get(moduleSlug)?.label ?? moduleSlug : null;
+            const willReach = mode === "live" && target.live && !masterOff && moduleOn;
             return JSON.stringify({
               done: false,
               preview: true,
@@ -3991,11 +4399,21 @@ export function makeCopilotDispatch(
                   ? `It is currently ${currentStart} to ${currentFinish} with clinician ${currentPractitionerId}: say that too, so the owner can tell you if it is not the appointment they mean. The patient is texted their new time when the move saves and the time has changed. ` +
                     "The diary's own checks run when you confirm: a clash, a cancelled appointment, a clinician who is not at that site or an appointment somebody else has just changed is refused and nothing moves. "
                   : "") +
+                // ONE SENTENCE PER CAUSE, in the order that decides the outcome.
+                // The module switch is asked FIRST because `performMove` reads it
+                // before the gate is reached at all: with it off a move never gets
+                // as far as a ledger row, so a sentence promising "what was wanted
+                // is recorded" would be wrong for the very action this tool is
+                // mostly used for.
                 (willReach
                   ? "Confirming will change the practice's real Dentally diary. "
-                  : masterOff
-                    ? "Dentally write-back is switched OFF in System controls, so confirming will RECORD what was wanted and change nothing in Dentally. Tell the owner that before they confirm. "
-                    : "Writing back to Dentally is not switched on for this practice yet, so confirming will RECORD what was wanted and change nothing in Dentally. Tell the owner that before they confirm. ") +
+                  : !moduleOn
+                    ? `${moduleLabel} is switched OFF in System controls${masterOff ? ", and so is Dentally write-back" : ""}, so confirming is REFUSED: nothing in the diary and nothing in Dentally changes. Tell the owner that before they confirm. `
+                    : masterOff
+                      ? "Dentally write-back is switched OFF in System controls, so confirming will RECORD what was wanted and change nothing in Dentally. Tell the owner that before they confirm. "
+                      : mode !== "live"
+                        ? "Writing back to Dentally is not switched on for this practice yet, so confirming will RECORD what was wanted and change nothing in Dentally. Tell the owner that before they confirm. "
+                        : `Writing back is switched on, but this deployment is aimed at ${targetLabel(target.host)} and NOT at the practice's real Dentally book, so confirming changes nothing in Dentally — it is a rehearsal. Tell the owner that before they confirm. `) +
                 "Only once they clearly say yes in a later reply, call diary_write again with confirm true.",
             });
           }
@@ -4039,7 +4457,8 @@ export function makeCopilotDispatch(
                 ...readback,
                 action,
                 appointmentId: String(appointment.id),
-                note: `Booked ${patient!.name} into Dentally (appointment ${appointment.id}). Confirm that to the owner.`,
+                // NOT "into Dentally" unconditionally: see `whereItLanded`.
+                note: `Booked ${patient!.name} ${whereItLanded} (appointment ${appointment.id}). Confirm that to the owner.`,
               });
             }
 
@@ -4109,7 +4528,7 @@ export function makeCopilotDispatch(
                   patientTextQueued: notify?.queued === true,
                   patientTextNotSentBecause: notify?.queued === true ? null : notify?.reason ?? null,
                   note:
-                    `Moved appointment ${appointmentId} in Dentally. Confirm that to the owner. ` +
+                    `Moved appointment ${appointmentId} ${whereItLanded}. Confirm that to the owner. ` +
                     (notify?.queued === true
                       ? "A text telling the patient their new time has been queued; it still goes through the practice's consent and opt-out rules before it is sent."
                       : "No text has been queued for the patient, so somebody may need to ring them.") +
@@ -4159,7 +4578,7 @@ export function makeCopilotDispatch(
               ...readback,
               action,
               appointmentId: String(appointment.id),
-              note: `Cancelled appointment ${appointment.id} in Dentally. Confirm that to the owner, and remember the freed slot is not offered to anybody automatically from here.`,
+              note: `Cancelled appointment ${appointment.id} ${whereItLanded}. Confirm that to the owner, and remember the freed slot is not offered to anybody automatically from here.`,
             });
           } catch (err) {
             // A REFUSAL IS NOT A DENTALLY FAILURE. The gate throws rather than
@@ -4172,7 +4591,13 @@ export function makeCopilotDispatch(
                 done: false,
                 refused: true,
                 ...readback,
-                reason: "writes_disabled",
+                // THE GATE'S OWN REASON, for the same reason create_patient
+                // carries it (above). diary_write's kinds resolve
+                // `calendar-writes` (W3/2), so an owner who switched Diary
+                // appointment moves off gets `system_off` here — and a field
+                // hard-coded to "writes_disabled" would point them at the
+                // deployment's write key instead of the switch they threw.
+                reason: err.reason,
                 blockedReason: err.reason,
                 message:
                   `Nothing was changed in Dentally: ${err.message} ` +

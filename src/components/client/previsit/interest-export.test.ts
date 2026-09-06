@@ -1,30 +1,36 @@
 // ===========================================================================
-// THE INTEREST LISTS ARE TARGETABLE (ruling W3/10).
+// THE INTEREST LISTS ARE TARGETABLE, THROUGH ONE DOOR (rulings W3/10, W3/29).
 //
-// THE DEFECT this pins: the tick-grid was built so the practice could run the
-// whitening campaign, and for two waves the list could only be LOOKED at. No
+// THE FIRST DEFECT this pins: the tick-grid was built so the practice could run
+// the whitening campaign, and for two waves the list could only be LOOKED at. No
 // export, no copy, no campaign filter — `OutreachFilters` selects on Dentally's
 // own patient base and has no interest predicate, and the co-pilot's
 // `interest_lists` tool is a read whose own prompt says you cannot send to these
 // people from there. Three hundred people who asked to hear about implants, and
 // the way out of the platform was to retype names off a 25-row table.
 //
-// W3/10 sets the floor: "owner+manager CSV export / 'copy as audience' per
-// treatment on the interest-lists screen". The Meta half of that ruling does not
-// bind — there is no audience builder in src/lib/meta-ads to extend; `audience`
-// there is free prose — so this minimum is the whole obligation.
+// THE SECOND, which W3/29 settles: the controls that answered it built their own
+// CSV in the browser, out of the rows this page had rendered, WHILE a guarded
+// server route built a different one out of its own read. Two shapes of the same
+// list, and two ways to be wrong about it:
 //
-// FOUR RULES, and each one is a way the export could be worse than useless:
-//   1. It is ON THE SCREEN, per treatment. A helper nothing calls is the state
-//      the ruling was written to end.
-//   2. ONE ROW PER PERSON. An audience with a name in it twice is an audience
-//      somebody rings twice, and the count above the button already counts
-//      distinct patients.
-//   3. IT SAYS WHAT IT IS NOT. The page reads a bounded number of answers, so a
-//      long list exports a SAMPLE — and a CSV silently cut is the defect W3/11
-//      has just been spent fixing on screen (charter §0/5).
-//   4. NOTHING IN A CELL IS EXECUTED. Every value is text somebody else typed.
+//   THE FILE WAS A SAMPLE OF A SAMPLE. The page reads 400 interest rows. A
+//   treatment whose yeses are older than those 400 exported NOBODY — and its
+//   button was DISABLED, because the disabled rule counted rows on the page. The
+//   practice with the most people to ring was the one offered least.
+//
+//   AND IT LEFT WITHOUT A GUARD. A file of named patients was assembled in the
+//   browser from a page read, so no route logged it, no switch stopped it and no
+//   second role check stood between it and the clipboard.
+//
+// So both controls now fetch GET /api/previsit/interest/export, which walks the
+// table to its end, de-duplicates to one person per treatment, refuses when the
+// module is switched off, and answers with its own honest count. What is pinned
+// here is the WIRING — the url, the three answer shapes, what the reader is told
+// — because the formatting is pinned once, in src/lib/triage/interest-csv.test.ts.
 // ===========================================================================
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -32,10 +38,10 @@ import { describe, expect, it } from "vitest";
 import { INTEREST_TREATMENTS } from "@/lib/triage/bank";
 import {
   InterestPanel,
-  audienceRows,
-  interestClipboardText,
-  interestCsv,
-  interestExportFilename,
+  interestDownloadFilename,
+  interestExportNotice,
+  interestExportRefusal,
+  interestExportUrl,
   type InterestRow,
 } from "./previsit-workspace";
 
@@ -50,18 +56,16 @@ function row(over: Partial<InterestRow> = {}): InterestRow {
   };
 }
 
-const LABEL = (key: string) => INTEREST_TREATMENTS.find((t) => t.key === key)?.label ?? key;
-
 function panel(rows: InterestRow[] | null, counts: Record<string, number> | null): string {
   return renderToStaticMarkup(
-    createElement(InterestPanel, {
-      treatments: [...INTEREST_TREATMENTS],
-      rows,
-      counts,
-      scopeLabel: "N15 Vitality Dental",
-    }),
+    createElement(InterestPanel, { clientSlug: "vitality", treatments: [...INTEREST_TREATMENTS], rows, counts }),
   );
 }
+
+const SOURCE = readFileSync(
+  join(process.cwd(), "src/components/client/previsit/previsit-workspace.tsx"),
+  "utf8",
+);
 
 describe("a treatment's list can leave the platform without being retyped", () => {
   it("offers a CSV and a copy on every treatment, by name", () => {
@@ -84,151 +88,132 @@ describe("a treatment's list can leave the platform without being retyped", () =
     expect(html).not.toContain("Export everyone");
     expect(html).not.toContain("as a CSV");
   });
-
-  it("says on the button when a treatment's file would be a sample", () => {
-    // 1 row on the page, 118 people on the list: the file is a sample and the
-    // person exporting it is told BEFORE they open it, not only inside it.
-    const html = panel([row()], { whitening: 118 });
-    expect(html).toContain("1 of 118");
-    expect(html).toContain("the rest are past this page");
-  });
-
-  it("totals the whole-list export from the per-treatment counts", () => {
-    // A row of the all-treatments file is one person PER TREATMENT, which is
-    // exactly what those counts add up to — so the sample sentence is right for
-    // the "Export everyone" file as well as for a single treatment's.
-    const html = panel([row()], { whitening: 2, implants: 3 });
-    expect(html).toContain("Export everyone");
-    expect(html).toContain("1 of 2");
-  });
-
-  it("says nothing of the sort when the page holds the whole list", () => {
-    const html = panel([row()], { whitening: 1 });
-    expect(html).not.toContain("the rest are past this page");
-  });
 });
 
-describe("an audience is people, not answers", () => {
-  it("keeps one row per patient per treatment, the most recent first", () => {
-    const rows = [
-      row({ id: "a", patientId: "dp-1", createdAt: "2026-08-09T10:00:00.000Z" }),
-      row({ id: "b", patientId: "dp-1", createdAt: "2026-06-01T10:00:00.000Z" }),
-      row({ id: "c", patientId: "dp-2" }),
-    ];
-    const out = audienceRows(rows, "whitening");
-    expect(out.map((r) => r.id)).toEqual(["a", "c"]);
-  });
-
-  it("keeps the same person once per treatment, not once overall", () => {
-    // Somebody interested in two things belongs on two lists.
-    const rows = [row({ id: "a" }), row({ id: "b", treatment: "implants" })];
-    expect(audienceRows(rows, null).map((r) => r.id)).toEqual(["a", "b"]);
-  });
-
-  it("filters to the treatment asked for", () => {
-    const rows = [row({ id: "a" }), row({ id: "b", treatment: "implants", patientId: "dp-9" })];
-    expect(audienceRows(rows, "implants").map((r) => r.id)).toEqual(["b"]);
-  });
-});
-
-describe("the file says what it is before it says who is in it", () => {
-  const csv = (rows: InterestRow[], total?: number) =>
-    interestCsv({
-      rows,
-      labelFor: LABEL,
-      heading: "Whitening",
-      takenAt: "2 September 2026",
-      scopeLabel: "N15 Vitality Dental",
-      total,
-    });
-
-  it("names the list, when it was taken and which sites it covers", () => {
-    const out = csv([row()]);
-    expect(out).toContain("Interest list,Whitening");
-    expect(out).toContain("Taken from the platform on,2 September 2026,Sites: N15 Vitality Dental");
-  });
-
-  it("states that it holds the whole list when it does", () => {
-    expect(csv([row()], 1)).toContain("all 1 person on this list");
-  });
-
-  it("states that it is a SAMPLE when the page could not reach the whole list", () => {
-    const out = csv([row()], 118);
-    expect(out).toContain("1 person of the 118 on this list");
-    expect(out).toContain("this file is a sample and not the whole list");
-  });
-
-  it("carries the patient's Dentally number, which is what makes it targetable", () => {
-    const out = csv([row()]);
-    expect(out).toContain("Dentally patient ID");
-    expect(out).toContain("Alex Berry,dp-1,Whitening,");
-  });
-
-  it("opens with a BOM and CRLF line endings, so Excel reads it", () => {
-    const out = csv([row()]);
-    expect(out.startsWith("﻿")).toBe(true);
-    expect(out).toContain("\r\n");
-  });
-
-  it("quotes a comma and doubles a quote rather than shifting the columns", () => {
-    const out = csv([row({ patientName: 'Berry, Alex "AB"' })]);
-    expect(out).toContain('"Berry, Alex ""AB""",dp-1');
-  });
-
-  it("never hands a spreadsheet a formula to run", () => {
-    // A patient name comes off the Dentally record. A cell starting with = is a
-    // formula to Excel, Numbers and Sheets alike.
-    const out = csv([row({ patientName: "=1+1" })]);
-    expect(out).not.toContain("\r\n=1+1,");
-    expect(out).toContain("'=1+1,dp-1");
-  });
-
-  it("says a whole-list export is a sample when the page itself was cut", () => {
-    // The totals could not be read, so there is no figure to compare against —
-    // but the page KNOWS its own read was cut, and "all 400 people" would be the
-    // false-completeness failure the rest of this file exists to prevent.
-    const out = interestCsv({
-      rows: [row()],
-      labelFor: LABEL,
-      heading: "Everyone who asked to hear more",
-      takenAt: "2 September 2026",
-      pageCut: true,
-    });
-    expect(out).toContain("this page could read");
-    expect(out).toContain("this file is a sample and not the whole list");
-    expect(out).not.toContain("all 1 person on this list");
-  });
-
-  it("still produces its header rows for an empty list", () => {
-    // An empty FILE is indistinguishable from a failed export.
-    const out = csv([]);
-    expect(out).toContain("Interest list,Whitening");
-    expect(out).toContain("Patient,Dentally patient ID");
-  });
-});
-
-describe("the clipboard form is the one somebody pastes into another tool", () => {
-  it("is the Dentally id and the name, tab separated, no header", () => {
-    expect(interestClipboardText([row(), row({ patientId: "dp-2", patientName: "Sam Okafor" })])).toBe(
-      "dp-1\tAlex Berry\ndp-2\tSam Okafor",
+describe("both controls call the SERVER, not this page's rows (W3/29)", () => {
+  it("asks the guarded route for one treatment, and for everybody", () => {
+    expect(interestExportUrl("vitality", "whitening", "csv")).toBe(
+      "/api/previsit/interest/export?client=vitality&treatment=whitening",
+    );
+    expect(interestExportUrl("vitality", null, "csv")).toBe(
+      "/api/previsit/interest/export?client=vitality",
     );
   });
 
-  it("is empty for an empty audience rather than a stray header", () => {
-    expect(interestClipboardText([])).toBe("");
+  it("asks for the audience shape when the control is Copy", () => {
+    expect(interestExportUrl("vitality", "implants", "audience")).toBe(
+      "/api/previsit/interest/export?client=vitality&treatment=implants&format=audience",
+    );
+  });
+
+  it("encodes a practice slug rather than pasting it into the query", () => {
+    expect(interestExportUrl("a b&c", null, "csv")).toContain("client=a+b%26c");
+  });
+
+  it("is what the panel actually calls, and it holds no CSV builder of its own", () => {
+    // The click cannot be driven in this renderer, so the panel is asserted to
+    // delegate to the url rule rather than hold a second copy of it — and the
+    // retired browser-side formatter is asserted to be GONE, because two
+    // formatters over one list is the defect W3/29 named.
+    expect(SOURCE).toContain("interestExportUrl(clientSlug, treatment, mode === \"copy\" ? \"audience\" : \"csv\")");
+    expect(SOURCE, "the browser is building a CSV again").not.toContain("function interestCsv");
+    expect(SOURCE, "a second cell-quoting rule came back").not.toContain("function csvCell");
+  });
+
+  it("keeps a failed CLIPBOARD apart from a failed export", () => {
+    // Two different facts. The list was read fine and only the paste failed, so
+    // "nothing has left the platform" would send somebody after the wrong
+    // problem — and saying nothing at all would leave them pasting whatever they
+    // copied last into a campaign.
+    expect(SOURCE).toContain("That list could not be copied. Download it instead.");
+    expect(SOURCE).toContain("await navigator.clipboard.writeText(text);");
+  });
+
+  it("saves through a Blob, never a plain link, so a refusal cannot be saved as a .csv", () => {
+    // The route answers an off module with HTTP 200 and a JSON body. An <a href>
+    // download would write `{"ok":false,…}` into a file called interest-*.csv.
+    expect(SOURCE).toContain("const blob = await res.blob()");
+    expect(SOURCE).toContain('type.includes("application/json")');
   });
 });
 
-describe("two exports of the same list are told apart", () => {
-  it("names the treatment and stamps the minute", () => {
-    const name = interestExportFilename("whitening", new Date("2026-09-02T14:22:00.000Z"));
-    expect(name).toBe("interest-whitening-20260902-1422.csv");
+describe("what the reader is told when no file arrived", () => {
+  it("prints the route's OWN sentence for a switched-off module", () => {
+    const message = "Pre-visit questions is switched off, so these lists cannot be exported.";
+    expect(interestExportRefusal({ status: 200 }, { ok: false, skipped: "system off", message })).toBe(message);
   });
 
-  it("calls the whole list 'all'", () => {
-    expect(interestExportFilename(null, new Date("2026-09-02T14:22:00.000Z"))).toBe(
-      "interest-all-20260902-1422.csv",
+  it("prints the route's error when it wrote one", () => {
+    expect(interestExportRefusal({ status: 500 }, { ok: false, error: "This list could not be read just now." })).toBe(
+      "This list could not be read just now.",
+    );
+  });
+
+  it("names the status only when the route wrote nothing — a 403, a 404, a proxy", () => {
+    expect(interestExportRefusal({ status: 403 }, {})).toBe(
+      "That list could not be exported just now (403).",
     );
   });
 });
 
+describe("the count beside the button is the ROUTE'S count, in the route's words", () => {
+  it("prints what the file's own first row prints", () => {
+    expect(interestExportNotice("Whitening", "142", "downloaded")).toBe("Whitening: 142 people downloaded.");
+  });
+
+  it("carries an AT LEAST through untouched, rather than rounding it into a figure", () => {
+    expect(interestExportNotice("Whitening", "at least 20,000", "copied")).toBe(
+      "Whitening: at least 20,000 people copied. Paste into your campaign or a spreadsheet.",
+    );
+  });
+
+  it("says person, not people, for one", () => {
+    expect(interestExportNotice("Implants", "1", "downloaded")).toBe("Implants: 1 person downloaded.");
+  });
+
+  it("drops the figure rather than inventing one when the header is missing", () => {
+    // A proxy stripped the header. The file is still fine; the sentence simply
+    // does not claim a number it does not have.
+    expect(interestExportNotice("Implants", null, "downloaded")).toBe("Implants: downloaded.");
+  });
+});
+
+describe("the browser saves the file under the name the route chose", () => {
+  it("takes the filename out of the route's own content-disposition", () => {
+    expect(
+      interestDownloadFilename('attachment; filename="interest-whitening-20260902-1422.csv"', "whitening"),
+    ).toBe("interest-whitening-20260902-1422.csv");
+  });
+
+  it("falls back to the shared builder when the header did not survive", () => {
+    expect(interestDownloadFilename(null, "whitening")).toMatch(
+      /^interest-whitening-\d{8}-\d{4}\.csv$/,
+    );
+  });
+});
+
+/** The opening tag of one treatment's Download control, and nothing else. */
+function control(html: string, label: string): string {
+  const at = html.indexOf(`Download the ${label} list as a CSV`);
+  expect(at, `no control for ${label}`).toBeGreaterThan(0);
+  return html.slice(at - 120, at);
+}
+
+describe("a control is disabled only when there is provably nobody to export", () => {
+  it("is OFFERED for a treatment whose people are all older than this page", () => {
+    // THE DEFECT this pins: the old rule counted rows on the 400-row page, so the
+    // practice whose whitening yeses are a year old — the one that most needs the
+    // file — was shown a disabled button over a headline figure of 118.
+    const html = panel([row({ treatment: "implants", patientId: "dp-9" })], { whitening: 118, implants: 1 });
+    expect(html).toContain("Download the Whitening list as a CSV");
+    // Rendered enabled: React omits the attribute entirely when it is false. The
+    // window is the button's own opening tag (~95 characters), so it cannot reach
+    // back into the previous treatment's controls and read their state instead.
+    expect(control(html, "Whitening"), "the control for a real list was disabled").not.toContain("disabled=");
+  });
+
+  it("is disabled for a treatment nobody has asked about", () => {
+    const html = panel([row()], { whitening: 1, implants: 0 });
+    expect(control(html, "Implants")).toContain("disabled=");
+  });
+});

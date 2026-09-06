@@ -22,7 +22,9 @@
 //   * a migration that changes a default changes this fake on the next run, so a
 //     scenario cannot keep passing against a schema that no longer exists;
 //   * a table with no `create table` in the tree is a LOUD failure at seed time
-//     (see MISSING_FROM_MIGRATIONS), not a silent empty-defaults row.
+//     (see MISSING_FROM_MIGRATIONS), not a silent empty-defaults row;
+//   * and a COLUMN no migration declares is a loud failure too, in every
+//     direction — written, read or filtered on (see assertColumnsDeclared).
 //
 // WHAT IT IS NOT. It is not Postgres. There are no foreign keys, no CHECK
 // constraints, no triggers and no RLS, so it can hold a row Postgres would
@@ -31,10 +33,14 @@
 // src/lib/postop/outbox-isolation.test.ts does. This fake proves the code path;
 // the migration text proves the constraint.
 //
-// BUT WHERE IT DOES MODEL POSTGRES, IT MODELS THE STRICTER SIDE. See
-// POSTGREST_MAX_ROWS below: a fake that is more generous than live is worse than
-// no fake at all, because it hands a green tick to the exact read that will
-// truncate in production.
+// BUT WHERE IT DOES MODEL POSTGRES, IT MODELS THE STRICTER SIDE. A fake that is
+// more generous than live is worse than no fake at all, because it hands a green
+// tick to the exact call that will fail in production. Two things are modelled on
+// that principle and each cost a defect to learn: POSTGREST_MAX_ROWS, which clips
+// every select at the server's row ceiling; and assertColumnsDeclared, which
+// refuses a column no migration declares — PostgREST answers PGRST204 to a write
+// naming one and 42703 to a read, and both fail the whole statement, while this
+// fake used to invent the column on a write and hand back `undefined` on a read.
 // ===========================================================================
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -164,27 +170,47 @@ function splitTopLevel(body: string): string[] {
 
 const TABLE_CONSTRAINT = /^(primary\s+key|unique|check|constraint|foreign\s+key|exclude)\b/i;
 
+/** `default <expr>` runs to the next clause keyword or the end of the column. */
+const COLUMN_DEFAULT =
+  /\bdefault\s+([\s\S]+?)(?=\s+(?:not\s+null|null|references|check|unique|primary\s+key|generated|collate)\b|$)/i;
+
+/** Collapse a SQL fragment onto one line — the shape both parsers below want. */
+function oneLine(part: string): string {
+  return part.split("\n").join(" ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * ONE column definition — `status text not null default 'queued'` — wherever it
+ * came from: a `create table (...)` body, or an `add column` clause of an
+ * `alter table`. Shared on purpose. These two used to be parsed by two different
+ * expressions against two differently-shaped strings, and they disagreed; the
+ * ALTER loop in migrationSchema() records exactly what that cost.
+ */
+function parseColumnDefinition(part: string): { column: ColumnDef; primaryKey: boolean } | null {
+  const nameMatch = /^"?([a-z_][a-z0-9_]*)"?\s/i.exec(part);
+  if (!nameMatch) return null;
+  const def = COLUMN_DEFAULT.exec(part);
+  return {
+    column: { name: nameMatch[1], default: def ? parseDefault(def[1]) : null },
+    primaryKey: /\bprimary\s+key\b/i.test(part),
+  };
+}
+
 function parseCreateTable(sql: string, name: string, body: string): TableDef {
   const columns: ColumnDef[] = [];
   const primaryKey: string[] = [];
   for (const rawPart of splitTopLevel(stripSqlComments(body))) {
-    const part = rawPart.split("\n").join(" ").replace(/\s+/g, " ").trim();
+    const part = oneLine(rawPart);
     if (!part) continue;
     if (TABLE_CONSTRAINT.test(part)) {
       const pk = /^primary\s+key\s*\(([^)]*)\)/i.exec(part);
       if (pk) primaryKey.push(...pk[1].split(",").map((c) => c.trim()));
       continue;
     }
-    const nameMatch = /^"?([a-z_][a-z0-9_]*)"?\s/i.exec(part);
-    if (!nameMatch) continue;
-    const column = nameMatch[1];
-    if (/\bprimary\s+key\b/i.test(part)) primaryKey.push(column);
-    // `default <expr>` runs to the next clause keyword or the end of the column.
-    const def =
-      /\bdefault\s+([\s\S]+?)(?=\s+(?:not\s+null|null|references|check|unique|primary\s+key|generated|collate)\b|$)/i.exec(
-        part,
-      );
-    columns.push({ name: column, default: def ? parseDefault(def[1]) : null });
+    const parsed = parseColumnDefinition(part);
+    if (!parsed) continue;
+    if (parsed.primaryKey) primaryKey.push(parsed.column.name);
+    columns.push(parsed.column);
   }
   void sql;
   return { name, columns, primaryKey };
@@ -231,19 +257,59 @@ export function migrationSchema(): Map<string, TableDef> {
         schema.set(name, parsed);
       }
     }
+    // THE ALTER SCAN RUNS ON THE COMMENT-STRIPPED FILE, and that is not tidiness.
+    //
+    // `alter table` statements are found by a regex over the whole file, so a
+    // `--` comment is just more text to it. Two things followed. Migrations that
+    // write a note BETWEEN the table name and the first `add column` — 0078, 0079
+    // and 0082 all do, explaining the column they are about to add — were skipped
+    // ENTIRELY, which is why smile_assessment_campaign.flow_published (`not null
+    // default false`) was absent from this fake while being present in every real
+    // database. And 0075_staff_hr_profile.sql, whose header spends three
+    // paragraphs on WHY pay must never be a column on rota_staff, opens that
+    // explanation with the words `alter table rota_staff add column hourly_pence
+    // int` — so this reader invented `rota_staff.hourly_pence` out of the comment
+    // that forbids it. A fake carrying a column live does not have is the exact
+    // direction the header of this file says it must never fail in: a write naming
+    // it is green here and 400s in production.
+    //
+    // stripSqlComments FIRST, therefore, exactly as the create-table body does it
+    // and for the same reason.
+    //
+    // ONE `alter table` STATEMENT CAN ADD MANY COLUMNS, and five in this tree do.
+    //
+    // This loop used to read `add column <name> <the rest of the statement>` and
+    // take exactly one column from it, so every column after the first comma was
+    // INVISIBLE to the fake — rota_shift's published_at, patient_note's colour and
+    // updated_at, smile_assessment_campaign's flow_version and flow_published,
+    // speed_to_lead_lead's nurture_next_at. Worse than invisible, actually: the
+    // FIRST column's `default` expression then ran on through the comma and
+    // swallowed the columns behind it, so `origin text not null default
+    // 'generated', add column ...` parsed as an unrecognised expression and
+    // `origin` came out with NO DEFAULT AT ALL. A table whose defaults are read
+    // out of the migrations, silently missing the defaults the migrations declare,
+    // is the one failure this whole file exists to prevent (see the header, and
+    // stripSqlComments, which is the same bug found one comma earlier).
+    //
+    // So: take the WHOLE statement, split it on top-level commas the way a create
+    // body is split, and parse each `add column` clause with the same
+    // parseColumnDefinition the create path uses. Clauses that are not `add
+    // column` (a statement may mix in `add constraint`) declare no column and are
+    // skipped, which is what the single-column expression achieved by accident.
     const ALTER =
-      /alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+add\s+column\s+(?:if\s+not\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?([^;]*);/gi;
+      /alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+(add\s+column\b[^;]*);/gi;
+    const alterSql = stripSqlComments(sql);
     let a: RegExpExecArray | null;
-    while ((a = ALTER.exec(sql)) !== null) {
-      const [, table, column, rest] = a;
+    while ((a = ALTER.exec(alterSql)) !== null) {
+      const [, table, statement] = a;
       const def = schema.get(table);
       if (!def) continue;
-      const d =
-        /\bdefault\s+([\s\S]+?)(?=\s+(?:not\s+null|null|references|check|unique|generated|collate)\b|$)/i.exec(
-          rest,
-        );
-      if (!def.columns.some((c) => c.name === column)) {
-        def.columns.push({ name: column, default: d ? parseDefault(d[1]) : null });
+      for (const rawClause of splitTopLevel(statement)) {
+        const added = /^add\s+column\s+(?:if\s+not\s+exists\s+)?([\s\S]+)$/i.exec(oneLine(rawClause));
+        if (!added) continue;
+        const parsed = parseColumnDefinition(added[1]);
+        if (!parsed) continue;
+        if (!def.columns.some((c) => c.name === parsed.column.name)) def.columns.push(parsed.column);
       }
     }
   }
@@ -272,6 +338,109 @@ export function defaultsFor(table: string): Row {
 export function primaryKeyFor(table: string): string[] {
   const pk = migrationSchema().get(table)?.primaryKey ?? [];
   return pk.length > 0 ? pk : ["id"];
+}
+
+// ---------------------------------------------------------------------------
+// Column existence.
+// ---------------------------------------------------------------------------
+
+const columnCache = new Map<string, Set<string> | null>();
+
+/**
+ * Every column the migrations declare for a table, or `null` when the repo cannot
+ * see the table's shape and this fake therefore has nothing to check against.
+ *
+ * `null` is returned for exactly two things, and both are already accounted for
+ * elsewhere: the four MISSING_FROM_MIGRATIONS tables, whose real shape is
+ * invisible from the codebase and which say so in a paragraph of their own; and a
+ * table with no `create table` at all, which `defaultsFor` already turns into a
+ * loud failure on the first write.
+ */
+export function knownColumns(table: string): Set<string> | null {
+  const cached = columnCache.get(table);
+  if (cached !== undefined) return cached;
+  const def = MISSING_FROM_MIGRATIONS[table] ? undefined : migrationSchema().get(table);
+  const known = def ? new Set(def.columns.map((c) => c.name)) : null;
+  columnCache.set(table, known);
+  return known;
+}
+
+/** A plain column name, or null for anything this reader will not claim to parse. */
+function plainColumn(name: string): string | null {
+  const bare = name.trim();
+  return /^[a-z_][a-z0-9_]*$/i.test(bare) ? bare : null;
+}
+
+/**
+ * The columns a PostgREST projection string NAMES.
+ *
+ * Deliberately conservative, and the conservatism is the point: a projection may
+ * embed a related resource (`patient(id,name)`), reach into json (`consent->>sms`),
+ * cast, or rename (`shown:patient_name`). This reader claims only the shapes it can
+ * read with certainty — a bare column, and the column half of an alias — and hands
+ * back NOTHING for a string containing an embedded resource. A guard that guessed
+ * at the rest would fail a correct read, which is a worse failure than the one it
+ * is here to catch, because it would be paid on every green day.
+ */
+function projectedColumns(cols: string | undefined): string[] {
+  if (cols === undefined || cols.includes("(")) return [];
+  const out: string[] = [];
+  for (const raw of cols.split(",")) {
+    const part = raw.trim();
+    if (!part || part === "*") continue;
+    const named = part.includes(":") ? part.slice(part.indexOf(":") + 1) : part;
+    const column = plainColumn(named);
+    if (column) out.push(column);
+  }
+  return out;
+}
+
+/**
+ * A COLUMN NO MIGRATION DECLARES IS A LOUD FAILURE, IN BOTH DIRECTIONS.
+ *
+ * The row ceiling above made this fake as strict as live about how MANY rows come
+ * back. This makes it as strict about WHICH COLUMNS EXIST, which was the other
+ * half and stayed open longer:
+ *
+ *   * a WRITE naming a column the schema has no cache entry for is answered
+ *     PGRST204 by PostgREST and lands NOTHING — while this fake hydrated the row
+ *     as `{ ...defaults, ...input }` and cheerfully invented the column on a plain
+ *     JS object, so the test went green and the first production call 400ed;
+ *   * a READ naming one fails the WHOLE statement with 42703 — while this fake
+ *     discarded the projection string entirely and handed back `undefined`, which
+ *     most callers normalise into a perfectly plausible answer. `sync_state`'s
+ *     backfill cursor is the worked example: neither column was declared by any
+ *     migration, three registered syncs read them first thing every tick, and the
+ *     whole suite was green (see src/lib/coordinator/sync-state-backfill-columns
+ *     .test.ts and migration 0106, which is what fixing one instance looks like).
+ *   * a FILTER naming one is 42703 too, and here it was worse than merely allowed:
+ *     `.is("typo", null)` matched EVERY row, because a column that is not there
+ *     reads `undefined`. A read live would refuse outright instead silently
+ *     widened, which is the fail-open direction this file exists to close.
+ *
+ * NO ESCAPE HATCH, ON PURPOSE. A column that exists in the database and in no
+ * migration is a real defect with a known correct fix — write the migration, as
+ * 0106 did — and an allowlist would let the next one be waved through instead.
+ * There is nothing to wave through today either: every column of every table that
+ * both the migration tree and the live database hold was compared on 6 September
+ * 2026 (information_schema on project qoiyaiiajdqydyrccixt, read-only) and the two
+ * agreed exactly, in both directions, once the ALTER reader above was fixed.
+ */
+function assertColumnsDeclared(table: string, how: string, columns: readonly string[]): void {
+  const known = knownColumns(table);
+  if (!known) return;
+  const unknown = columns.filter((c) => !known.has(c));
+  if (unknown.length === 0) return;
+  throw new Error(
+    `fake-supabase: ${how} on "${table}" names ${unknown.map((c) => `"${c}"`).join(", ")}, which ` +
+      `no migration in supabase/migrations/ declares. Live PostgREST answers PGRST204 to a write ` +
+      `naming an undeclared column and 42703 to a read or filter naming one, and BOTH fail the ` +
+      `whole statement — so a fake that invented the column would hand a green tick to a call ` +
+      `that 400s in production (the header's rule: never more generous than live). Either the ` +
+      `name is a typo, or the column is real and out of band, in which case the fix is a ` +
+      `migration that declares it (supabase/migrations/0106_sync_state_backfill_cursor_columns` +
+      `.sql is the worked example), never a looser fake.`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +516,8 @@ class FakeQuery implements PromiseLike<FakeResult> {
   private max: number | null = null;
   private offset = 0;
   private wantCount = false;
+  /** How many rows this query ASKED for (.limit / .range), or null for neither. */
+  private asked: number | null = null;
   private headOnly = false;
   private returning = true;
 
@@ -364,7 +535,8 @@ class FakeQuery implements PromiseLike<FakeResult> {
   }
 
   // --- projection -----------------------------------------------------------
-  select(_cols?: string, opts?: { count?: string; head?: boolean }) {
+  select(cols?: string, opts?: { count?: string; head?: boolean }) {
+    assertColumnsDeclared(this.table, "a select", projectedColumns(cols));
     if (this.mode === "select") this.mode = "select";
     this.wantCount = opts?.count === "exact" || opts?.count === "planned" || opts?.count === "estimated";
     this.headOnly = opts?.head === true;
@@ -373,16 +545,28 @@ class FakeQuery implements PromiseLike<FakeResult> {
   }
 
   // --- filters --------------------------------------------------------------
-  eq(col: string, val: unknown) { this.filters.push((r) => r[col] === val); return this; }
-  neq(col: string, val: unknown) { this.filters.push((r) => r[col] !== val); return this; }
-  in(col: string, vals: unknown[]) { this.filters.push((r) => vals.includes(r[col])); return this; }
-  gt(col: string, val: unknown) { this.filters.push((r) => compare(r[col], val) > 0); return this; }
-  gte(col: string, val: unknown) { this.filters.push((r) => compare(r[col], val) >= 0); return this; }
-  lt(col: string, val: unknown) { this.filters.push((r) => compare(r[col], val) < 0); return this; }
-  lte(col: string, val: unknown) { this.filters.push((r) => compare(r[col], val) <= 0); return this; }
+  /**
+   * One filtered column, checked against the migrations before it can silently
+   * match nothing (or, for `.is(col, null)`, silently match EVERYTHING). A name
+   * this reader cannot parse as a plain column — a json path like
+   * `consent->>sms` — is left alone rather than guessed at.
+   */
+  private filterOn(col: string): void {
+    const column = plainColumn(col);
+    if (column) assertColumnsDeclared(this.table, "a filter", [column]);
+  }
+
+  eq(col: string, val: unknown) { this.filterOn(col); this.filters.push((r) => r[col] === val); return this; }
+  neq(col: string, val: unknown) { this.filterOn(col); this.filters.push((r) => r[col] !== val); return this; }
+  in(col: string, vals: unknown[]) { this.filterOn(col); this.filters.push((r) => vals.includes(r[col])); return this; }
+  gt(col: string, val: unknown) { this.filterOn(col); this.filters.push((r) => compare(r[col], val) > 0); return this; }
+  gte(col: string, val: unknown) { this.filterOn(col); this.filters.push((r) => compare(r[col], val) >= 0); return this; }
+  lt(col: string, val: unknown) { this.filterOn(col); this.filters.push((r) => compare(r[col], val) < 0); return this; }
+  lte(col: string, val: unknown) { this.filterOn(col); this.filters.push((r) => compare(r[col], val) <= 0); return this; }
   like(col: string, pattern: string) { return this.matchPattern(col, pattern, false); }
   ilike(col: string, pattern: string) { return this.matchPattern(col, pattern, true); }
   private matchPattern(col: string, pattern: string, insensitive: boolean) {
+    this.filterOn(col);
     const rx = new RegExp(
       `^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".")}$`,
       insensitive ? "i" : "",
@@ -391,11 +575,13 @@ class FakeQuery implements PromiseLike<FakeResult> {
     return this;
   }
   is(col: string, val: unknown) {
+    this.filterOn(col);
     const mustBeNull = val === null;
     this.filters.push((r) => (r[col] === null || r[col] === undefined) === mustBeNull);
     return this;
   }
   not(col: string, op: string, val: unknown) {
+    this.filterOn(col);
     if (op === "is") {
       const mustNotBeNull = val === null;
       this.filters.push((r) => (r[col] === null || r[col] === undefined) !== mustNotBeNull);
@@ -425,26 +611,43 @@ class FakeQuery implements PromiseLike<FakeResult> {
 
   // --- shaping --------------------------------------------------------------
   order(col: string, opts?: { ascending?: boolean }) {
+    const column = plainColumn(col);
+    if (column) assertColumnsDeclared(this.table, "an order by", [column]);
     this.orderBy.push({ col, asc: opts?.ascending !== false });
     return this;
   }
-  limit(n: number) { this.max = n; return this; }
-  range(from: number, to: number) { this.offset = from; this.max = to - from + 1; return this; }
+  limit(n: number) { this.max = n; this.asked = n; return this; }
+  range(from: number, to: number) {
+    this.offset = from;
+    this.max = to - from + 1;
+    this.asked = this.max;
+    return this;
+  }
 
   // --- writes ---------------------------------------------------------------
   insert(row: Row | Row[]) {
+    for (const r of Array.isArray(row) ? row : [row]) {
+      assertColumnsDeclared(this.table, "an insert", Object.keys(r ?? {}));
+    }
     this.mode = "insert";
     this.payload = row;
     this.returning = false;
     return this;
   }
   update(patch: Row) {
+    assertColumnsDeclared(this.table, "an update", Object.keys(patch ?? {}));
     this.mode = "update";
     this.payload = patch;
     this.returning = false;
     return this;
   }
   upsert(row: Row | Row[], opts?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+    for (const r of Array.isArray(row) ? row : [row]) {
+      assertColumnsDeclared(this.table, "an upsert", Object.keys(r ?? {}));
+    }
+    if (opts?.onConflict) {
+      assertColumnsDeclared(this.table, "an upsert conflict target", opts.onConflict.split(",").map((c) => c.trim()));
+    }
     this.mode = "upsert";
     this.payload = row;
     this.conflict = opts?.onConflict ? opts.onConflict.split(",").map((c) => c.trim()) : null;
@@ -510,6 +713,14 @@ class FakeQuery implements PromiseLike<FakeResult> {
     }
     let out = table.filter((r) => this.matches(r));
     const total = out.length;
+    // EVERY SELECT'S REQUESTED WIDTH, RECORDED (ruling W3/32). A page size that
+    // sits ON the server's ceiling is indistinguishable from a clipped page, and
+    // the loops that page by offset use "a short page means the end" as their
+    // completeness signal — so the WIDTH A LOOP ASKS FOR is a property worth
+    // asserting, and it is only observable from in here. `asked` is null for a
+    // select that set neither .limit() nor .range(), which is itself the shape
+    // POSTGREST_MAX_ROWS exists to catch.
+    this.db.reads.push({ table: this.table, asked: this.asked, offset: this.offset });
     for (const { col, asc } of [...this.orderBy].reverse()) {
       out = [...out].sort((a, b) => (asc ? compare(a[col], b[col]) : compare(b[col], a[col])));
     }
@@ -565,6 +776,14 @@ export interface FakeDatabase {
   tables: Record<string, Row[]>;
   /** Every write that reached the database, in order — table plus operation. */
   writes: Array<{ table: string; op: string }>;
+  /**
+   * Every SELECT that reached the database, in order: which table, how many rows
+   * it asked for (null when it asked for no bound at all) and from what offset.
+   *
+   * Here so a test can assert the SHAPE of a paging loop's request rather than
+   * only its result — see ruling W3/32 and `this.db.reads.push` above.
+   */
+  reads: Array<{ table: string; asked: number | null; offset: number }>;
   /** Tables forced to return an error, for fail-direction scenarios. */
   failures: Map<string, string>;
   /**
@@ -605,7 +824,7 @@ export function createFakeSupabase(opts: { maxRows?: number } = {}): FakeSupabas
     opts.maxRows === undefined
       ? POSTGREST_MAX_ROWS
       : Math.max(1, Math.min(Math.floor(opts.maxRows), POSTGREST_MAX_ROWS));
-  const db: FakeDatabase = { tables: {}, writes: [], failures: new Map(), maxRows };
+  const db: FakeDatabase = { tables: {}, writes: [], reads: [], failures: new Map(), maxRows };
   const client = { from: (table: string) => new FakeQuery(table, db) };
   return {
     db,
@@ -613,6 +832,7 @@ export function createFakeSupabase(opts: { maxRows?: number } = {}): FakeSupabas
     reset() {
       for (const k of Object.keys(db.tables)) delete db.tables[k];
       db.writes.length = 0;
+      db.reads.length = 0;
       db.failures.clear();
       resetFakeIds();
     },
@@ -626,6 +846,7 @@ export function createFakeSupabase(opts: { maxRows?: number } = {}): FakeSupabas
       return (db.tables[table] ?? []).map((r) => ({ ...r }));
     },
     seed(table: string, ...rows: Row[]) {
+      for (const r of rows) assertColumnsDeclared(table, "a seed", Object.keys(r ?? {}));
       const bucket = (db.tables[table] ??= []);
       for (const r of rows) bucket.push({ ...defaultsFor(table), ...r });
     },

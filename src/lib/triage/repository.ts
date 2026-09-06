@@ -1,5 +1,5 @@
 import { serviceClient } from "@/lib/supabase/server";
-import { readStoredAnswers } from "./kind";
+import { readStoredAnswers, readStoredInterest } from "./kind";
 import { mintTriageLinkToken } from "./link";
 import { usableConfig } from "./project";
 import type {
@@ -415,9 +415,12 @@ function rowToResponse(r: ResponseRow): TriageResponse {
     // answer whose kind it cannot read resolves to `symptom` (the RESTRICTED class,
     // ruling W1-C/2) rather than to the class every role reads. See ./kind.ts.
     answers: readStoredAnswers(r.answers),
-    interest: Array.isArray(r.interest)
-      ? (r.interest as Array<{ treatment: InterestTreatmentKey; answer: InterestAnswer }>)
-      : [],
+    // NOT A CAST EITHER, for the same reason and after the same defect: an
+    // `Array.isArray` check admitted every element inside the array unexamined, so
+    // a null element threw out of `projectSummary` and a near-miss pair rendered a
+    // treatment the catalogue does not have. readStoredInterest drops what it
+    // cannot read; see ./kind.ts.
+    interest: readStoredInterest(r.interest),
     submittedAt: r.submitted_at,
   };
 }
@@ -644,8 +647,20 @@ export interface InterestCountSummary {
   scanned: number;
 }
 
-/** One PostgREST page. 1000 is the server's own default max-rows. */
-const INTEREST_COUNT_PAGE = 1000;
+/**
+ * One keyset page, ONE ROW UNDER THE SERVER'S CEILING (ruling W3/32).
+ *
+ * Supabase clips every REST response at a max-rows ceiling, measured on this
+ * project at 1,000 (POSTGREST_MAX_ROWS in src/lib/test-support/fake-supabase.ts).
+ * Both walks below decide "the table ended" from `rows.length < want`, so a page
+ * width that sits ON that ceiling is one raise away from a silent lie: ask for
+ * 2,000, get the server's 1,000, read it as a short page and set `capped = false`
+ * on a scan that stopped in the middle. Below the ceiling that cannot happen — a
+ * short page is genuinely the end of the data — and `capped` keeps its meaning,
+ * which is what the "at least N" sentence on the interest grid and the export
+ * rests on.
+ */
+const INTEREST_COUNT_PAGE = 999;
 /** The absolute ceiling on one scan: 20 pages, then we say so rather than guess. */
 const INTEREST_COUNT_CEILING = 20_000;
 
@@ -727,9 +742,25 @@ async function countInterestRowsInScope(
  *     not a cursor.
  *  2. DEEP OFFSET GETS SLOWER AS IT DEEPENS. This filter (site_id, answer) is not
  *     the leading edge of 0097's `(site_id, treatment, answer, created_at desc)`
- *     index, so Postgres sorts the matching set — and page 20 sorted the whole set
- *     again to throw the first 19,000 rows away. A keyset page carries its own
- *     `created_at <` predicate, so the work shrinks page by page instead.
+ *     index — `treatment` sits in the middle of it and a btree cannot skip a
+ *     middle column — so Postgres sorts the matching set, and page 20 sorted the
+ *     whole set again to throw the first 19,000 rows away. A keyset page carries
+ *     its own `created_at <` predicate, so the page can be found by an INDEX SEEK
+ *     rather than by counting past the rows before it — WHICH NEEDS THE
+ *     `(site_id, answer, created_at desc, id)` INDEX MIGRATION 0103 ADDS. Without
+ *     that index the first page and the twentieth pay the same full scan, and
+ *     this clause used to claim the work shrank page by page on its own. It does
+ *     not: measured on a throwaway PG 17.10 cluster with 0097's table verbatim,
+ *     400,000 rows / 320,000 yes, single site, no new index, export page 1 read
+ *     5,952 shared buffers and deep page ~16 read 6,353 — the same parallel
+ *     sequential scan both times, with only the sort's INPUT shrinking (91,666
+ *     rows to 76,666). With 0103 those become ordered index scans at 67 and 316
+ *     buffers and the sort disappears. Reason (1) — an OFFSET moves under a table
+ *     the public submit endpoint inserts into, a keyset cursor cannot be moved by
+ *     a concurrent write — was always the load-bearing one and is untouched; only
+ *     this second half was optimistic. 0103's own header carries the full table of
+ *     measurements, including what it does NOT fix (the all-sites view still
+ *     scans, because `site_id = ANY (…)` cannot emit rows in index order).
  *
  * AND THE CEILING IS NOW DETECTED, NOT WALKED INTO. Past 20,000 rows the old loop
  * paid all twenty round trips and twenty thousand rows to arrive at `capped`, which
@@ -745,6 +776,45 @@ async function countInterestRowsInScope(
  * counts are still distinct patients. A one-query answer needs a Postgres
  * `count(distinct …)` aggregate behind an RPC — a migration, and a handoff.
  */
+/**
+ * THE EXACT COUNTS, FROM POSTGRES, IN ONE CALL — when the function is there.
+ *
+ * `interest_counts_by_treatment(p_site_ids text[])` (migration 0101) does the
+ * `count(distinct dentally_patient_id)` where the rows live, so the answer is
+ * exact at any scale and nothing is paged into this process to produce it. The
+ * scan below stays as the fallback and is not going away: the migration is
+ * applied by hand (the platform has no migration runner in the request path), so
+ * this code runs against both shapes of database and must be right on both.
+ *
+ * NULL MEANS "ASK THE SCAN", NEVER "THERE ARE NONE". Any failure at all resolves
+ * to null — PGRST202 (the function is not in the schema cache, i.e. 0101 is not
+ * applied yet), a permission error, a client double in a test that has no `rpc`
+ * at all — because the fallback is the behaviour this platform shipped with and
+ * it is honest on its own. A wrong number is the only outcome worth refusing, and
+ * this path cannot produce one: it either returns Postgres's own tally or nothing.
+ */
+async function interestCountsExact(
+  db: ReturnType<typeof serviceClient>,
+  siteIds: string[],
+): Promise<Record<string, number> | null> {
+  try {
+    const { data, error } = await db.rpc("interest_counts_by_treatment", { p_site_ids: siteIds });
+    if (error || !Array.isArray(data)) return null;
+    const counts: Record<string, number> = {};
+    for (const raw of data as Array<{ treatment?: unknown; patients?: unknown }>) {
+      const treatment = typeof raw.treatment === "string" ? raw.treatment : null;
+      const patients = Number(raw.patients);
+      // A row we cannot read is a row we cannot count, and a partial map returned
+      // as an exact answer would be worse than the scan. Fail closed to the walk.
+      if (treatment === null || !Number.isFinite(patients)) return null;
+      counts[treatment] = patients;
+    }
+    return counts;
+  } catch {
+    return null;
+  }
+}
+
 export async function countInterestByTreatmentDetailed(
   siteIds: string[],
   opts: { pageSize?: number; ceiling?: number } = {},
@@ -754,6 +824,14 @@ export async function countInterestByTreatmentDetailed(
   const page = Math.max(1, Math.floor(opts.pageSize ?? INTEREST_COUNT_PAGE));
   const ceiling = Math.max(page, Math.floor(opts.ceiling ?? INTEREST_COUNT_CEILING));
   const db = serviceClient();
+
+  // ONE EXACT ANSWER WHEN THE DATABASE CAN GIVE ONE (ruling W3/33, handoff H77).
+  // `scanned: 0` is the literal truth on this path: no interest row was read into
+  // this process — Postgres counted them where they are — and `capped` is false
+  // because an aggregate has no ceiling to hit. Nothing prints `scanned`; it is
+  // here so a reader of a log can tell the two paths apart.
+  const exact = await interestCountsExact(db, siteIds);
+  if (exact) return { counts: exact, capped: false, scanned: 0 };
 
   // DISTINCT PATIENTS, not rows. A patient who filled the form in before two
   // appointments and said yes to whitening both times is ONE person interested in
@@ -823,18 +901,39 @@ export async function countInterestByTreatmentDetailed(
 }
 
 /**
- * The same counts in the bare shape the two existing callers read, and it REFUSES
- * rather than returning a floor a caller would print as a total.
+ * DEAD IN PRODUCTION, AND KEPT ONLY UNTIL ONE TEST OUTSIDE THIS MODULE MOVES.
  *
- * A `Record<string, number>` cannot say "at least". The module page renders each
- * figure as a headline number with exactly two states — the number, or "The totals
- * could not be read" — and the co-pilot's `interest_lists` labels the same map
- * "distinct patients who answered yes". Neither can qualify a capped figure, so
- * this throws when the scan capped and the honest sentence is shown instead:
- * honest numbers or no numbers (charter §0/5), failing closed.
+ * The bare `Record<string, number>` shape cannot say "at least", so this wrapper
+ * REFUSES a capped scan rather than handing back a floor a caller would print as
+ * a total: honest numbers or no numbers (charter §0/5), failing closed. That was
+ * the right answer while its two callers could not qualify a figure — but the
+ * sentence that used to sit here, "when both of them do, this wrapper goes away",
+ * has come true and the wrapper has not gone away, so it is written down instead
+ * of promised. BOTH CALLERS MOVED:
  *
- * Callers that CAN say "at least N" should use countInterestByTreatmentDetailed
- * and read `capped`; when both of them do, this wrapper goes away.
+ *   the pre-visit module page (src/components/client/previsit/previsit-view.tsx)
+ *   and the co-pilot's `interest_lists` tool (src/lib/copilot/tools.ts) now read
+ *   `countInterestByTreatmentDetailed` and render `capped` as "at least N". The
+ *   throw's own failure mode is why: it collapsed the WHOLE grid to "The totals
+ *   could not be read." for a practice that could simply have been told its
+ *   figures were floors.
+ *
+ * SO THERE IS NO PRODUCTION CALLER LEFT, and the only references in the tree are
+ * two assertions in ./repository.test.ts (which pin this throw, i.e. the thing
+ * being deleted) and one in src/lib/os-scenarios/j2-previsit-triage.test.ts
+ * (step 5 of a cross-module journey another lane owns). Deleting it is therefore
+ * a THREE-FILE edit that no single lane's file scope has covered yet, and half a
+ * deletion is worse than none. The recipe, so it is not re-derived a fourth time:
+ * remove this comment and the function; drop the import at ./repository.test.ts
+ * and the two `countInterestByTreatment` assertions beside it; and in
+ * j2-previsit-triage.test.ts replace step 5's call with
+ * `const { counts } = await countInterestByTreatmentDetailed([SITE])`, reading
+ * `counts.whitening` / `counts.implants`.
+ *
+ * Until then: NEW CALLERS USE countInterestByTreatmentDetailed. It is strictly
+ * more informative — same counts, plus the `capped` flag every surface needs — and
+ * on a database with migration 0101 applied it answers from Postgres exactly,
+ * where this wrapper's throw could never fire at all.
  */
 export async function countInterestByTreatment(
   siteIds: string[],
@@ -847,6 +946,113 @@ export async function countInterestByTreatment(
     );
   }
   return summary.counts;
+}
+
+/**
+ * THE WHOLE LIST, WALKED TO THE END OF THE TABLE (ruling W3/29).
+ *
+ * `listInterest` above takes a limit and no cursor, so nothing built on it can be
+ * complete: ask it for twenty thousand rows and PostgREST hands back its own
+ * max-rows page with `error: null` — a clipped read wearing a complete read's
+ * clothes, which is the trap this tree has now documented five times. The export
+ * route is a FILE OF NAMED PATIENTS that a practice sizes a campaign on, so it
+ * needs the walk rather than the bound: this is the same keyset page
+ * `countInterestByTreatmentDetailed` uses (identical order, identical cursor
+ * filter, identical cursor-safety rule), collecting rows instead of tallying them.
+ *
+ * TWO DELIBERATE DIFFERENCES FROM THE COUNT SCAN:
+ *
+ *   NO `count: 'exact'` PROBE. The count scan asks once, after its first full
+ *   page, whether the ceiling is even reachable, and stops early when it is not —
+ *   because a partial COUNT is worthless (it would be a floor printed as a
+ *   headline). A partial EXPORT is not worthless: it is the most recent N people,
+ *   which is a list somebody can work, so this walk keeps reading and says in the
+ *   file that there are more behind them.
+ *
+ *   THE SAME CEILING CONSTANT AS THE COUNT SCAN, AND NO LONGER THE SAME CEILING.
+ *   `INTEREST_COUNT_CEILING` still bounds this walk, and it bounded the count
+ *   scan too until migration 0101: below twenty thousand rows both were complete
+ *   and above it both said "at least", which is what this comment used to
+ *   promise. 0101 gave `countInterestByTreatmentDetailed` an aggregate —
+ *   `interest_counts_by_treatment` counts where the rows live — and an aggregate
+ *   has no ceiling to hit, so on a database with the migration applied the grid
+ *   is EXACT at any scale while this walk still stops at twenty thousand and the
+ *   file still says "at least N people". The two surfaces on one screen can
+ *   therefore print an exact headline above a file that names a floor.
+ *
+ *   THAT IS THE INTENDED SHAPE, AND NEITHER NUMBER LIES. A partial count is
+ *   worthless — a floor printed as a headline is the failure this module is
+ *   written around — so the count either totals or refuses. A partial export is
+ *   NOT worthless: it is the most recent N people, a list somebody can work, and
+ *   its first line says outright that there are more behind them. What must never
+ *   happen is a bare figure with no such line, and that is what `capped` is for.
+ *   (The promise was never exact even before 0101: the count scan's ceiling spans
+ *   every treatment in scope, an export's spans the one treatment asked for, so
+ *   the same table could reach one ceiling and not the other.) Pinned by "an
+ *   exact grid above a capped file is two honest numbers, not one broken pair"
+ *   in ./repository.test.ts, so this paragraph cannot drift back into a promise.
+ *
+ * `capped` is the caller's honesty flag and it FAILS CLOSED: it starts true and is
+ * only cleared by a short page — a page shorter than what this page ASKED for,
+ * which is the only proof of the end of the table that a limit cannot fake.
+ */
+export interface InterestWalk {
+  /** Newest first, exactly as `listInterest` orders them. */
+  rows: InterestRecord[];
+  /** True when the walk stopped at its ceiling: the rows are a sample, not the list. */
+  capped: boolean;
+  /** Rows actually read. */
+  scanned: number;
+}
+
+export async function listInterestToCompletion(args: {
+  siteIds: string[];
+  treatment?: InterestTreatmentKey;
+  answer?: InterestAnswer;
+  pageSize?: number;
+  ceiling?: number;
+}): Promise<InterestWalk> {
+  if (args.siteIds.length === 0) return { rows: [], capped: false, scanned: 0 };
+  const page = Math.max(1, Math.floor(args.pageSize ?? INTEREST_COUNT_PAGE));
+  const ceiling = Math.max(page, Math.floor(args.ceiling ?? INTEREST_COUNT_CEILING));
+  const db = serviceClient();
+  const rows: InterestRecord[] = [];
+  let capped = true;
+  let cursor: InterestCursor | null = null;
+
+  while (rows.length < ceiling) {
+    const want = Math.min(page, ceiling - rows.length);
+    let q = db
+      .from("treatment_interest")
+      .select(INTEREST_COLUMNS)
+      .in("site_id", args.siteIds)
+      .eq("answer", args.answer ?? "yes");
+    if (args.treatment) q = q.eq("treatment", args.treatment);
+    if (cursor) q = q.or(interestKeysetFilter(cursor));
+    const { data, error } = await q
+      .order("created_at", { ascending: false })
+      // The tiebreak, for the same reason the count scan has it: one submit writes
+      // up to four rows in a single instant, so `created_at` alone is not a cursor.
+      .order("id", { ascending: true })
+      .limit(want);
+    if (error) throw error;
+    const batch = (data ?? []) as InterestRow[];
+    for (const r of batch) rows.push(rowToInterest(r));
+    // Measured against what THIS page asked for, never against the page size, so
+    // the last part-page of the ceiling cannot be misread as the end of the data.
+    if (batch.length < want) {
+      capped = false;
+      break;
+    }
+    const last = batch[batch.length - 1];
+    if (!INTEREST_CURSOR_SAFE.test(String(last.created_at)) || !INTEREST_CURSOR_SAFE.test(String(last.id))) {
+      // No cursor we trust: stop, and let `capped` stand. Fails closed.
+      break;
+    }
+    cursor = { createdAt: last.created_at, id: last.id };
+  }
+
+  return { rows, capped, scanned: rows.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,6 +1288,20 @@ export async function markOutboxFailed(outboxId: string): Promise<void> {
   await recordNonDelivery(outboxId, "undeliverable");
 }
 
+/**
+ * The drain would not send this row. WE DO NOT KNOW WHY, AND WE DO NOT PRETEND TO.
+ *
+ * `markBlocked(id)` carries no reason (see the drain's `OutboxSource`), and the
+ * drain calls it from four branches: an opt-out, the output guardrail, an
+ * undeliverable address, and the daily frequency cap. Only the first is consent.
+ * `opted_out` here would put a claim about what the patient asked for into their
+ * record on the strength of a call that said no such thing, which is exactly the
+ * reuse ./types.ts, the closer and the collection agent all refuse. So the row is
+ * stopped with `blocked`: the one fact this call establishes.
+ *
+ * `provider = 'suppressed'` on the outbox row is unchanged — it is the outbox's
+ * own word for "the drain refused it", and it predates this.
+ */
 export async function markOutboxBlocked(outboxId: string): Promise<void> {
   const db = serviceClient();
   const { error } = await db
@@ -1089,7 +1309,7 @@ export async function markOutboxBlocked(outboxId: string): Promise<void> {
     .update({ status: "failed", provider: "suppressed" })
     .eq("id", outboxId);
   if (error) throw error;
-  await recordNonDelivery(outboxId, "opted_out");
+  await recordNonDelivery(outboxId, "blocked");
 }
 
 /** The Twilio delivery-status webhook's write. */

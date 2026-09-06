@@ -1,15 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Loader2, Power } from "lucide-react";
 import { PageHeader, SectionCard, StatCard, Tabs } from "@/components/primitives";
 import { SyncStatusView } from "./sync-status-view";
+import { CLIENT_NAV, NAV_SWITCH_EXEMPT_SLUGS } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-// Owner-only master control panel: one on/off switch per automated system. OFF is
-// a full kill switch (the server halts the system's sweeps, sends, agent replies
-// and public intake, and the module is hidden). Reads/writes /api/systems, which
-// is owner-gated. Optimistic toggles with revert-on-failure.
+// Owner-only master control panel: one on/off switch per automated system. OFF
+// halts the WORK — the server refuses that system's sends, agent replies and
+// public intake, and it writes nothing to Dentally. It does NOT halt every
+// sweep (see `killSwitchSummary` below: /api/outreach/sweep runs its
+// build-continuation pass ungated, ahead of the send gate, by design), and it
+// is NOT true that every module then disappears: `NAV_SWITCH_EXEMPT_SLUGS`
+// keeps the preparation screens in the sidebar while their own switch is off
+// (W1-D, W2-C/4), and a row's own sentence names anything else that survives
+// (post-op replies are still triaged; outreach list-BUILDING deliberately
+// continues before the send gate).
+// `killSwitchSummary()` below is that truth in the owner's words, derived
+// from the exempt set rather than restated beside it. Reads/writes /api/systems,
+// which is owner-gated. Optimistic toggles with revert-on-failure.
 //
 // SECOND TAB: DENTALLY SYNC. The switches on the first tab decide what each
 // system is allowed to DO; the second says what any of it actually reaches the
@@ -125,13 +136,168 @@ export const SWEEPS_WITH_NO_CRON_JOB: readonly string[] = [
  *
  * Null while the system is OFF, because the row is already carrying the same
  * fact under "Needs first" — the roster's own words, with the job name in them.
+ *
+ * ONE SENTENCE FOR FOUR SLUGS WAS TRUE FOR THREE OF THEM. "nothing runs …
+ * this system is on in name only" is exactly right for the closer, balance
+ * reminders and the post-op check-in: those three have one sweep each, it is
+ * unregistered, and the switch therefore starts nothing at all.
+ *
+ * It is FALSE for `pre-visit-triage`, and false in the direction that costs the
+ * owner the thing he asked for by name. Rulings W3/8, W3/21 and W3/27 landed
+ * after this copy was written: the owner-only "Build / refresh candidates"
+ * button on the pre-visit page is `disabled` while the system is off and
+ * POST /api/previsit/mining-run refuses under the same switch, so switching
+ * this system ON is the only way to run the implant scan by hand. An owner who
+ * reads "on in name only" switches it back off — into the one state in which
+ * the button he came for cannot be pressed. The runbook's pre-visit section
+ * says the opposite of the old sentence in as many words ("It can be built by
+ * hand in the meantime"), and ruling W3/9 settles which of the two moves: copy
+ * matches code, never the reverse.
+ *
+ * The opening clause is shared deliberately. §4 of the runbook quotes it
+ * ("Switched on, but it has not started") as the row's tell for an unregistered
+ * job, and runbook.test.ts pins that quote; the correction is to the tail, which
+ * is where the over-claim was.
  */
+const REGISTRATION_WARNING_BY_SLUG: Record<string, string> = {
+  // IT CLAIMS ONE JOB, NOT TWO, because one job is what this list can vouch for.
+  // `SWEEPS_WITH_NO_CRON_JOB` carries SLUGS, and the slug reaches it through the
+  // agent whose trigger is /api/previsit/sweep — the questionnaire sweep. The
+  // implant scan is a second, separately registrable job (app-sweep-previsit-
+  // mining) that this screen cannot see the state of, so the sentence asks for it
+  // to be checked rather than asserting it is missing: a count here would be copy
+  // that a later registration silently falsifies.
+  "pre-visit-triage":
+    "Switched on, but it has not started: the scheduled job that sends this questionnaire has never been " +
+    "registered, so no patient is asked anything. Ask the agency to register it — and to check the implant " +
+    "scan's own job while they are there. Switching on is not nothing in the meantime: it is what lets an owner " +
+    "build the implant-candidate list by hand with Build / refresh candidates on the pre-visit page, which reads " +
+    "patient history and messages nobody.",
+};
+
+const REGISTRATION_WARNING_DEFAULT =
+  "Switched on, but it has not started: its scheduled job has never been registered, so nothing runs and " +
+  "nothing is sent. Ask the agency to register it — until then this system is on in name only.";
+
 export function registrationWarning(row: Pick<SystemRow, "enabled" | "slug">): string | null {
   if (!row.enabled) return null;
   if (!SWEEPS_WITH_NO_CRON_JOB.includes(row.slug)) return null;
+  return REGISTRATION_WARNING_BY_SLUG[row.slug] ?? REGISTRATION_WARNING_DEFAULT;
+}
+
+/**
+ * The three figures above the panel: running, not started, switched off.
+ *
+ * SWITCHED ON IS NOT RUNNING, AND THE TWO OWNER SCREENS HAD STOPPED AGREEING.
+ * Home's Automations tile already subtracts the switches whose sweep the
+ * scheduler has never heard of (src/lib/home/os-band.ts, ruling W3/31): with
+ * `pre-visit-triage` on it reads "2 of 30 running, 1 not started". This card
+ * counted every enabled row and read "3 of 30" for the same practice at the same
+ * moment — two owner-facing figures, both labelled running, differing by the
+ * exact system the owner had just toggled. One of them had to be wrong, and it
+ * was this one: the row directly below it already says so in words ("Switched
+ * on, but it has not started", `registrationWarning` above), so the headline was
+ * contradicting its own panel — the charter's honest-numbers rule (§0/5) applied
+ * to the smallest number on the screen.
+ *
+ * IT USES THE SAME SET AS HOME. `SWEEPS_WITH_NO_CRON_JOB` is held equal to
+ * `slugsWithNoScheduledJob()` by cron-registration.test.ts, which is the module
+ * Home reads directly, so the two screens move together the day a job is
+ * registered rather than needing to be corrected twice.
+ *
+ * THE DENOMINATOR DOES NOT MOVE, and a stalled system is NOT folded into
+ * `off`: the owner switched it on, and a figure that quietly relabelled his
+ * action would read as the switch not having taken. It is returned separately so
+ * the panel can give it its own card, shown only when there is one to show.
+ *
+ * Pulled out of the component because SystemsView fetches its rows in an effect —
+ * a test that rendered the view would get the loading state and nothing else,
+ * which is how a headline can be wrong on every real screen with no assertion
+ * going red. Same reason `SystemRowLine` and `registrationWarning` are exported.
+ */
+export function systemHeadlineCounts(rows: readonly Pick<SystemRow, "enabled" | "slug">[]): {
+  total: number;
+  running: number;
+  stalled: number;
+  off: number;
+} {
+  const total = rows.length;
+  const enabled = rows.filter((r) => r.enabled).length;
+  const stalled = rows.filter((r) => r.enabled && SWEEPS_WITH_NO_CRON_JOB.includes(r.slug)).length;
+  return { total, running: enabled - stalled, stalled, off: total - enabled };
+}
+
+/**
+ * WHAT "OFF" ACTUALLY MEANS, on the one screen that decides it.
+ *
+ * THE OVER-CLAIM this replaces. The panel opened with "Turning one off is a full
+ * kill switch: it hides the module and stops all of its work, so nothing sends
+ * and nothing is written to Dentally until you switch it back on." Two of those
+ * clauses are false, and the screen itself is the proof:
+ *
+ *   - "it hides the module" is false for every slug in NAV_SWITCH_EXEMPT_SLUGS.
+ *     Those four (Campaigns, Equipment, IT desk, Pre-visit questions) are kept in
+ *     the sidebar by `categoriesForRole` precisely so the owner can review and
+ *     prepare them BEFORE arming them (rulings W1-D and W2-C/4). An owner who
+ *     switches Pre-visit questions off, still sees it in his sidebar and can
+ *     still open it reasonably concludes the switch did not take.
+ *   - "stops all of its work" is false for at least two rows this panel prints.
+ *     /api/outreach/sweep runs its build-continuation pass UNGATED, ahead of the
+ *     send gate, by design ("Building a list is not sending"); the post-op
+ *     check-in row says in its own `halts` sentence that replies are still
+ *     triaged and escalated to a person.
+ *
+ * W3/9 settles which side moves: copy matches code, never the reverse. So the
+ * paragraph claims only the two things that ARE universally true — the work
+ * stops, and nothing reaches Dentally — and then names the exceptions instead of
+ * papering over them. It DERIVES the still-reachable list from
+ * NAV_SWITCH_EXEMPT_SLUGS rather than restating it in prose, so widening that
+ * set rewrites this sentence in the same edit (kill-switch-copy.test.ts pins
+ * that join, and goes red if a slug is exempted without appearing here).
+ *
+ * THE REPLACEMENT KEPT ONE WORD OF THE OVER-CLAIM, AND THAT WORD IS "SWEEPS"
+ * (wave-3d review, 6 September 2026). "its sweeps, sends, agent replies and
+ * public forms stop" is the same false claim as "stops all of its work", made
+ * about the same row: /api/outreach/sweep runs `continueBuilds()` and its
+ * Dentally reads BEFORE `isSystemEnabledForSend(CLIENT_ID, "outreach")`, on every
+ * ten-minute tick, so the outreach SWEEP does not stop and this sentence said
+ * every system's does. src/lib/systems/catalog.test.ts already derives from that
+ * call order that the outreach ROW may not say its sweep halts; the panel-wide
+ * paragraph was asserting the opposite, and kill-switch-copy.test.ts had pinned
+ * the clause as one of "the two things that ARE true of every system" — two
+ * green tests contradicting each other. The word is gone; the send, agent-reply,
+ * public-form and Dentally-write halves are true of every row and stay. The
+ * carry-on class is named in general terms rather than by system, because naming
+ * "Segment outreach" here would be the prose-restating-code shape this whole
+ * paragraph exists to avoid — and the same derivation that made the claim false
+ * now guards the sentence.
+ *
+ * The exceptions matter more than they look: this paragraph is the ONLY thing on
+ * screen describing the off state. `systemRowSentence` prints `starts`, not
+ * `halts`, for a row that is off, so the corrective sentence a few pixels below
+ * is invisible in exactly the state the reader is asking about — which is why
+ * the last sentence says WHEN the row's own line spells the exception out.
+ */
+export function killSwitchSummary(): string {
+  const labels = CLIENT_NAV.flatMap((g) => g.items)
+    .filter((i) => NAV_SWITCH_EXEMPT_SLUGS.has(i.slug))
+    .map((i) => i.label);
+  const named =
+    labels.length === 0
+      ? ""
+      : labels.length === 1
+        ? labels[0]
+        : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  const reachable = named
+    ? ` Most modules disappear from your sidebar while they are off; ${named} stay ` +
+      "reachable so you can review and prepare them before switching on."
+    : "";
   return (
-    "Switched on, but it has not started: its scheduled job has never been registered, so nothing runs and " +
-    "nothing is sent. Ask the agency to register it — until then this system is on in name only."
+    "Turning one off halts that system's work: its sends, agent replies and public forms stop, " +
+    "and it writes nothing to Dentally, until you switch it back on." +
+    reachable +
+    " A few background passes are deliberately outside the switch — preparing work is not sending it — " +
+    "and each system's own line spells its exceptions out while it is running."
   );
 }
 
@@ -169,6 +335,9 @@ async function fetchSystems(
 }
 
 export function SystemsView({ clientSlug }: { clientSlug: string }) {
+  // THE ROUTER IS HELD FOR ONE REASON: a flipped switch has to reach the SERVER-
+  // RENDERED screens that read it. See `toggle` below.
+  const router = useRouter();
   const [rows, setRows] = useState<SystemRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -210,6 +379,7 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
     setBusy((b) => new Set(b).add(slug));
     // Optimistic: flip locally, revert if the write fails.
     setRows((rs) => rs?.map((r) => (r.slug === slug ? { ...r, enabled: next } : r)) ?? rs);
+    let wrote = false;
     try {
       const res = await fetch("/api/systems", {
         method: "POST",
@@ -217,6 +387,7 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
         body: JSON.stringify({ client: clientSlug, slug, enabled: next }),
       });
       if (!res.ok) throw new Error("write failed");
+      wrote = true;
     } catch {
       setRows((rs) => rs?.map((r) => (r.slug === slug ? { ...r, enabled: !next } : r)) ?? rs);
       setRowError("Could not update that system. Please try again.");
@@ -227,11 +398,44 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
         return n;
       });
     }
+    // -----------------------------------------------------------------------
+    // AND THE REST OF THE APP IS TOLD (Next 16 client router cache).
+    //
+    // The optimistic flip above updates THIS panel and nothing else, and this is
+    // the write in the tree with the widest SERVER-rendered blast radius.
+    // `system_toggle` is read on the server by the sidebar (`getDisabledSlugs`
+    // in src/app/c/[client]/layout.tsx), by Home's Operating system band
+    // (`readOsBand`/`getSystemStates` — the Off pill, the empty/figure states and
+    // the "N of M running" cell) and by the module banners that say whether a
+    // system is armed.
+    //
+    // next.config.ts sets `experimental.staleTimes = { dynamic: 30, static: 120 }`,
+    // so a route the owner has already visited is restored from the client router
+    // cache on the next <Link> navigation WITHOUT re-rendering on the server. A
+    // plain `fetch` to a Route Handler — unlike a Server Action — invalidates
+    // none of it: `invalidateBfCache()` has exactly two callers in the Next
+    // runtime, the refresh reducer and the server-action reducer. So without this
+    // line the owner switches a system off during an incident, clicks Home to
+    // confirm it stopped, and reads the PRE-toggle state for the length of the
+    // stale time, with nothing on screen to distinguish a stale cache from a save
+    // that never landed. (The halt itself is server-side and immediate; only the
+    // display lags. That is still the screen he decides from.) Every other write
+    // surface in the tree already refreshes — equipment, the IT desk, pre-visit,
+    // the patient editors, the diary, the top bar; this one did not.
+    //
+    // ONE CALL COVERS EVERY SURFACE, because the invalidation bumps the cache
+    // version and the whole client cache is dropped, not just this route.
+    //
+    // OUTSIDE THE TRY, AND ONLY ON A WRITE THAT LANDED: a throw from the refresh
+    // must not be caught by the block above and reported to the owner as "could
+    // not update that system", which would be the panel lying about a switch it
+    // successfully flipped. Pinned by control-panel.test.ts, "a flipped switch
+    // invalidates the server-rendered screens that read it".
+    // -----------------------------------------------------------------------
+    if (wrote) router.refresh();
   }
 
-  const total = rows?.length ?? 0;
-  const running = rows?.filter((r) => r.enabled).length ?? 0;
-  const offCount = total - running;
+  const { total, running, stalled, off: offCount } = systemHeadlineCounts(rows ?? []);
 
   const groups = GROUP_ORDER.map((g) => ({
     group: g,
@@ -240,10 +444,7 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
 
   const systemsPanel = (
     <>
-      <p className="mb-5 max-w-3xl text-[13px] text-muted">
-        Turning one off is a full kill switch: it hides the module and stops all of its work, so nothing sends and
-        nothing is written to Dentally until you switch it back on.
-      </p>
+      <p className="mb-5 max-w-3xl text-[13px] text-muted">{killSwitchSummary()}</p>
 
       {rowError ? (
         <p className="rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">{rowError}</p>
@@ -311,6 +512,7 @@ export function SystemsView({ clientSlug }: { clientSlug: string }) {
           rows ? (
             <>
               <StatCard label="Systems running" value={`${running} of ${total}`} dot="bg-status-green" />
+              {stalled > 0 ? <StatCard label="Not started" value={stalled} dot="bg-status-amber" /> : null}
               {offCount > 0 ? <StatCard label="Switched off" value={offCount} dot="bg-status-amber" /> : null}
             </>
           ) : undefined

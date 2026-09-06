@@ -189,7 +189,23 @@ describe("projectBank refuses a symptom question ON THE SHORT BANK, whatever the
 //
 //   1. delete `if (kind === "symptom")`         → the honestly-classified question
 //   2. delete the symptomTermIn loop            → the mis-classified LABEL
-//   3. drop `o.label` / `o.value` from patientText → the mis-classified OPTION
+//   3. delete the `patientText.push(o.label, o.value)` line → the mis-classified
+//      OPTION
+//
+// MUTATION 3 IS THE WHOLE LINE, and the precision matters. ROUTE 3's fixture
+// option is `{ value: "sore", label: "I have toothache and it is painful" }`:
+// "sore" is a symptom term and so is "painful", so narrowing the push to one
+// half leaves the OTHER half still tripping the scan. Naming a narrower
+// mutation here would be a citation that reads green when it should read red,
+// which is exactly what W3/17 exists to stop.
+//
+// EACH HALF IS PINNED IN ITS OWN RIGHT, one describe below, and those fixtures
+// are deliberately one-sided so the mutation lands:
+//
+//   drop `o.label` only → "a symptom word in an option LABEL ..." goes red
+//                         (its value is "second", which matches nothing)
+//   drop `o.value` only → "a symptom word in an option VALUE ..." goes red
+//                         (its label is "Something I would like looked at")
 // ===========================================================================
 describe("the contractual fork, pinned under the name project.ts cites", () => {
   it("brief-bank-has-no-symptom-questions", () => {
@@ -267,9 +283,15 @@ describe("custom choice OPTIONS are scanned like question text (W3/3)", () => {
   }
 
   it("a symptom word in an option LABEL keeps the question off the short bank", () => {
+    // THE VALUE IS DELIBERATELY INNOCENT. It used to be "broken", which is itself
+    // a symptom term — so this test passed even with `o.label` dropped from the
+    // scan, and pinned the pair rather than the label (ruling W3/17: a guard that
+    // holds whichever half you break is not pinning either one). "second" matches
+    // nothing in FORBIDDEN_IN_BRIEF, so the only route to a refusal here is the
+    // option LABEL.
     const projected = projectBank("brief", withOptions([
       { value: "routine", label: "Just my usual check-up" },
-      { value: "broken", label: "A broken tooth" },
+      { value: "second", label: "A broken tooth" },
     ]));
     expect(projected.questions.map((q) => q.key)).not.toContain("custom-visit-reason");
     expect(projected.dropped.find((d) => d.key === "custom-visit-reason")?.matched?.toLowerCase()).toBe("broken");
@@ -508,6 +530,78 @@ describe("usableCustom", () => {
     expect(
       usableCustom({ ...base, type: "choice", options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] }),
     ).not.toBeNull();
+  });
+
+  it("refuses a second option that reuses a value the question already has", () => {
+    // THE DEFECT THIS PINS: the value is the answer's identity. Two options
+    // carrying "friend" made the public form render two buttons whose
+    // `value === c.value` test is true at the same time — tap either and both
+    // paint as chosen (previsit-form.tsx) — and `summary.ts` resolved the stored
+    // answer to whichever label came first, so the clinician's pre-visit summary
+    // named an answer the patient had not given. The browser editor de-duplicates
+    // (bank-editor.tsx `draftToQuestion`), but this is the only SERVER-side
+    // validator a saved config passes through, so a hand-edited or restored PUT
+    // went in and came back out intact.
+    const parsed = usableCustom({
+      ...base,
+      type: "choice",
+      options: [
+        { value: "friend", label: "A friend" },
+        { value: "friend", label: "A neighbour" },
+        { value: "search", label: "I searched for you" },
+      ],
+    });
+    expect(parsed?.options).toEqual([
+      { value: "friend", label: "A friend" },
+      { value: "search", label: "I searched for you" },
+    ]);
+    const values = (parsed?.options ?? []).map((o) => o.value);
+    expect(new Set(values).size, "two options share a value").toBe(values.length);
+  });
+
+  it("fails the whole question closed when the duplicate leaves it with one answer", () => {
+    // Dropping the repeat rather than renaming it is deliberate — inventing
+    // "friend-2" would be guessing which of two labels the practice meant — and
+    // the existing two-option floor is what turns that drop into a refusal
+    // instead of a one-answer question nobody can answer wrongly or rightly.
+    expect(
+      usableCustom({
+        ...base,
+        type: "choice",
+        options: [
+          { value: "friend", label: "A friend" },
+          { value: "friend", label: "A neighbour" },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("a duplicate value never survives the projection either, on either bank", () => {
+    // The rule where the patient meets it: the projection is what the public
+    // form renders and what the submit route validates against.
+    for (const fork of ["full", "brief"] as const) {
+      const projected = projectBank(fork, {
+        enabledKeys: [],
+        required: {},
+        custom: [
+          {
+            key: "custom-how-did-you-hear",
+            label: "How did you hear about us?",
+            type: "choice",
+            kind: "logistics",
+            options: [
+              { value: "friend", label: "A friend" },
+              { value: "friend", label: "A neighbour" },
+              { value: "search", label: "I searched for you" },
+            ],
+          } as never,
+        ],
+      });
+      const q = projected.questions.find((x) => x.key === "custom-how-did-you-hear");
+      expect(q, `the ${fork} bank dropped the question entirely`).toBeDefined();
+      const values = (q?.options ?? []).map((o) => o.value);
+      expect(values, `two options share a value on the ${fork} bank`).toEqual(["friend", "search"]);
+    }
   });
 
   it("never marks a free-text custom question required", () => {

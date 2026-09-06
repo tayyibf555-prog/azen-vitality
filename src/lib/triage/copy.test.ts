@@ -11,7 +11,8 @@ import {
   projectTriageFacts,
   urgentHelpLine,
 } from "./copy";
-import { FORBIDDEN_PATIENT_WORDS } from "./forbidden";
+import { FORBIDDEN_PATIENT_WORDS, symptomTermIn } from "./forbidden";
+import { SMS_GSM7_SINGLE, SMS_UCS2_SINGLE, firstNonGsm7, gsm7LengthUnits, isGsm7, smsCost } from "./sms-cost";
 import { projectBank } from "./project";
 import { PreVisitDone, PreVisitFormView, hasUrgentScore, outstandingCount } from "@/components/previsit/previsit-form";
 
@@ -106,6 +107,35 @@ describe("no funding words reach a patient", () => {
 
   it("not in the interest grid", () => {
     for (const s of stringsIn(INTEREST_TREATMENTS)) assertClean(s, "the interest grid");
+  });
+
+  it("no SYMPTOM word in the interest grid either, which the short bank shows too", () => {
+    // THE HOLE THIS CLOSES. `projectBank`/`admit` is where the NHS symptom fork
+    // lives, and W3/3 widened it to every string a QUESTION puts in front of a
+    // patient. The interest question (bank.ts) carries no `options`: the four
+    // rows a patient actually reads are INTEREST_TREATMENTS, passed from
+    // src/app/pv/[token]/page.tsx straight to the form and printed at
+    // previsit-form.tsx as {t.label} / {t.blurb}. So `admit` never sees them,
+    // and they render on the SHORT bank — the fork whose entire purpose is to
+    // keep symptom framing away from a patient whose plan makes the asking an
+    // obligation. `assertClean` above and the rendered-markup crawls below all
+    // loop FORBIDDEN_PATIENT_WORDS, the FUNDING list, only; nothing in the tree
+    // applied FORBIDDEN_IN_BRIEF to these four rows. They clear it today by
+    // hand-authorship ("a tooth that isn't there any more" is written the way it
+    // is precisely because "missing tooth" is on the list), and hand-authorship
+    // is not a guard — this module's own bank.ts says so.
+    //
+    // LABEL AND BLURB SPECIFICALLY, not stringsIn(): `catalogueKeys` are lookup
+    // keys matched against Dentally's treatment names and are never rendered, so
+    // a future ["denture"] key would fail this for a word no patient can read.
+    expect(INTEREST_TREATMENTS.length, "an empty grid proves nothing").toBeGreaterThan(3);
+    for (const t of INTEREST_TREATMENTS) {
+      expect(symptomTermIn(t.label), `interest row "${t.key}" label`).toBeNull();
+      expect(symptomTermIn(t.blurb), `interest row "${t.key}" blurb`).toBeNull();
+    }
+    // GUARDS THE GUARD: the same check, on the phrasing this rule exists to
+    // catch. Without this line a broken symptomTermIn would pass the loop above.
+    expect(symptomTermIn("A fixed replacement for a missing tooth.")).toBe("missing tooth");
   });
 
   it("not in any screen string the public form can show", () => {
@@ -207,6 +237,15 @@ describe("no funding words reach a patient", () => {
   });
 });
 
+/** The shipped message at the real origin, real token length and real site name. */
+function REAL_BODY(firstName: string): string {
+  return previsitBody({
+    firstName,
+    practiceName: "N15 Vitality Dental",
+    link: "https://azen-vitality.vercel.app/pv/AbCdEfGhIjKlMnOpQrStUv",
+  });
+}
+
 describe("the outbound message", () => {
   it("passes its own compliance scan", () => {
     const scan = checkTriageMessage(previsitBody(FACTS), { firstName: FACTS.firstName });
@@ -216,14 +255,19 @@ describe("the outbound message", () => {
   // ONE SMS CREDIT, and it is asserted at a REALISTIC origin rather than at a
   // toy one: the token is exactly the 22 characters link.ts mints, and the
   // practice name is the longest of the three real sites.
+  //
+  // AND IT IS ASSERTED IN SEGMENTS, NOT IN `body.length`. The old form of this
+  // test measured the same encoding-blind way the code did, so it could not fail
+  // for the reason it is named after. It now asks the carrier's question.
   it("fits one SMS credit with a real link and the longest practice name", () => {
-    const body = previsitBody({
-      firstName: "Christopher",
-      practiceName: "N15 Vitality Dental",
-      link: "https://azen-vitality.vercel.app/pv/AbCdEfGhIjKlMnOpQrStUv",
-    });
-    expect(body.length, `the message is ${body.length} characters: ${body}`).toBeLessThanOrEqual(MAX_CHARS);
+    const body = REAL_BODY("Christopher");
+    expect(gsm7LengthUnits(body), `the message is ${gsm7LengthUnits(body)} septets: ${body}`).toBeLessThanOrEqual(
+      MAX_CHARS,
+    );
     expect(MAX_CHARS).toBe(160);
+    const cost = smsCost(body);
+    expect(cost.encoding).toBe("gsm7");
+    expect(cost.segments, `${body} costs ${cost.segments} credits`).toBe(1);
   });
 
   it("names the practice, so a patient knows who is texting", () => {
@@ -258,6 +302,131 @@ describe("the outbound message", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// WHAT THE MESSAGE COSTS, IN THE UNIT THE CARRIER BILLS IN.
+//
+// The one-credit contract used to be checked with `body.length`, and the test
+// that guarded it used "Christopher" — the same encoding-blind measure as the
+// code, on a fixture that could not expose the hole. A single letter GSM 03.38
+// cannot carry pushes the whole body into UCS-2, where one segment is 70 units
+// rather than 160, so a ~140-character message becomes two or three credits with
+// nothing on screen or in the tree counting them.
+// ---------------------------------------------------------------------------
+describe("what an SMS actually costs", () => {
+  it("counts a plain ASCII body as GSM-7 at one septet a character", () => {
+    const cost = smsCost("Hi Alex, N15 here.");
+    expect(cost).toEqual({ encoding: "gsm7", units: 18, segments: 1, forcedUcs2By: null });
+  });
+
+  // THE ESCAPE TABLE. These nine characters are transmitted as ESC + the code
+  // point, so the wire charges two for each and `body.length` charged one.
+  it("charges TWO septets for an escape-table character, as the wire does", () => {
+    for (const ch of ["^", "{", "}", "\\", "[", "~", "]", "|", "€"]) {
+      expect(smsCost(ch), `"${ch}" was not charged as an escape-table character`).toMatchObject({
+        encoding: "gsm7",
+        units: 2,
+        segments: 1,
+      });
+    }
+    // 160 characters with one `[` among them is 161 septets: two segments, and
+    // the old measure called it one.
+    const body = `${"a".repeat(159)}[`;
+    expect(body.length).toBe(160);
+    expect(smsCost(body)).toMatchObject({ encoding: "gsm7", units: 161, segments: 2 });
+  });
+
+  it("keeps the accented letters GSM-7 DOES carry on one credit", () => {
+    // é, ü, ö, ä, à, ñ, è, ì, ò, ù, Ç, Ø, Å, Æ, ß, É are all in the default
+    // alphabet, so José and Gül cost exactly what Alex costs. Only the letters
+    // outside it are the problem, and naming the difference is the point.
+    for (const name of ["José", "Gül", "Renée", "Åsa", "Günther"]) {
+      const cost = smsCost(REAL_BODY(name));
+      expect(cost.encoding, `${name} was pushed out of GSM-7`).toBe("gsm7");
+      expect(cost.segments, `${name} costs ${cost.segments} credits`).toBe(1);
+    }
+    // THE ALPHABET IS NOT SYMMETRIC, and this is the trap in reading it off a
+    // guess: GSM 03.38 carries Ç at 0x09 and has no lowercase ç at all. So
+    // "Françoise" is three credits and "José" is one, and only a real table
+    // tells you which. This assertion exists so nobody "tidies" the table.
+    expect(isGsm7("Ç")).toBe(true);
+    expect(isGsm7("ç")).toBe(false);
+    expect(smsCost(REAL_BODY("Françoise")).encoding).toBe("ucs2");
+  });
+
+  // THE DEFECT, NAMED. These are ordinary first names on a north London list of
+  // 51,000 patients, copied verbatim out of the Dentally record.
+  it("a first name outside GSM-7 costs the practice two or three credits, not one", () => {
+    const cases: Array<[string, number]> = [
+      ["Siân", 2],
+      ["Małgorzata", 3],
+      ["Ionuț", 3],
+      ["Nguyễn", 3],
+    ];
+    for (const [name, segments] of cases) {
+      const body = REAL_BODY(name);
+      const cost = smsCost(body);
+      expect(cost.encoding, `${name} should force UCS-2`).toBe("ucs2");
+      expect(cost.segments, `${name}: ${body.length} units, ${cost.segments} segments`).toBe(segments);
+      // …and the module says WHICH character did it, so a report is not a mystery.
+      expect(cost.forcedUcs2By).not.toBeNull();
+      expect(body).toContain(cost.forcedUcs2By as string);
+    }
+  });
+
+  // THE RULING THIS FILE MAY NOT MAKE ON ITS OWN. Refusing would mean the
+  // practice never texts a patient because of how their name is spelled.
+  it("does NOT refuse a body for costing more than one credit", () => {
+    const body = REAL_BODY("Małgorzata");
+    expect(smsCost(body).segments).toBeGreaterThan(1);
+    expect(checkTriageMessage(body, { firstName: "Małgorzata" })).toEqual({ ok: true });
+  });
+
+  it("still refuses a body that is genuinely over the septet ceiling", () => {
+    const scan = checkTriageMessage(`Hi Alex, ${"N15 ".repeat(50)}here: link`, { firstName: "Alex" });
+    expect(scan).toMatchObject({ ok: false, category: "too_long" });
+  });
+
+  // THE CEILING IS MEASURED IN SEPTETS, WHICH IS THE HALF `body.length` GOT
+  // WRONG WITHOUT BEING ABOUT ALPHABETS AT ALL. 160 characters holding one
+  // escape-table character is 161 septets: two segments the practice pays for,
+  // and the old measure certified it as one credit.
+  it("refuses 160 characters that are 161 septets, because an escape-table character costs two", () => {
+    const body = `Hi Alex, N15 here: link ${"a".repeat(135)}[`;
+    expect(body.length, "the fixture is not 160 characters").toBe(160);
+    expect(gsm7LengthUnits(body)).toBe(161);
+    expect(smsCost(body).segments).toBe(2);
+    expect(checkTriageMessage(body, { firstName: "Alex" })).toMatchObject({
+      ok: false,
+      category: "too_long",
+      matched: "161 chars",
+    });
+    // …and the same body one character shorter, with no escape, is accepted.
+    expect(checkTriageMessage(`Hi Alex, N15 here: link ${"a".repeat(135)}a`, { firstName: "Alex" })).toEqual({
+      ok: true,
+    });
+  });
+
+  it("names the ceilings the carrier uses rather than a rounded guess", () => {
+    expect(SMS_GSM7_SINGLE).toBe(160);
+    expect(SMS_UCS2_SINGLE).toBe(70);
+    // A UCS-2 body of exactly 70 units is one segment; 71 is two.
+    expect(smsCost(`ł${"a".repeat(69)}`).segments).toBe(1);
+    expect(smsCost(`ł${"a".repeat(70)}`).segments).toBe(2);
+  });
+
+  it("knows which characters GSM-7 carries and which it does not", () => {
+    expect(isGsm7("Hi Alex, N15 Vitality Dental here.")).toBe(true);
+    expect(isGsm7("José")).toBe(true);
+    expect(isGsm7("Małgorzata")).toBe(false);
+    expect(firstNonGsm7("Małgorzata")).toBe("ł");
+    expect(firstNonGsm7("Alex")).toBeNull();
+    // The curly punctuation a copy edit introduces without anybody noticing.
+    for (const ch of ["’", "“", "…", "–"]) {
+      expect(isGsm7(ch), `"${ch}" was treated as GSM-7`).toBe(false);
+    }
+  });
+});
+
 describe("the message scan", () => {
   it.each([
     ["urgency", "Hi Alex, N15 here. Urgent: fill this in before your visit: link"],
@@ -265,6 +434,23 @@ describe("the message scan", () => {
     ["clinical_question", "Hi Alex, N15 here. Any pain before your visit? link"],
     ["clinical_question", "Hi Alex, N15 here. How are your gums? link"],
     ["funding", "Hi Alex, N15 here. NHS patients please fill this in: link"],
+    // THE SHARED PLATFORM BACKSTOP, WHICH NOTHING HERE USED TO EXERCISE.
+    //
+    // `checkTriageMessage` opens by calling `checkAgentReply` (copy.ts), and the
+    // header calls funding jargon and clinical advice "the two universal rules".
+    // Only the first half of that was ever pinned from this side: this module's
+    // own FORBIDDEN_PATIENT_WORDS is a superset of the guardrail's funding list
+    // for every practical phrasing, so the row above is caught by `fundingTermIn`
+    // whether the shared call runs or not, and this file's own patterns catch
+    // clinical QUESTIONS ("any pain?") but no clinical STATEMENT at all.
+    //
+    // These two rows are the shared call's entire marginal contribution — a
+    // treatment recommendation and a safety assurance, both from
+    // guardrail.ts's CLINICAL_PATTERNS and from nothing in this module.
+    // MUTATION (T64): replace that call with a constant `{ ok: true }` and these
+    // two go red while every other row here stays green.
+    ["clinical", "Hi Alex, N15 here. You should book a filling: link"],
+    ["clinical", "Hi Alex, N15 here. It is completely safe: link"],
     ["placeholder", "Hi Alex, {{practice}} here. Questions before your visit: link"],
     ["em_dash", "Hi Alex, N15 here — questions before your visit: link"],
   ])("refuses %s", (category, body) => {
@@ -486,5 +672,71 @@ describe("the interest grid is required-but-refusable", () => {
   it("the grid says plainly that a yes commits the patient to nothing", () => {
     expect(TRIAGE_PUBLIC_COPY.interestNote).toMatch(/nothing is booked/i);
     expect(TRIAGE_PUBLIC_COPY.interestNote).toMatch(/nothing is charged/i);
+  });
+});
+
+// ===========================================================================
+// THE ONE LINE OF ORIENTATION HAS TO BE TRUE OF THE FORM UNDER IT.
+//
+// The crawls above prove what the screen strings must NOT say. Nothing proved
+// that they were true, and one of them was not: the intro promised "you can skip
+// anything you would rather talk about in person" while four required questions
+// held the submit button shut. Ruling W3/9 settles the direction — copy matches
+// code, never the reverse — so the sentence changed and this is the join that
+// stops the two drifting apart again.
+// ===========================================================================
+describe("the intro is true of the form it sits above", () => {
+  function render(fork: "full" | "brief") {
+    const bank = projectBank(fork, null);
+    const outstanding = outstandingCount(bank.questions, INTEREST_TREATMENTS, {}, {});
+    return {
+      bank,
+      outstanding,
+      markup: renderToStaticMarkup(
+        createElement(PreVisitFormView, {
+          practiceName: FACTS.practiceName,
+          questions: bank.questions,
+          interest: INTEREST_TREATMENTS,
+          answers: {},
+          interestAnswers: {},
+          status: "idle" as const,
+          error: null,
+          outstanding,
+          practicePhone: null,
+          onAnswer: () => {},
+          onInterest: () => {},
+          onSubmit: () => {},
+        }),
+      ),
+    };
+  }
+
+  it.each(["full", "brief"] as const)("the %s form really does refuse an untouched submit", (fork) => {
+    // The premise, stated first, so the assertion below is about something real.
+    const { bank, outstanding, markup } = render(fork);
+    expect(bank.questions.filter((q) => q.required).length, `${fork} requires nothing`).toBeGreaterThan(0);
+    expect(outstanding, `${fork} let an empty form through`).toBeGreaterThan(0);
+    expect(markup, `${fork}'s submit button was not disabled`).toContain("disabled=");
+  });
+
+  it("the intro never promises a skip the form will not allow", () => {
+    // MUTATION: put "you can skip anything you would rather talk about in person"
+    // back on TRIAGE_PUBLIC_COPY.intro and this goes red.
+    expect(
+      /\bskip\b/i.test(TRIAGE_PUBLIC_COPY.intro),
+      "the intro offers a skip while required questions hold the submit button shut",
+    ).toBe(false);
+    // And it still tells the patient which way round it is, rather than saying
+    // nothing at all: the few that are needed are named as needed.
+    expect(TRIAGE_PUBLIC_COPY.intro).toMatch(/optional/i);
+    expect(TRIAGE_PUBLIC_COPY.intro).toMatch(/need/i);
+  });
+
+  it("the count line, which is the only explanation a stuck patient gets, still counts", () => {
+    // If the intro is going to send somebody to this sentence, the sentence has
+    // to agree with the number that disabled the button.
+    const { outstanding } = render("full");
+    expect(TRIAGE_PUBLIC_COPY.incomplete(outstanding)).toContain(String(outstanding));
+    expect(TRIAGE_PUBLIC_COPY.incomplete(1)).toContain("1 question ");
   });
 });

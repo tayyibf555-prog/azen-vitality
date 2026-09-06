@@ -170,6 +170,35 @@ describe("what an owner's click actually does", () => {
     expect(String(body.message)).toContain("nothing is lost");
   });
 
+  it("tells the owner what a bare total hides (W3/25)", async () => {
+    // A site that stopped on its own even share of the run, and patients whose
+    // records could not be read at all. Both are in the report and neither was on
+    // any screen: the composed sentence is what the button prints verbatim.
+    store.report = {
+      patientReads: 120,
+      budgetRefused: false,
+      sites: [
+        { siteId: "site-cc", daysCovered: 2, candidates: 1, unreadable: 3, stoppedBy: "patient-budget" },
+        { siteId: "site-n17", daysCovered: 4, candidates: 0, unreadable: 0, stoppedBy: "complete" },
+      ],
+    } as typeof store.report;
+    const { body } = await post();
+    // PER SITE, NOT SUMMED, AND BOUNDED WHEN THE SITES ARE OUT OF STEP. This
+    // expectation used to read "Read 6 more days of the diary", which was the
+    // clause adding one site's 2 days to another's 4 — the false-completeness
+    // defect miningRunSentence was rewritten to remove (charter §0/5, ruling
+    // W3/11; pinned at source by "counts days PER SITE, because three sites do
+    // not make ninety days of one diary" in src/lib/triage/mining.test.ts). The
+    // route prints the library's sentence verbatim, so this asserts the sentence
+    // the library actually composes rather than the one it used to.
+    expect(String(body.message)).toContain(
+      "Read up to 4 more days of the diary at each of 2 sites and added 1 person.",
+    );
+    expect(String(body.message), "the two sites' days were added up again").not.toContain("6 more days");
+    expect(String(body.message)).toContain("One site reached its share");
+    expect(String(body.message)).toContain("3 patients could not be looked up at all");
+  });
+
   it("takes the SAME lease as the scheduled sweep, and releases it", async () => {
     await post();
     expect(store.locks).toEqual([MINING_LOCK]);

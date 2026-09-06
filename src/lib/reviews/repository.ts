@@ -150,12 +150,30 @@ export async function markStatus(id: string, status: ReviewStatus): Promise<void
  * then killed before its outbox row is written is a skipped ask — better than a
  * DUPLICATE review request to a patient (which annoys them and can breach review-
  * platform policy).
+ *
+ * SCHEMA CONTRACT (wave 3d, 6 Sep 2026). The patch names `status` and nothing
+ * else. `review_request` is the ten columns migration 0026_reviews.sql declares —
+ * id, site_id, dentally_appointment_id, dentally_patient_id, patient_name,
+ * channel, attended_at, send_at, status, created_at — and no later migration adds
+ * to it (verified against the live database: information_schema returns exactly
+ * those ten). It has NO `sent_at`; this call used to set one, and PostgREST
+ * answers a patch naming a column outside its schema cache with PGRST204, which
+ * the `if (error) throw` below turned into an unhandled 500 out of the sweep —
+ * the row stayed `scheduled`, so every following tick threw on the same row and
+ * the module could never ask a single patient for a review. The send moment is
+ * not lost by dropping it: `review_touch.sent_at` and `review_outbox.sent_at`
+ * (0026:53, 0026:69) both exist and are stamped by recordOutboxSent when the
+ * drain actually dispatches — the honest moment anyway, since this claim happens
+ * BEFORE the outbox row is even written. Pinned by "claimForSend patches only
+ * columns review_request actually has" in repository.test.ts, which drives this
+ * function against a column-strict stand-in whose columns are parsed from the
+ * migration.
  */
 export async function claimForSend(id: string): Promise<boolean> {
   const db = serviceClient();
   const { data, error } = await db
     .from("review_request")
-    .update({ status: "sent", sent_at: new Date().toISOString() })
+    .update({ status: "sent" })
     .eq("id", id)
     .eq("status", "scheduled")
     .select("id");

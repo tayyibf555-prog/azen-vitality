@@ -22,8 +22,8 @@ export {
 //
 // EVERY WRITE HERE IS FAIL-SOFT, AND THAT IS THE ORDERING DECISION OF THIS LANE.
 // The ledger is a RECORD of a booking, never a precondition for one. If the
-// insert fails — the migration has not been applied, the table is briefly
-// unreachable, PostgREST is unhappy about a column — the recorder logs loudly
+// insert fails — a fresh environment has never run the migration, the table is
+// briefly unreachable, PostgREST is unhappy about a column — the recorder logs loudly
 // and returns null, and the write path carries on exactly as it did before the
 // ledger existed. A patient must never lose an appointment because a row about
 // that appointment could not be written.
@@ -145,10 +145,13 @@ function toRow(r: Record<string, unknown>): WriteIntentRow {
 // DEDUPE for the fail-soft log line, the same shape (and for the same reason) as
 // getDisabledSlugs' in src/lib/systems/repository.ts.
 //
-// Until migration 0096 is applied, EVERY intent fails the same way. This runs on
-// the booking path, the diary path, the agent path and two staff paths, so
-// without a dedupe one un-migrated deployment fills the server log with hundreds
-// of identical lines and buries whatever error actually matters. The FIRST
+// WHEN THE LEDGER IS UNREACHABLE, EVERY INTENT FAILS THE SAME WAY. Migration
+// 0096 is applied in production, so on the live deployment this is an anomaly
+// rather than the resting state — but a fresh environment that has never run the
+// migration, a revoked grant or a PostgREST blip each break every insert at once.
+// This runs on the booking path, the diary path, the agent path and two staff
+// paths, so without a dedupe one such deployment fills the server log with
+// hundreds of identical lines and buries whatever error actually matters. The FIRST
 // occurrence of a given reason logs loudly; exact repeats stay quiet, and a
 // DIFFERENT reason still logs, because a new fault appearing behind an old one
 // is precisely what a dedupe must not swallow.

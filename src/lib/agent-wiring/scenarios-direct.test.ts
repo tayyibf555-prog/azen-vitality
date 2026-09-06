@@ -24,6 +24,8 @@
 // row, the conversation thread and the record read — is the real code.
 // ===========================================================================
 
+import { readFileSync } from "node:fs";
+
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { createFakeSupabase } from "@/lib/test-support/fake-supabase";
@@ -246,8 +248,20 @@ describe("abandoned-booking rescue: a hold nobody finished becomes a contacted l
   it("the roster records the two-switch rule where a person will read it", () => {
     const agent = AGENT_BY_KEY.get("abandoned-booking-rescue")!;
     expect(agent.slug).toBeNull();
+    expect(agent.slugNote).toMatch(/speed-to-lead/);
     expect(agent.slugNote).toMatch(/online-booking/);
-    expect(agent.slugNote).toMatch(/W1-B\/4/);
+    // THE RULE, NOT THE RULING CODE. This asserted /W1-B\/4/ until 5 September
+    // 2026, which held the citation in place in a sentence the co-pilot reads
+    // back to the practice owner — a reference to a programme document he has
+    // never seen (roster.test.ts, "cites no internal ruling code in anything the
+    // owner is shown"). What he has to be told is the consequence, so that is
+    // what is pinned; the traceability moved one layer in, to the comment above
+    // the entry, and is asserted there rather than dropped.
+    expect(agent.slugNote).toMatch(/switched off the page this text points at/);
+    const roster = readFileSync("src/lib/agent-wiring/roster.ts", "utf8");
+    expect(roster, "the decision behind the two-switch rule is no longer traceable").toContain(
+      "ruling W1-B/4",
+    );
   });
 });
 

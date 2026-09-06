@@ -516,17 +516,25 @@ export function BankPanel({
           </ul>
         ) : null}
 
-        {/* THE TRAP THIS WARNS ABOUT IS REAL AND IS NOT THIS SCREEN'S TO FIX.
+        {/* WHAT SWITCHING THEM ALL OFF ACTUALLY DOES, NOW THAT IT IS DIFFERENT.
             `usableConfig` (src/lib/triage/project.ts) falls back to the fork's
-            shipped defaults whenever `enabledKeys` is empty — and the fallback
-            replaces the WHOLE config, so a stored `custom` array goes with it.
-            An owner who switches every shipped question off loses the questions
-            they wrote. Until that is fixed in the projection, the editor says so
-            rather than letting somebody find out from an empty form. */}
+            shipped defaults whenever `enabledKeys` is empty. It used to return
+            `defaultConfigFor(fork)` WHOLE, which threw the practice's own
+            questions away with it — so this warning read "your own questions are
+            not asked", which was true and was the reason it was here. The
+            projection now parses `custom` first and carries it onto the fallback,
+            so that half is fixed and the sentence had to move with it (W3/9: copy
+            matches code, never the reverse).
+
+            What survives is the half an owner still needs told: switching every
+            shipped question off does not produce a form of only their own
+            questions — it brings the shipped list back. Better said here than
+            discovered from a form. */}
         {custom.length > 0 && bank.config.enabledKeys.length === 0 ? (
           <p className="mt-3 rounded-lg border border-tint-amber-line bg-tint-amber px-3 py-2 text-[12px] leading-relaxed text-navy">
             Keep at least one of the questions above switched on. A list with none of them on falls back to the
-            questions this platform ships with, and your own questions are not asked.
+            questions this platform ships with — your own questions are still asked, and the shipped ones come
+            back alongside them.
           </p>
         ) : null}
 

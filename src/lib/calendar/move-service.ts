@@ -35,7 +35,6 @@ import type { AuthedUser } from "@/lib/auth/session";
 import { dentallySiteId, getSite } from "@/lib/mock/clients";
 import { isPatientAdminRole } from "@/lib/patient/roles";
 import { isSystemEnabledStrict } from "@/lib/systems/repository";
-import { SYSTEM_BY_SLUG } from "@/lib/systems/catalog";
 import { invalidateAppointmentsCache, listSitePractitionersSafe, listDiaryAvailabilitySafe } from "@/lib/dentally/read";
 import { recordUsage } from "@/lib/telemetry";
 import { londonDayKey } from "@/lib/time/london";
@@ -63,6 +62,31 @@ import { draftMoveText } from "./draft";
 /** The standardised 503 every gated write path in this codebase gives, word for word. */
 const WRITE_GATE_OFF =
   "Booking into Dentally is not switched on yet. Ask your administrator to enable it.";
+
+/**
+ * WHAT THE DESK SAYS WHEN THE DIARY SWITCH IS OFF — the DESK's own sentence.
+ *
+ * This used to be `SYSTEM_BY_SLUG.get("calendar-writes")?.halts`, and reusing the
+ * catalog row read well until the catalog row grew a second clause. `halts` is
+ * written for the OWNER standing at System controls, deciding whether one flip is
+ * enough, so ruling W3/9 required it to name every door the switch closes — it
+ * now ends "— and the co-pilot cannot book, move or cancel one either", which is
+ * true, necessary there, and a non-sequitur to a receptionist who has just
+ * dragged an appointment across the grid. Two audiences, two sentences.
+ *
+ * They are not allowed to drift into disagreement, and they cannot: this one is
+ * the desk half of that same sentence, and move-service-switch-copy.test.ts
+ * drives a real switched-off move and holds both properties at once — the desk's
+ * body says what the desk can no longer do, and it does NOT relay the co-pilot
+ * clause. The catalog's own sentence stays pinned against the write registry by
+ * catalog.test.ts, so the owner's half cannot quietly lose the co-pilot either.
+ *
+ * The old hard-coded fallback literal is gone with the lookup that needed it: a
+ * literal that only ever appeared when the catalog lost its row was, by
+ * construction, the one string nobody would notice going stale.
+ */
+const DIARY_SWITCH_OFF_MESSAGE =
+  "Appointments can no longer be moved, reassigned or resized from the diary. The practice owner can switch diary moves back on in System controls.";
 
 /**
  * A move that has been read back and confirmed, or one of three honest failures.
@@ -346,10 +370,7 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
   // toggle-read blip would re-arm a switch that had just been turned off, and the
   // move would land in a real diary. A switch we cannot read is treated as off.
   if (!(await isSystemEnabledStrict(site.clientId, "calendar-writes"))) {
-    const halts =
-      SYSTEM_BY_SLUG.get("calendar-writes")?.halts ??
-      "Appointments can no longer be moved, reassigned or resized from the diary.";
-    return json({ ok: false, error: halts }, 503);
+    return json({ ok: false, error: DIARY_SWITCH_OFF_MESSAGE }, 503);
   }
 
   // --- 6. THE WRITE GATE, BEFORE ANY CLIENT IS CONSTRUCTED ------------------
@@ -375,10 +396,15 @@ export async function performMove(appointmentId: string, rawBody: unknown): Prom
   // `copilot_action` row for the same turn. Handoff H33 asked for an optional
   // per-call `source` override so Sync Status could show a co-pilot move apart
   // from a desk drag; that is a product question about what the ledger CLAIMS,
-  // the charter does not settle it, and this lane left it for a ruling rather
-  // than guessing. Nothing about safety turns on it either way: `diary` and
-  // `copilot` resolve the SAME `calendar-writes` switch for appointment.update,
-  // which write-gate.test.ts pins.
+  // so it went up for a ruling rather than being guessed at.
+  //
+  // RULED, and this is now settled rather than provisional: W3/28 — "a co-pilot-
+  // driven diary move is filed under source `diary` (what was done), actor = the
+  // user id (who did it). No source override on performMove." So the literal
+  // below is the answer, not a placeholder, and anybody adding an override is
+  // reopening a decision rather than filling a gap. Nothing about safety turned
+  // on it either way: `diary` and `copilot` resolve the SAME `calendar-writes`
+  // switch for appointment.update, which write-gate.test.ts pins.
   const writeRefused = await precheckDentallyWrite({
     ctx: { source: "diary", siteId: body.siteId, clientId: site.clientId, actor: user?.id ?? null },
     kind: "appointment.update",

@@ -33,7 +33,16 @@ function rowToOverlay(r: OverlayRow): TaskOverlayState {
 export async function getOverlayMap(clientId: string): Promise<Map<string, TaskOverlayState>> {
   const db = serviceClient();
   const m = new Map<string, TaskOverlayState>();
-  const PAGE = 1000;
+  // ONE ROW UNDER THE SERVER'S CEILING (ruling W3/32). The loop's completeness
+  // signal below is `rows.length < PAGE`, and Supabase clips every response at a
+  // max-rows ceiling measured on this project at 1,000 (POSTGREST_MAX_ROWS in
+  // src/lib/test-support/fake-supabase.ts). A page size of exactly 1,000 sits ON
+  // that ceiling, where a full page and a clipped one are the same observation —
+  // so if the server cap were ever LOWER than the page size, a clipped first page
+  // would read as "the last (short) page" and this overlay would come back
+  // incomplete with nothing to notice it: every task the missing rows suppressed
+  // would reappear as open. At 999 a short page can only mean the rows ran out.
+  const PAGE = 999;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from("task_overlay")

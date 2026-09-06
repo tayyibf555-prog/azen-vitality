@@ -18,7 +18,14 @@ import { readPlanId } from "@/lib/calendar/funding";
 import { buildTriageLink } from "@/lib/triage/link";
 import { checkTriageMessage, previsitBody, projectTriageFacts } from "@/lib/triage/copy";
 import { dayKey, decideSend, dueAtFor, scanWindow } from "@/lib/triage/schedule";
-import { enqueueSend, listTargets, stopTarget, upsertTargetIfNew } from "@/lib/triage/repository";
+import {
+  enqueueSend,
+  getTarget,
+  listTargets,
+  stopTarget,
+  triageTargetId,
+  upsertTargetIfNew,
+} from "@/lib/triage/repository";
 import { TRIAGE_SYSTEM_SLUG, triageConfig } from "@/lib/triage/types";
 import type { TriageTarget } from "@/lib/triage/types";
 
@@ -29,8 +36,9 @@ import type { TriageTarget } from "@/lib/triage/types";
 // Three passes, deliberately separate, exactly as post-op splits its own:
 //
 //   PASS 1 (flag)   read the appointment window ahead of us, keep the live ones,
-//                   resolve each distinct patient ONCE, decide their bank from
-//                   their payment plan, and record each appointment once.
+//                   skip the ones already on the worklist, resolve each remaining
+//                   distinct patient ONCE, decide their bank from their payment
+//                   plan, and record each appointment once.
 //   PASS 2 (queue)  for every recorded appointment now due, compose the fixed
 //                   message and put it in this module's own outbox.
 //   PASS 3 (retire) stop every `queued` or `sent` target whose appointment has
@@ -106,6 +114,52 @@ import type { TriageTarget } from "@/lib/triage/types";
 // response body so an operator can tell a stopped run from a quiet one.
 //
 // ---------------------------------------------------------------------------
+// AN APPOINTMENT IS READ FROM DENTALLY ONCE, NOT ONCE PER TICK.
+// ---------------------------------------------------------------------------
+// The `facts` map below memoises the patient read WITHIN a run, and that was the
+// only economy this pass had. Nothing consulted `previsit_target` before paying
+// for the read, so an appointment flagged at 09:00 cost the same
+// `GET /v1/patients/:id` again at 09:10, at 09:20, and on every tick until it
+// started — and the result was thrown away, because `upsertTargetIfNew` returns
+// null for a row that already exists and `if (created)` is its only consumer.
+// The fork, the name and the consent flag are snapshotted at flag time on
+// purpose (see `upsertTargetIfNew`'s own comment) and are never refreshed, so
+// the repeat read bought nothing at all.
+//
+// The arithmetic is why this is a go-live defect rather than an inefficiency.
+// At the `*/10` cadence the registration SQL asks for, `maxExaminedPerRun` of
+// 400 and a window that `dayKey` + the client's own +/- 1 day range padding widen
+// to three or four calendar days, this pass alone could issue up to 2,400
+// Dentally reads an hour against a BACKGROUND class ceiling of 60% of 3,600.
+// The drain resolves phone numbers through `getPatient` in that same class, as
+// do five syncs and six other sweeps: switching this module on and registering
+// its cron would have starved them. That is the incident `budget.ts` was written
+// after.
+//
+// So a row already on the worklist costs one keyed `previsit_target` read and no
+// Dentally request at all. The key is derivable without a database round trip
+// (`triageTargetId`), so this is the same idempotency `upsertTargetIfNew` already
+// relies on, asked one step earlier — where it can still save the expensive half.
+//
+// ---------------------------------------------------------------------------
+// THE EXAMINATION BUDGET IS SPLIT PER SITE (ruling W3/25, applied here).
+// ---------------------------------------------------------------------------
+// It used to be one run-wide pot of `maxExaminedPerRun` spent in SITES order,
+// with both the page guard and the row guard breaking out of the whole loop when
+// it emptied. N15 is first in that order and is the busiest, and the pot is
+// exactly `MAX_PAGES_PER_SITE * PER_PAGE`, so one site could take the entire run
+// on its own — and because cancelled and did-not-attend rows are paged and
+// counted before `upcoming()` discards them, and the window is date-granular so
+// every tick re-reads the same rows, N17 and Romford Road would have been skipped
+// deterministically, every tick, with a run report that said only
+// `examined: 400`. This is the identical defect W3/25 closed in the sibling
+// mining engine, and it takes the identical fix: each mapped site gets its own
+// even share, a site that exhausts ITS share stops that site rather than the run,
+// an unused share does NOT roll over, and the run's own ceiling still holds. The
+// response then carries a per-site line with an `exhausted` flag, so a truncated
+// read never wears a complete read's clothes (charter section 0 item 5).
+//
+// ---------------------------------------------------------------------------
 // THE FORK IS RESOLVED HERE AND ONLY HERE.
 // ---------------------------------------------------------------------------
 // An appointment payload carries no payment plan, so pass 1 resolves each DISTINCT
@@ -124,6 +178,36 @@ const PER_PAGE = 100;
  *  shipped lead, which no single site fills three times over; the cap exists so a
  *  mis-filtered query cannot walk the whole book. */
 const MAX_PAGES_PER_SITE = 4;
+
+/**
+ * THE MOST ROWS PASS 3 MAY RETIRE IN ONE TICK, AND WHY IT IS NOT THE OPERATOR'S
+ * NUMBER (ruling W3/32, charter section 0 item 5).
+ *
+ * Pass 3 proves "there is more behind this page" the way the Dentally sync ledger
+ * does: it asks for ONE ROW MORE than it means to retire and reports
+ * `expiredMore` when the page comes back over-full. That proof only works while
+ * the request width stays UNDER the server's own ceiling. Supabase clips every
+ * REST response at a max-rows ceiling measured on this project at 1,000 - no
+ * error, nothing on the response to read - so a read that asks for more than that
+ * can never observe its own bound: `liveRows.length > bound` becomes
+ * arithmetically impossible and a page the server cut prints a bare, complete-
+ * looking `expired`.
+ *
+ * `PREVISIT_MAX_EXAMINED` is an operator-set env var whose legal range runs to
+ * 5,000 (src/lib/triage/types.ts), and pass 1 - which walks Dentally appointment
+ * rows across three sites - is exactly the reason somebody would raise it. So
+ * pass 3 clamps to its OWN cap rather than inheriting that number. 900 matches
+ * COUNT_CAP in src/lib/dentally/sync-ledger.ts and for the same stated reason:
+ * well inside the ceiling, with room for the ceiling to be lowered without
+ * silently disarming the flag.
+ *
+ * A clamp costs nothing in practice. The read is ordered by appointment_at
+ * ascending, so each tick retires the next 900 oldest and the next tick takes the
+ * rest; `expiredMore` says so in the response body meanwhile. Passes 1 and 2 keep
+ * the operator's number: neither prints a total, so neither can be dishonest
+ * about one.
+ */
+const RETIRE_BOUND_CAP = 900;
 
 function vitalitySiteIds(): string[] {
   return SITES.filter((s) => s.clientId === CLIENT_ID).map((s) => s.id);
@@ -276,16 +360,40 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     let examined = 0;
     let flagged = 0;
     let skippedNoFacts = 0;
+    /** Rows whose appointment was already on the worklist, so no Dentally read. */
+    let alreadyFlagged = 0;
     const forkCounts: Record<string, number> = {};
+    /** Per-site honesty for the run report (charter section 0 item 5). */
+    const siteReports: Array<{ siteId: string; examined: number; flagged: number; exhausted: boolean }> = [];
 
     // One read per DISTINCT patient per run, not one per appointment. A patient
     // with a check-up and a hygiene visit in the same window is read once.
     const facts = new Map<string, PatientFacts | null>();
 
+    // THE EVEN SHARE (ruling W3/25). `Math.max(1, ...)` so a practice with more
+    // sites than budget still opens every one of them rather than handing a site
+    // a share of zero and reporting it as budget-stopped having read nothing.
+    const perSiteExamineShare = Math.max(
+      1,
+      Math.floor(config.maxExaminedPerRun / Math.max(1, siteIds.length)),
+    );
+
     for (const siteId of siteIds) {
       if (dentallyScopeRefused() || gate.switchedOffMidRun) break;
+      // This site's ceiling as a run total: its own share on top of what the run
+      // has already spent, clamped to the run's ceiling. An earlier site that
+      // under-spent does NOT hand its remainder on — that is the starvation this
+      // split exists to end — so a quiet run may finish well under the ceiling.
+      const siteCeiling = Math.min(config.maxExaminedPerRun, examined + perSiteExamineShare);
+      const examinedBefore = examined;
+      const flaggedBefore = flagged;
+      let siteExhausted = false;
+
       for (let page = 1; page <= MAX_PAGES_PER_SITE; page += 1) {
-        if (examined >= config.maxExaminedPerRun || dentallyScopeRefused() || gate.switchedOffMidRun) break;
+        if (examined >= siteCeiling || dentallyScopeRefused() || gate.switchedOffMidRun) {
+          siteExhausted = siteExhausted || examined >= siteCeiling;
+          break;
+        }
         let rows: unknown[] = [];
         try {
           const res = await client.listAppointments({
@@ -302,7 +410,12 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         }
         if (rows.length === 0) break;
         for (const raw of rows) {
-          if (examined >= config.maxExaminedPerRun) break;
+          // THIS SITE'S share, not the run's. A site that fills its allowance
+          // stops THIS site; the loop moves on to the next one.
+          if (examined >= siteCeiling) {
+            siteExhausted = true;
+            break;
+          }
           // Consulted BEFORE the row is examined: the Dentally patient read below
           // is the expensive part of this pass and an owner who has just switched
           // the module off should not pay for another ten of them.
@@ -317,6 +430,29 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
           // Already past, or already too late. Checked BEFORE the patient read so
           // a window edge does not cost a Dentally request per stale row.
           if (decideSend({ appointmentAt: hit.startsAt, dueAt }, now, config).action === "drop") {
+            continue;
+          }
+
+          // ALREADY ON THE WORKLIST? Then this appointment costs no Dentally
+          // request. `upsertTargetIfNew` would have returned null for it and the
+          // patient read would have been thrown away — the snapshot on the row is
+          // deliberately never refreshed — so asking one keyed question of our own
+          // table first is the whole saving, on every tick after the first.
+          //
+          // A READ ERROR FALLS THROUGH TO THE OLD BEHAVIOUR rather than skipping
+          // the row. This memo is a COST optimisation, not a safety guard: the
+          // fail-closed direction for it would be to assume the appointment is
+          // already flagged and never flag it, which would silently drop a
+          // patient's link for the sake of one Dentally read. The upsert below is
+          // idempotent and is what actually decides.
+          let seenBefore = false;
+          try {
+            seenBefore = (await getTarget(triageTargetId(siteId, hit.appointmentId))) !== null;
+          } catch (err) {
+            console.warn(`[previsit] worklist check failed for ${siteId}:${hit.appointmentId}`, err);
+          }
+          if (seenBefore) {
+            alreadyFlagged += 1;
             continue;
           }
 
@@ -347,7 +483,22 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         }
         if (gate.switchedOffMidRun) break;
         if (rows.length < PER_PAGE) break;
+        // THE OTHER TRUNCATION, and it is not the budget's. `MAX_PAGES_PER_SITE`
+        // stops a mis-filtered query walking the whole book, and a site whose
+        // last allowed page came back FULL has more behind it. Without this the
+        // per-site line would print a complete-looking figure whenever an
+        // operator raised PREVISIT_MAX_EXAMINED above the page cap's reach.
+        if (page === MAX_PAGES_PER_SITE) siteExhausted = true;
       }
+
+      siteReports.push({
+        siteId,
+        examined: examined - examinedBefore,
+        flagged: flagged - flaggedBefore,
+        // True means "there was more of this site's book we did not open", so the
+        // numbers on this line are a floor and not a total.
+        exhausted: siteExhausted,
+      });
     }
 
     // -----------------------------------------------------------------------
@@ -499,15 +650,19 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     // this pass exists for — are at the head of the page rather than behind a
     // year of live appointments. ONE ROW MORE than the bound is asked for so the
     // response can say honestly that there is more behind it (charter §0/5,
-    // ruling W3/11) instead of printing a bare figure off a capped read.
+    // ruling W3/11) instead of printing a bare figure off a capped read — which
+    // is why the bound is RETIRE_BOUND_CAP-clamped rather than the operator's own
+    // `maxExaminedPerRun`: above the server's 1,000-row ceiling the "one row more"
+    // never arrives and the proof silently becomes a constant false (W3/32).
+    const retireBound = Math.min(config.maxExaminedPerRun, RETIRE_BOUND_CAP);
     const liveRows = gate.switchedOffMidRun
       ? []
       : await listTargets({
           siteIds,
           statuses: ["queued", "sent"],
-          limit: config.maxExaminedPerRun + 1,
+          limit: retireBound + 1,
         });
-    const overdue = liveRows.slice(0, config.maxExaminedPerRun);
+    const overdue = liveRows.slice(0, retireBound);
 
     for (const target of overdue) {
       // THE SWITCH, FIRST IN THE LOOP AND BEFORE ANY ROW MUTATION (W1-B/5 as
@@ -523,7 +678,7 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     }
     // "At least this many": the page came back full AND every row on it was
     // retired, so the bound bit rather than the list ending.
-    expiredMore = liveRows.length > config.maxExaminedPerRun && expired === overdue.length;
+    expiredMore = liveRows.length > retireBound && expired === overdue.length;
 
     return Response.json({
       ok: true,
@@ -536,7 +691,14 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       flagged,
       forkCounts,
       skippedNoFacts,
+      // Appointments already on the worklist, which cost no Dentally read. On a
+      // steady tick this is most of `examined` and `patientReads` is near zero.
+      alreadyFlagged,
       patientReads: facts.size,
+      // PER SITE, because the run-wide totals cannot tell a quiet site from one
+      // whose share ran out before its book was opened. `exhausted: true` means
+      // that site's `examined` and `flagged` are a floor, not a total.
+      sites: siteReports,
       queued,
       waiting,
       stopped,

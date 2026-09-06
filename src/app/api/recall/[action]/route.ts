@@ -4,6 +4,7 @@ import { dentallyWrite, precheckDentallyWrite } from "@/lib/dentally/write-gate"
 import { fetchAvailabilityDays, findExactSlot, type BookingSlot } from "@/lib/booking/slots";
 import { londonDayKey } from "@/lib/time/london";
 import { draftRecall } from "@/lib/recall/draft";
+import { RecallDraftTooLongError } from "@/lib/recall/sms-budget";
 import { stepDef, advanceAfter, RECALL_CADENCE } from "@/lib/recall/cadence";
 import { shouldGraduate } from "@/lib/recall/normalise";
 import {
@@ -132,7 +133,29 @@ async function handleDraft(body: Record<string, unknown>): Promise<Response> {
   const stepNumber = (cadence?.currentStep ?? 0) + 1;
   const step = stepDef(stepNumber, RECALL_CADENCE) ?? stepDef(1, RECALL_CADENCE)!;
 
-  const { body: draftBody, rationale } = await draftRecall(target, channel, step);
+  // draftRecall makes one repair turn and then REFUSES rather than truncating a
+  // message to a patient (src/lib/recall/sms-budget.ts). Unhandled, that refusal
+  // reached the coordinator as an opaque 500 on a Draft click. It is a 422 and a
+  // plain sentence instead: the click did nothing, nothing was queued, and the
+  // reason is the one thing the person at the desk can act on. `nothing` is the
+  // same shape the pending-touch skip returns, so the caller has one thing to read.
+  let draftBody: string;
+  let rationale: string;
+  try {
+    ({ body: draftBody, rationale } = await draftRecall(target, channel, step));
+  } catch (err) {
+    if (!(err instanceof RecallDraftTooLongError)) throw err;
+    console.error(`[recall] manual draft for ${targetId} came back too long; refused`, err);
+    return Response.json(
+      {
+        skipped: true,
+        reason: "draft_too_long",
+        autoQueued: false,
+        error: "That message came out too long to send as one text. Nothing was queued — please try again.",
+      },
+      { status: 422 },
+    );
+  }
 
   // Recall is routine and high-volume: auto-send whenever the channel is consented.
   const consented = channelConsented(target, channel);

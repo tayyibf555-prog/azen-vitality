@@ -630,6 +630,64 @@ describe("3. legitimate equipment questions are allowed", () => {
     // The register supplies the vocabulary, so the practice's own names work.
     expect(ask("Is the SteriPro 22B ours or leased?").kind).toBe("allow");
   });
+
+  // -------------------------------------------------------------------------
+  // THE GENERIC NOUNS, WHICH ARE THE ONES A PERSON REACHES FOR FIRST
+  // (programme ruling W3/20: add "machines"/"out of test" style nouns so "which
+  // machines are out of test?" is answered, not refused).
+  //
+  // WHY THIS IS ITS OWN BATTERY AND NOT MORE ENTRIES IN `ALLOWED`. The battery
+  // above already carries "Which machines on the register are out of test?" —
+  // which passed the whole time, on the word "register", a word the ruling never
+  // mentions. It proved the allow-list admits "register"; it proved nothing at
+  // all about "machines" or "out of test", and both were missing: EQUIPMENT_TERMS
+  // enumerated specific kit and never the generic noun, MAINTENANCE_TERMS carried
+  // "overdue" and "pat test" but not "out of test", and the phrase lived only
+  // inside OUT_OF_TEST, which the judgement rules read and which — by its own
+  // comment — narrows an allow and never creates one. So the register's two
+  // headline questions were answered with "Name the machine you mean".
+  //
+  // EVERY SENTENCE BELOW IS DELIBERATELY BARE. No "register", no "service", no
+  // named machine, no kit noun — nothing but the words the ruling names. Put any
+  // of them back and the test would pass on a gate that had never been widened.
+  // -------------------------------------------------------------------------
+  const RULED_GENERIC_PHRASINGS = [
+    "Which machines are out of test?",
+    "What equipment do we have?",
+    "Are any of our machines out of date?",
+    "Is all our equipment in date?",
+    "Which machines need testing?",
+  ];
+
+  it.each(RULED_GENERIC_PHRASINGS)(
+    "W3/20: the ruled generic phrasing is answered, not refused: %j",
+    (question) => {
+      const verdict = ask(question);
+      expect(verdict.kind, question).toBe("allow");
+      // And unconstrained: none of these carries an intent to go on using
+      // anything, so none of them should drag the take-out-of-use sentence in.
+      expect(verdict.kind === "allow" && verdict.mode, question).toBeUndefined();
+    },
+  );
+
+  it("W3/20's sentences carry NO other allow-list word, so the battery cannot pass by accident", () => {
+    // The guard on the guard. `mentionsVocabulary` is the register half of the
+    // allow-list and these are asked against a register of Durr and W&H kit; if
+    // one of these sentences ever starts naming a registered asset, the battery
+    // above stops testing what it says it tests.
+    for (const question of RULED_GENERIC_PHRASINGS) {
+      const withEmptyVocabulary = gateEquipmentQuestion({
+        userTurns: [question],
+        registerVocabulary: [],
+        registeredCount: 4,
+        assetInScope: false,
+      });
+      expect(withEmptyVocabulary.kind, question).toBe("allow");
+      for (const word of ["register", "asset", "inventory", "overdue", "service", "manual", "engineer"]) {
+        expect(question.toLowerCase(), `${question} leans on "${word}"`).not.toContain(word);
+      }
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

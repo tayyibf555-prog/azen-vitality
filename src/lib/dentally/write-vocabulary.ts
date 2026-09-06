@@ -217,6 +217,17 @@ export const DENTALLY_WRITE_SOURCES = {
     // `calendar-writes` rather than on the master switch alone. Removing the kind
     // would drop the co-pilot off the owner's list AND remove the per-module
     // switch from a path that could come back.
+    //
+    // AND THAT IS NOW A RULING, not this file's own reading of the situation:
+    // W3/28 — "a co-pilot-driven diary move is filed under source `diary` (what
+    // was done), actor = the user id (who did it). No source override on
+    // performMove." The ledger answers "what happened to this appointment" with
+    // the module the change belongs to, and "who asked for it" with the opaque
+    // actor id already on the row; the door someone came through is recorded
+    // separately, in the co-pilot's own `copilot_action` log. So a Sync Status
+    // reader who wants co-pilot moves apart from desk drags is asking for a
+    // second question to be answered, not for this one to be answered
+    // differently.
     slugByKind: {
       // RULING W3/19, answering the open question this registry used to carry:
       // creating a patient IS the New-patient onboarding module's job, whichever

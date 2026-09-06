@@ -485,13 +485,46 @@ describe("create_patient honesty (errors, never a misleading dry run)", () => {
     });
     const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
     expect(out.created).toBe(false);
-    expect(out.reason).toBe("writes_disabled");
+    // THE GATE'S OWN REASON TRAVELS, and this assertion was flipped in wave 3
+    // because the old one pinned a defect. It read `writes_disabled` while the
+    // gate had refused with `master_off`: harmless while the deployment switch
+    // was the only refusal this branch could see, and wrong the moment ruling
+    // W3/19 routed patient.create through the Onboarding switch — a caller
+    // reading `reason` would send the owner to the write key for a refusal that
+    // was their own module switch.
+    expect(out.reason).toBe("master_off");
     expect(out.blockedReason).toBe("master_off");
     expect(out.message).toMatch(/write-back switch is off/i);
     // NOT reported as a Dentally rejection, which would send the owner to check
     // the patient's date of birth for a problem that is a switch.
     expect(out.message).not.toMatch(/Dentally rejected/i);
     expect(out.status).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("names the ONBOARDING switch as the reason when that is what refused it (W3/19)", async () => {
+    // THE CASE RULING W3/19 CREATED. `copilot::patient.create` resolves the
+    // Onboarding module's slug, so an owner who switches New-patient onboarding
+    // off in System controls gets `system_off` from the gate here — a refusal
+    // this branch could not see while the deployment's write key was the only
+    // thing in the way. The `reason` field is machine-readable and is what a
+    // caller would act on, so it must be the gate's own reason: "writes_disabled"
+    // would send the owner to their agency for a switch on their own screen.
+    const gate = await import("@/lib/dentally/write-gate");
+    const spy = vi.spyOn(gate.dentallyWrite, "createPatient").mockImplementation(async () => {
+      throw new gate.DentallyWriteRefused(
+        "system_off",
+        "Refusing patient.create: Onboarding is switched off in System controls.",
+      );
+    });
+    const out = JSON.parse(await dispatch("create_patient", { ...GOOD, confirm: true }));
+    expect(out.created).toBe(false);
+    expect(out.reason).toBe("system_off");
+    expect(out.blockedReason).toBe("system_off");
+    // The message was already right and stays untouched: it relays the gate's
+    // own sentence, which names the control the owner actually threw.
+    expect(out.message).toMatch(/Onboarding is switched off in System controls/i);
+    expect(out.message).not.toMatch(/Dentally rejected/i);
     spy.mockRestore();
   });
 });

@@ -214,4 +214,57 @@ describe("a default-off preparation surface stays reachable while it is off", ()
       expect(SYSTEM_BY_SLUG.get(slug), `${slug} has no controllable system`).toBeTruthy();
     }
   });
+
+  // ===========================================================================
+  // AND THE SIDEBAR SAYS SO. W3/9: copy matches code, never the reverse.
+  //
+  // The System controls nav note is the sentence an owner reads BEFORE opening
+  // the panel, and it carried the identical over-claim the panel's own paragraph
+  // did until kill-switch-copy.test.ts pinned that one: "Switching one off is a
+  // full kill switch: it hides the module and halts its server-side work, so
+  // nothing sends until it is switched back on."
+  //
+  // Both halves are falsified by this very file. "It hides the module" is untrue
+  // of all four NAV_SWITCH_EXEMPT_SLUGS — the assertion three tests above proves
+  // the owner still sees them with every system off — and "halts its server-side
+  // work" is untrue of outreach, whose build-continuation pass runs ahead of the
+  // send gate by design, and of post-op check-in, whose `halts` sentence says
+  // replies are still triaged by a person.
+  //
+  // Two surfaces described the same switch and only ONE of them was joined to the
+  // code, which is exactly how the two drifted apart. This is the other join.
+  // ===========================================================================
+  describe("the System controls nav note describes the switch this file implements", () => {
+    const controlsNote =
+      CLIENT_NAV.flatMap((g) => g.items).find((i) => i.slug === "controls")?.note ?? "";
+
+    it("is present, so the assertions below are not vacuous", () => {
+      expect(controlsNote.length).toBeGreaterThan(80);
+      expect(NAV_SWITCH_EXEMPT_SLUGS.size).toBeGreaterThan(0);
+    });
+
+    // MUTATION: put "it hides the module" back. Four modules stay in the sidebar
+    // with their switch off — the owner who flips Pre-visit questions off, still
+    // finds it, and reasonably concludes the switch did not take.
+    it("does not claim the switch hides the module while any slug is exempt", () => {
+      expect(NAV_SWITCH_EXEMPT_SLUGS.size, "nothing is exempt, so re-read this rule").toBeGreaterThan(
+        0,
+      );
+      expect(controlsNote).not.toMatch(/hides the module/i);
+      expect(controlsNote).not.toMatch(/\bfull kill switch\b/i);
+    });
+
+    // MUTATION: restore "halts its server-side work", which outreach's ungated
+    // build pass and post-op's own halts sentence both falsify.
+    it("does not claim every scrap of server-side work stops", () => {
+      expect(controlsNote).not.toMatch(/halts its server-side work/i);
+      expect(controlsNote).not.toMatch(/stops all of its work/i);
+    });
+
+    it("says what IS true of every system, and that the preparation screens remain", () => {
+      expect(controlsNote).toContain("halts that system's work");
+      expect(controlsNote).toContain("it writes nothing to Dentally");
+      expect(controlsNote).toMatch(/preparation screens stay reachable/);
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { TRIAGE_BANK_BY_KEY, defaultConfigFor, INTEREST_QUESTION_KEY } from "./bank";
+import { TRIAGE_BANK_BY_KEY, defaultConfigFor } from "./bank";
 import { fundingTermIn, symptomTermIn } from "./forbidden";
 import type {
   TriageBankConfig,
@@ -300,11 +300,34 @@ export function usableCustom(raw: unknown): TriageCustomQuestion | null {
   if (type === "choice") {
     const raws = Array.isArray(c.options) ? c.options : [];
     options = [];
+    // THE VALUE IS THE ANSWER'S IDENTITY, so two options may never share one.
+    //
+    // The editor de-duplicates on the way in (`draftToQuestion` in
+    // src/components/client/previsit/bank-editor.tsx keeps a `seen` set and
+    // suffixes "-2", "-3"), and for the same reason this is the wrong place to
+    // repair one: this function is the ONLY server-side validator a config
+    // passes through — `parseConfig` in src/app/api/previsit/bank/route.ts calls
+    // it and nothing else — so a config that reached the PUT some other way
+    // (a hand-edit, a restored export, a future editor path) was stored and
+    // projected with the duplicate intact. The public form then renders one
+    // button per option keyed on the value and paints `value === c.value` as
+    // selected, so tapping "A friend" also selected "A neighbour", and the
+    // stored answer resolved through `summary.ts` to whichever label came
+    // first — a clinician's summary naming an answer the patient did not give.
+    //
+    // A REPEAT IS DROPPED, NOT RENAMED. A validator that invented "friend-2"
+    // would be guessing at which of two labels the practice meant; dropping it
+    // leaves a question the practice can see is wrong in the editor, and if
+    // that takes it below two options the check underneath fails the whole
+    // question closed.
+    const takenValues = new Set<string>();
     for (const o of raws.slice(0, 12)) {
       const oo = o && typeof o === "object" ? (o as Record<string, unknown>) : null;
       const value = oo && typeof oo.value === "string" ? oo.value.trim() : "";
       const optLabel = oo && typeof oo.label === "string" ? oo.label.trim() : "";
       if (!value || !optLabel || optLabel.length > MAX_HELP) continue;
+      if (takenValues.has(value)) continue;
+      takenValues.add(value);
       options.push({ value, label: optLabel });
     }
     // A choice question with nothing to choose is not a question.
@@ -320,9 +343,4 @@ export function usableCustom(raw: unknown): TriageCustomQuestion | null {
     // Free text is never required, for the reason stated on TriageQuestion.
     required: (type === "text" || type === "textarea") ? false : c.required === true,
   };
-}
-
-/** The interest question, if this projection includes it. */
-export function interestQuestion(bank: ProjectedBank): ProjectedQuestion | null {
-  return bank.questions.find((q) => q.key === INTEREST_QUESTION_KEY) ?? null;
 }

@@ -64,17 +64,46 @@ export function isTriageLinkTokenShaped(token: string | null | undefined): boole
 }
 
 /**
- * The absolute /pv/<token> link, or a root-relative one when PUBLIC_BASE_URL is
- * unset (local dev).
+ * The absolute /pv/<token> link, or NULL — never a root-relative path.
  *
- * Mirrors buildMedicalHistoryLink's contract exactly, so the two pre-visit links
- * are built the same way even though they are minted differently.
+ * ---------------------------------------------------------------------------
+ * WHY THIS FAILS CLOSED, WHERE ITS SIBLINGS FALL BACK.
+ * ---------------------------------------------------------------------------
+ * `buildMedicalHistoryLink`, `src/lib/fp17/link.ts` and `src/lib/messaging/
+ * pref-token.ts` all return a root-relative "/…/<token>" when no public origin
+ * is configured, and that is right for them: every one of those is a link a
+ * STAFF MEMBER copies out of a screen, where a path is a usable thing to have
+ * in local dev and nothing is transmitted.
+ *
+ * This one is different, and it is the only one of the family that is
+ * different: its single caller is the pre-visit sweep, which puts the result
+ * straight into an SMS body (src/app/api/previsit/sweep/route.ts, `compose`).
+ * "A few quick questions before your visit: /pv/AbCdEf…" is a text no phone
+ * renders as a link, so it is the message ./copy.ts refuses by name — "a link
+ * that is the empty string is a message asking the patient to tap nothing" —
+ * arriving in a form that composer's emptiness check cannot see. One SMS
+ * credit is spent per appointment, the target moves to `sent`, the run report
+ * counts it queued and delivered, and the practice sees zero completions with
+ * no reason for it. That is a silent failure in both directions, which is
+ * exactly what the fail-CLOSED direction (W1-B/1-5) exists to stop.
+ *
+ * So an origin that is not an http(s) origin is treated the same way as a
+ * malformed token: NO LINK. The sweep already has the branch for it, and its
+ * `no_link` stop reason now fires for the misconfiguration its own comment
+ * names (PUBLIC_BASE_URL unset or set without a scheme — the roster lists it
+ * at src/lib/agent-wiring/roster.ts as a pre-visit "Needs first", and nothing
+ * else in the tree validates its shape) as well as for a corrupt stored token.
+ * The pattern is the one src/app/api/closer/sweep/route.ts already uses.
+ *
+ * `startsWith("http")` — not a URL parse — because the mock and local dev both
+ * serve http://localhost:3000 and "https" begins with "http". Anything else
+ * (a bare "azen-vitality.vercel.app", "ftp://…", "" ) is refused.
  */
 export function buildTriageLink(
   token: string,
   baseUrl: string | undefined = process.env.PUBLIC_BASE_URL,
 ): string | null {
   if (!isTriageLinkTokenShaped(token)) return null;
-  const base = baseUrl && baseUrl.startsWith("http") ? baseUrl.replace(/\/$/, "") : "";
-  return `${base}/pv/${token}`;
+  if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) return null;
+  return `${baseUrl.replace(/\/$/, "")}/pv/${token}`;
 }

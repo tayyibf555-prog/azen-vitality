@@ -7,8 +7,12 @@
 // contact step has been submitted and the server handed that session a token.
 // Before then there is no lead to have progress, and pre-contact visitors stay
 // anonymous — which is the whole reason this is a separate thing from the
-// anonymous step beacon rather than a field on it. funnel-progress-beacon.test.ts
-// pins that the single importer is the quiz.
+// anonymous step beacon rather than a field on it.
+// src/components/assess/funnel-progress-wiring.test.ts pins that the single
+// importer is the quiz ("is imported by the deterministic quiz and by nothing
+// else"). This line named a sibling test file of the same name as this module,
+// which has never existed, until ruling W3/17's sweep caught it on 5 September
+// 2026; the crawl was always there, next to the component it constrains.
 // ============================================================================
 //
 // THIS IS NOT step-beacon.ts, AND THE DIFFERENCE IS THE POINT. That one writes

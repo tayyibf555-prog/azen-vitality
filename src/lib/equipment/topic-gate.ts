@@ -375,13 +375,45 @@ export const EQUIPMENT_OFF_TOPIC_RULES: GateRule[] = [
 // vocabulary of dental equipment, or (mid-conversation) read as a continuation.
 // ---------------------------------------------------------------------------
 
-/** Equipment nouns. Broad enough that a nurse's plain question gets through. */
+/**
+ * Equipment nouns. Broad enough that a nurse's plain question gets through.
+ *
+ * THE GENERIC NOUNS ARE HERE ON PURPOSE (programme ruling W3/20). The list is
+ * otherwise an enumeration of SPECIFIC kit — autoclave, compressor, chair — and
+ * a person who has not yet named a machine does not use those words: they say
+ * "which machines are out of test?" or "what equipment do we have?", which are
+ * the register's own two headline questions and which this list refused, with
+ * "Name the machine you mean", until `machine`/`equipment` were added to it.
+ * (`list_assets`' own tool description offers "what equipment do we have" as its
+ * example use, and the gate in front of it would not let the sentence through.)
+ *
+ * Widening the ALLOW-LIST cannot widen anything dangerous: hard safety (step 1),
+ * off topic (step 2), the empty register (step 3) and the judgement rules
+ * (steps 4/4b) have all already run by the time this list is consulted, and 4b
+ * NARROWS the allow it produces. The cost of a false positive here is one
+ * on-topic-looking question reaching a desk that will say it cannot find that
+ * machine; the cost of the false negative was refusing "which machines are out
+ * of test?", which is the most safety-positive question the register answers.
+ */
 const EQUIPMENT_TERMS =
-  /\b(autoclave|steril\w*|sterilis\w*|steriliz\w*|decon\w*|washer.?disinfector|ultrasonic (bath|cleaner)|thermal disinfector|compressor|suction|aspirator|vacuum pump|handpiece|contra.?angle|turbine|micromotor|scaler|cavitron|curing light|light cure|x-?ray|radiograph\w*|opg|dpt|cbct|tube ?head|phosphor plate|sensor|intra-?oral (camera|scanner)|scanner|dental chair|chair|dental unit|operating light|spittoon|amalgam separator|waterline|water line|ro unit|reverse osmosis|distiller|water softener|apex locator|endo motor|sandblaster|model trimmer|vacuum former|laser|nitrous|sedation|oxygen|defibrillat\w*|aed|emergency drug|fire extinguisher|legionella|boiler|air ?con\w*|fridge|refrigerator|centrifuge|microscope|loupe|pouch sealer|heat sealer|tray|cassette)\b/;
+  /\b(machine\w*|equipment|autoclave|steril\w*|sterilis\w*|steriliz\w*|decon\w*|washer.?disinfector|ultrasonic (bath|cleaner)|thermal disinfector|compressor|suction|aspirator|vacuum pump|handpiece|contra.?angle|turbine|micromotor|scaler|cavitron|curing light|light cure|x-?ray|radiograph\w*|opg|dpt|cbct|tube ?head|phosphor plate|sensor|intra-?oral (camera|scanner)|scanner|dental chair|chair|dental unit|operating light|spittoon|amalgam separator|waterline|water line|ro unit|reverse osmosis|distiller|water softener|apex locator|endo motor|sandblaster|model trimmer|vacuum former|laser|nitrous|sedation|oxygen|defibrillat\w*|aed|emergency drug|fire extinguisher|legionella|boiler|air ?con\w*|fridge|refrigerator|centrifuge|microscope|loupe|pouch sealer|heat sealer|tray|cassette)\b/;
 
-/** Maintenance vocabulary — the words a fault report is made of. */
+/**
+ * Maintenance vocabulary — the words a fault report is made of.
+ *
+ * "OUT OF TEST" LIVES HERE NOW, WHICH IT DID NOT (programme ruling W3/20). The
+ * phrase existed in this file only inside `OUT_OF_TEST`, which the JUDGEMENT
+ * rules read at steps 4/4b — and those, by their own comment, "narrow an allow,
+ * never create one". So the words a nurse uses for a lapsed service could
+ * constrain an answer and could not obtain one: "which machines are out of
+ * test?" fell through to `scope.unrecognised`. The out-of-test phrasings are
+ * repeated here rather than spliced in from `OUT_OF_TEST` deliberately — that
+ * constant is deliberately ALL PAST TENSE for a reason its own comment sets out
+ * at length (an in-date machine must not select facts-only mode), and this list
+ * has the opposite job: recognising the topic, whatever the tense.
+ */
 const MAINTENANCE_TERMS =
-  /\b(error code|fault code|error|fault|e\d{2}\b|breakdown|broken|not working|won'?t (start|turn on|run|drain|fill|seal|close)|leaking|leak|dripping|noisy|overheat\w*|smell\w*|cycle|programme|program|abort|filter|gasket|seal|o-?ring|hose|belt|blade|bulb|lamp|cartridge|consumable|spare part|serial number|model number|warranty|service (due|date|record|history)|next service|last service|overdue|engineer|supplier|manual|instruction book|register|asset|inventory|pat test|calibration|log book|reservoir|chamber|drain|distilled water|temperature|pressure)\b/;
+  /\b(out of test|out of date|in date|due (?:a|an|its|another) (?:test|service|inspection|calibration|validation|check)|(?:test|service|servic\w*|calibrat\w*|validat\w*|inspect\w*)(?:ing|ed|ion)? (?:due|overdue)|need\w* (?:a |an )?(?:test|testing|tested|service|servicing|serviced|calibrat\w*|validat\w*|inspect\w*)|error code|fault code|error|fault|e\d{2}\b|breakdown|broken|not working|won'?t (start|turn on|run|drain|fill|seal|close)|leaking|leak|dripping|noisy|overheat\w*|smell\w*|cycle|programme|program|abort|filter|gasket|seal|o-?ring|hose|belt|blade|bulb|lamp|cartridge|consumable|spare part|serial number|model number|warranty|service (due|date|record|history)|next service|last service|overdue|engineer|supplier|manual|instruction book|register|asset|inventory|pat test|calibration|log book|reservoir|chamber|drain|distilled water|temperature|pressure)\b/;
 
 /** True when this message reads like a question about the practice's kit. */
 export function looksLikeEquipmentQuestion(normalised: string): boolean {

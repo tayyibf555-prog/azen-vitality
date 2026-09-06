@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TriageTarget } from "@/lib/triage/types";
+import { POSTGREST_MAX_ROWS } from "@/lib/test-support/fake-supabase";
 
 // ===========================================================================
 // RULING W3/4 ON THE PRE-VISIT SWEEP (the seventh sweep).
@@ -70,6 +71,8 @@ const h = vi.hoisted(() => {
     upserted: [] as Array<Record<string, unknown>>,
     queued: [] as Array<Record<string, unknown>>,
     stopped: [] as Array<{ id: string; reason: string }>,
+    /** Existing `previsit_target` keys — see the same field in sweep.test.ts. */
+    targetIds: new Set<string>(),
   };
   return {
     state,
@@ -88,13 +91,21 @@ const h = vi.hoisted(() => {
     }),
     // STATUS-AWARE: pass 2 asks for `pending`, pass 3 for `queued`/`sent`. One
     // answer to both would let a pass-2 fixture drive pass 3 and vice versa.
-    listTargets: vi.fn(async (args: { statuses: string[] }) =>
-      args.statuses.includes("pending") ? state.pending : state.live,
-    ),
+    // `limit` is honoured, and clipped at the server's own max-rows ceiling, for
+    // the reason spelled out in sweep.test.ts: a fake looser than live is how a
+    // bound that no longer binds goes unnoticed (charter §0/11).
+    listTargets: vi.fn(async (args: { statuses: string[]; limit?: number }) => {
+      const rows = args.statuses.includes("pending") ? state.pending : state.live;
+      return rows.slice(0, Math.min(args.limit ?? 500, POSTGREST_MAX_ROWS));
+    }),
     upsertTargetIfNew: vi.fn(async (input: Record<string, unknown>) => {
       state.upserted.push(input);
-      return { ...target(0), ...input };
+      const id = `${String(input.siteId)}:${String(input.appointmentId)}`;
+      if (state.targetIds.has(id)) return null;
+      state.targetIds.add(id);
+      return { ...target(0), ...input, id };
     }),
+    getTarget: vi.fn(async (id: string) => (state.targetIds.has(id) ? target(0, { id }) : null)),
     enqueueSend: vi.fn(async (input: Record<string, unknown>) => {
       state.queued.push(input);
       if (state.queued.length === state.flipOffAtQueue) state.systemOn = false;
@@ -144,6 +155,8 @@ vi.mock("@/lib/triage/repository", () => ({
   upsertTargetIfNew: h.upsertTargetIfNew,
   enqueueSend: h.enqueueSend,
   stopTarget: h.stopTarget,
+  getTarget: h.getTarget,
+  triageTargetId: (siteId: string, appointmentId: string) => `${siteId}:${appointmentId}`,
 }));
 
 import { POST } from "./route";
@@ -192,6 +205,7 @@ beforeEach(() => {
   h.state.upserted = [];
   h.state.queued = [];
   h.state.stopped = [];
+  h.state.targetIds = new Set();
   process.env.PUBLIC_BASE_URL = "https://azen-vitality.vercel.app";
 });
 

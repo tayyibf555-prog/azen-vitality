@@ -41,9 +41,24 @@
 
 /**
  * Sends allowed in ONE sweep run. Deliberately conservative for the first ticks
- * after switch-on. The sweep runs hourly, so this is ~600 confirmations a day —
- * comfortably above the practice's steady-state need (roughly three touches per
- * booked appointment) while making a cold-start blast impossible.
+ * after switch-on.
+ *
+ * THE CADENCE THIS NUMBER IS CALIBRATED AGAINST IS THE SCHEDULER'S, NOT A
+ * REMEMBERED ONE. This comment used to say "the sweep runs hourly, so this is
+ * ~600 confirmations a day". `app-sweep-noshow` is registered at a TEN-MINUTE
+ * step (src/lib/agent-wiring/scheduler.ts, which is cron.job's truth per ruling
+ * W3/31), so the real ceiling is 25 x 6 x 24 = 3,600 a day — six times what the
+ * comment claimed, on the one constant whose whole job is to make a cold-start
+ * blast impossible. A calibration contract that is out by a factor of six is
+ * worse than none, because the next lane widens the cap trusting it.
+ *
+ * So: the sweep runs every ten minutes, and this is a ceiling of ~3,600
+ * confirmations a day — far above the practice's steady-state need (roughly
+ * three touches per booked appointment) while still making a cold-start blast
+ * impossible. "the ramp's stated daily ceiling is derived from the scheduler's
+ * real cadence" in ./ramp.test.ts recomputes both numbers from SCHEDULER and
+ * this constant, so the day the job's minute changes, that test says so here
+ * rather than leaving a false figure for somebody to reason from.
  */
 export const NOSHOW_DEFAULT_MAX_SENDS_PER_RUN = 25;
 

@@ -259,6 +259,15 @@ function isReadOnlyLatch(err: unknown): boolean {
  *              The deployment is not armed, nothing can reach a real book, and
  *              reading the absent row as off would merely stop the local mock
  *              working on every developer's machine and in the whole test suite.
+ *
+ * THE SIMULATED BRANCH DOES NOT DO WHAT ITS SECOND SENTENCE INTENDED. The
+ * write-back migration seeds a row that says false for the pilot client, so on
+ * any database the migrations have run against this returns TRUE while writes
+ * are simulated — the mock path the branch exists to protect is refused there,
+ * and the refusal is filed under the owner's switch rather than under the
+ * arming. Nothing unsafe follows (a simulated write cannot reach a real book by
+ * any route), but the honest question is "has an OWNER turned it off?", which
+ * needs the row's `updated_by`. See the note on `evaluateGate`; handed off.
  */
 export async function isDentallyWriteMasterOff(
   clientId: string,
@@ -310,9 +319,28 @@ interface GateDecision {
  *   3. the owner's switch on the module that asked
  *   4. the AGENCY's deployment arming (DENTALLY_WRITE_*)
  * so the reason a practice reads is the one nearest to them and the one they can
- * act on. With the deployment unarmed today, rows read `writes_disabled` — the
- * honest answer, rather than blaming a switch the owner has not been given a
- * reason to touch yet.
+ * act on.
+ *
+ * WHAT A REFUSED WRITE ACTUALLY READS TODAY, AND WHY IT IS NOT `writes_disabled`.
+ * This paragraph used to say the deployment being unarmed made every row read
+ * `writes_disabled`, which is what ruling W1-A/1 describes and what the tests
+ * below assert. It was not true of any real database. The write-back migration
+ * SEEDS the master lever off for the pilot client, step 2 asks (in simulated
+ * mode) only whether some row says false, that row does, and step 2 therefore
+ * fires first on every deployment the migrations have run against — so the
+ * ledger reads `master_off` and the owner-facing copy for that reason is about a
+ * switch nobody touched. `master_off` is not a lie (the switch IS off) and the
+ * fail direction is unchanged — three independent locks still stand and no write
+ * escapes — but the reason is the further of the two, and the Sync Status prose
+ * had to be taught to name BOTH (see `syncHeadline`) rather than send an owner
+ * to flip their half of a two-key lock over 51,000 real records for no effect.
+ *
+ * The clean answer is for step 2 to distinguish "an owner turned it off" from "a
+ * migration seeded it off" — the row's `updated_by` carries exactly that, and
+ * the read lives behind `@/lib/systems/repository`. HANDED OFF; do not fix it by
+ * reordering the four checks instead, because an owner who really has switched
+ * write-back off must keep reading `master_off` (pinned by
+ * `src/lib/noshow/inbound-write-ledger.test.ts`).
  */
 async function evaluateGate(
   ctx: DentallyWriteContext,

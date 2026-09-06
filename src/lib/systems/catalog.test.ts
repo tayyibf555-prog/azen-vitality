@@ -220,4 +220,65 @@ describe("what a switch halts is described in full", () => {
     // The questionnaire half is still described.
     expect(halts).toMatch(/no pre-visit questionnaires are sent/i);
   });
+
+  it("the outreach switch does not claim its sweep halts, because the build pass does not", () => {
+    // THE DERIVATION, and it is the ORDER OF TWO CALLS rather than a claim about
+    // them. src/app/api/outreach/sweep/route.ts takes the cron lease and runs its
+    // build-continuation pass BEFORE it reads the outreach send switch, so the
+    // ten-minute tick keeps advancing any campaign left in `building` — and keeps
+    // reading Dentally to do it — with the switch off. Only the send section below
+    // the switch is gated. The sentence therefore may not say the sweep halts, and
+    // the day the build pass moves BELOW the switch this assertion goes red and the
+    // sentence becomes free (and required) to change with it. Ruling W3/9.
+    const route = readFileSync(join(process.cwd(), "src/app/api/outreach/sweep/route.ts"), "utf8");
+    const buildPass = route.indexOf("const build = await continueBuilds()");
+    const sendGate = route.indexOf('isSystemEnabledForSend(CLIENT_ID, "outreach")');
+    expect(buildPass, "the outreach sweep no longer runs a build-continuation pass").toBeGreaterThan(-1);
+    expect(sendGate, "the outreach sweep no longer reads its own send switch").toBeGreaterThan(-1);
+    expect(
+      buildPass,
+      "the build pass now runs UNDER the switch — the halts sentence may say the sweep stops",
+    ).toBeLessThan(sendGate);
+
+    const halts = SYSTEM_BY_SLUG.get("outreach")?.halts ?? "";
+    expect(halts, "the outreach row lost its halts sentence").not.toBe("");
+    expect(
+      halts,
+      "the sentence tells the owner the sweep stops; the build pass runs on every tick regardless of the switch",
+    ).not.toMatch(/sweep (?:halts|stops)/i);
+    expect(
+      halts,
+      "the owner is not told that campaign list-building carries on while the switch is off",
+    ).toMatch(/build\w*[\s\S]*\b(?:continues|carries on|carry on)\b/i);
+    // The send half is still described: the sentence gained a fact, it did not
+    // trade one for another.
+    expect(halts).toMatch(/stop drafting and sending/i);
+  });
+
+  it("the Onboarding switch says it stops the co-pilot creating a patient too", () => {
+    // THE DERIVATION, and it is the same shape as the diary one above. Ruling
+    // W3/19 gave `copilot::patient.create` the Onboarding module's SWITCH (the
+    // SOURCE stayed `copilot`, because "who did this" and "which control stops
+    // it" are different questions), so the write gate asks THIS slug before the
+    // co-pilot creates anybody. Read out of the registry the gate consults, so
+    // the day that resolution changes this goes red instead of the sentence
+    // standing as stale prose.
+    expect(
+      writeSlugFor("copilot", "patient.create"),
+      "copilot patient.create no longer resolves onboarding (W3/19) — the halts sentence below is now wrong",
+    ).toBe("onboarding");
+    const halts = SYSTEM_BY_SLUG.get("onboarding")?.halts ?? "";
+    expect(halts, "the onboarding row lost its halts sentence").not.toBe("");
+    expect(
+      halts,
+      "switching Onboarding off also stops the co-pilot creating a patient in Dentally, and the owner is not told",
+    ).toMatch(/co-pilot/i);
+    expect(
+      halts,
+      "it says the co-pilot is affected but not what it can no longer do",
+    ).toMatch(/creat\w*\s+a\s+patient/i);
+    // The public-form half is still described: the sentence gained a clause, it
+    // did not trade one fact for another.
+    expect(halts).toMatch(/public new-patient onboarding form goes offline/i);
+  });
 });

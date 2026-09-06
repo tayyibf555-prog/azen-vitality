@@ -217,6 +217,29 @@ describe("the outreach sweep stops drafting when the owner flips the switch mid-
       12 + SWITCH_RECHECK_EVERY_ROWS,
     );
     expect(body.switchedOffMidRun).toBe(true);
+
+    // AND THE OUTER BREAK ITSELF, WHICH THE COUNTS ABOVE DO NOT SEE.
+    //
+    // `liveSwitch` latches: once it has read off it issues no further reads and
+    // answers false forever. So a campaign STARTED after the switch-off stops on
+    // its very first row and drafts nothing — which is exactly why every draft,
+    // enqueue and cadence assertion in this file is identical with and without
+    // `if (gate.switchedOffMidRun) break;` in route.ts, and why deleting that line
+    // left the whole suite green when the wave-3 review tried it.
+    //
+    // What the break actually saves is the PASS: without it the halted run walks
+    // every remaining campaign, paying countContactedToday + listDueTargets for
+    // each and pushing a zeroed CampaignResult into `detail` that reads like a
+    // campaign that had nothing to do. Two of the four campaigns are reached here,
+    // and that is the assertion the route's own five-line comment makes in prose.
+    expect(
+      vi.mocked(listDueTargets).mock.calls.length,
+      "a halted run started a fresh pass over a later campaign's due targets",
+    ).toBe(2);
+    expect(
+      (body.detail as unknown[]).length,
+      "a halted run reported campaigns it never worked",
+    ).toBe(2);
   });
 
   it("an untouched switch sweeps the whole batch, so the gate is a limit and not a wall", async () => {

@@ -339,6 +339,31 @@ describe("a patient the scan cannot read", () => {
     expect(report.sites[0].unreadable).toBe(0);
     expect(h.state.scans.at(-1)?.excludedNoDob).toBe(1);
   });
+
+  it("REACHES THE COVERAGE ROW, so the screen can say so (handoff H40, 0101)", async () => {
+    // The figure has been in the run report since wave 1 and stopped there: it
+    // was in the response body and the logs, and on no screen, because
+    // previsit_mining_scan had no column for it. It travels with the claim now,
+    // exactly like the other two exclusion counters — counted per day, committed
+    // with the day, so a patient on a day that was never claimed is counted when
+    // that day is re-read rather than twice.
+    h.state.days = {
+      [NEWEST]: [extraction("gone", NEWEST), extraction("p1", NEWEST)],
+      [MIDDLE]: [extraction("nameless", MIDDLE)],
+      [OLDEST]: [],
+    };
+    h.state.patients = {
+      gone: 404,
+      p1: adult(),
+      nameless: { first_name: "", last_name: "", date_of_birth: "1980-04-02" },
+    };
+
+    const report = await run();
+
+    expect(report.sites[0].unreadable).toBe(2);
+    const banked = h.state.scans.reduce((n, s) => n + Number(s.excludedUnreadable ?? 0), 0);
+    expect(banked, "the run report knew, and the coverage row was never told").toBe(2);
+  });
 });
 
 describe("the run's bounds, and what survives them", () => {

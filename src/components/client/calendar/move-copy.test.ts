@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { checkContinuity } from "@/lib/calendar/continuity";
+import { isDryRun } from "@/lib/messaging/types";
 import {
   cancelledAnnouncement,
   moveModeAnnouncement,
@@ -290,6 +291,88 @@ describe("the continuing-treatment refusal, as the chip actually draws it", () =
 
   it("does not say the treatment twice when the treatment IS continuing treatment", () => {
     expect(refusal("Continuing Treatment")).not.toContain("(Continuing Treatment)");
+  });
+});
+
+// ===========================================================================
+// THE DIARY READS THE DRY-RUN FLAG THE WAY THE PROVIDERS DO (charter §0/6,
+// W1-B/1-5 fail-direction law).
+//
+// THE DEFECT this pins. `calendar-view.tsx` computed the board's
+// `messagingDryRun` prop as `process.env.MESSAGING_DRY_RUN === "true"` — the
+// OPPOSITE spelling of the tree's one rule, `isDryRun()` in
+// src/lib/messaging/types.ts, which is `!== "false"`. The two agree on the
+// exact strings "true" and "false" and on nothing else. For an unset variable,
+// an emptied one, "TRUE", "True", "1" or " true", the providers simulate
+// (twilio.ts, resend.ts) while the prop said messaging was live — so
+// `notifyNotice` printed "The patient will be texted about the new time"
+// instead of the amber "Messages are simulated on this environment", and the
+// post-move chip printed "Text queued" instead of "Text simulated, not
+// delivered". A safety rule that fails OPEN on every value but one, on the
+// screen where a receptionist decides whether to ring the patient.
+//
+// WHAT IS PINNED:
+//   1. THE WIRING. calendar-view passes `isDryRun()` and reads the variable
+//      nowhere itself, so a second spelling cannot be reintroduced. Read from
+//      source: the prop lives in a server component this node-environment
+//      suite cannot render, the same reason the board scan above reads source.
+//   2. THE SEMANTIC. Driving the REAL `isDryRun()` over hostile spellings and
+//      feeding its answer to the REAL `notifyNotice`, the dialog is amber and
+//      says "simulated" for every value that is not the exact "false" — which
+//      is precisely the set of values where the providers no-op.
+// ===========================================================================
+describe("the diary's dry-run claim is the providers' own", () => {
+  it("takes messagingDryRun from isDryRun(), never from its own reading of the env", () => {
+    const view = readFileSync(
+      fileURLToPath(new URL("./calendar-view.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(view, "the board is no longer told about the messaging mode").toMatch(
+      /messagingDryRun=\{isDryRun\(\)\}/,
+    );
+    // The whole point: no second reading of the variable anywhere in the file.
+    // Comments may NAME it (this file's own do), so the ban is on a read.
+    expect(
+      /process\.env\.MESSAGING_DRY_RUN/.test(view),
+      "calendar-view reads MESSAGING_DRY_RUN itself instead of calling isDryRun()",
+    ).toBe(false);
+    expect(view).toContain('from "@/lib/messaging/types"');
+  });
+
+  it("says simulated for every env spelling the providers simulate on", () => {
+    const before = process.env.MESSAGING_DRY_RUN;
+    try {
+      // Only the exact string "false" is live. Everything else - including the
+      // two ways an operator "turns dry-run off" by hand - is a simulation.
+      const simulated = [undefined, "", "true", "TRUE", "True", "1", " true", "  false  "];
+      for (const value of simulated) {
+        if (value === undefined) delete process.env.MESSAGING_DRY_RUN;
+        else process.env.MESSAGING_DRY_RUN = value;
+        expect(isDryRun(), `MESSAGING_DRY_RUN=${JSON.stringify(value)} is not dry`).toBe(true);
+        const n = notifyNotice({
+          from: NINE_THIRTY,
+          to: TWO_THIRTY,
+          blocker: "none",
+          dryRun: isDryRun(),
+        });
+        expect(n.tone, `MESSAGING_DRY_RUN=${JSON.stringify(value)} is not amber`).toBe("amber");
+        expect(n.text).toContain("will not actually be texted");
+      }
+
+      process.env.MESSAGING_DRY_RUN = "false";
+      expect(isDryRun()).toBe(false);
+      const live = notifyNotice({
+        from: NINE_THIRTY,
+        to: TWO_THIRTY,
+        blocker: "none",
+        dryRun: isDryRun(),
+      });
+      expect(live.tone).toBe("plain");
+      expect(live.text).toContain("will be texted about the new time");
+    } finally {
+      if (before === undefined) delete process.env.MESSAGING_DRY_RUN;
+      else process.env.MESSAGING_DRY_RUN = before;
+    }
   });
 });
 

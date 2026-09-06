@@ -13,6 +13,7 @@ import { authEnforced } from "@/lib/auth/guard";
 import { getSessionUser } from "@/lib/auth/session";
 import { isPatientAdminRole } from "@/lib/patient/roles";
 import { isDentallyWriteEnabled } from "@/lib/dentally/write";
+import { isDryRun } from "@/lib/messaging/types";
 import { CalendarBoard, type PractitionersForSite } from "./calendar-board";
 import type { DiaryDaySeed } from "./use-diary-day";
 import {
@@ -178,7 +179,17 @@ export async function CalendarView({ clientSlug }: { clientSlug: string }) {
       }))}
       canMove={canMove}
       writeEnabled={isDentallyWriteEnabled()}
-      messagingDryRun={process.env.MESSAGING_DRY_RUN === "true"}
+      // ONE READING OF THE DRY-RUN FLAG, and it is the providers' own.
+      // `isDryRun()` is "simulated unless the exact string 'false'" (charter
+      // §0 item 6): every other value - unset, "TRUE", "1", a stray space -
+      // means the send layer simulates. This line used to spell the rule the
+      // opposite way round (`=== "true"`), so for any of those values the
+      // providers simulated while the dialog promised the patient a text and
+      // the chip afterwards said "Text queued". That is the over-claiming
+      // direction of a fail-CLOSED rule, on the one screen a receptionist
+      // trusts instead of ringing the patient. Calling the predicate makes a
+      // second spelling impossible.
+      messagingDryRun={isDryRun()}
       practitionersBySite={practitionersBySite}
       nowIso={now.toISOString()}
       initialSite={initialSite}

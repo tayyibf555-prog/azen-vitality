@@ -83,8 +83,24 @@ export interface StepEventScan {
   truncated: boolean;
 }
 
-/** PostgREST's default page cap, so a short page is a reliable "no more rows". */
-const SCAN_PAGE = 1000;
+/**
+ * ONE ROW UNDER PostgREST's server-side row cap, never ON it (W3/32).
+ *
+ * The scan below stops on a page that comes back shorter than it ASKED for, which
+ * is the only end-of-data signal a range query gives. That signal is unreadable at
+ * exactly the cap: the server clips every response at 1,000 rows silently — no
+ * error, nothing on the response to read — so a clipped first page and a final
+ * first page are the same observation, and the tally would come back
+ * `truncated: false` having read a fraction of the window. Asking for 999 keeps
+ * the two apart. (The keyset cursor solves a different problem — concurrent
+ * inserts shifting an offset walk — and does nothing about the ceiling.)
+ *
+ * EXPORTED for the tests only, so the page-boundary assertions in
+ * step-events-repository.test.ts name this value rather than restating it: a
+ * boundary written as a literal is a test that goes red for the wrong reason the
+ * next time the width moves.
+ */
+export const SCAN_PAGE = 999;
 
 /**
  * The hard ceiling on one report's scan.

@@ -37,6 +37,12 @@ const store = vi.hoisted(() => ({
     apiVersion: "v25.0",
   },
   publishRecorded: [] as Record<string, unknown>[], // recordPublishResult captures
+  // The Meta Ads kill switch, as System controls holds it. Default ON, matching
+  // the catalog (`meta-ads` declares no defaultEnabled, so it ships enabled).
+  metaAdsOn: true,
+  // How many times the publish adapter was actually reached. A refusal that
+  // still called Meta would be worse than no refusal at all.
+  publishCalls: 0,
   modelReply: "", // the FakeAnthropic reply text
   previewToken: "tok123" as string | null,
 }));
@@ -117,7 +123,25 @@ vi.mock("@/lib/meta-ads/connection", () => ({
 }));
 // The real publish adapter is exercised in its own tests; here it is mocked so the
 // co-pilot branching is tested without any Meta call.
-vi.mock("@/lib/meta-ads/publish", () => ({ publishCampaign: async () => store.publishResult }));
+vi.mock("@/lib/meta-ads/publish", () => ({
+  publishCampaign: async () => {
+    store.publishCalls += 1;
+    return store.publishResult;
+  },
+}));
+
+// THE SYSTEM SWITCHES. `publish_meta_campaign` creates a campaign, an ad set, a
+// creative and an ad in the practice's real Meta account, and it now asks the
+// owner's Meta Ads switch first — through the STRICT reader, because an
+// unreadable toggle must not authorise objects in a real ad account. Answered
+// here so these tests exercise the tool's branching rather than a database that
+// is not there.
+vi.mock("@/lib/systems/repository", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isSystemEnabled: async () => true,
+  isSystemEnabledForSend: async () => true,
+  isSystemEnabledStrict: async () => store.metaAdsOn,
+}));
 
 vi.mock("@anthropic-ai/sdk", () => {
   class FakeAnthropic {
@@ -161,6 +185,8 @@ beforeEach(() => {
   store.publishRecorded = [];
   store.modelReply = "";
   store.previewToken = "tok123";
+  store.metaAdsOn = true;
+  store.publishCalls = 0;
 });
 
 describe("create_landing_page (wraps the real generation + lint, DRAFT only)", () => {
@@ -431,5 +457,50 @@ describe("publish_meta_campaign (honesty gate: refuses until Meta connected)", (
     const out = JSON.parse(await dispatch("publish_meta_campaign", { campaignId: "meta-1", confirm: true }));
     expect(out.published).toBe(false);
     expect(out.error).toMatch(/site selector|outside/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE OWNER'S KILL SWITCH REACHES THIS DOOR TOO.
+  //
+  // clearance.ts states in writing that "every tool that DOES something —
+  // nudge_lead, launch_outreach_campaign, publish_meta_campaign — consults the
+  // system's switch inside tools.ts and refuses when its system is off". Two of
+  // the three did. This one read no toggle at all: its gates were the IDOR
+  // check, the site scope, the two-step confirm and the Meta connection, and not
+  // one of them is a switch. Because the co-pilot is NAV_SWITCH_EXEMPT,
+  // switching Meta Ads off hid the workspace and left the publishing act
+  // reachable by asking for it in a sentence — the shape ruling W3/2 closed for
+  // the diary.
+  // -------------------------------------------------------------------------
+  it("REFUSES to publish while Meta Ads is switched OFF, and never reaches Meta", async () => {
+    store.metaCampaign = draftCampaign();
+    store.metaConnected = true; // connected, so ONLY the switch is in the way
+    store.metaAdsOn = false;
+
+    const out = JSON.parse(await dispatch("publish_meta_campaign", { campaignId: "meta-1", confirm: true }));
+
+    expect(out.published).toBe(false);
+    expect(out.reason).toBe("system_off");
+    expect(out.message).toMatch(/switched off/i);
+    // It names the control the owner can actually flip.
+    expect(out.message).toMatch(/System controls/);
+    expect(out.message).toMatch(/nothing has gone live/i);
+    // NOTHING WAS CREATED IN THE PRACTICE'S AD ACCOUNT. The refusal is before the
+    // adapter, not a message printed after it.
+    expect(store.publishCalls).toBe(0);
+    expect(store.publishRecorded).toHaveLength(0);
+    // ...and the refusal is on the audit trail like every other blocked act.
+    expect(store.logged.some((l) => l.status === "blocked:meta_ads_off")).toBe(true);
+  });
+
+  it("the switch is asked BEFORE the campaign is read back, so a preview is unaffected", async () => {
+    // The read-back step touches nothing and is the owner asking "what would
+    // this do". Refusing it would tell them less, not protect them more: the
+    // gate belongs on the act, which is what carries `confirm: true`.
+    store.metaCampaign = draftCampaign();
+    store.metaAdsOn = false;
+    const out = JSON.parse(await dispatch("publish_meta_campaign", { campaignId: "meta-1" }));
+    expect(out.preview).toBe(true);
+    expect(store.publishCalls).toBe(0);
   });
 });

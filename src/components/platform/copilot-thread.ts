@@ -36,6 +36,16 @@ export interface CopilotMessage {
 export const COPILOT_FAILED_REPLY = "Sorry, something went wrong.";
 /** Shown when the request never completed (offline, dropped connection). */
 export const COPILOT_UNREACHABLE_REPLY = "Sorry, I could not reach the co-pilot just now.";
+/**
+ * Shown when the route refused this person and its 403 carried no sentence.
+ *
+ * Not a generic apology, because a refusal is not a fault: the one thing the
+ * person needs to know is that this is about their access, and who can change
+ * it. It says no more than that — no role, no capability, no tool name — which
+ * is the same posture the route's own refusal takes.
+ */
+export const COPILOT_FORBIDDEN_REPLY =
+  "You do not have access to the co-pilot. Ask the practice owner to check your permissions.";
 
 export interface CopilotStarter {
   id: string;
@@ -130,6 +140,20 @@ export function copilotStartersFor(access: CopilotAccess = "full"): CopilotStart
 }
 
 /**
+ * Does this 403 body read as a refusal somebody wrote for a person?
+ *
+ * The guards in this codebase answer with lowercase machine tokens —
+ * `forbidden`, `unauthorized`, and on other statuses `bad json`, `no messages`,
+ * `unknown client`, `copilot unavailable`. Several of those contain a space, so
+ * "more than one word" alone does not separate them from prose; none of them
+ * closes a sentence. The test is therefore both: whitespace AND terminal
+ * punctuation. A token fails it, and the caller falls back to a sentence.
+ */
+function readsAsWrittenRefusal(text: string): boolean {
+  return /\s/.test(text) && /[.!?]$/.test(text);
+}
+
+/**
  * Post one turn and return the text to show as the assistant's reply.
  *
  * NEVER REJECTS AND NEVER RETURNS EMPTY. Every failure path resolves to a
@@ -157,13 +181,36 @@ export async function postCopilotTurn(
     // reach the co-pilot", when in fact it answered.
     const data = ((await response.json()) ?? {}) as { reply?: unknown; error?: unknown };
     if (typeof data.reply === "string" && data.reply.trim().length > 0) return data.reply;
-    // A 403 from this route is the ONE error whose body is a sentence written
-    // for the owner to read ("The co-pilot is available to the practice owner"),
-    // and swallowing it into the generic apology is how a permissions problem
-    // gets mistaken for a broken feature. Every other status keeps the generic
-    // sentence: "copilot unavailable" is a log line, not an answer.
-    if (response.status === 403 && typeof data.error === "string" && data.error.trim().length > 0) {
-      return data.error;
+    // A 403 FROM THIS ROUTE IS NOT ALWAYS A SENTENCE, AND THAT IS THE WHOLE
+    // REASON THIS BRANCH IS NOT ONE LINE. /api/copilot refuses in four places
+    // and only one of them writes for a person:
+    //
+    //   - the clearance refusal (`access === "none"`, src/app/api/copilot/route.ts)
+    //     — "Your account's role is not one the co-pilot serves. Ask the practice
+    //     owner to check your access.";
+    //   - `requireClientAccess` and `requireModuleApiAccess`
+    //     (src/lib/auth/guard.ts) and `requireCapability(auth,
+    //     "system.copilot.ask")` (src/lib/auth/capability-guard.ts) — all three
+    //     answer this codebase's standing machine token, `{ error: "forbidden" }`.
+    //
+    // The capability one is neither hypothetical nor hostile: taking
+    // `system.copilot.ask` off a named login is the documented way an owner
+    // removes the co-pilot from ONE person (src/lib/copilot/clearance.ts), and
+    // nothing hides the ask-bar from her afterwards — the page gates on module
+    // access, which a revoked capability does not touch, and the Cmd-J panel is
+    // mounted by the shell layout for every role. Rendering the word
+    // "forbidden" as the assistant's entire answer tells her nothing, least of
+    // all that her access was changed rather than the feature broken.
+    //
+    // So the body is surfaced only when it READS as a refusal written for a
+    // person, and the standing permissions sentence is shown when it does not.
+    // Either way the reply is a sentence and never a token, so if the route's
+    // wording is later edited past this shape the reader still gets the right
+    // KIND of answer. Every other status keeps the generic apology: "copilot
+    // unavailable" is a log line, not an answer.
+    if (response.status === 403) {
+      const refusal = typeof data.error === "string" ? data.error.trim() : "";
+      return readsAsWrittenRefusal(refusal) ? refusal : COPILOT_FORBIDDEN_REPLY;
     }
     return COPILOT_FAILED_REPLY;
   } catch {

@@ -20,6 +20,9 @@ const h = vi.hoisted(() => {
     id: string;
   };
   let rows: Row[] = [];
+  // Every window the paging loop asked for, in order. The scan's own request
+  // shape is the thing ruling W3/32 is about, so it has to be observable.
+  const ranges: Array<[number, number]> = [];
 
   const makeBuilder = () => {
     const eqs: Array<[string, unknown]> = [];
@@ -60,6 +63,7 @@ const h = vi.hoisted(() => {
     b.order = () => b;
     b.range = (from: number, to: number) => {
       range = [from, to];
+      ranges.push([from, to]);
       return b;
     };
     b.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => {
@@ -77,11 +81,17 @@ const h = vi.hoisted(() => {
     setRows: (r: Row[]) => {
       rows = r;
     },
+    ranges,
+    clearRanges: () => {
+      ranges.length = 0;
+    },
     serviceClient: vi.fn(() => ({ from: () => makeBuilder() })),
   };
 });
 
 vi.mock("@/lib/supabase/server", () => ({ serviceClient: h.serviceClient }));
+
+import { POSTGREST_MAX_ROWS } from "@/lib/test-support/fake-supabase";
 
 import { funnelSummary, funnelVariantSummary } from "./events";
 
@@ -103,6 +113,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   seq = 0;
   h.setRows([]);
+  h.clearRanges();
 });
 
 describe("funnelVariantSummary — per-page scoping (finding 3)", () => {
@@ -187,5 +198,53 @@ describe("funnelSummary — per-step shape", () => {
   it("returns an empty array when there are no rows", async () => {
     const steps = await funnelSummary({ clientId: "vitality", surface: "assessment", fromIso, toIso });
     expect(steps).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PAGE THE SCAN ASKS FOR, AND WHY ITS WIDTH IS A RULE (programme ruling W3/32).
+//
+// Supabase clips every REST response at a server-side max-rows ceiling — measured
+// on this project at POSTGREST_MAX_ROWS, with no error and no marker on the
+// response. A read that asks for EXACTLY the ceiling therefore cannot tell a full
+// page from a clipped one: both come back as a thousand rows. This scan does not
+// currently rest on that distinction (it is anchored to a head-count and advances
+// by rows.length), which is exactly how the constant sat on the ceiling for months
+// without a single test noticing — so the property is pinned on the REQUEST, where
+// it is observable, rather than on a tally that happens not to need it.
+// ---------------------------------------------------------------------------
+describe("the paging scan never asks for a page the server could clip (W3/32)", () => {
+  // MUTATION: put SUMMARY_PAGE back to 1000 (or above). The tally stays correct
+  // and every other test in this file stays green — and the loop has gone back to
+  // asking for exactly as many rows as the server is willing to hand back, where
+  // "the rows ran out" and "you were cut off" are the same observation.
+  it("asks for windows strictly narrower than PostgREST's ceiling", async () => {
+    const N = 3_000; // three pages' worth, so the width is asserted more than once
+    h.setRows(
+      Array.from({ length: N }, (_, i) => row("vitality", "booking", "viewed", null, `w-${i}`)),
+    );
+
+    const steps = await funnelSummary({ clientId: "vitality", surface: "booking", fromIso, toIso });
+    expect(steps).toEqual([{ step: "viewed", count: N }]);
+
+    expect(h.ranges.length, "the scan did not page at all").toBeGreaterThan(1);
+    for (const [from, to] of h.ranges) {
+      expect(
+        to - from + 1,
+        `a page of ${to - from + 1} rows is at or above the ${POSTGREST_MAX_ROWS}-row ceiling, so a clipped page would look like the last one`,
+      ).toBeLessThan(POSTGREST_MAX_ROWS);
+    }
+  });
+
+  // The narrowing on the final page is the other half: a loop that over-asks reads
+  // rows it will not count, which is how a scan quietly costs more than its bound.
+  it("narrows the last page to the rows still wanted", async () => {
+    const N = 1_500;
+    h.setRows(
+      Array.from({ length: N }, (_, i) => row("vitality", "booking", "viewed", null, `t-${i}`)),
+    );
+    await funnelSummary({ clientId: "vitality", surface: "booking", fromIso, toIso });
+    const last = h.ranges[h.ranges.length - 1];
+    expect(last[1], "the last page reached past the rows the head-count promised").toBe(N - 1);
   });
 });

@@ -1,5 +1,6 @@
 import { runWithDentallyPriority } from "@/lib/dentally/budget";
 import { draftRecall } from "@/lib/recall/draft";
+import { RecallDraftTooLongError } from "@/lib/recall/sms-budget";
 import { stepDef, advanceAfter, RECALL_CADENCE } from "@/lib/recall/cadence";
 import { shouldGraduate } from "@/lib/recall/normalise";
 import { londonOverdueDays } from "@/lib/time/london";
@@ -147,6 +148,25 @@ async function handleWithDentallyPriority(request: Request) {
   let paused = 0;
   let capped = 0;
   let suppressed = 0;
+  // ONE MESSAGE THAT WILL NOT FIT IS ONE MESSAGE, NOT THE TICK.
+  //
+  // draftRecall makes one repair turn and then THROWS RecallDraftTooLongError
+  // rather than truncating (src/lib/recall/sms-budget.ts: a half-sentence about a
+  // dental appointment is worse than no message). Refusing is right. Letting the
+  // refusal escape was not: the throw sat bare inside this loop, the only
+  // enclosing try is the `finally { releaseCronLock }`, and runWithDentallyPriority
+  // forwards — so the handler 500'd, every remaining due cadence in the batch was
+  // dropped, and none of the counters below were ever returned. A practice whose
+  // drafts systematically over-run (long USPs are the ordinary cause: they are
+  // injected into the prompt at draft.ts) would have had recall stop dead, tick
+  // after tick, with the switch showing ON and nothing but a 500 in the cron log.
+  //
+  // So it is counted and stepped over, the shape the no-show sweep already uses
+  // for a per-row failure. The cadence is untouched (the throw precedes
+  // insertTouch), so the same target is simply drafted again next tick — and
+  // `refused` on the response is what makes a systematic over-run visible instead
+  // of invisible. Narrow on purpose: any OTHER error still aborts the tick.
+  let refused = 0;
 
   // The switch is re-read every ten rows for the rest of this run (ruling
   // W1-B/5): a long sweep must not keep drafting after the owner has switched
@@ -212,7 +232,19 @@ async function handleWithDentallyPriority(request: Request) {
     }
 
     // Recall auto-sends: draft, approve, queue, send (stub), advance.
-    const { body } = await draftRecall(target, step.channel, step);
+    let body: string;
+    try {
+      ({ body } = await draftRecall(target, step.channel, step));
+    } catch (err) {
+      if (!(err instanceof RecallDraftTooLongError)) throw err;
+      refused += 1;
+      console.error(
+        `[recall] cadence ${cadence.id} (target ${target.id}) drafted a ${err.units}-unit ${err.channel} ` +
+          `body against a ${err.limit} ceiling; refused rather than truncated, moving to the next patient`,
+        err,
+      );
+      continue;
+    }
     const touch = await insertTouch({
       targetId: target.id,
       cadenceId: cadence.id,
@@ -264,6 +296,7 @@ async function handleWithDentallyPriority(request: Request) {
     graduated,
     capped,
     suppressed,
+    refused,
     dailyLimit,
     usedToday,
   });

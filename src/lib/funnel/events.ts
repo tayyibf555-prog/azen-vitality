@@ -116,10 +116,22 @@ export interface FunnelStepCount {
   count: number;
 }
 
-// Page size for the raw-row scan below. Kept at the PostgREST default page cap so
-// a short page is a reliable "no more rows" signal; the loop is anchored to an
-// exact head-count regardless, so a lower server cap can never truncate the tally.
-const SUMMARY_PAGE = 1000;
+// PAGE SIZE FOR THE RAW-ROW SCAN BELOW, ONE ROW UNDER THE SERVER'S OWN CEILING
+// (programme ruling W3/32).
+//
+// Supabase applies a max-rows ceiling to every REST request, measured on this
+// project at 1,000 (limit=1500 and limit=2001 both came back with exactly a
+// thousand rows, `content-range: 0-999/*`, and no error — see POSTGREST_MAX_ROWS
+// in src/lib/test-support/fake-supabase.ts). A page size of exactly 1,000 sits ON
+// that ceiling, and there a full page and a CLIPPED page are indistinguishable:
+// "there were a thousand" and "the server stopped you at a thousand" arrive as
+// the same response. At 999 nothing this loop asks for can be trimmed on the way
+// back, so a short page means the rows genuinely ran out.
+//
+// The tally does not rest on that today — it is anchored to the exact head-count
+// below and advances by rows.length — which is precisely why the constant could
+// sit on the ceiling unnoticed. It is pinned by name in events.test.ts.
+const SUMMARY_PAGE = 999;
 // Above this row total the scan is logged: it means a big range / heavy traffic,
 // worth surfacing so a truer DB-side rollup can be prioritised if it recurs.
 const LARGE_SCAN_WARN = 50_000;
@@ -169,7 +181,9 @@ export async function funnelSummary(args: {
       .lte("created_at", args.toIso)
       .order("created_at", { ascending: true })
       .order("id", { ascending: true })
-      .range(scanned, scanned + SUMMARY_PAGE - 1);
+      // Narrowed to what is still wanted on the last page, so the loop reads no
+      // row it will not count.
+      .range(scanned, Math.min(scanned + SUMMARY_PAGE, total) - 1);
     if (error) throw error;
     const rows = (data ?? []) as Array<{ step: string }>;
     if (rows.length === 0) break; // safety: never loop forever on an unexpected empty page

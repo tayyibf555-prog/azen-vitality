@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { POSTGREST_MAX_ROWS } from "@/lib/test-support/fake-supabase";
+
 vi.mock("server-only", () => ({}));
 
 // A chainable Supabase builder mock, the same shape systems/repository.test.ts
@@ -94,8 +96,9 @@ describe("recording an intent NEVER fails the write it is about", () => {
   });
 
   it("returns null and does not throw when the table is not there yet", async () => {
-    // Migration 0096 is written but not applied. Until a human applies it every
-    // insert fails exactly this way, and a booking must be completely unaffected.
+    // Migration 0096 is applied in production, but a fresh environment that has
+    // never run it fails exactly this way — as does a revoked grant. A booking
+    // must be completely unaffected either way.
     h.set({ data: null, error: { code: "42P01", message: 'relation "dentally_write_intent" does not exist' } });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(recordWriteIntent(INTENT)).resolves.toBe(null);
@@ -112,8 +115,8 @@ describe("recording an intent NEVER fails the write it is about", () => {
   });
 
   it("logs the FIRST failure loudly and then stays quiet about the same one", async () => {
-    // Five write paths file intents; on an un-migrated deployment every one of
-    // them fails identically, and 200 copies of the same line bury the error
+    // Five write paths file intents; wherever the ledger is unreachable every one
+    // of them fails identically, and 200 copies of the same line bury the error
     // that matters. A DIFFERENT reason still logs.
     h.set({ data: null, error: { code: "42P01", message: "missing" } });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -247,7 +250,13 @@ describe("the reads are bounded, and say when they were cut short", () => {
     // printed a floor as a bare total the moment the ledger passed a thousand
     // rows. The fake in these tests honours .limit(2001) literally, which is why
     // no behavioural test could catch it and why this one is arithmetic.
-    const POSTGREST_MAX_ROWS = 1000;
+    //
+    // THE CEILING IS IMPORTED, NOT RESTATED (ruling W3/32). It was declared here
+    // as a local `const` and again in src/lib/test-support/fake-supabase.ts, where
+    // the fake that MODELS it lives. Two copies of a measured number is how one of
+    // them stops being the measured number: raising the shared constant without
+    // this file noticing would leave this guard asserting against a ceiling the
+    // database no longer has.
     expect(
       COUNT_CAP + 1,
       "countWriteIntents asks for more rows than PostgREST will hand back, so `capped` can never be true",

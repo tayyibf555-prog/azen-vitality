@@ -58,6 +58,7 @@ import "server-only";
 // ===========================================================================
 
 import { canRoleAccessModule } from "@/lib/nav";
+import { slugsWithNoScheduledJob } from "@/lib/agent-wiring/scheduler";
 import type { Role } from "@/lib/types";
 import { SYSTEM_BY_SLUG } from "@/lib/systems/catalog";
 import { firstStepFor } from "@/lib/systems/first-steps";
@@ -243,13 +244,16 @@ export async function readOsBand(input: OsBandInput): Promise<OsBand> {
     }),
   );
 
+  const noJob = new Set(slugsWithNoScheduledJob());
+
   const tiles: OsTile[] = visible.map((tile) => {
     const enabled = tile.systemSlug === null ? null : enabledBySlug.get(tile.systemSlug) ?? null;
-    const state: OsTileState =
+    const raw: OsTileState =
       results.get(tile.key) ??
       (states === null
         ? { kind: "unreadable" }
         : { kind: "off", firstStep: firstStepFor(tile.systemSlug ?? tile.key)?.step ?? null });
+    const state = qualifyUnscheduled(raw, enabled === true && tile.systemSlug !== null && noJob.has(tile.systemSlug));
     return {
       key: tile.key,
       label: tile.label,
@@ -388,11 +392,38 @@ async function readTile(
     }
     case "automations": {
       if (states === null) return { kind: "unreadable" };
-      const running = states.filter((s) => s.enabled).length;
+      // SWITCHED ON IS NOT RUNNING, AND THIS TILE IS WHERE THAT MATTERED MOST.
+      //
+      // Four owner switches arm a sweep the scheduler has never heard of
+      // (`slugsWithNoScheduledJob()`, ruling W3/31). Counting those as "running"
+      // put the band in contradiction with ITSELF: `qualifyUnscheduled` below
+      // rewrites the pre-visit tile to "On, but nothing runs it yet" while the
+      // cell beside it added the same system to a headline count of running
+      // ones. Worse for the other three — treatment-closer, balance-reminders
+      // and postop-checkin have no tile of their own, so this figure is the ONLY
+      // thing Home says about them and there is no adjacent sentence anywhere on
+      // the front door to correct it.
+      //
+      // So a switch with no job is subtracted from `running` and named in its own
+      // clause rather than silently dropped: an owner who has just switched
+      // something on must see the number account for it, or the tile reads as
+      // broken. The clause is the panel's own vocabulary ("Switched on, but it
+      // has not started"), shortened because the cell truncates — the full
+      // explanation and the registration SQL live on the control panel this tile
+      // links to, and in §2 of the switch-on runbook.
+      //
+      // The denominator is unchanged: every controllable system there is.
+      const noJob = new Set(slugsWithNoScheduledJob());
+      const on = states.filter((s) => s.enabled);
+      const stalled = on.filter((s) => noJob.has(s.slug)).length;
+      const running = on.length - stalled;
       return {
         kind: "fact",
-        text: `${running} of ${states.length} running`,
-        tone: running === 0 ? "attention" : "neutral",
+        text:
+          stalled > 0
+            ? `${running} of ${states.length} running, ${stalled} not started`
+            : `${running} of ${states.length} running`,
+        tone: stalled > 0 || running === 0 ? "attention" : "neutral",
       };
     }
     default:
@@ -404,6 +435,34 @@ async function readTile(
  * A figure with the cap turned into honesty: a read that came back at its bound
  * knows only that there are AT LEAST that many, and says so.
  */
+/**
+ * THE ZERO THAT IS NOT A ZERO (wave-3b handoff B128, ruling W3/31).
+ *
+ * Four owner switches turn on a sweep that has no scheduled job at all
+ * (`slugsWithNoScheduledJob()` derives them from the one read of `cron.job` in
+ * src/lib/agent-wiring/scheduler.ts). Switching one on changes nothing: no
+ * invite, no queue row, no error. The System controls panel says so under the
+ * row — "Switched on, but it has not started" — and this band, the first screen
+ * an owner sees, said "0 sent, awaiting an answer", which reads as a working
+ * system with a quiet day. That is the exact fail-open the panel's sentence was
+ * added to close, printed one screen earlier and larger.
+ *
+ * SO ONLY THE EMPTY FIGURE IS REPLACED, and deliberately not the rest. A real
+ * count is never overwritten: if rows exist the sweep evidently ran, and this
+ * module's record of the scheduler is the thing that must be stale — a screen
+ * that hid a live number behind "not running" would be the same lie pointing
+ * the other way. `off`, `empty`, `unreadable` and any non-zero figure pass
+ * through untouched.
+ *
+ * The sentence is short because the tile truncates: the full explanation, and
+ * the instruction, live on the control panel the tile links its owner to.
+ */
+function qualifyUnscheduled(state: OsTileState, hasNoScheduledJob: boolean): OsTileState {
+  if (!hasNoScheduledJob) return state;
+  if (state.kind !== "figure" || state.value !== 0 || state.atLeast) return state;
+  return { kind: "fact", text: "On, but nothing runs it yet", tone: "attention" };
+}
+
 function figure(rowCount: number, noun: string, tone: OsTone = "neutral"): OsTileState {
   const atLeast = rowCount > TILE_ROW_CAP;
   return {

@@ -3,6 +3,10 @@
 // daily frequency cap does not apply to them, and the module has no daily
 // contact limit of its own. If a rule here is wrong, real patients get texted.
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+
+import { SCHEDULER } from "@/lib/agent-wiring/scheduler";
+import { srcPath } from "@/lib/test-support/walk-src";
 import {
   NOSHOW_DEFAULT_MAX_SENDS_PER_RUN,
   noshowSendCap,
@@ -200,5 +204,63 @@ describe("applySendCap", () => {
 
   it("floors a fractional cap", () => {
     expect(applySendCap(hundred, 2.9).send).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE COMMENT ON THE CAP IS A CALIBRATION CONTRACT, SO IT IS TESTED LIKE ONE
+// ---------------------------------------------------------------------------
+
+describe("the ramp's stated daily ceiling is derived from the scheduler's real cadence", () => {
+  /*
+   * WHY A COMMENT GETS A TEST HERE, of all places. NOSHOW_DEFAULT_MAX_SENDS_PER_RUN
+   * is a number whose only justification is arithmetic against how often the sweep
+   * runs, and the comment above it carried that arithmetic against the WRONG
+   * cadence for a whole wave: it said "hourly, so this is ~600 confirmations a
+   * day" while `app-sweep-noshow` has been registered at a ten-minute step, which
+   * makes the true ceiling 3,600. Nothing went red, because nothing checked — and
+   * the next lane to ask "is 25 too tight?" would have reasoned from a figure six
+   * times too small.
+   *
+   * Both halves are RECOMPUTED here, from SCHEDULER (cron.job's truth, ruling
+   * W3/31) and from the constant itself, so this test cannot drift with the
+   * comment: change the job's minute in the scheduler and the sentence in ramp.ts
+   * is wrong on the next run.
+   */
+  const SOURCE = readFileSync(srcPath("lib/noshow/ramp.ts"), "utf8");
+
+  /** Runs a day for a `STEP * * * *`-shaped cron, which is every sweep's shape. */
+  function runsPerDay(schedule: string): number {
+    const [minute] = schedule.split(" ");
+    const step = /^\*\/(\d+)$/.exec(minute);
+    if (step) return (60 / Number(step[1])) * 24;
+    if (minute === "*") return 60 * 24;
+    return 24; // a fixed minute past every hour
+  }
+
+  it("names the ten-minute cadence the scheduler actually holds, not an hourly one", () => {
+    const job = SCHEDULER["app-sweep-noshow"];
+    expect(job, "the no-show sweep is not in the scheduler at all").toBeTruthy();
+    expect(job.schedule).toBe("*/10 * * * *");
+    expect(SOURCE, "the cap's comment no longer names the cadence it is calibrated against").toMatch(
+      /TEN-MINUTE/,
+    );
+    // The old claim survives ONLY as a quotation of what it used to say, which
+    // is why this counts occurrences rather than forbidding the words: the
+    // correction is worth more to the next reader than the erasure.
+    const hourly = SOURCE.split("sweep runs hourly").length - 1;
+    expect(hourly, "the file states an hourly cadence somewhere other than the record of the error").toBe(1);
+    expect(SOURCE).toMatch(/used to say "the sweep runs hourly/);
+  });
+
+  it("states the daily ceiling the cap and that cadence actually produce", () => {
+    const ceiling = NOSHOW_DEFAULT_MAX_SENDS_PER_RUN * runsPerDay(SCHEDULER["app-sweep-noshow"].schedule);
+    expect(ceiling).toBe(3_600);
+    // Written with a thousands separator, the way the comment reads it out.
+    const stated = ceiling.toLocaleString("en-GB");
+    expect(
+      SOURCE.includes(stated),
+      `the cap's comment does not state its real daily ceiling of ${stated}`,
+    ).toBe(true);
   });
 });

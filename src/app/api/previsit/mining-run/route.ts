@@ -5,6 +5,7 @@ import { requireClientAccess, requireOwnerRole, requireUser } from "@/lib/auth/g
 import { acquireCronLock, releaseCronLock } from "@/lib/cron-lock";
 import { getClient } from "@/lib/mock/clients";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { miningRunSentence } from "@/lib/triage/mining";
 import { TRIAGE_SYSTEM_SLUG } from "@/lib/triage/types";
 import { runMiningSweep } from "../_mining";
 
@@ -94,16 +95,15 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       readOnly: true,
     });
     const report = await runMiningSweep({ clientId: client.id, client: dentally, now: new Date() });
-    const daysCovered = report.sites.reduce((n, s) => n + s.daysCovered, 0);
-    const candidates = report.sites.reduce((n, s) => n + s.candidates, 0);
     return Response.json({
       ok: true,
       ...report,
-      // What the owner should be told, in the platform's own words rather than
-      // by reading a counter. It never claims a day the scan did not finish.
-      message: report.budgetRefused
-        ? `Read ${daysCovered} more ${daysCovered === 1 ? "day" : "days"} of the diary and stopped there: the practice's daily limit with the practice management system is spent for background work this hour. Try again later; nothing is lost.`
-        : `Read ${daysCovered} more ${daysCovered === 1 ? "day" : "days"} of the diary and added ${candidates} ${candidates === 1 ? "person" : "people"}.`,
+      // What the owner should be told, in the platform's own words rather than by
+      // reading a counter — including the two things a bare total hides: a site
+      // that stopped on its own even share of the run (W3/25), and the patients
+      // the scan could not look up at all. The sentence is composed in
+      // src/lib/triage/mining.ts so the rule can be tested without a route.
+      message: miningRunSentence(report),
     });
   } catch (err) {
     console.error("[previsit/mining-run] scan failed", err);

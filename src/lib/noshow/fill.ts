@@ -65,9 +65,22 @@ export async function offerSlotToNextCandidate(
   // posture as every other send choke point. A slot that goes unoffered during a
   // toggle-table blip is re-offered by the next sweep tick; a text sent for a
   // system the owner switched off cannot be recalled.
+  //
+  // UNCONDITIONAL, and that matters as much as where it lives. The client used to
+  // be read as `getSite(slot.siteId)?.clientId` with the check itself written
+  // `if (clientId && !(await ...))`, so a slot on a site id SITES no longer maps —
+  // a site renamed or retired in src/lib/mock/clients.ts while noshow_slot_offer /
+  // noshow_waitlist rows written under the old id are still live, or a second
+  // practice onboarded before its SITES entry lands — short-circuited past the
+  // switch entirely and went on to draft, create the offer, write a noshow_touch
+  // and queue a real patient SMS. Delivery was then stopped only incidentally,
+  // because the drain lists by vitalitySiteIds() off the same SITES table; a kill
+  // switch whose protection rests on a SECOND lookup failing the same way is not a
+  // kill switch. The practice's own client id is the fallback, exactly as
+  // /api/speed-to-lead/[action] and /api/speed-to-lead/intake do it.
   // ===========================================================================
-  const clientId = getSite(slot.siteId)?.clientId;
-  if (clientId && !(await isSystemEnabledForSend(clientId, "no-show-defence"))) {
+  const clientId = getSite(slot.siteId)?.clientId ?? "vitality";
+  if (!(await isSystemEnabledForSend(clientId, "no-show-defence"))) {
     console.warn(
       `[noshow] waitlist fill skipped for site ${slot.siteId}: the no-show defence system is switched off`,
     );

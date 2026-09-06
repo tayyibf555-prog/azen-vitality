@@ -126,6 +126,10 @@ vi.mock("@/lib/mock/clients", () => ({
 vi.mock("@/lib/systems/repository", () => ({
   getDisabledSlugs: async () => new Set(fakes.disabledSlugs),
   getDisabledSlugsForSend: async () => new Set(fakes.disabledSlugs),
+  // The drain's per-row gate reads the switch through this same module, so the
+  // fake answers the single-slug question the same way it answers the set one — a
+  // mock looser than live here would make the mid-run stop untestable.
+  isSystemEnabledForSend: async (_clientId: string, slug: string) => !fakes.disabledSlugs.has(slug),
 }));
 
 // The cross-module daily frequency cap is exercised in its own test; here it must

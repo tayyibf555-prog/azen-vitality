@@ -358,6 +358,76 @@ describe("JOURNEY 8 — a read that hit its bound never wears a total's clothes"
     expect(state.value).toBe(TILE_ROW_CAP);
   });
 
+  it("the pre-visit tile's bound is proved against the real repository too", async () => {
+    /*
+     * THE SAME FLOOR, THROUGH A DIFFERENT READ, AND THAT IS THE POINT. The leads
+     * probe above drives `listLeads`; this one drives `listTargets` — a separately
+     * written query, through the real repository, against a fake that enforces
+     * PostgREST's own ceilings. The unit-level pin for this tile mocks the
+     * repository and so proves the BAND's arithmetic over whatever the mock chose
+     * to return; nothing there is evidence about the query underneath it.
+     *
+     * WHAT IT CATCHES, STATED HONESTLY. `figure()` calls a read capped at
+     * rowCount > TILE_ROW_CAP and the tile asks for TILE_ROW_CAP + 1, so the whole
+     * floor rests on that one spare row: ask for TILE_ROW_CAP exactly and a
+     * practice with thousands of live links reads as an exact "200 sent". That
+     * off-by-one is what goes red here. It is NOT a proof that `listTargets` still
+     * passes a `.limit()` at all — an unbounded read of 203 rows produces the same
+     * honest "at least 200", because the cap that makes the tile honest is the
+     * tile's own. The bound on the query is a cost property, pinned where the
+     * query lives.
+     */
+    world.setToggle(TRIAGE_SYSTEM_SLUG, true);
+    world.fake.seed(
+      "previsit_target",
+      ...Array.from({ length: TILE_ROW_CAP + 3 }, (_, i) => ({
+        id: `${SITE}:appt-${i}`,
+        site_id: SITE,
+        dentally_patient_id: `p-${i}`,
+        appointment_id: `appt-${i}`,
+        patient_name: `Patient ${i}`,
+        fork: "full",
+        // Ascending, because listTargets orders by it and the bound takes the
+        // OLDEST page — the ordering this tile's comment says not to re-filter.
+        appointment_at: new Date(Date.now() + i * 60_000).toISOString(),
+        due_at: new Date(Date.now() - 3_600_000).toISOString(),
+        status: "sent",
+        stop_reason: null,
+        consent_sms: true,
+        link_token: `tok-${i}`,
+      })),
+    );
+
+    const t = tile((await band()).tiles, "pre-visit");
+    expect(t.state.kind).toBe("figure");
+    const state = t.state as { value: number; atLeast: boolean; noun: string };
+    expect(state.atLeast, "a real bounded pre-visit read printed an exact number").toBe(true);
+    expect(state.value).toBe(TILE_ROW_CAP);
+    expect(state.noun).toBe("sent, awaiting an answer");
+
+    // CONTROL: under the bound it is an exact figure, so "at least" above is the
+    // read hitting its ceiling and not this tile saying "at least" about
+    // everything.
+    world.reset();
+    world.setToggle(TRIAGE_SYSTEM_SLUG, true);
+    world.fake.seed("previsit_target", {
+      id: `${SITE}:appt-solo`,
+      site_id: SITE,
+      dentally_patient_id: "p-solo",
+      appointment_id: "appt-solo",
+      patient_name: "Solo",
+      fork: "full",
+      appointment_at: new Date(Date.now() + 3_600_000).toISOString(),
+      due_at: new Date(Date.now() - 3_600_000).toISOString(),
+      status: "sent",
+      stop_reason: null,
+      consent_sms: true,
+      link_token: "tok-solo",
+    });
+    const small = tile((await band()).tiles, "pre-visit");
+    expect((small.state as { atLeast: boolean; value: number })).toMatchObject({ atLeast: false, value: 1 });
+  });
+
   it("nothing in this journey reached the network", () => {
     expect(guard.calls).toEqual([]);
   });

@@ -667,7 +667,26 @@ export const CLIENT_NAV: NavGroup[] = [
         icon: Power,
         status: "live",
         roles: OWNER_ROLES,
-        note: "The owner's master on/off panel for every automated system (recall, reactivation, no-show defence, the agents, and more). Switching one off is a full kill switch: it hides the module and halts its server-side work, so nothing sends until it is switched back on.",
+        // W3/9 — copy matches code, never the reverse. This note carried the same
+        // over-claim the panel itself did ("a full kill switch: it hides the
+        // module and halts its server-side work"), and both clauses are false of
+        // rows this very file declares:
+        //
+        //   * "it hides the module" is false for every slug in
+        //     NAV_SWITCH_EXEMPT_SLUGS below — categoriesForRole keeps all four in
+        //     the sidebar with the switch off, deliberately, so the owner can
+        //     prepare a module before arming it (W1-D, W2-C/4).
+        //   * "halts its server-side work" is false for outreach, whose
+        //     build-continuation pass runs UNGATED ahead of the send gate
+        //     ("building a list is not sending"), and for post-op check-in, whose
+        //     own `halts` sentence says replies are still triaged by a person.
+        //
+        // Kept word-for-word in step with killSwitchSummary() on the screen this
+        // note describes (src/components/client/systems/systems-view.tsx); the
+        // join is pinned by nav.os-coherence.test.ts, which reddens if the exempt
+        // set is non-empty and this note goes back to claiming the module is
+        // hidden.
+        note: "The owner's master on/off panel for every automated system (recall, reactivation, no-show defence, the agents, and more). Turning one off halts that system's work: its sweeps, sends, agent replies and public forms stop, and it writes nothing to Dentally, until you switch it back on. Most modules disappear from the sidebar while they are off; the preparation screens stay reachable so they can be reviewed and set up first.",
       },
     ],
   },

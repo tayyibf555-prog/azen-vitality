@@ -15,11 +15,12 @@
 // the same sentence Home's Operating system band already prints for a capped
 // read. Honest numbers, not no numbers.
 //
-// THREE SURFACES CARRY THE FIGURE and all three are qualified: the headline
-// number, the "N of T — the rest are past this page" line beside the export
-// buttons, and the CSV's own completeness row. The last one matters most: a
-// spreadsheet of patient names outlives the screen it came off, and "all 20,000
-// people on this list" printed into it is a claim nothing can take back.
+// THE FIGURE IS QUALIFIED WHEREVER IT IS PRINTED. On this screen that is the
+// headline number. The file's own completeness row is now the ROUTE's to write
+// (ruling W3/29): the export walks the table itself, so the page's 400-row read
+// no longer decides what a spreadsheet may claim, and the two sentences cannot
+// drift apart because there is only one of them
+// (src/lib/triage/interest-csv.ts, pinned in its own suite).
 //
 // THE PAGE IS DRIVEN FOR REAL. The repository is mocked rather than seeded,
 // because reaching the ceiling honestly needs twenty thousand rows; what the
@@ -27,8 +28,6 @@
 // `capped` down to the panel. A page that went back to the bare wrapper would
 // not find it on the mock at all.
 // ===========================================================================
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -90,7 +89,7 @@ vi.mock("@/lib/auth/session", () => ({
 }));
 
 import { PreVisitTriageView } from "./previsit-view";
-import { InterestPanel, csvCompleteness, interestCsv } from "./previsit-workspace";
+import { InterestPanel } from "./previsit-workspace";
 
 async function page(): Promise<string> {
   return renderToStaticMarkup(await PreVisitTriageView({ clientSlug: "vitality" }));
@@ -99,6 +98,7 @@ async function page(): Promise<string> {
 function panel(over: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
     createElement(InterestPanel, {
+      clientSlug: "vitality",
       treatments: [...INTEREST_TREATMENTS],
       rows: [
         {
@@ -110,7 +110,6 @@ function panel(over: Record<string, unknown> = {}): string {
         },
       ],
       counts: { whitening: 20_000 },
-      scopeLabel: "N15 Vitality Dental",
       ...over,
     }),
   );
@@ -143,55 +142,101 @@ describe("the pre-visit page prints a capped count as a floor, not as a total", 
   });
 });
 
-describe("every figure beside a capped count wears the same sign", () => {
-  it("qualifies the 'N of T' line under the export buttons", () => {
+describe("a capped grid is still a grid somebody can act on", () => {
+  it("prints the floor beside every control rather than collapsing the panel", () => {
     const html = panel({ countsCapped: true });
-    expect(html).toContain("1 of at least 20,000");
-    expect(html).toContain("the rest are past this page");
+    expect(html).toContain("at least 20,000");
+    expect(html).toContain("Download the Whitening list as a CSV");
   });
 
-  it("says the page is short even when it holds as many rows as the floor", () => {
-    // A capped grid whose floor happens to equal the rows on the page is still a
-    // floor: there ARE more, and "1 of 1" would read as the whole list.
-    const html = panel({ counts: { whitening: 1 }, countsCapped: true });
-    expect(html).toContain("1 of at least 1");
+  it("makes no claim about what the FILE holds off this page's rows (W3/29)", () => {
+    // THE DEFECT this pins: the panel used to print "1 of at least 20,000 — the
+    // rest are past this page" beside the export controls, because the file was
+    // built from the rows this page had rendered. The export is the route's now
+    // and walks the table itself, so that sentence would be false about the file
+    // and is gone; the honest count arrives from the route after the click, in
+    // the same words the file's first row uses.
+    const html = panel({ countsCapped: true });
+    expect(html).not.toContain("the rest are past this page");
+    expect(html).not.toContain("1 of at least");
   });
 
-  it("stays silent about a short page when the counts are true totals", () => {
-    expect(panel({ counts: { whitening: 1 } })).not.toContain("the rest are past this page");
+  it("still says the TABLE below is cut, which is a claim about the page", () => {
+    // The other half of the same distinction: the list on screen IS bounded, and
+    // that sentence is true and stays.
+    const html = panel({ more: true, pageSize: 400 });
+    expect(html).toContain("This list is cut at 400 patients");
+  });
+
+  it("offers the export for a treatment the page shows none of", () => {
+    // The counts say 20,000 people; this page happens to hold none of their rows
+    // because they are older than its 400. The file is the server's, so the
+    // control is offered — the old page-derived rule disabled it.
+    const html = panel({ rows: [], counts: { whitening: 20_000 }, countsCapped: true });
+    expect(html).toContain("Download the Whitening list as a CSV");
   });
 });
 
-describe("the exported file never claims completeness off a floor", () => {
-  it("withholds a capped figure and says the file is a sample instead", () => {
-    const claim = csvCompleteness(20_000, true, false);
-    expect(claim.total, "a floor was handed to the file as a total").toBeUndefined();
-    expect(claim.pageCut).toBe(true);
-    const csv = interestCsv({
-      rows: [],
-      labelFor: (k) => k,
-      heading: "Whitening",
-      takenAt: "2 Sep 2026",
-      ...claim,
-    });
-    expect(csv).toContain("this file is a sample and not the whole list");
-    expect(csv).not.toContain("all 0 people");
+/** The opening tag of one treatment's control, and nothing else. */
+function control(html: string, label: string, kind: "Download" | "Copy"): string {
+  const needle =
+    kind === "Download" ? `Download the ${label} list as a CSV` : `Copy the ${label} list as an audience`;
+  const at = html.indexOf(needle);
+  expect(at, `no ${kind} control for ${label}`).toBeGreaterThan(0);
+  return html.slice(at - 120, at);
+}
+
+// ===========================================================================
+// A CAPPED ZERO IS NOT A ZERO (ruling W3/11, charter §0/5).
+//
+// THE DEFECT this pins: `nothingToExport` read `counts[treatment] ?? 0 === 0`
+// as proof there is nobody, WITHOUT asking whether the count had finished. On
+// the fallback keyset walk a treatment whose people all sit past the ceiling
+// comes back as an absent key, so the card printed "at least 0" — a figure that
+// admits it proved nothing — directly above a Download and a Copy that were
+// both greyed out. Since W3/29 the server route is the ONE way a list leaves
+// the platform, so that closed the only door, on exactly the practice whose
+// list is too long to count. The route has no ceiling: it walks the table to
+// its end and can reach the people this scan did not.
+//
+// Home's Operating system band already rules this way for its own bound
+// (src/lib/home/os-band.ts, "A ZERO OFF A CAPPED READ IS NOT A ZERO"); this is
+// the same rule on the screen the campaign is actually run from.
+// ===========================================================================
+describe("a capped zero closes no door and prints no figure", () => {
+  it("keeps BOTH export controls live for a treatment a capped scan never reached", () => {
+    // Whitening is at its ceiling; nobody asking about veneers was in the part
+    // of the table the scan read. React omits `disabled` entirely when false.
+    const html = panel({ counts: { whitening: 20_000 }, countsCapped: true });
+    expect(control(html, "Veneers and bonding", "Download")).not.toContain("disabled=");
+    expect(control(html, "Veneers and bonding", "Copy")).not.toContain("disabled=");
   });
 
-  it("passes a true total through untouched", () => {
-    expect(csvCompleteness(118, false, false)).toEqual({ total: 118, pageCut: false });
-    expect(csvCompleteness(118, false, true)).toEqual({ total: 118, pageCut: true });
+  it("prints 'Not counted' rather than the nonsense floor 'at least 0'", () => {
+    const html = panel({ counts: { whitening: 20_000 }, countsCapped: true });
+    expect(html).not.toContain("at least 0");
+    expect(html).toContain("Not counted");
+    expect(html).toContain("this is not a zero");
   });
 
-  it("is what the download actually uses, not a rule beside it", () => {
-    // The click cannot be driven in this renderer, so the panel is asserted to
-    // delegate to the rule rather than to hold a second copy of it.
-    const src = readFileSync(
-      join(process.cwd(), "src/components/client/previsit/previsit-workspace.tsx"),
-      "utf8",
-    );
-    expect(src).toContain("csvCompleteness(total, countsCapped, more)");
-    expect(src).toContain("total: claim.total");
-    expect(src).toContain("pageCut: claim.pageCut");
+  it("still offers the whole-list export when every figure is an uncounted zero", () => {
+    // `{}` off a capped scan is "we read none of it", not "there is nobody".
+    const html = panel({ counts: {}, countsCapped: true });
+    expect(html).toContain("Export everyone");
+  });
+
+  it("STILL disables a control when a COMPLETED count proves there is nobody", () => {
+    // The other direction, and the mutation that matters: a panel that never
+    // disabled anything would be as wrong as one that always did. An uncapped
+    // zero is a real finding and keeps its bare figure.
+    const html = panel({ counts: { whitening: 118, implants: 0 }, countsCapped: false });
+    expect(control(html, "Implants", "Download")).toContain("disabled=");
+    expect(control(html, "Implants", "Copy")).toContain("disabled=");
+    expect(html).not.toContain("Not counted");
+  });
+
+  it("still hides the whole-list export when a COMPLETED count found nobody at all", () => {
+    const html = panel({ counts: { whitening: 0 }, countsCapped: false });
+    expect(html).not.toContain("Export everyone");
   });
 });

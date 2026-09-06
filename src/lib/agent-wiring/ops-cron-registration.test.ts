@@ -33,44 +33,63 @@ import { describe, it, expect } from "vitest";
 // a job the scheduler has never heard of must still say it has not been applied,
 // so nobody skips a step that really is outstanding.
 //
-// WHERE THE TRUTH COMES FROM. `SCHEDULER` below is the read-only
-// `select jobname, schedule, active from cron.job` Fable ran against production on
-// 4 September 2026, recorded as CRON.JOB TRUTH under ruling W3/7 — the same read
-// that `src/lib/agent-wiring/runbook.test.ts` holds as its own `SCHEDULER` and
-// that §2 of `docs/runbooks/agent-switch-on.md` prints as a table. Three copies of
-// one read is one copy too many (handoff H109 proposes promoting it to
-// `src/lib/agent-wiring/scheduler.ts` and projecting it), so until that happens the
-// last describe below reads the runbook's table and asserts the two agree. Change
-// the scheduler, and either this file or that one goes red — never neither.
+// WHERE THE TRUTH COMES FROM, AND WHY IT IS NOT WRITTEN OUT HERE ANY MORE.
+// The read-only `select jobname, schedule, active from cron.job` Fable ran against
+// production on 4 September 2026 — CRON.JOB TRUTH under ruling W3/7 — used to be
+// copied into this file as a `SCHEDULER` constant of its own, a third copy beside
+// the one in `runbook.test.ts` and the table in §2 of the runbook. Ruling W3/31
+// ended that: the read lives in `src/lib/agent-wiring/scheduler.ts`, an ordinary
+// module, and all three readers import it.
+//
+// THE THIRD COPY FAILED THE WAY THIRD COPIES DO, hours after it was written. Two
+// pre-visit ops files landed under ruling W3/30; the runbook's table and
+// runbook.test.ts knew about them and this file did not, so its own "the sweep is
+// not vacuous" check went red naming a mismatch that was really a stale copy. With
+// the import there is nothing to keep in step: an ops file for a job the module
+// already holds needs no edit here at all, and an ops file for a job it does NOT
+// hold goes red with a sentence telling the author to record the job.
+//
+// So the chain is: cron.job → scheduler.ts → { runbook §2, this directory, the
+// control panel's list }. Change the scheduler, and whichever of those has not
+// been updated goes red — never neither.
 // ===========================================================================
+
+import { OPS_FILE, SCHEDULER as CRON_JOB, UNROSTERED_OPS_JOBS } from "./scheduler";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
 const OPS_DIR = join(REPO_ROOT, "supabase/ops");
-const RUNBOOK = join(REPO_ROOT, "docs/runbooks/agent-switch-on.md");
 
 /**
  * Every pg_cron job that `supabase/ops` carries registration SQL for, against the
  * live scheduler. The value is the schedule cron.job actually holds, or `null`
  * when the scheduler has never heard of the job.
  *
- * A job here is NOT the whole scheduler — nineteen rows exist and only ten of them
- * have an ops file (the rest were registered from `enable-24-7-cron.sql`, which
- * contains no executable statement of its own). runbook.test.ts holds all nineteen.
+ * DERIVED FROM THE ONE READ, never restated. A job in `scheduler.ts`'s SCHEDULER
+ * contributes its real schedule when it is registered and `null` when it is not;
+ * the two marketing-side jobs in `UNROSTERED_OPS_JOBS` are `null` because the same
+ * read did not hold them either.
+ *
+ * A job here is NOT the whole scheduler — twenty-four rows are recorded and only
+ * ten of them have an ops file; the other fourteen were registered from
+ * `enable-24-7-cron.sql`, the 24/7 runbook, whose own statements are commented
+ * out, so this directory holds nothing for them to be checked against.
+ * runbook.test.ts holds all twenty-four against §2 of the runbook.
+ *
+ * This map still has twelve entries, and the two extra are not a contradiction:
+ * they are the marketing jobs of `UNROSTERED_OPS_JOBS`, which have ops files and
+ * which the scheduler has never held, so they are not among the twenty-four.
+ *
+ * Every numeral in those two paragraphs is derived and pinned in §4 below. This
+ * sentence is exactly what drifted the last time the constant changed shape.
  */
 const SCHEDULER: Record<string, string | null> = {
-  // Registered, active, firing (cron.job + cron.job_run_details, 4 Sep 2026).
-  "app-purge-assessment-step-events": "43 4 * * *",
-  "app-prewarm-dentally": "40 * * * *",
-  "app-sweep-anomaly": "45 * * * *",
-  "app-sweep-landing-promote": "17 3 * * *",
-  "app-sweep-outreach": "*/10 * * * *",
-  // Written, deliberately never run. The schedule in each file is a PROPOSAL, so
-  // there is nothing to compare it against and none is recorded here.
-  "app-sweep-closer": null,
-  "app-sweep-collection": null,
-  "app-sweep-postop": null,
-  "app-sweep-meta-insights": null,
-  "app-sweep-winning-ads-ingest": null,
+  ...Object.fromEntries(
+    Object.entries(OPS_FILE).map(([job]) => [
+      job,
+      CRON_JOB[job].status === "not registered" ? null : CRON_JOB[job].schedule,
+    ]),
+  ),
+  ...Object.fromEntries(Object.keys(UNROSTERED_OPS_JOBS).map((job) => [job, null])),
 };
 
 /** A five-field cron expression, and nothing else. */
@@ -129,8 +148,39 @@ const FILE_FOR: Record<string, string> = Object.fromEntries(
 
 describe("the ops sweep is not vacuous", () => {
   it("parses a registration out of every ops file that has one", () => {
-    expect(REGISTRATIONS.length).toBeGreaterThanOrEqual(10);
+    expect(REGISTRATIONS.length).toBeGreaterThanOrEqual(12);
     expect(Object.keys(FILE_FOR).sort()).toEqual(Object.keys(SCHEDULER).sort());
+  });
+
+  it("registers no job the one registration-truth module has never heard of", () => {
+    // THE FAIL DIRECTION FOR A NEW OPS FILE (ruling W3/31). Every assertion in
+    // this file compares a header against what cron.job holds, so a file for a
+    // job that is in neither map of scheduler.ts is a file nothing checks — it
+    // could open "APPLIED" for a job that does not exist and no test would care.
+    // This is the sentence that stops that: record the job in scheduler.ts (and,
+    // if an agent owns it, in §2 of the runbook) and every other pin here starts
+    // covering the new file for free.
+    const unknown = REGISTRATIONS.filter(
+      (r) => !(r.job in CRON_JOB) && !(r.job in UNROSTERED_OPS_JOBS),
+    ).map((r) => `${r.file} registers ${r.job}, which is not in src/lib/agent-wiring/scheduler.ts`);
+    expect(unknown).toEqual([]);
+  });
+
+  it("agrees with OPS_FILE about which file holds which job", () => {
+    // Both directions. OPS_FILE is what runbook.test.ts uses to decide whether a
+    // job's SQL has to be printed in the runbook at all, so a wrong path there
+    // silently excuses the document from carrying SQL a practice cannot get
+    // anywhere else — and the directory is the only thing that can disprove it.
+    for (const [job, file] of Object.entries(OPS_FILE)) {
+      expect(FILE_FOR[job], `${OPS_FILE[job]} is named for ${job} but holds no registration`).toBe(
+        file.replace("supabase/ops/", ""),
+      );
+    }
+    for (const [job, file] of Object.entries(UNROSTERED_OPS_JOBS)) {
+      expect(FILE_FOR[job], `${file} is named for ${job} but holds no registration`).toBe(
+        file.replace("supabase/ops/", ""),
+      );
+    }
   });
 
   it("reads the executable statement, never a commented-out example", () => {
@@ -215,8 +265,21 @@ describe("an ops file for a registered job states registration truth (W3/22)", (
 describe("an ops file for an unregistered job never claims to be applied", () => {
   const unregistered = Object.entries(SCHEDULER).filter(([, s]) => s === null);
 
-  it("covers the five that were written and deliberately not run", () => {
-    expect(unregistered).toHaveLength(5);
+  it("covers every ops file whose job the scheduler has never heard of", () => {
+    // Seven since ruling W3/30 added the two pre-visit files. Five of the seven
+    // are unrun ON PURPOSE (closer, collection, post-op, and the two marketing
+    // jobs); the two pre-visit ones are an outstanding go-live step, which is a
+    // different thing to a reader and the same thing to this assertion — neither
+    // may say APPLIED.
+    expect(unregistered.map(([job]) => job).sort()).toEqual([
+      "app-sweep-closer",
+      "app-sweep-collection",
+      "app-sweep-meta-insights",
+      "app-sweep-postop",
+      "app-sweep-previsit",
+      "app-sweep-previsit-mining",
+      "app-sweep-winning-ads-ingest",
+    ]);
   });
 
   it("states plainly that it has not been applied", () => {
@@ -234,57 +297,117 @@ describe("an ops file for an unregistered job never claims to be applied", () =>
 });
 
 // ---------------------------------------------------------------------------
-// 3. This file and the runbook hold the same read.
+// 3. The whole directory answers to the one read, and nothing is left over.
 // ---------------------------------------------------------------------------
 //
-// §2 of the runbook prints the scheduler as a table, and runbook.test.ts pins that
-// table to its own copy of the same read. So the chain is: cron.job → runbook §2 →
-// runbook.test.ts, and this joins the fourth link. Until handoff H109 promotes the
-// read to one module, this is what stops a correction landing in one place only.
+// This used to be a re-parse of §2 of the runbook, asserting that the markdown
+// table and this file's own copy of cron.job agreed. That was a patch for having
+// two copies, not a check worth having: ruling W3/31 deleted the copy, and
+// runbook.test.ts § "gives each job the schedule, route and status the scheduler
+// actually has" already holds §2 row-for-row against the same module this file
+// imports. Re-reading the table here would test the markdown parser twice and the
+// scheduler nowhere.
+//
+// WHAT IS WORTH HAVING INSTEAD is the direction nothing else covers: every file in
+// the directory is accounted for. A `register-*.sql` whose job appears in neither
+// map of scheduler.ts is unchecked by every assertion above (§0 catches it), and a
+// map entry naming a file that carries no such registration is a signpost into
+// thin air (§0 catches that too). What is left is the count, so that deleting an
+// ops file cannot quietly shrink this suite to a handful of green loops.
 
-describe("the runbook's §2 table and this file's SCHEDULER agree", () => {
-  const md = readFileSync(RUNBOOK, "utf8");
+describe("every registration file in the directory is accounted for", () => {
+  it("holds a registration for each of the twelve jobs the module records", () => {
+    expect(Object.keys(OPS_FILE)).toHaveLength(10);
+    expect(Object.keys(UNROSTERED_OPS_JOBS)).toHaveLength(2);
+    expect(REGISTRATIONS.map((r) => r.job).sort()).toEqual(
+      [...Object.keys(OPS_FILE), ...Object.keys(UNROSTERED_OPS_JOBS)].sort(),
+    );
+  });
 
-  // One §2 row: a job name, its schedule, its route and its status, each in
-  // backticks or bold between pipes.
-  function tableRows(): Record<string, { schedule: string; status: string }> {
-    const start = md.indexOf("## 2. Cron registration");
-    const end = md.indexOf("## 3. The agents", start + 1);
-    const rows: Record<string, { schedule: string; status: string }> = {};
-    if (start === -1 || end === -1) return rows;
-    for (const line of md.slice(start, end).split("\n")) {
-      const m = /^\|\s*`(app-[a-z0-9-]+)`\s*\|(.+?)\|(.+?)\|(.+?)\|\s*$/.exec(line);
-      if (!m) continue;
-      const cell = (s: string) => s.trim().replace(/^`|`$/g, "").replace(/^\*\*|\*\*$/g, "").trim();
-      rows[m[1]] = { schedule: cell(m[2]), status: cell(m[4]) };
-    }
-    return rows;
+  it("checks a header for every one of them", () => {
+    // Non-vacuity for the two describes above, which are for-loops over subsets:
+    // five live plus seven unregistered is every job, so no file can fall between
+    // the two loops and go unchecked.
+    const live = Object.values(SCHEDULER).filter((s) => s !== null).length;
+    const dead = Object.values(SCHEDULER).filter((s) => s === null).length;
+    expect(live).toBe(5);
+    expect(dead).toBe(7);
+    expect(live + dead).toBe(REGISTRATIONS.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. And the header's own arithmetic answers to the module as well.
+// ---------------------------------------------------------------------------
+//
+// The sentence at the top of `SCHEDULER` counts the scheduler for a reader who is
+// deciding whether a file is missing, and it was the one thing left in this file
+// that was typed rather than derived. It drifted the moment the constant became an
+// import: the left-hand number grew correctly (the five "not registered" rows
+// joined the map) and the right-hand one grew wrongly, by folding in the two
+// `UNROSTERED_OPS_JOBS` marketing jobs — which are, by construction, NOT among the
+// rows the scheduler holds; that separation is the whole reason the second map
+// exists. Nothing went red: §3 asserts the two sizes without ever comparing them to
+// the prose, and the tree's only crawl over test prose (`claimsATotal` in
+// roster.test.ts) is scoped to the roster.
+//
+// A reader who subtracts one number from the other — which is exactly the audit
+// ruling W3/7 asks for, reconciling this directory against cron.job — then starts
+// from a denominator two files wrong, and cannot tell whether a file is missing.
+// So the numerals are computed from the module here and the header is held to
+// them, word for word. Adding a job to `scheduler.ts` reddens this until the
+// sentence is rewritten, which is the direction that failed.
+
+describe("the header's count of the scheduler is derived, not remembered", () => {
+  /** This file's own comments, unwrapped, so a reflow cannot break a pin that a
+   *  changed numeral should. The assertions below build their sentences from the
+   *  module, so the template literals that state them never match themselves. */
+  const HEADER = readFileSync(join(__dirname, "ops-cron-registration.test.ts"), "utf8")
+    .replace(/\n\s*(?:\*|\/\/)\s?/g, " ");
+
+  /** English for a small count, so the assertion reads as the header writes. */
+  const NUMERAL = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "twenty-one", "twenty-two",
+    "twenty-three", "twenty-four", "twenty-five", "twenty-six", "twenty-seven",
+    "twenty-eight", "twenty-nine", "thirty", "thirty-one", "thirty-two",
+    "thirty-three", "thirty-four", "thirty-five", "thirty-six", "thirty-seven",
+    "thirty-eight", "thirty-nine", "forty",
+  ];
+  function word(n: number): string {
+    expect(NUMERAL[n], `no English word for ${n} — extend NUMERAL`).toBeTruthy();
+    return NUMERAL[n];
   }
 
-  const rows = tableRows();
+  /** Scheduler rows, and how many of them this directory carries a file for. */
+  const ROWS = Object.keys(CRON_JOB).length;
+  const WITH_FILE = Object.keys(OPS_FILE).filter((job) => job in CRON_JOB).length;
 
-  it("finds the runbook table where §2 says it is", () => {
-    // Non-vacuity: without this, a renamed heading would make every comparison
-    // below iterate an empty object and pass.
-    expect(Object.keys(rows).length).toBeGreaterThanOrEqual(15);
+  it("counts the ops files against the scheduler's rows, not against this map", () => {
+    // The two are different numbers and the header said they were one: OPS_FILE is
+    // a subset of the scheduler, UNROSTERED_OPS_JOBS is disjoint from it, and only
+    // the first kind can be "N of the scheduler's rows".
+    expect(Object.keys(OPS_FILE).filter((job) => !(job in CRON_JOB))).toEqual([]);
+    expect(Object.keys(UNROSTERED_OPS_JOBS).filter((job) => job in CRON_JOB)).toEqual([]);
+    expect(WITH_FILE).toBe(Object.keys(OPS_FILE).length);
+
+    expect(
+      HEADER,
+      `the header no longer says "${word(ROWS)} rows … only ${word(WITH_FILE)} of them have an ops file"`,
+    ).toContain(`${word(ROWS)} rows are recorded and only ${word(WITH_FILE)} of them have an ops file`);
   });
 
-  it("agrees with §2 on every job that has an ops file", () => {
-    for (const [job, schedule] of Object.entries(SCHEDULER)) {
-      const row = rows[job];
-      if (!row) continue; // meta-insights and winning-ads are not agents; §2 omits them
-      const registered = row.status !== "not registered";
-      expect(registered, `§2 and this file disagree about whether ${job} exists`).toBe(
-        schedule !== null,
-      );
-      if (schedule !== null) {
-        expect(row.schedule, `§2 and this file disagree about ${job}'s schedule`).toBe(schedule);
-      }
-    }
+  it("says how many rows this directory therefore cannot check, and is right", () => {
+    expect(HEADER).toContain(`the other ${word(ROWS - WITH_FILE)} were registered from`);
+    expect(HEADER).toContain(`runbook.test.ts holds all ${word(ROWS)} against §2 of the runbook`);
   });
 
-  it("cross-checks enough rows to be worth having", () => {
-    const checked = Object.keys(SCHEDULER).filter((job) => rows[job]);
-    expect(checked.length).toBeGreaterThanOrEqual(8);
+  it("states this map's own size as the sum it is, so it is never read as the scheduler's", () => {
+    expect(Object.keys(SCHEDULER)).toHaveLength(
+      Object.keys(OPS_FILE).length + Object.keys(UNROSTERED_OPS_JOBS).length,
+    );
+    expect(HEADER).toContain(`This map still has ${word(Object.keys(SCHEDULER).length)} entries`);
+    expect(HEADER).toContain(`they are not among the ${word(ROWS)}`);
   });
 });

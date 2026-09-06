@@ -20,12 +20,41 @@ interface CoverageRow {
   candidates: number;
   excluded_no_dob: number;
   excluded_under_age: number;
+  excluded_unreadable?: number | null;
   last_run_at: string;
   more_to_read: boolean;
 }
 
-const COVERAGE_COLUMNS =
+/**
+ * THE COLUMNS, IN TWO SHAPES, BECAUSE THE DATABASE EXISTS IN TWO SHAPES.
+ *
+ * `excluded_unreadable` arrives in migration 0101, and migrations here are
+ * applied BY HAND — so this code runs against a database that has the column and
+ * against one that does not, and it has to be right on both.
+ *
+ * A PostgREST select names its columns explicitly, so naming one that does not
+ * exist fails the WHOLE read with 42703 rather than omitting a field. That
+ * direction is fail-OPEN and is the reason for the pair below: the coverage row
+ * is what puts the window and the exclusions on the screen, so losing the read
+ * takes the provenance sentence off a list of named patients and leaves the list.
+ * The read asks for the column, and falls back to the shape without it.
+ */
+const COVERAGE_BASE_COLUMNS =
   "site_id, covered_from, covered_to, examined, candidates, excluded_no_dob, excluded_under_age, last_run_at, more_to_read";
+const COVERAGE_COLUMNS = `${COVERAGE_BASE_COLUMNS}, excluded_unreadable`;
+
+/**
+ * "The column is not there yet", however the server says it.
+ *
+ * Postgres 42703 is `undefined_column`; PostgREST answers PGRST204 when its own
+ * schema cache has no such column on a write. Anything else is a real failure and
+ * is thrown, because a read that fails for another reason must not be quietly
+ * retried into a narrower answer.
+ */
+function isMissingColumn(error: { code?: string | null } | null): boolean {
+  if (!error) return false;
+  return error.code === "42703" || error.code === "PGRST204";
+}
 
 function rowToCoverage(r: CoverageRow): MiningCoverage {
   return {
@@ -36,6 +65,14 @@ function rowToCoverage(r: CoverageRow): MiningCoverage {
     candidates: Number(r.candidates ?? 0),
     excludedNoDob: Number(r.excluded_no_dob ?? 0),
     excludedUnderAge: Number(r.excluded_under_age ?? 0),
+    // NULL IS "WE DO NOT KNOW", AND ZERO WOULD BE A CLAIM. Before 0101 there is
+    // nowhere to persist this figure, so the sentence on screen leaves the clause
+    // out rather than printing "0 patients could not be looked up" over a scan
+    // that may have failed to read a dozen of them.
+    excludedUnreadable:
+      r.excluded_unreadable === undefined || r.excluded_unreadable === null
+        ? null
+        : Number(r.excluded_unreadable),
     lastRunAt: r.last_run_at,
     moreToRead: Boolean(r.more_to_read),
   };
@@ -43,24 +80,23 @@ function rowToCoverage(r: CoverageRow): MiningCoverage {
 
 export async function getCoverage(siteId: string): Promise<MiningCoverage | null> {
   const db = serviceClient();
-  const { data, error } = await db
-    .from("previsit_mining_scan")
-    .select(COVERAGE_COLUMNS)
-    .eq("site_id", siteId)
-    .maybeSingle();
+  const read = (columns: string) =>
+    db.from("previsit_mining_scan").select(columns).eq("site_id", siteId).maybeSingle();
+  let { data, error } = await read(COVERAGE_COLUMNS);
+  if (isMissingColumn(error)) ({ data, error } = await read(COVERAGE_BASE_COLUMNS));
   if (error) throw error;
-  return data ? rowToCoverage(data as CoverageRow) : null;
+  return data ? rowToCoverage(data as unknown as CoverageRow) : null;
 }
 
 export async function listCoverage(siteIds: string[]): Promise<MiningCoverage[]> {
   if (siteIds.length === 0) return [];
   const db = serviceClient();
-  const { data, error } = await db
-    .from("previsit_mining_scan")
-    .select(COVERAGE_COLUMNS)
-    .in("site_id", siteIds);
+  const read = (columns: string) =>
+    db.from("previsit_mining_scan").select(columns).in("site_id", siteIds);
+  let { data, error } = await read(COVERAGE_COLUMNS);
+  if (isMissingColumn(error)) ({ data, error } = await read(COVERAGE_BASE_COLUMNS));
   if (error) throw error;
-  return ((data ?? []) as CoverageRow[]).map(rowToCoverage);
+  return ((data ?? []) as unknown as CoverageRow[]).map(rowToCoverage);
 }
 
 /**
@@ -73,6 +109,23 @@ export async function listCoverage(siteIds: string[]): Promise<MiningCoverage[]>
  * been read, and reading cannot be undone.
  *
  * The counters ADD rather than replace, for the same reason.
+ *
+ * AND ADDING MEANS TWO DIFFERENT THINGS HERE, WHICH IS WORTH KNOWING BEFORE YOU
+ * READ ONE OF THESE NUMBERS AS A HEADCOUNT. `candidates` counts only patients
+ * `upsertCandidate` actually INSERTED — it returns false for anybody already on
+ * the register, and false for an update — so however many runs match the same
+ * person, they add one. The three exclusion counters have no register: they
+ * arrive as this run's raw sums, de-duplicated only by the `accounted` set that
+ * `runMiningSweep` creates fresh each time, and each run reads an older, disjoint
+ * window. So a patient with extractions in two windows, whose date of birth is
+ * missing both times, adds one on each of two nights.
+ *
+ * That makes those three CEILINGS on the number of people, and `exclusionSentence`
+ * (./mining.ts) prints them as ceilings rather than as "N patients". The honest
+ * fix is a register for exclusions too — the same `${siteId}:${patientId}` key,
+ * counted on first insert, the patient still re-read each run so a date of birth
+ * filled in later can still promote them onto the list — which needs a migration
+ * and a change in the sweep, and is written up in this lane's report.
  */
 export async function recordScanRun(input: {
   siteId: string;
@@ -82,6 +135,9 @@ export async function recordScanRun(input: {
   candidates: number;
   excludedNoDob: number;
   excludedUnderAge: number;
+  /** Matched patients the scan could not look up at all (Dentally 404/410, or no
+   *  usable name). Persisted from migration 0101; see the write below. */
+  excludedUnreadable: number;
   moreToRead: boolean;
   now: string;
 }): Promise<void> {
@@ -91,20 +147,29 @@ export async function recordScanRun(input: {
     existing && existing.coveredFrom < input.coveredFrom ? existing.coveredFrom : input.coveredFrom;
   const coveredTo =
     existing && existing.coveredTo > input.coveredTo ? existing.coveredTo : input.coveredTo;
-  const { error } = await db.from("previsit_mining_scan").upsert(
-    {
-      site_id: input.siteId,
-      covered_from: coveredFrom,
-      covered_to: coveredTo,
-      examined: (existing?.examined ?? 0) + input.examined,
-      candidates: (existing?.candidates ?? 0) + input.candidates,
-      excluded_no_dob: (existing?.excludedNoDob ?? 0) + input.excludedNoDob,
-      excluded_under_age: (existing?.excludedUnderAge ?? 0) + input.excludedUnderAge,
-      last_run_at: input.now,
-      more_to_read: input.moreToRead,
-    },
-    { onConflict: "site_id" },
-  );
+  const row = {
+    site_id: input.siteId,
+    covered_from: coveredFrom,
+    covered_to: coveredTo,
+    examined: (existing?.examined ?? 0) + input.examined,
+    candidates: (existing?.candidates ?? 0) + input.candidates,
+    excluded_no_dob: (existing?.excludedNoDob ?? 0) + input.excludedNoDob,
+    excluded_under_age: (existing?.excludedUnderAge ?? 0) + input.excludedUnderAge,
+    last_run_at: input.now,
+    more_to_read: input.moreToRead,
+  };
+  const write = (r: Record<string, unknown>) =>
+    db.from("previsit_mining_scan").upsert(r, { onConflict: "site_id" });
+  // THE RUN IS NOT LOST TO A COLUMN THAT IS NOT THERE YET. Before 0101 the write
+  // with the new field is refused (PGRST204) and the same row goes in without it;
+  // the days read, the candidates and the two older exclusion counters are what
+  // the screen depends on and they must land either way. The unreadable figure
+  // stays in the run report and in the log until the migration is applied.
+  let { error } = await write({
+    ...row,
+    excluded_unreadable: (existing?.excludedUnreadable ?? 0) + input.excludedUnreadable,
+  });
+  if (isMissingColumn(error)) ({ error } = await write(row));
   if (error) throw error;
 }
 

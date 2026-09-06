@@ -92,7 +92,7 @@ function seedCoverage(siteId: string, over: Record<string, unknown> = {}): void 
   });
 }
 
-async function coverageSentence(): Promise<string> {
+async function sentences(): Promise<{ miningCoverage: string; miningExclusions: string }> {
   const html = renderToStaticMarkup(await PreVisitTriageView({ clientSlug: "vitality" }));
   const block = html.match(/<pre>([\s\S]*?)<\/pre>/);
   expect(block, "the stubbed workspace did not render; the page shape has changed").not.toBeNull();
@@ -102,7 +102,15 @@ async function coverageSentence(): Promise<string> {
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
-  return (JSON.parse(decoded) as { miningCoverage: string }).miningCoverage;
+  return JSON.parse(decoded) as { miningCoverage: string; miningExclusions: string };
+}
+
+async function coverageSentence(): Promise<string> {
+  return (await sentences()).miningCoverage;
+}
+
+async function exclusions(): Promise<string> {
+  return (await sentences()).miningExclusions;
 }
 
 describe("the coverage sentence never claims a window for a site nobody has scanned", () => {
@@ -162,5 +170,58 @@ describe("the coverage sentence never claims a window for a site nobody has scan
     expect(sentence).toContain("could not be read just now");
     expect(sentence).not.toContain("This list has not been built yet");
     expect(sentence).not.toContain("Built from appointments between");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SAME GAP, IN THE SENTENCE DIRECTLY BELOW IT (handoff H108 / B81).
+// ---------------------------------------------------------------------------
+// `exclusionSentence` takes an optional scope and FAILS CLOSED without it: it
+// appends "That is a count over the sites the scan has reached so far", which
+// qualifies without claiming, because a caller that said nothing might have no
+// gap at all. This page is not that caller — it computes `unscanned` one line
+// above for the coverage sentence — so it hands the number over and the reader
+// gets the counted gap in the same words, or the plain sentence when there is no
+// gap to state.
+// ---------------------------------------------------------------------------
+describe("the exclusions sentence names the same gap the coverage sentence does", () => {
+  it("counts the unscanned sites rather than hedging with 'so far'", async () => {
+    seedCoverage("site-cc", { excluded_no_dob: 41 });
+    const sentence = await exclusions();
+    expect(sentence).toContain("41 patients have no date of birth on record");
+    expect(sentence).toContain("2 other sites in view have not been scanned");
+    expect(sentence).toContain("nobody there has been counted either way");
+    expect(sentence, "the page knew the gap and hedged anyway").not.toContain("reached so far");
+  });
+
+  it("drops the SCOPE qualifier once every site in scope has been scanned", async () => {
+    // THE OTHER DIRECTION: a sentence that always warned about SCOPE would be as
+    // useless as one that never did — so the "other sites have not been scanned"
+    // clause must be gone here.
+    //
+    // The per-run ceiling clause is NOT that qualifier and is still owed, however
+    // complete the scan: the exclusion counters ADD ACROSS RUNS (migration 0097,
+    // and 0101 for the third of them), so six occurrences can be fewer than six
+    // people if somebody had extractions in two of the periods read. Scanning
+    // every site closes the coverage gap; it does not make the figure a headcount.
+    for (const site of SCOPE) seedCoverage(site, { excluded_no_dob: 2 });
+    const sentence = await exclusions();
+    expect(sentence).toBe(
+      "Left off this list: up to 6 patients have no date of birth on record, so we could not tell whether they are 18 or over." +
+        " Each run counts these again, so somebody with extractions in two of the periods we have read is in them twice:" +
+        " the number of people is this or fewer.",
+    );
+  });
+
+  it("says nothing at all when nobody was left off", async () => {
+    // An empty string, not a sentence about zero exclusions.
+    for (const site of SCOPE) seedCoverage(site);
+    expect(await exclusions()).toBe("");
+  });
+
+  it("claims no exclusions off a coverage read that FAILED", async () => {
+    seedCoverage("site-cc", { excluded_no_dob: 41 });
+    world.failTable("previsit_mining_scan");
+    expect(await exclusions()).toBe("");
   });
 });

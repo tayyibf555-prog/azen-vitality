@@ -11,6 +11,23 @@
 --
 -- Post-0012 locked posture: RLS on, no grants; the function + table are reached
 -- only via the service-role client.
+--
+-- THE REVOKE AT THE FOOT OF THIS FILE NAMES `public` FIRST, AND DID NOT ALWAYS.
+-- As shipped it read `from anon, authenticated`, which does nothing: Postgres
+-- grants EXECUTE on a new function to PUBLIC by default, and anon/authenticated
+-- hold it THROUGH that PUBLIC grant rather than through one of their own, so
+-- revoking the two by name removes nothing and leaves PUBLIC's in place. Read
+-- live on 6 September 2026, years after this ran: anon and authenticated could
+-- both still execute it. Same defect ruling W3/35 found on
+-- `verify_practice_brain_password` and 0104 fixed the same way.
+--
+-- Corrected here so a database replayed from scratch arrives at the right grant,
+-- and carried to the ALREADY-APPLIED database by
+-- 0105_consume_rate_budget_execute_grants.sql — which also records what the reach
+-- was (nil: this function is not SECURITY DEFINER and anon holds nothing on
+-- api_budget, so an anon call was admitted and then failed 42501) and why it was
+-- worth fixing anyway. Correcting this file alone would never reach production;
+-- 0105 alone would leave a fresh replay wrong. Both, exactly as 0101/0102 did.
 
 create table if not exists api_budget (
   key text primary key,
@@ -43,4 +60,6 @@ begin
 end;
 $$;
 
-revoke all on function consume_rate_budget(text, integer, integer) from anon, authenticated;
+revoke all on function consume_rate_budget(text, integer, integer)
+  from public, anon, authenticated;
+grant execute on function consume_rate_budget(text, integer, integer) to service_role;

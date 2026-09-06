@@ -1,0 +1,78 @@
+-- 0105_trigger_app_cron_revoke_browser_roles.sql
+--
+-- APPLIED 6 September 2026 by Fable via the Supabase MCP, immediately on
+-- discovery. This is a live security fix, not a tidy-up.
+--
+-- ===========================================================================
+-- WHAT WAS WRONG
+-- ===========================================================================
+-- `public.trigger_app_cron(path text)` is the function every pg_cron job calls to
+-- poke an endpoint on the deployed app. Read live from pg_proc before this file
+-- was written:
+--
+--     prosecdef       = true                    -- SECURITY DEFINER
+--     proconfig       = search_path=""          -- pinned, which is fine
+--     proacl          = {=X/postgres, postgres=X/postgres, service_role=X/postgres}
+--                                               -- the leading "=X" is PUBLIC
+--     has_function_privilege('anon', …)          = TRUE
+--     has_function_privilege('authenticated', …) = TRUE
+--
+-- Its body issues `net.http_get` to the production host with `path` CONCATENATED
+-- onto the URL, carrying a static bearer token in an Authorization header.
+--
+-- So anybody holding the project's public anon key — which ships in the browser
+-- bundle of every page — could call this rpc through PostgREST and have the
+-- DATABASE make an authenticated request to the production app, of their
+-- choosing, as often as they liked. Two distinct consequences:
+--
+--   1. UNAUTHENTICATED CRON TRIGGERING. Every sweep, drain and sync endpoint the
+--      platform has could be fired at will by an anonymous caller. Today the
+--      messaging dry-run and the default-off switches bound the damage; the day
+--      the practice switches messaging live, they would not.
+--
+--   2. BEARER-TOKEN EXFILTRATION, which is the serious one. The URL is built as
+--      'https://azen-vitality.vercel.app' || path, so a path beginning with "@"
+--      makes the literal host into USERINFO and the attacker's host into the
+--      real destination — and the Authorization header goes with it. One rpc
+--      call with the public anon key hands the cron secret to a third party.
+--
+-- ===========================================================================
+-- THE FIX, AND WHY IT IS SAFE
+-- ===========================================================================
+-- Revoke EXECUTE from PUBLIC — which is the grant anon and authenticated actually
+-- hold it through, so revoking those two by name alone would change nothing —
+-- and grant it back explicitly to service_role.
+--
+-- THE CRON JOBS ARE UNAFFECTED. pg_cron runs each job as its owner, `postgres`,
+-- whose own EXECUTE grant (postgres=X/postgres) is untouched by this file. All 18
+-- active jobs in cron.job call this function and all 18 keep working.
+--
+-- ===========================================================================
+-- WHAT THIS FILE DELIBERATELY DOES NOT DO
+-- ===========================================================================
+-- IT DOES NOT REWRITE THE BODY, and that is deliberate rather than an oversight.
+-- The body embeds the cron bearer token as a literal, and `create or replace`
+-- would require restating it — which would commit a live secret to this
+-- repository, which is PUBLIC. The revoke closes the reachable hole without
+-- putting the secret anywhere new. Two things are therefore still owed and are
+-- carried as ledger items for the client, not smuggled in here:
+--
+--   (a) ROTATE THE CRON BEARER TOKEN. It sits in a function definition that any
+--       role able to connect can read out of pg_proc, so it must be treated as
+--       disclosed. Rotating it means changing the app's expected value and
+--       redefining this function with the new one, from a private context.
+--
+--   (b) VALIDATE THE PATH rather than concatenating it. A guard of the shape
+--       `path ~ '^/api/[a-z0-9-]+(/[a-z0-9-]+)*$'` accepts all 18 registered
+--       job paths and rejects "@", "//", "?" and ":" outright. It belongs in the
+--       same redefinition as (a), for the same reason.
+--
+-- Every statement here is safe to run twice, and safe never to run: without it
+-- the function keeps working exactly as it does today, with the wider grant.
+
+revoke all on function public.trigger_app_cron(text) from public, anon, authenticated;
+
+grant execute on function public.trigger_app_cron(text) to service_role;
+
+comment on function public.trigger_app_cron(text) is
+  'Fires the deployed app''s cron endpoints. SECURITY DEFINER and it carries a bearer token, so EXECUTE is held by postgres (which is what pg_cron runs jobs as) and service_role only — never by anon or authenticated, who reach this database through PostgREST with a key that ships in the browser. Its path argument is still concatenated rather than validated; see 0105 for what that means and what is owed.';

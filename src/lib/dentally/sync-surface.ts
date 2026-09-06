@@ -159,16 +159,23 @@ export function sourcesForKind(kind: DentallyWriteKind): string[] {
  * rendering an empty heading. Nothing is ever in both.
  */
 export function syncFacts(mode: DentallyWriteMode, masterOff = false): SyncFact[] {
-  // TWO SWITCHES, ONE ANSWER. Writing back needs the deployment armed (the
-  // agency's DENTALLY_WRITE_*) AND the practice's own master switch on. Either
-  // one off means nothing flows, so the facts are grouped on the CONJUNCTION —
-  // and the sentence names whichever one is in the way, because "waiting on a key
-  // the agency has to issue" and "waiting on a switch you can flip yourself" are
-  // two very different things to be told.
+  // TWO SWITCHES, ONE ANSWER. Writing back needs the connection in place (the
+  // agency's DENTALLY_WRITE_*, aimed at the practice's own book) AND the
+  // practice's own master switch on. Either one off means nothing flows, so the
+  // facts are grouped on the CONJUNCTION — and the sentence names whichever one
+  // is in the way, because "waiting on a key the agency has to issue" and
+  // "waiting on a switch you can flip yourself" are two very different things to
+  // be told.
+  //
+  // AND SO IS "BOTH", which is the state this deployment is actually in. See the
+  // note above `syncHeadline` for why the third sentence exists and why it may
+  // not be collapsed back into the master-switch one.
   const flowing = mode === "live" && !masterOff;
   const writeGroup: SyncGroup = flowing ? "mirrored" : "pending_on_key";
   const waiting = masterOff
-    ? "This is built and ready. It is waiting on ONE thing you control: switch Dentally write-back on in System controls. Until then every one of these is recorded below and nothing is sent."
+    ? mode === "live"
+      ? "This is built and ready. It is waiting on ONE thing you control: switch Dentally write-back on in System controls. Until then every one of these is recorded below and nothing is sent."
+      : "This is built and ready. Two things have to be in place before it flows, and neither is yet: your Dentally write-back switch in System controls, and the connection to your Dentally book that your agency sets up. Every one of these is recorded below and nothing is sent."
     : "This is built and ready; it is waiting on the practice's Dentally write key, and until that arrives every one of these is recorded below as an intent instead of being sent.";
   const supported: SyncFact[] = SUPPORTED_WRITES.map((w) => ({
     id: w.kind,
@@ -189,14 +196,40 @@ export function syncFacts(mode: DentallyWriteMode, masterOff = false): SyncFact[
 /**
  * The headline sentence, given both switches.
  *
- * Three states, not two, because "we cannot yet" and "you have chosen not to"
- * are different facts and only one of them is something the reader can change.
- * The owner's own switch is named FIRST when it is the thing in the way, so
- * nobody waits on the agency for something they can flip themselves.
+ * `mode` here answers "does a write from this platform reach the practice's real
+ * Dentally book" — `assembleSyncStatus` passes the CONJUNCTION of the arming and
+ * the target, not the raw `DENTALLY_WRITE_*` state — so "live" means connected
+ * and anything else means not.
+ *
+ * FOUR STATES, NOT THREE, AND THE FOURTH IS THE ONE THIS DEPLOYMENT IS IN.
+ *
+ * "we cannot yet" and "you have chosen not to" are different facts and only one
+ * of them is something the reader can change, so the owner's own switch is named
+ * FIRST when it is the thing in the way — nobody should wait on their agency for
+ * a control sitting on the next tab. That was three states, and it was written
+ * on the assumption that a master switch reading OFF meant an owner had turned
+ * it off.
+ *
+ * It does not. Migration 0096 (APPLIED, 3 September 2026) seeds
+ * `('vitality','dentally-write-back',false,'migration:0096')`, so on every
+ * database the migrations have run against the master switch reads OFF from the
+ * moment the platform is installed, with the write connection ALSO absent. In
+ * that state the three-state sentence told an owner "because you have switched
+ * it off … turn it back on whenever you are ready" — a thing they never did,
+ * followed by an instruction that would achieve nothing (the connection is the
+ * agency's half) while arming their half of a two-key lock over 51,000 real
+ * patient records ahead of anybody deciding to.
+ *
+ * So when BOTH are in the way the sentence says both, names neither party as the
+ * one who chose it, and says plainly that flipping the switch is not on its own
+ * enough. The armed-and-only-the-switch-is-off state keeps the sentence it had:
+ * there the instruction is true and immediately actionable.
  */
 export function syncHeadline(mode: DentallyWriteMode, masterOff = false): string {
   if (masterOff) {
-    return "Writing back to Dentally is OFF, because you have switched it off. Everything in this platform keeps working; nothing reaches your Dentally book, and every appointment and patient change is recorded below so you can see exactly what was held back. Turn Dentally write-back back on in System controls whenever you are ready.";
+    return mode === "live"
+      ? "Writing back to Dentally is OFF, because you have switched it off. Everything in this platform keeps working; nothing reaches your Dentally book, and every appointment and patient change is recorded below so you can see exactly what was held back. Turn Dentally write-back back on in System controls whenever you are ready."
+      : "Writing back to Dentally is OFF, and two separate things are holding it back: your Dentally write-back switch in System controls is off, and the connection to your Dentally book is not in place yet. Everything in this platform keeps working, and every appointment and patient change is recorded below so you can see exactly what was held back. Switching write-back on will not start sending them on its own — the connection is your agency's half.";
   }
   return mode === "live"
     ? "Writing back to Dentally is ON. Appointments and patient records made or changed here are written to your Dentally book."
@@ -238,11 +271,21 @@ export const SYNC_GROUP_TITLES: Record<SyncGroup, string> = {
  * doing, because it is the nearer of the two and the only one they can flip
  * themselves. Every other group's heading is a fact about Dentally rather than
  * about a switch, so it does not move.
+ *
+ * IT STATES THE SWITCH, IT DOES NOT PROMISE THE SWITCH IS ENOUGH. This function
+ * is handed one boolean and cannot tell the master-switch-only state from the
+ * both-are-off state the seeded 0096 row puts every deployment in (see
+ * `syncHeadline`), and it is rendered by a browser component that holds nothing
+ * else. "Waiting on your switch" would therefore be a heading that promises,
+ * above bullets that deny it, that one flip starts the writes. Naming the switch
+ * as a FACT is true in both states, still points the reader at the control they
+ * own, and leaves the "what would it take" answer to the headline and the
+ * bullets, which know.
  */
 export function syncGroupTitle(group: SyncGroup, masterOff = false): string {
   if (group !== "pending_on_key") return SYNC_GROUP_TITLES[group];
   return masterOff
-    ? "Ready, waiting on your switch in System controls"
+    ? "Ready — your write-back switch in System controls is off"
     : "Ready, waiting on your Dentally write key";
 }
 

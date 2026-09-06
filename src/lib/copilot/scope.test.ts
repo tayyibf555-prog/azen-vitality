@@ -39,15 +39,17 @@ vi.mock("@/lib/practice-brain/retrieval", () => ({
 }));
 
 import type { Role } from "@/lib/types";
-import { ALL_ROLES } from "@/lib/capabilities/defaults";
+import { ALL_ROLES, defaultHoldersOf } from "@/lib/capabilities/defaults";
 import { maxTierForRole } from "@/lib/practice-brain/clearance";
 import { COPILOT_TOOLS, makeCopilotDispatch } from "./tools";
 import { buildCopilotSystemPrompt } from "./prompt";
+import { CLINICIAN_SLUGS, STAFF_SLUGS, canRoleAccessModule } from "@/lib/nav";
 import {
   MANAGER_COPILOT_TOOLS,
   MANAGER_PLAN_FIELDS,
   type CopilotAccess,
   copilotAccessForRole,
+  copilotClearanceForRole,
   copilotKnowledgeTier,
   copilotToolAllowed,
   copilotToolsFor,
@@ -766,5 +768,102 @@ describe("8. the owner's surface is untouched", () => {
   it("still gets the unprojected patient record", () => {
     const payload = payloadWithMoney();
     expect(projectPatientRecord(payload, copilotAccessForRole("client_owner"))).toBe(payload);
+  });
+});
+
+// ===========================================================================
+// 9. THE BOUNDARY FILE'S OWN COMMENTS AGREE WITH THE BOUNDARY (§0/1, W3/9, W3/17).
+//
+// WHY THIS SECTION EXISTS. In this codebase a comment IS the calibration
+// contract — the charter's first standard is that a lane reads a module's
+// comments before writing, because that is where the live decisions are
+// recorded. scope.ts is not any module: the decisions log names it as the
+// boundary itself ("CO-PILOT BOUNDARY MOVED (consequence of W1-E/2) ... the
+// ACCESS_BY_ROLE clearance Record IS the security boundary"). A false sentence
+// directly above the two rows somebody is about to edit is therefore a false
+// entry in the security contract.
+//
+// IT WAS FALSE HERE. The block over `client_clinician` / `client_staff` said
+// "co-pilot" was in neither CLINICIAN_SLUGS nor STAFF_SLUGS, that
+// `requireModuleApiAccess` refused both roles "at the route today", that
+// `system.copilot.ask` was held by "owner, agency and the coordinator", and
+// therefore that both rows were "DECLARED, TESTED AND INERT". W1-E/2 had made
+// every one of those false, and the same file contradicted itself 140 lines
+// below, where REACHABLE_TODAY lists all five roles and says every row is live.
+//
+// THE COST IS SPECIFIC. A lane asked to narrow or widen a clearance row opens
+// the correct file, reads that both rows are dead code behind a door nobody has
+// opened, and edits them without the review a live surface gets. `client_staff:
+// "staff"` becoming `"manager"` then hands every receptionist login the
+// manager's catalog — patient_record, search_patients, appointments — over
+// 51,000 records, on the next deploy, with nothing else in the way.
+//
+// SAME SHAPE AS route-comment-truth.test.ts AND clearance.test.ts §9, and
+// deliberately: the truth is asserted FIRST, from the real predicates, and only
+// then is the prose checked against it. If the co-pilot is ever narrowed again
+// the first half fails and somebody rewrites these comments on purpose, rather
+// than the pin decaying into a grep for a sentence nobody says any more.
+// ===========================================================================
+
+/**
+ * scope.ts's prose as one flat string.
+ *
+ * The claims wrap wherever the line length fell, and across two comment styles
+ * (`//` for the row notes, ` * ` for the doc blocks), so a regex over the raw
+ * source would match or miss on formatting rather than on meaning. Strip both
+ * markers, collapse the whitespace, and a claim is one searchable sentence
+ * however it was laid out.
+ */
+const scopeProse = readFileSync(fileURLToPath(new URL("./scope.ts", import.meta.url)), "utf8")
+  .replace(/^\s*(?:\/\/|\*)\s?/gm, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
+describe("9. scope.ts's comments agree with the boundary scope.ts IS", () => {
+  it("does not call the clinician and staff rows inert while all three locks admit them", () => {
+    // THE TRUTH, from the allow-lists and the predicate the API guard consults —
+    // never retyped, and never read off a comment.
+    expect(CLINICIAN_SLUGS.has("co-pilot"), "W1-E/2 put the slug in CLINICIAN_SLUGS").toBe(true);
+    expect(STAFF_SLUGS.has("co-pilot"), "W1-E/2 put the slug in STAFF_SLUGS").toBe(true);
+    for (const role of ALL_ROLES) {
+      expect(canRoleAccessModule(role, "co-pilot"), `${role} is refused the module`).toBe(true);
+    }
+    // ...and the capability's DEFAULT holders are all five, so "owner, agency and
+    // the coordinator" is false as well.
+    expect([...defaultHoldersOf("system.copilot.ask")].sort()).toEqual([...ALL_ROLES].sort());
+    // ...and this file's own honest half says so too.
+    for (const role of ["client_clinician", "client_staff"] as Role[]) {
+      expect(copilotClearanceForRole(role).reachableToday, `${role} is not reachable`).toBe(true);
+    }
+
+    // THEREFORE the file may not say the opposite. Each phrase below is one the
+    // stale block actually carried, verbatim.
+    for (const claim of [
+      "is in neither CLINICIAN_SLUGS nor STAFF_SLUGS",
+      "refuses both roles at the route today",
+      "whose default holders are owner, agency and the coordinator",
+      "DECLARED, TESTED AND INERT",
+    ]) {
+      expect(scopeProse, `scope.ts still claims: ${claim}`).not.toContain(claim);
+    }
+  });
+
+  it("says instead that this Record is the boundary, and cites the ruling that moved it", () => {
+    // The replacement is not merely "not the old sentence": a reader has to be
+    // told what IS true, or the next lane reconstructs the wrong model from the
+    // silence. These three are the load-bearing halves of the ruling.
+    expect(scopeProse).toContain("W1-E/2");
+    expect(scopeProse).toContain("THIS RECORD IS THE SECURITY BOUNDARY");
+    expect(scopeProse).toMatch(/admits every known role/);
+  });
+
+  it("keeps the fail-closed default and the allow-list argument it still has", () => {
+    // The stale block was the ONLY thing removed. The two properties a reader of
+    // this file most needs are behavioural, still true, and still stated: an
+    // unknown role gets nothing, and the manager's list is an allow-list.
+    expect(copilotAccessForRole("nonsense" as Role)).toBe("none");
+    expect(copilotAccessForRole(null)).toBe("none");
+    expect(scopeProse).toContain("FAIL-CLOSED ON PURPOSE");
+    expect(scopeProse).toContain("WHY AN ALLOW-LIST AND NOT A DENY-LIST");
   });
 });

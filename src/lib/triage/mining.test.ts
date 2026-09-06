@@ -9,6 +9,7 @@ import {
   MINING_TITLE,
   coverageSentence,
   exclusionSentence,
+  miningRunSentence,
   nextWindow,
   type MiningCoverage,
 } from "./mining";
@@ -173,6 +174,10 @@ describe("the coverage sentence: the list never wears a complete number's clothe
       candidates: 212,
       excludedNoDob: 41,
       excludedUnderAge: 6,
+      // The default is "the column is there and nobody was unreadable", so the
+      // third clause is silent unless a test asks for it. Null — the shape of a
+      // database without migration 0101 — has its own tests below.
+      excludedUnreadable: 0,
       lastRunAt: "2026-09-10T02:00:00.000Z",
       moreToRead: true,
       ...over,
@@ -239,12 +244,101 @@ describe("the coverage sentence: the list never wears a complete number's clothe
     expect(whole).not.toMatch(/not been scanned/i);
 
     // (d) FAIL CLOSED. A caller that does not state the scope has not proved the
-    // figures cover it, so they are qualified rather than printed bare. This is
-    // the case every caller is in until the pre-visit view passes its own
-    // `unscannedSites` count through.
+    // figures cover it, so they are qualified rather than printed bare. The
+    // pre-visit view DOES state it now (it computes `unscanned` for the coverage
+    // line one statement earlier, and hands the count over), so this is the
+    // contract for the next caller rather than for the one that exists.
     const unstated = exclusionSentence(coverage());
     expect(unstated).toContain("41");
     expect(unstated).toMatch(/over the sites the scan has reached/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE THIRD WAY SOMEBODY IS LEFT OFF (handoff H40, migration 0101).
+  // -------------------------------------------------------------------------
+  // A patient the scan matched but could not look up AT ALL — Dentally answers
+  // 404/410 for a merged or deleted record — is neither on the list nor under
+  // "no date of birth". The sweep has counted them since wave 1; until 0101 there
+  // was nowhere to persist the figure, so it was invisible on screen.
+  it("names the patients it could not look up at all, once the figure exists", () => {
+    const sentence = exclusionSentence(coverage({ excludedUnreadable: 3 }));
+    expect(sentence).toContain("3 patients could not be looked up at all");
+    expect(sentence, "the other two exclusions were dropped").toContain("41");
+  });
+
+  it("says patient, not patients, for one", () => {
+    expect(exclusionSentence(coverage({ excludedUnreadable: 1 }))).toContain(
+      "1 patient could not be looked up at all",
+    );
+  });
+
+  it("is SILENT rather than printing a zero it cannot stand behind", () => {
+    // NULL is the shape of a database where migration 0101 has not been applied:
+    // the sweep counted those patients and had nowhere to put the number, so the
+    // honest sentence leaves the clause out. Printing "0 patients could not be
+    // looked up" over a scan that failed to read a dozen of them is a false
+    // statement where silence is a true one (charter §0/5).
+    const unknown = exclusionSentence(coverage({ excludedUnreadable: null }));
+    expect(unknown).toContain("41");
+    expect(unknown).not.toContain("looked up at all");
+
+    const none = exclusionSentence(coverage({ excludedUnreadable: 0 }));
+    expect(none).not.toContain("looked up at all");
+  });
+
+  it("does not turn an empty sentence into a full one on its own", () => {
+    // The clause qualifies a list of exclusions; it never becomes the whole of it
+    // by itself... except when it is the only exclusion there is, which is a real
+    // state and reads correctly.
+    expect(exclusionSentence(coverage({ excludedNoDob: 0, excludedUnderAge: 0, excludedUnreadable: 0 }))).toBe("");
+    expect(
+      exclusionSentence(coverage({ excludedNoDob: 0, excludedUnderAge: 0, excludedUnreadable: 2 })),
+    ).toContain("Left off this list: up to 2 patients could not be looked up at all");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE UNIT. Three of these four figures are not headcounts.
+  // -------------------------------------------------------------------------
+  // `candidates` is distinct patients: `upsertCandidate` returns false for anybody
+  // already on the register, so a second run cannot count them twice. The three
+  // exclusion counters have no register — the sweep de-duplicates them only inside
+  // ONE run, and every later run reads an older, disjoint window — so a patient
+  // with extractions in two windows is resolved and counted in both. Printing all
+  // four side by side as "N patients" is the false-completeness failure with the
+  // direction reversed (charter §0/5, ruling W3/11), on the screen whose stated
+  // purpose is that the list can be reconciled against the practice's own numbers.
+  it("mining-exclusions-are-ceilings-not-headcounts", () => {
+    const many = exclusionSentence(coverage({ excludedUnreadable: 3 }), { unscannedSites: 0 });
+    expect(many).toContain("up to 41 patients have no date of birth");
+    expect(many).toContain("up to 6 are under 18");
+    expect(many).toContain("up to 3 patients could not be looked up at all");
+    // And it says WHY, once, rather than leaving the reader to wonder what "up to"
+    // is doing there.
+    expect(many).toMatch(/Each run counts these again/i);
+    expect(many).toMatch(/the number of people is this or fewer/i);
+  });
+
+  it("a figure of ONE is exact, and is not qualified into doubt", () => {
+    // A ceiling of one over at least one occurrence is one person. "Up to 1
+    // patient" would be its own small dishonesty, the same reason the scope clause
+    // is dropped when there is no gap.
+    const one = exclusionSentence(
+      coverage({ excludedNoDob: 1, excludedUnderAge: 0, excludedUnreadable: 0 }),
+      { unscannedSites: 0 },
+    );
+    expect(one).toContain("1 patient has no date of birth");
+    expect(one).not.toContain("up to");
+    expect(one, "an explanation with nothing to explain").not.toMatch(/Each run counts these again/i);
+  });
+
+  it("the ceiling clause and the SCOPE clause are different qualifications", () => {
+    // One is about who was counted twice, the other about which sites were counted
+    // at all. A sentence that carried only one of them would read as complete in
+    // the other dimension.
+    const both = exclusionSentence(coverage(), { unscannedSites: 2 });
+    expect(both).toMatch(/Each run counts these again/i);
+    expect(both).toMatch(/over the sites the scan has reached/i);
+    expect(both).toContain("2 other sites");
   });
 });
 
@@ -271,6 +365,7 @@ describe("the caveats are ON THE SCREEN, not in a constant nobody renders", () =
           candidates: 0,
           excludedNoDob: 0,
           excludedUnderAge: 0,
+          excludedUnreadable: 0,
           lastRunAt: "2026-09-10T02:00:00.000Z",
           moreToRead: true,
         }),
@@ -367,6 +462,29 @@ describe("the caveats are ON THE SCREEN, not in a constant nobody renders", () =
     expect(MINING_CAVEATS[2]).toMatch(/covers a window of time, not the whole history/i);
   });
 
+  // BOTH EDGES, ON THE SCREEN. The caveat used to name only the older one — "it
+  // does not know about anything before them" — and the older gap is the one the
+  // scan CLOSES, a month of nights at a time, until it stops at the three-year
+  // horizon. The gap in front of the window is the one that grows: `coveredTo`
+  // is written once (src/app/api/previsit/_mining.ts passes the stored value
+  // back, and recordScanRun only ever takes the maximum) and `nextWindow` only
+  // ever walks backwards, so an extraction done since the first run can never
+  // reach this list. A coordinator sizing a campaign off it six months later had
+  // been told in writing that the only gap was history.
+  it("the window caveat names the FORWARD gap too, not just the history behind it", () => {
+    const caveat = MINING_CAVEATS[2];
+    expect(caveat, "the caveat no longer names the older edge").toMatch(/nothing before the earlier one/i);
+    expect(caveat, "the caveat does not name the edge that GROWS").toMatch(/nothing since the later one/i);
+    expect(caveat).toMatch(/does not move/i);
+    expect(caveat, "it does not say what a reader would act on").toMatch(
+      /extraction done since then is not on this list/i,
+    );
+    // …and it is on the screen, above the names, not in a constant nobody reads.
+    const markup = renderPanel([ROW]);
+    expect(markup).toContain(caveat.replace(/'/g, "&#x27;"));
+    expect(markup.indexOf(caveat.slice(0, 40))).toBeLessThan(markup.indexOf("Alex Berry"));
+  });
+
   it("a caveat states the age exclusion rather than hiding it", () => {
     expect(MINING_CAVEATS[3]).toMatch(/left off and counted, not assumed to be an adult/i);
   });
@@ -374,5 +492,137 @@ describe("the caveats are ON THE SCREEN, not in a constant nobody renders", () =
   it("the title promises a conversation, not a shortlist", () => {
     expect(MINING_TITLE).toBe("People who might want to hear about implants");
     expect(MINING_TITLE).not.toMatch(/suitable|candidate|eligible|qualif/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHAT ONE RUN TELLS THE OWNER (ruling W3/25, both halves).
+// ---------------------------------------------------------------------------
+describe("the run report says what a bare total would hide", () => {
+  function report(over: Record<string, unknown> = {}) {
+    return {
+      budgetRefused: false,
+      sites: [{ daysCovered: 3, candidates: 2, unreadable: 0, stoppedBy: "complete" }],
+      ...over,
+    } as Parameters<typeof miningRunSentence>[0];
+  }
+
+  it("says what was read and who was added", () => {
+    expect(miningRunSentence(report())).toBe("Read 3 more days of the diary and added 2 people.");
+  });
+
+  it("says the practice's own quota stopped it, and does not pretend otherwise", () => {
+    const out = miningRunSentence(report({ budgetRefused: true }));
+    expect(out).toContain("daily limit");
+    expect(out).toContain("nothing is lost");
+    expect(out, "a refused run claimed to have added people").not.toContain("added 2 people");
+  });
+
+  it("names a site that stopped on its OWN share, which a total makes invisible", () => {
+    // W3/25 splits the run's patient reads evenly so no site starves another. A
+    // site that spends its share stops while its neighbours finish, and the
+    // totals look exactly like a run that simply found less.
+    const out = miningRunSentence(
+      report({
+        sites: [
+          { daysCovered: 2, candidates: 1, unreadable: 0, stoppedBy: "patient-budget" },
+          { daysCovered: 4, candidates: 1, unreadable: 0, stoppedBy: "complete" },
+        ],
+      }),
+    );
+    expect(out).toContain("Read up to 4 more days of the diary at each of 2 sites");
+    expect(out).toContain("One site reached its share");
+    expect(out).toContain("picks it up where it left off");
+  });
+
+  it("counts days PER SITE, because three sites do not make ninety days of one diary", () => {
+    // THE DEFECT THIS PINS: the clause used to sum `daysCovered` across sites,
+    // and `daysCovered` is one site's days — every site walks its OWN window of
+    // at most MINING_DAYS_PER_RUN. Three sites moving in lockstep (the ordinary
+    // case: they all start from the same empty coverage) advanced the calendar
+    // thirty days and printed "Read 90 more days of the diary" on the same card
+    // as `coverageSentence`, whose window had moved thirty. Two numbers, one
+    // run, units differing by the number of sites — charter §0/5, ruling W3/11.
+    const out = miningRunSentence(
+      report({
+        sites: [
+          { daysCovered: 30, candidates: 5, unreadable: 0, stoppedBy: "complete" },
+          { daysCovered: 30, candidates: 4, unreadable: 0, stoppedBy: "complete" },
+          { daysCovered: 30, candidates: 5, unreadable: 0, stoppedBy: "complete" },
+        ],
+      }),
+    );
+    expect(out).toBe("Read 30 more days of the diary at each of 3 sites and added 14 people.");
+    expect(out, "the days of three sites were added into one diary").not.toContain("90");
+  });
+
+  it("says 'up to' the moment the sites stop moving in step, and never an average", () => {
+    // A site at the horizon, a site that spent its even share, a site that
+    // finished its window: the largest is the only figure true of all three, so
+    // it is bounded rather than summed, averaged or silently picked.
+    const out = miningRunSentence(
+      report({
+        sites: [
+          { daysCovered: 0, candidates: 0, unreadable: 0, stoppedBy: "horizon" },
+          { daysCovered: 7, candidates: 1, unreadable: 0, stoppedBy: "patient-budget" },
+          { daysCovered: 30, candidates: 2, unreadable: 0, stoppedBy: "complete" },
+        ],
+      }),
+    );
+    expect(out).toContain("Read up to 30 more days of the diary at each of 3 sites");
+    expect(out, "the days were added up").not.toContain("37");
+  });
+
+  it("a single site still reads as it always did: no site count, no bound", () => {
+    // The other direction. One site is the shipped default view scope, and a
+    // sentence that hedged there would be noise bought with nothing.
+    expect(miningRunSentence(report())).toBe("Read 3 more days of the diary and added 2 people.");
+    expect(miningRunSentence(report())).not.toContain("up to");
+    expect(miningRunSentence(report())).not.toContain("each of");
+  });
+
+  it("counts several such sites in the plural", () => {
+    const out = miningRunSentence(
+      report({
+        sites: [
+          { daysCovered: 2, candidates: 0, unreadable: 0, stoppedBy: "patient-budget" },
+          { daysCovered: 2, candidates: 0, unreadable: 0, stoppedBy: "patient-budget" },
+        ],
+      }),
+    );
+    expect(out).toContain("Read 2 more days of the diary at each of 2 sites");
+    expect(out).toContain("2 sites reached their share");
+    expect(out).not.toContain("One site");
+  });
+
+  it("says nothing about shares when every site finished its book", () => {
+    // THE OTHER DIRECTION: a sentence that always explained itself would be as
+    // useless as one that never did.
+    expect(miningRunSentence(report())).not.toContain("share of this run");
+  });
+
+  it("shows the patients it could not look up AT ALL, rather than losing them in a quiet total", () => {
+    // The other half of W3/25. "Nobody was found" and "four people could not be
+    // looked up" are different facts, and the second is one the practice can fix
+    // in Dentally. Stated whatever the database's shape — the run report holds
+    // the figure even where the coverage row cannot persist it yet (0101).
+    const out = miningRunSentence(
+      report({ sites: [{ daysCovered: 1, candidates: 0, unreadable: 4, stoppedBy: "complete" }] }),
+    );
+    expect(out).toContain("4 patients could not be looked up at all");
+    expect(out).toContain("counted separately");
+  });
+
+  it("says patient, not patients, for one, and nothing at all for none", () => {
+    expect(
+      miningRunSentence(report({ sites: [{ daysCovered: 1, candidates: 0, unreadable: 1, stoppedBy: "complete" }] })),
+    ).toContain("1 patient could not be looked up");
+    expect(miningRunSentence(report())).not.toContain("could not be looked up");
+  });
+
+  it("says one day, not 1 days", () => {
+    expect(
+      miningRunSentence(report({ sites: [{ daysCovered: 1, candidates: 1, unreadable: 0, stoppedBy: "complete" }] })),
+    ).toBe("Read 1 more day of the diary and added 1 person.");
   });
 });

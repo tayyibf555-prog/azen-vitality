@@ -85,10 +85,47 @@ as $$
   limit 1;
 $$;
 
--- Seed pilot credentials. Documented pilot passwords (rotate after handover):
---   Owner            -> vitality-owner-2026   (tier 4)
---   Practice manager -> vitality-manager-2026 (tier 3)
---   Coordinator      -> vitality-coord-2026   (tier 2)
+-- Seed pilot credentials.
+--
+-- CORRECTED IN PLACE 6 September 2026 (wave 3 review; comments do not alter
+-- applied state — the W3/18 precedent — and the statement below is untouched).
+-- This comment used to read "Documented pilot passwords (rotate after
+-- handover)" and then list the three in plaintext. Rotating after handover was
+-- advice, never a control, and the handover has not happened, so the sentence
+-- read as reassurance for something that is still open. What is actually true:
+--
+-- THESE THREE PASSWORDS ARE PUBLISHED, AND ONE OF THEM IS STILL LIVE. They are
+-- compiled into the `crypt('…')` calls of the insert below, repeated in
+-- docs/superpowers/plans/2026-06-19-practice-brain-foundation.md, and present in
+-- every clone, worktree and git object of this repository — so everyone who can
+-- read the repo holds them. Of the three rows seeded here, the manager and
+-- coordinator rows were later deleted and the Owner row (tier 4) was not: it is
+-- the ONE credential row that exists for `vitality` in production, and its hash
+-- still answers to the password printed below (row count recorded under ruling
+-- W3/35; the surviving row identified during wave-3 verification, 6 Sep 2026).
+--
+-- WHAT THAT REACHES, STATED PLAINLY. POST /api/practice-brain/unlock takes a
+-- password and nothing else — no platform account, no session — and src/proxy.ts
+-- excludes `api` from its matcher, so the endpoint is internet-reachable. A
+-- correct password mints an 8-hour signed `pb_session` carrying maxTier 4, and
+-- the `tree` and `ask` actions then serve every tier of the practice's knowledge
+-- base to it. The unlock caps (20 per IP per hour, 100 per hour shared) exist to
+-- stop guessing and do nothing whatever about a password that is already known.
+--
+-- WHY THE PLAINTEXT IS STILL SITTING HERE. Deleting it from this comment would
+-- rotate nothing: the passwords are in the statement itself and in this file's
+-- history, and stripping them would remove the only in-tree record of which
+-- password the live hash answers to while making the file look clean. The fix is
+-- a rotation in the LIVE database — a new hash for the surviving Owner row, or a
+-- fresh row and the deletion of that one — and only then the stripping of this
+-- file and the plan doc. That changes the security posture of a live gate, which
+-- charter §0 item 12 says a lane does not guess at, so it is raised as a BLOCKED
+-- question for Fable rather than done here.
+--
+-- PINNED: src/lib/migration-seeded-secret.test.ts refuses a plaintext password
+-- compiled into any migration and carries this file as a named, cited exemption
+-- whose recorded shape is this seed. Change the seed and that test goes red —
+-- which is how the exemption gets deleted deliberately, by whoever rotates.
 insert into practice_brain_credential (client_id, label, password_hash, tier) values
   ('vitality', 'Owner',            crypt('vitality-owner-2026',   gen_salt('bf')), 4),
   ('vitality', 'Practice manager', crypt('vitality-manager-2026', gen_salt('bf')), 3),

@@ -130,7 +130,8 @@ function fakeTable() {
 
 vi.mock("@/lib/supabase/server", () => ({ serviceClient: () => ({ from: () => fakeTable() }) }));
 
-import { readStepEvents, StepEventTableMissingError } from "./step-events-repository";
+import { POSTGREST_MAX_ROWS } from "@/lib/test-support/fake-supabase";
+import { SCAN_PAGE, readStepEvents, StepEventTableMissingError } from "./step-events-repository";
 
 const FROM = "2026-01-01T00:00:00.000+00:00";
 const TO = "2027-01-01T00:00:00.000+00:00";
@@ -252,10 +253,13 @@ describe("readStepEvents, paging", () => {
     // monotonic no matter what is being inserted underneath it.
     expect(ts2 < ts1 || (ts2 === ts1 && id2 < id1)).toBe(true);
 
-    // And it is the real boundary row, not an approximation of one.
+    // And it is the real boundary row, not an approximation of one. Indexed off
+    // SCAN_PAGE rather than off a literal: the width moved once already (W3/32
+    // took it off the PostgREST ceiling) and a hard-coded 999/1999 here would go
+    // red for the page size rather than for the cursor this test is about.
     const sorted = [...state.rows].sort(byNewest);
-    expect([ts1, id1]).toEqual([sorted[999]!.created_at, sorted[999]!.id]);
-    expect([ts2, id2]).toEqual([sorted[1999]!.created_at, sorted[1999]!.id]);
+    expect([ts1, id1]).toEqual([sorted[SCAN_PAGE - 1]!.created_at, sorted[SCAN_PAGE - 1]!.id]);
+    expect([ts2, id2]).toEqual([sorted[2 * SCAN_PAGE - 1]!.created_at, sorted[2 * SCAN_PAGE - 1]!.id]);
   });
 
   it("never skips a row when the table is written to mid-scan", async () => {
@@ -296,7 +300,9 @@ describe("readStepEvents, paging", () => {
 
     expect(out.truncated).toBe(true);
     expect(out.rows).toHaveLength(200_000);
-    expect(state.pageCount).toBe(200);
+    // The ceiling is read in WHOLE pages plus whatever remainder is left, so the
+    // count follows the page width rather than a memorised 200.
+    expect(state.pageCount).toBe(Math.ceil(200_000 / SCAN_PAGE));
   });
 
   it("stops rather than paging on a cursor it cannot safely quote", async () => {
@@ -306,13 +312,27 @@ describe("readStepEvents, paging", () => {
     // A value that could break out of the quoting in the filter string. It cannot
     // come from this table in practice; the guard is what makes that a fact rather
     // than an assumption.
-    rows[999]!.id = 'id-"; drop';
+    rows[SCAN_PAGE - 1]!.id = 'id-"; drop';
     state.rows = rows;
 
     const out = await scan();
-    expect(out.rows).toHaveLength(1000);
+    expect(out.rows).toHaveLength(SCAN_PAGE);
     expect(out.truncated).toBe(true);
     expect(state.pageCount).toBe(1);
+  });
+
+  // W3/32, and the reason the width is 999 rather than the round number it reads
+  // like. PostgREST clips every response at POSTGREST_MAX_ROWS silently — no error,
+  // nothing on the response — and this scan's only end-of-data signal is a page
+  // that comes back shorter than it asked for. At exactly the ceiling those two are
+  // the same observation, so a clipped FIRST page would end the scan and the report
+  // would print a fraction of the funnel with `truncated: false` on it. The
+  // tree-wide sweep for this shape lives in src/lib/offset-paging-ceiling.test.ts;
+  // this is the module's own copy, next to the loop it is about.
+  //
+  // MUTATION: set SCAN_PAGE back to 1000 in step-events-repository.ts.
+  it("asks for one row LESS than the server will hand back, so a clip is visible", () => {
+    expect(SCAN_PAGE).toBeLessThan(POSTGREST_MAX_ROWS);
   });
 });
 

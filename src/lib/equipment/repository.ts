@@ -165,6 +165,35 @@ function assetPayload(clientId: string, row: Omit<ParsedAssetRow, "line" | "warn
   };
 }
 
+/**
+ * THE SAME PAYLOAD, WITHOUT THE AUTHOR COLUMN — for every door that UPDATES.
+ *
+ * `created_by` belongs to the row's author, not to whoever edits it. It is the
+ * register's only provenance column (0098 keeps it nullable precisely so "not
+ * known" stays expressible) and this is a CQC/insurance artefact, where who
+ * entered a row is part of what the register is FOR.
+ *
+ * IT IS A FUNCTION BECAUSE THE RULE WAS WRITTEN DOWN ONCE AND OBEYED ONCE. Two
+ * doors write this table. `updateAsset` destructured the column out with that
+ * sentence in a comment beside it; `importAssets`' serial-matched branch passed
+ * the very same `assetPayload` object straight through — so correcting three
+ * service dates in the spreadsheet and re-importing it rewrote the author of
+ * every row the file matched, the whole register, unrecoverably, and reported
+ * `updated: 47` with no hint that anything but the dates had moved. Editing an
+ * asset by hand preserved authorship; re-importing the CSV did not. Two writers
+ * to one table cannot be trusted to remember the same rule twice, so there is
+ * now one place that knows it.
+ */
+function payloadWithoutAuthor(
+  clientId: string,
+  row: Omit<ParsedAssetRow, "line" | "warnings">,
+  actor: string | null,
+): Omit<ReturnType<typeof assetPayload>, "created_by"> {
+  const { created_by: _author, ...payload } = assetPayload(clientId, row, actor);
+  void _author;
+  return payload;
+}
+
 export interface ImportResult {
   inserted: number;
   updated: number;
@@ -276,14 +305,17 @@ export async function importAssets(
   }
 
   for (const row of rows) {
-    const payload = assetPayload(clientId, row, actor);
     try {
       const key = serialKey(row.serial?.trim());
       const existingId = key ? serialToId.get(key) : undefined;
       if (existingId) {
         const { error } = await db
           .from("equipment_asset")
-          .update(payload)
+          // AN UPDATE, SO THE AUTHOR COLUMN DOES NOT TRAVEL — the same rule
+          // `updateAsset` obeys, now obeyed from the same place. A re-import is
+          // a correction to the practice's spreadsheet, not a change of who
+          // first entered the machine.
+          .update(payloadWithoutAuthor(clientId, row, actor))
           .eq("client_id", clientId) // tenancy in the WHERE clause, not in the map we built
           .eq("id", existingId);
         if (error) throw error;
@@ -292,7 +324,7 @@ export async function importAssets(
       }
       const { data: inserted, error } = await db
         .from("equipment_asset")
-        .insert(payload)
+        .insert(assetPayload(clientId, row, actor))
         .select("id")
         .single();
       if (error) throw error;
@@ -345,11 +377,11 @@ export async function updateAsset(
   actor: string | null,
 ): Promise<boolean> {
   try {
-    const { created_by: _ignored, ...payload } = assetPayload(clientId, row, actor);
-    void _ignored; // created_by belongs to the row's author, not to whoever edits it
     const { error } = await serviceClient()
       .from("equipment_asset")
-      .update(payload)
+      // created_by belongs to the row's author, not to whoever edits it — see
+      // `payloadWithoutAuthor`, which the importer's update branch shares.
+      .update(payloadWithoutAuthor(clientId, row, actor))
       .eq("client_id", clientId)
       .eq("id", id);
     if (error) throw error;
@@ -407,7 +439,52 @@ function toManual(row: ManualRow): EquipmentManual {
   };
 }
 
-/** Every manual for a practice, so the table can show which assets have one. */
+/**
+ * The most manual rows the per-asset manual index will read.
+ *
+ * IT IS NOT `ASSET_ROW_CAP`, WHICH IS WHAT IT USED TO BE, and the difference is
+ * the whole point of this constant existing. Every consumer of `listManuals`
+ * uses the result as an index keyed by asset id — the Register tab's Manual
+ * column, the prompt's `manual: yes/NO`, the tools' `manualUploaded` — while the
+ * ASSETS are read separately, ordered by category then name, and the manuals by
+ * `uploaded_at desc`. Two differently-ordered pages of the same size do not
+ * cover the same rows, so at 400 the index started missing assets that were on
+ * screen and the answer for those was a hard `false`: "No manual uploaded" on
+ * the Register tab and `manualUploaded: false` to the model, about a manual that
+ * is stored, indexed and searchable — the exact false statement
+ * MANUAL_INDEX_UNREADABLE_NOTE and the null-vs-[] work exist to make impossible,
+ * and one `search_manual` call away from contradicting itself inside one turn.
+ *
+ * 999 rather than 1,000, per programme ruling W3/32: PostgREST clips every
+ * request at 1,000 rows, so a cap ON the ceiling can never be observed —
+ * `rows.length >= CAP` is structurally false and the read comes back clipped
+ * wearing a whole read's clothes. At 999 the bound is observable, and it sits
+ * far enough above `ASSET_ROW_CAP` that the degradation below is a backstop
+ * rather than an everyday state: a manual is one hand-uploaded PDF per machine
+ * (`replaceManual` keeps exactly one row per asset), so reaching it needs 999
+ * individual uploads, where the asset cap is reachable by one 500-row CSV.
+ */
+export const MANUAL_INDEX_ROW_CAP = 999;
+
+/**
+ * Every manual for a practice, so the table can show which assets have one.
+ *
+ * NULL MEANS "WE CANNOT SAY WHICH MACHINES HAVE ONE", AND A TRUNCATED READ IS
+ * ONE OF THE TWO WAYS THAT HAPPENS. The other is a failed read. They are the
+ * same fact to every caller — the answer for any given asset is unknown, because
+ * its absence from this page no longer distinguishes "no manual" from "past the
+ * bound" — and this module already handles that fact properly everywhere:
+ * `equipment-view.tsx` sets `manualsUnreadable` and the Register/Manuals tabs
+ * stop claiming "none"; `route.ts` passes `assetIdsWithManual: null` and the
+ * prompt emits no manual column at all; `tools.ts` omits `manualUploaded` from
+ * every summary and carries MANUAL_INDEX_UNREADABLE_NOTE. Collapsing here rather
+ * than adding a `capped` flag is deliberate: a flag is a thing three callers can
+ * each forget, and the failure it guards is a confident false negative
+ * (§0/5 — a truncated read never wears a complete one's clothes; W3/11).
+ *
+ * The two are still distinguishable in the log, because they need different
+ * things doing about them.
+ */
 export async function listManuals(clientId: string): Promise<EquipmentManual[] | null> {
   try {
     const { data, error } = await serviceClient()
@@ -415,9 +492,17 @@ export async function listManuals(clientId: string): Promise<EquipmentManual[] |
       .select("*")
       .eq("client_id", clientId)
       .order("uploaded_at", { ascending: false })
-      .limit(ASSET_ROW_CAP);
+      .limit(MANUAL_INDEX_ROW_CAP);
     if (error) throw error;
-    return (data ?? []).map((r) => toManual(r as ManualRow));
+    const rows = data ?? [];
+    if (rows.length >= MANUAL_INDEX_ROW_CAP) {
+      console.warn(
+        `[equipment] listManuals(${clientId}) came back at its ${MANUAL_INDEX_ROW_CAP}-row bound; ` +
+          "reporting the index as unknown rather than as a complete list",
+      );
+      return null;
+    }
+    return rows.map((r) => toManual(r as ManualRow));
   } catch (err) {
     console.error(`[equipment] listManuals(${clientId}) failed`, err);
     return null;
@@ -432,9 +517,35 @@ export async function listManuals(clientId: string): Promise<EquipmentManual[] |
  * from whichever wins". Two revisions of the same manual in the index is exactly
  * how an agent ends up quoting a superseded procedure.
  *
- * The old manual is deleted FIRST and its chunks go with it via the cascade in
- * 0098. Ordering matters: deleting after inserting would leave a window in which
- * a question is answered from both.
+ * THE NEW REVISION IS WRITTEN FIRST AND THE OLD ONE IS RETIRED BY ID AFTERWARDS,
+ * which is the reverse of the order this was written in (wave-3 review, 6
+ * September 2026). Deleting first read well — it closed the window in which a
+ * question could be answered from both revisions at once — but there is no
+ * transaction here, only three separate PostgREST calls, so it made every
+ * failure after that delete destructive. A chunk insert PostgREST rejects (a
+ * 380-page manual is ~800 rows and over a megabyte in one body), a statement
+ * timeout, a dropped connection: any of them landed in the catch below with the
+ * practice's previously ingested manual and every one of its passages already
+ * gone through 0098's cascade, while the screen said "We could not store that
+ * manual. Please try again." — a sentence that states nothing changed. Nothing
+ * could bring it back, either: the PDF's bytes are never stored (0098's
+ * copyright note), so the extracted text was the only copy the platform ever
+ * held, and the register then said "No manual uploaded" about a machine the desk
+ * had been answering from minutes earlier, indistinguishable from a machine that
+ * never had one.
+ *
+ * So the fail direction is closed the other way round, the way W3/6 rules it for
+ * the pre-visit form ("never lose a patient's answers"): what is already stored
+ * survives every failure, and what is half-written is rolled back. What that
+ * trades for is the few milliseconds between the new passages landing and the
+ * old row going, in which a search can see both revisions — a window that is
+ * cheaper, and recoverable, in a way that destroying the only copy is not.
+ *
+ * It is legal because `equipment_manual` has no unique key on `asset_id` (0098
+ * indexes `(asset_id, uploaded_at desc)` and nothing more), so two rows may
+ * coexist for that window. The retire is still scoped by client and asset and
+ * merely excludes the row just written, so it also sweeps up any older revision
+ * an earlier failure left behind.
  */
 export async function replaceManual(
   input: {
@@ -451,14 +562,10 @@ export async function replaceManual(
   chunks: ManualChunkDraft[],
 ): Promise<{ ok: true; manualId: string } | { ok: false; reason: string }> {
   const db = serviceClient();
+  // Held outside the try so the catch knows whether a half-written revision
+  // exists to undo. Null means nothing of ours reached the table.
+  let manualId: string | null = null;
   try {
-    const { error: deleteError } = await db
-      .from("equipment_manual")
-      .delete()
-      .eq("client_id", input.clientId)
-      .eq("asset_id", input.assetId);
-    if (deleteError) throw deleteError;
-
     const { data, error } = await db
       .from("equipment_manual")
       .insert({
@@ -475,7 +582,7 @@ export async function replaceManual(
       .select("id")
       .single();
     if (error) throw error;
-    const manualId = (data as { id: string }).id;
+    manualId = (data as { id: string }).id;
 
     if (chunks.length > 0) {
       const { error: chunkError } = await db.from("equipment_manual_chunk").insert(
@@ -490,16 +597,50 @@ export async function replaceManual(
         })),
       );
       // A manual whose chunks failed to write is a manual the agent cannot read,
-      // and leaving the header row behind would tell the practice it has one.
-      if (chunkError) {
-        await db.from("equipment_manual").delete().eq("id", manualId);
-        throw chunkError;
-      }
+      // and leaving the header row behind would tell the practice it has one —
+      // so the catch below removes it, along with nothing else.
+      if (chunkError) throw chunkError;
     }
+
+    // THE OLD REVISION GOES ONLY ONCE THE NEW ONE IS WHOLE — header row and
+    // every passage written. Its chunks go with it through 0098's cascade.
+    const { error: retireError } = await db
+      .from("equipment_manual")
+      .delete()
+      .eq("client_id", input.clientId)
+      .eq("asset_id", input.assetId)
+      .neq("id", manualId);
+    if (retireError) throw retireError;
 
     return { ok: true, manualId };
   } catch (err) {
     console.error(`[equipment] replaceManual(${input.assetId}) failed`, err);
+    // UNDO OUR HALF, NEVER THEIRS. Deleting the new manual takes its passages
+    // with it (0098's cascade) and leaves the practice with exactly what it had
+    // before it pressed upload — which is what the sentence below claims.
+    if (manualId) {
+      const { error: rollbackError } = await db
+        .from("equipment_manual")
+        .delete()
+        .eq("client_id", input.clientId)
+        .eq("id", manualId);
+      if (rollbackError) {
+        // Both revisions are in the index now and a search can mix them, which is
+        // the one thing this function exists to prevent. "Nothing was stored"
+        // would be the same lie in the other direction, so the sentence names the
+        // state and the one action that clears it: the Manuals tab's delete is
+        // scoped by asset, so it removes both.
+        console.error(
+          `[equipment] replaceManual(${input.assetId}) could not roll back manual ${manualId}`,
+          rollbackError,
+        );
+        return {
+          ok: false,
+          reason:
+            "That manual was stored, but the previous version could not be removed, so the desk can now see both. Remove the manual on the Manuals tab and upload it again before relying on its answers.",
+        };
+      }
+    }
     return { ok: false, reason: "We could not store that manual. Please try again." };
   }
 }

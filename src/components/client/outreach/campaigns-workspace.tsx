@@ -19,6 +19,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { SectionCard, StatusPill, EmptyState, DataTable, type Column, type Tone } from "@/components/primitives";
 import { cn } from "@/lib/utils";
+// THE BUILD LOOP'S RULE, in a pure leaf rather than inside the callback below.
+// It has no imports of its own, so a client bundle reading it drags nothing
+// server-side with it, and its four outcomes (failure, finished, rate-limited,
+// REFUSED) are driven by src/lib/outreach/build-progress.test.ts.
+import { buildLoopStep, type BuildTickResponse } from "@/lib/outreach/build-progress";
 
 // ---------------------------------------------------------------------------
 // Contracts (kept local; mirror the API shapes returned by /api/outreach/*).
@@ -253,16 +258,25 @@ export function CampaignsWorkspace({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ campaignId }),
           });
-          const data = (await res.json().catch(() => ({}))) as {
-            ok?: boolean;
-            done?: boolean;
-            stopped?: "403" | "429" | null;
+          const data = (await res.json().catch(() => ({}))) as BuildTickResponse & {
             counts?: { scanned?: number; matched?: number };
             cursor?: { page?: number } | null;
-            error?: string;
           };
-          if (!res.ok || data.ok === false) {
-            setProgress((p) => ({ ...(p ?? { pagesWalked: 0, scanned: 0, matched: 0, done: false, note: null }), note: data.error || "The build hit a problem and stopped. You can try again." }));
+          // WHAT HAPPENS NEXT IS DECIDED IN ONE PLACE, and it is not here.
+          // `buildLoopStep` (src/lib/outreach/build-progress.ts) holds the four
+          // outcomes and their sentences, so the rule can be driven by a test
+          // instead of living inside a React callback nothing can reach. In
+          // particular it reads `skipped`: a tick that REFUSED because the
+          // do-not-contact list could not be read comes back ok:true /
+          // done:false / stopped:null, and without that check this loop span its
+          // full MAX_BUILD_TICKS and left the owner on "scanned 0 / matched 0"
+          // with no note at all.
+          const step = buildLoopStep(res.ok, data);
+          if (step.failed) {
+            // The counts are NOT repainted: a failure body may carry nothing but
+            // an error, and blanking the screen to zero would read as "the scan
+            // found nobody" rather than "the scan did not run".
+            setProgress((p) => ({ ...(p ?? { pagesWalked: 0, scanned: 0, matched: 0, done: false, note: null }), note: step.note }));
             break;
           }
           setProgress({
@@ -270,12 +284,9 @@ export function CampaignsWorkspace({
             scanned: data.counts?.scanned ?? 0,
             matched: data.counts?.matched ?? 0,
             done: Boolean(data.done),
-            note: data.stopped
-              ? "Dentally paused us briefly (rate limit); the scan will pick up where it left off if you continue."
-              : null,
+            note: step.note,
           });
-          if (data.done) break;
-          if (data.stopped) break; // back off; the owner can resume
+          if (step.stop) break;
         }
       } finally {
         setBuilding(false);

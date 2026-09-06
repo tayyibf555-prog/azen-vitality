@@ -19,11 +19,20 @@
 // So the data moves here, to an ordinary module with no React and no filesystem
 // access, which means:
 //
-//   - runbook.test.ts still pins the document against it, in both directions;
-//   - /api/systems can project a per-row `cannotRunYet` from `slugsWithNoJob()`
-//     and the client component can stop carrying a list of its own;
-//   - home's OS band can qualify a tile that reads "0 sent, awaiting an answer"
-//     for a sweep that cannot run at all.
+//   - runbook.test.ts pins the document against it, in both directions;
+//   - ops-cron-registration.test.ts checks every `supabase/ops/register-*.sql`
+//     header against it, so a file cannot claim to be applied for a job the
+//     scheduler has never heard of (ruling W3/22);
+//   - src/components/client/systems/cron-registration.test.ts holds the control
+//     panel's own list to `slugsWithNoScheduledJob()`;
+//   - home's OS band qualifies a tile that would otherwise read "0 sent,
+//     awaiting an answer" for a sweep that cannot run at all.
+//
+// ONE COPY IS LEFT, and it is named rather than hidden: `SWEEPS_WITH_NO_CRON_JOB`
+// in the "use client" component src/components/client/systems/systems-view.tsx.
+// It is held equal to `slugsWithNoScheduledJob()` by the test above, so it cannot
+// drift silently; deleting it outright means /api/systems projecting a per-row
+// `cannotRunYet` from this module, which is a route change and a handoff.
 //
 // IT IS A RECORD OF A READ, NOT AN AUTHORITY. Vitest makes no network calls and
 // neither does a rendered page: nothing here is queried from Postgres at
@@ -102,9 +111,25 @@ export const SCHEDULER: Record<string, SchedulerJob> = {
 };
 
 /**
- * The registration SQL that exists as a file. A job with no entry here has no
- * ops file, so ruling W3/7 puts its SQL in the runbook itself — which is the
- * whole reason the pre-visit questionnaire could never have sent in production.
+ * The registration SQL that exists as a file, for every job in SCHEDULER. A job
+ * with no entry here has no ops file, so ruling W3/7 puts its SQL in the runbook
+ * itself — which is the whole reason the pre-visit questionnaire could never
+ * have sent in production.
+ *
+ * IT IS COMPLETE OVER `supabase/ops`, not a shortlist of the interesting ones,
+ * and `ops-cron-registration.test.ts` holds it to the directory in both
+ * directions. It was a shortlist until 5 September 2026: three files for jobs
+ * that are live and therefore never take the runbook-SQL branch were simply
+ * missing, so the sentence above ("a job with no entry here has no ops file")
+ * was false for three of the nineteen and nothing said so.
+ *
+ * THE TWO PRE-VISIT JOBS NOW HAVE FILES (ruling W3/30, 5 September 2026). Their
+ * SQL stayed in §2 of the runbook as well, deliberately: the runbook is what the
+ * person doing go-live reads, and runbook.test.ts holds the file, the table and
+ * this map to each other, so a correction cannot land in one of the three only.
+ * `runbook.test.ts` § "carries the registration SQL for every job that has no
+ * ops file (W3/7)" is what changes shape when an entry is added here: the job
+ * moves from the runbook-SQL branch to the file-exists branch.
  */
 export const OPS_FILE: Record<string, string> = {
   "app-sweep-closer": "supabase/ops/register-closer-cron.sql",
@@ -112,6 +137,29 @@ export const OPS_FILE: Record<string, string> = {
   "app-sweep-postop": "supabase/ops/register-postop-cron.sql",
   "app-sweep-outreach": "supabase/ops/register-outreach-cron.sql",
   "app-sweep-anomaly": "supabase/ops/register-anomaly-cron.sql",
+  "app-sweep-previsit": "supabase/ops/register-previsit-cron.sql",
+  "app-sweep-previsit-mining": "supabase/ops/register-previsit-mining-cron.sql",
+  "app-prewarm-dentally": "supabase/ops/register-dentally-prewarm-cron.sql",
+  "app-sweep-landing-promote": "supabase/ops/register-landing-promote-cron.sql",
+  "app-purge-assessment-step-events": "supabase/ops/purge-assessment-step-events.sql",
+};
+
+/**
+ * The two cron jobs `supabase/ops` carries SQL for that no rostered agent owns:
+ * the Meta insights refresh and the winning-ads ingest, both marketing-side.
+ *
+ * They are recorded APART FROM `SCHEDULER` rather than inside it because §2 of
+ * the runbook is the AGENTS' cron table and `runbook.test.ts` pins that table
+ * key-for-key against SCHEDULER — adding a job the agents' runbook has no
+ * business describing would put two rows in an owner-facing document to satisfy
+ * a test. They belong here all the same: the point of this module is that ONE
+ * read of `cron.job` answers for the whole tree, and an ops file whose job is in
+ * neither map is an ops file nobody has checked. Neither was in the 4 September
+ * read, so neither is registered.
+ */
+export const UNROSTERED_OPS_JOBS: Record<string, string> = {
+  "app-sweep-meta-insights": "supabase/ops/register-meta-insights-cron.sql",
+  "app-sweep-winning-ads-ingest": "supabase/ops/register-winning-ads-ingest-cron.sql",
 };
 
 /** Every route the platform exposes a sweep for that the scheduler never calls. */

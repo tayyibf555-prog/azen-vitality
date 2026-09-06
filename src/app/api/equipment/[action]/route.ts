@@ -283,7 +283,22 @@ export async function POST(
             practiceName: client.name,
             scopeLabel: scope.label,
             assets,
-            assetIdsWithManual: new Set((manuals ?? []).filter((m) => m.status === "ready").map((m) => m.assetId)),
+            // NULL TRAVELS, IT IS NOT FLATTENED. `listManuals` returns null when
+            // the read FAILED — a different thing from an empty list — and
+            // `(manuals ?? [])` turned that failure into "this practice has
+            // uploaded no manuals", which the prompt then printed as `manual: NO`
+            // on every index line and paired with "suggest uploading it on the
+            // Manuals tab". A nurse would have been invited to upload a document
+            // the practice uploaded months ago, about a machine whose manual we
+            // simply could not see. buildEquipmentSystemPrompt takes
+            // `ReadonlySet<string> | null` and, on null, emits NO manual column
+            // at all and forbids saying a machine has no manual, pointing at
+            // search_manual instead (which reads the chunk table directly and is
+            // unaffected). Pinned by src/lib/equipment/prompt.test.ts §3c.
+            assetIdsWithManual:
+              manuals === null
+                ? null
+                : new Set(manuals.filter((m) => m.status === "ready").map((m) => m.assetId)),
             today,
             mode: verdict.mode,
           }),

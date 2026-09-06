@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { srcPath, walkSrc } from "@/lib/test-support/walk-src";
 import { FLOW_SCHEMA_VERSION, type FlowGraph } from "@/lib/smile-assessment/flow";
 import { toPublicFlow } from "@/lib/smile-assessment/campaign";
 import { createFunnelProgressReporter } from "@/lib/smile-assessment/funnel-progress-beacon";
@@ -25,8 +26,10 @@ import { DeterministicAssessmentQuiz } from "./deterministic-assessment-quiz";
 //   - reporting on the ADAPTIVE fallback, whose screens have no ordinal.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC_ROOT = resolve(process.cwd(), "src");
 const SOURCE = readFileSync(join(HERE, "deterministic-assessment-quiz.tsx"), "utf8");
+
+/** Any `from "...funnel-progress-beacon"` import, whatever the path prefix. */
+const IMPORT_RE = /from\s+["'][^"']*funnel-progress-beacon["']/;
 
 /** Source with comments stripped: what the file DOES, not what it explains. */
 const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "")
@@ -67,25 +70,25 @@ function render(props: { previewMode?: boolean; flowVersion?: number } = {}): st
   );
 }
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.(ts|tsx)$/.test(name)) out.push(full);
-  }
-  return out;
-}
-
+// THE WALK IS THE SHARED ONE (src/lib/test-support/walk-src.ts), and that is not
+// tidiness. This file used to hand-roll its own: rooted at
+// `resolve(process.cwd(), "src")` — the RUNNER'S directory, which in a worktree is
+// a different checkout of this repo, so the sweep could report "exactly one
+// caller" about source nobody had edited — and descending EVERY directory,
+// dot-directories and node_modules included. That second half made this file FLAKY
+// in a parallel run: walk-src.test.ts builds a real, temporary
+// `.walk-fixture-XXXX/` under src/lib/test-support to prove `includeDotDirs`
+// works, and a walk that descends dot-directories reads files that are being
+// deleted underneath it (ENOENT on .walk-fixture-XXXX/node_modules/route.ts,
+// reproduced 1 run in 11). `walkSrc` skips dot-directories by default, so the
+// fixture is invisible to it and the race is gone.
 describe("the reporter has exactly one caller", () => {
   function importers(): string[] {
-    return walk(SRC_ROOT)
-      .filter((file) => {
-        if (/funnel-progress-beacon(\.test)?\.ts$/.test(file)) return false;
-        if (file.endsWith("funnel-progress-wiring.test.ts")) return false;
-        return /from\s+["'][^"']*funnel-progress-beacon["']/.test(readFileSync(file, "utf8"));
-      })
-      .map((f) => f.slice(SRC_ROOT.length + 1).split(sep).join("/"))
-      .sort();
+    return walkSrc({ includeTests: true }).filter((file) => {
+      if (/funnel-progress-beacon(\.test)?\.ts$/.test(file)) return false;
+      if (file.endsWith("funnel-progress-wiring.test.ts")) return false;
+      return IMPORT_RE.test(readFileSync(srcPath(file), "utf8"));
+    });
   }
 
   // MUTATION: wire it into the ADAPTIVE quiz, the Guided style or a landing page

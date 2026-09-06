@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect, vi } from "vitest";
@@ -34,9 +34,18 @@ import { SYSTEM_VOCABULARY } from "./vocabulary";
 //    proves it for the pre-visit form by RENDERING it, which is the stronger
 //    proof and covers one route tree. This sweep covers the OTHER public trees
 //    — the assessment, the booking page, onboarding, the medical-history link,
-//    the short-link lander — by crawling their source, which is weaker (a word
+//    the messaging-preferences page, the short-link lander — and reconciles that
+//    list against src/app so the next one cannot be omitted from it (a hole
+//    /prefs sat in until wave 3d); it crawls their source, which is weaker (a word
 //    reaching them from a database is invisible to it) and is why it is an
 //    addition to that suite and not a replacement for it.
+//
+//    IN TWO HALVES, AND THE SECOND ONE IS WHERE THE COPY LIVES. §1 crawls the
+//    route trees; §1b crawls the COMPONENTS those routes render, derived by
+//    following their imports. Five of the six routes are thin server shells, so
+//    for most of this rule §1 on its own was a crawl over the wrapper of the
+//    thing it was named after — see the note above §1b, and the planted-word
+//    self-check that now proves the crawl can see what it claims to look for.
 //
 // 2. NOTHING PROMISES THE PARKED PER-COMPUTER IT AGENT. "The installed
 //    per-computer IT agent is PARKED by decision" (charter §4). The IT desk has
@@ -65,9 +74,53 @@ import { SYSTEM_VOCABULARY } from "./vocabulary";
  * told. The exemption is exactly this route tree and nothing else, and the
  * assertion below proves the exemption is still needed rather than leaving a
  * stale hole in the crawl.
+ *
+ * /prefs WAS MISSING AND IS THE REASON THE RECONCILIATION BELOW EXISTS. It is a
+ * public, unauthenticated, patient-facing page — its own header says so
+ * (src/app/prefs/[token]/page.tsx: "this page needs no auth") and the proxy
+ * gates only /agency, /owner and /c/* (src/proxy.ts) — reached from the
+ * messaging preferences link, and it renders src/components/prefs/
+ * channel-pref-form.tsx, which meant §1b never visited that component either.
+ * Nothing was leaking (both files are clean of every funding word today, and
+ * `buildPrefLink` has no production caller yet), but "unsent" is not this list's
+ * exclusion criterion — /mh is on it and is staged exactly the same way. The
+ * hole was in the PROOF, and a hand-maintained literal will grow another one, so
+ * PUBLIC_TREES is now reconciled against the directories that actually exist.
  */
-const PUBLIC_TREES = ["src/app/pv", "src/app/assess", "src/app/book", "src/app/onboard", "src/app/mh", "src/app/go"];
+const PUBLIC_TREES = [
+  "src/app/pv",
+  "src/app/assess",
+  "src/app/book",
+  "src/app/onboard",
+  "src/app/mh",
+  "src/app/go",
+  "src/app/prefs",
+];
 const FUNDING_EXEMPT_TREE = "src/app/fp17";
+
+/**
+ * Every OTHER directory under src/app, each with the reason a patient never
+ * reads its copy. Ruling W3/17: the list above is hand-maintained, so the only
+ * thing that stops the next public patient tree being silently omitted from it
+ * is a check that every tree is either crawled, exempt, or named here. A new
+ * directory under src/app is a RED TEST until somebody classifies it — which is
+ * the whole point, because classifying it is the moment the question "can a
+ * patient land on this?" actually gets asked.
+ *
+ * A reason is prose, not a rubber stamp: "staff only" is a claim about the
+ * proxy or a guard, and if it is wrong the entry is the place the next reviewer
+ * looks. The root-level page.tsx/layout.tsx are not a tree — page.tsx redirects
+ * a signed-in user to their console and everyone else to /login.
+ */
+const NOT_PATIENT_FACING: Readonly<Record<string, string>> = {
+  agency: "the agency console; proxy-gated (src/proxy.ts) and requireUser behind that",
+  api: "route handlers, not a rendered surface — outbound patient copy is composed in src/lib (triage/copy.ts, the messaging layer) and guarded there",
+  c: "the practice workspace; proxy-gated",
+  owner: "the owner console; proxy-gated",
+  login: "the STAFF sign-in page — public, but no patient is ever sent to it",
+  "set-password": "the staff invitation flow — public, but staff-only by construction",
+  "agent-test": "a dev harness for the booking agent (its own header: DEV/TEST, 'Remove or gate before prod'); no patient is sent a link to it",
+};
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -114,6 +167,31 @@ describe("no funding word reaches a patient on any public surface", () => {
     expect(hits, `funding words on a patient-facing surface:\n${hits.join("\n")}`).toEqual([]);
   });
 
+  it("every route tree under src/app is crawled, exempt, or named as unreachable by a patient", () => {
+    const trees = readdirSync(join(process.cwd(), "src/app"), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+    const classified = new Set([
+      ...PUBLIC_TREES.map((t) => t.replace("src/app/", "")),
+      FUNDING_EXEMPT_TREE.replace("src/app/", ""),
+      ...Object.keys(NOT_PATIENT_FACING),
+    ]);
+    const unclassified = trees.filter((t) => !classified.has(t));
+    expect(
+      unclassified,
+      `route trees nobody has decided about — add each to PUBLIC_TREES if a patient can land on it, or to NOT_PATIENT_FACING with the reason they cannot:\n${unclassified.join("\n")}`,
+    ).toEqual([]);
+    // And the reverse: a classification for a tree that no longer exists is
+    // stale wood that would hide the next one behind a name that means nothing.
+    const stale = [...classified].filter((t) => !trees.includes(t)).sort();
+    expect(stale, `classified route trees that no longer exist:\n${stale.join("\n")}`).toEqual([]);
+    // Every reason is a sentence somebody wrote, not an empty string.
+    for (const [tree, reason] of Object.entries(NOT_PATIENT_FACING)) {
+      expect(reason.trim().split(/\s+/).length, `${tree} is classified with no reason`).toBeGreaterThan(3);
+    }
+  });
+
   it("the one exempt tree is exempt because it still needs to be", () => {
     // If FP17's pages ever stop naming the declaration, the exemption is dead
     // wood and should be deleted rather than left standing as a hole.
@@ -121,6 +199,243 @@ describe("no funding word reaches a patient on any public surface", () => {
       copyLines(f).some(({ text }) => /\bnhs\b/i.test(text)),
     );
     expect(named, "the FP17 funding exemption is no longer needed — delete it").toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. The same crawl, over the components those routes actually RENDER.
+// ---------------------------------------------------------------------------
+//
+// THE CRAWL ABOVE WAS NAMED FOR SOMETHING IT DID NOT DO, and the wave-3 review
+// caught it: `PUBLIC_TREES` collects 12 files and 594 lines, every one of them
+// under src/app, while five of those six routes are thin server shells that
+// render their copy from somewhere else — /assess renders <AssessmentQuiz>,
+// /mh is 39 lines returning <MhForm>, /onboard renders <OnboardingForm>, /book
+// renders <BookingCalendar>, and /go dispatches into the hand-written landing
+// pages. The one tree whose copy really does live in the route (/pv) is also the
+// one already covered by a stronger suite (src/lib/triage/copy.test.ts renders
+// the form). So the assertion "no funding word reaches a patient on any public
+// surface" was true of the shells and silent about the ~8,500 lines of component
+// prose a patient actually reads.
+//
+// THE CLOSURE IS DERIVED, NOT LISTED. Following the imports out of the public
+// route files (and onwards, through both "@/components/…" and relative
+// specifiers, staying inside src/components) means a funnel added next month is
+// in scope the moment a public route renders it, rather than the moment somebody
+// remembers to add its directory here. Ruling W3/17: the floor assertions below
+// and the planted-word self-check keep this from rotting into a crawl that
+// matches nothing.
+//
+// WHY A DIFFERENT READER THAN THE ROUTE CRAWL. A component is mostly code, and
+// the whole-line heuristic above reports the identifier `funding` 12 times in
+// one file for every real sentence it finds. So a component line is reduced to
+// the fragments a person could actually read — string literals, same-line JSX
+// text, and a line that is bare prose — and the fragments are what is matched.
+// It reports MORE than a renderer would (a literal that is never rendered still
+// counts) and it can still be beaten by copy that arrives from the database,
+// which is the same limitation the route crawl declares at the top of this file.
+
+const PUBLIC_COMPONENT_ROOT = join(process.cwd(), "src/components");
+
+/** `@/x` → `<cwd>/src/x`; a relative specifier resolves against the importer. */
+function resolveModule(spec: string, fromFile: string): string | null {
+  let base: string;
+  if (spec.startsWith("@/components/")) base = join(process.cwd(), spec.replace(/^@\//, "src/"));
+  else if (spec.startsWith(".")) base = resolvePath(dirname(fromFile), spec);
+  else return null; // a package, or a lib module: not a component
+  for (const candidate of [`${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`]) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  }
+  return null;
+}
+
+/** Static and dynamic import specifiers, in source order. */
+function importSpecifiers(file: string): string[] {
+  const src = readFileSync(file, "utf8");
+  return [...src.matchAll(/(?:from\s*|import\(\s*)"([^"]+)"/g)].map((m) => m[1]);
+}
+
+/** Every component file reachable from a public route, transitively. */
+function publicComponentClosure(): string[] {
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  const push = (spec: string, from: string) => {
+    const abs = resolveModule(spec, from);
+    if (abs && abs.startsWith(`${PUBLIC_COMPONENT_ROOT}/`) && !/\.test\.tsx?$/.test(abs)) queue.push(abs);
+  };
+  for (const tree of PUBLIC_TREES) for (const file of sourceFiles(tree)) for (const spec of importSpecifiers(file)) push(spec, file);
+  while (queue.length > 0) {
+    const file = queue.pop() as string;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const spec of importSpecifiers(file)) push(spec, file);
+  }
+  return [...seen].sort();
+}
+
+/**
+ * The parts of one line a person could read: string literals (a label, a
+ * placeholder, a template), same-line JSX text, and — for prose that a formatter
+ * has put on a line of its own, between tags on other lines — the whole line
+ * when it carries no code punctuation at all and at least two words. The
+ * two-word floor is what keeps `      funding,` (an object shorthand) out while
+ * keeping `NHS patients` in.
+ */
+function readerFragments(line: string): string[] {
+  const out: string[] = [];
+  for (const m of line.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|`([^`\\]*(?:\\.[^`\\]*)*)`/g)) {
+    out.push(m[1] ?? m[2] ?? m[3] ?? "");
+  }
+  for (const m of line.matchAll(/>([^<>{}]+)</g)) out.push(m[1]);
+  const words = line.match(/[A-Za-z][A-Za-z'-]+/g) ?? [];
+  if (!/[<>{}();=`"']/.test(line) && words.length >= 2) out.push(line);
+  return out.filter((fragment) => fragment.trim() !== "");
+}
+
+/** Every funding-word hit in one file's source, as `path:line :: fragment`. */
+function fundingHitsIn(relPath: string, source: string): string[] {
+  const hits: string[] = [];
+  source.split("\n").forEach((text, i) => {
+    const trimmed = text.trim();
+    if (trimmed === "" || trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return;
+    for (const fragment of readerFragments(text)) {
+      for (const re of FORBIDDEN_PATIENT_WORDS) {
+        if (re.test(fragment)) hits.push(`${relPath}:${i + 1} :: ${fragment.trim().slice(0, 90)}`);
+      }
+    }
+  });
+  return hits;
+}
+
+/**
+ * THE ONE THING THIS CRAWL FINDS AND THIS LANE MAY NOT FIX, NAMED AND CITED.
+ *
+ * src/components/book/booking-calendar.tsx line 104 is
+ * `const FUNDING_OPTIONS = ["NHS", "Private"] as const;`, and those two strings
+ * are the option labels of "How would you like to be seen?" on the PUBLIC
+ * booking page. The component's own comment says the practice asked for the
+ * question so the booking is registered on the right plan, and the server side
+ * is live-calibrated on the same two strings — /api/booking/create maps them to
+ * the practice's real Dentally payment plan ids, and
+ * src/app/api/booking/create/live-calibration.test.ts pins that no other value
+ * is accepted. It predates this programme (the file is unchanged since 6b93b40).
+ *
+ * IT IS BLESSED, AND BY WHOM. This exemption went back as BLOCKED with this
+ * crawl's report — rewording those labels changes patient-facing wording AND the
+ * NHS/private fork AND a live-calibrated payload, which charter §0 item 12
+ * forbids a lane from deciding — and it came back RULED: W3/36, 6 Sep 2026.
+ *
+ *   "The funding-jargon rule governs copy the platform WRITES TO a patient —
+ *    messages, agent replies, questionnaire questions AND their option labels.
+ *    It does NOT govern a patient CHOOSING which service they want on a booking
+ *    form, where naming the two options IS the question, the practice's own site
+ *    does the same, and the Dentally booking payload needs the distinction.
+ *    Booking form KEEPS NHS/Private."
+ *
+ * So this is no longer a placeholder waiting for an answer; it is the answer,
+ * and a lane that "fixes" the booking form is undoing a ruling. What the ruling
+ * did NOT widen is anything else: it is scoped to a patient choosing a service,
+ * so the exemption below stays exactly as tight as it was written — one file,
+ * and only a fragment that is exactly one of the two option labels. A new
+ * sentence in that same file saying "NHS patients" is still red (the platform
+ * would be writing that AT a patient), and the assertions below fail if the two
+ * labels ever stop being there, so the exemption cannot outlive the thing it
+ * excuses. Charter §0 item 7 was reworded in the same breath as the ruling so
+ * this file and the charter say the same thing.
+ */
+const RULED_FUNDING_EXEMPTION = {
+  file: "src/components/book/booking-calendar.tsx",
+  labels: ["NHS", "Private"],
+  ruling: "W3/36",
+};
+
+function isRuledExemption(hit: string): boolean {
+  const [location, fragment] = hit.split(" :: ");
+  return (
+    location.startsWith(`${RULED_FUNDING_EXEMPTION.file}:`) &&
+    RULED_FUNDING_EXEMPTION.labels.includes(fragment)
+  );
+}
+
+describe("no funding word reaches a patient from a component a public route renders", () => {
+  it("the closure reaches the components those routes actually render", () => {
+    const closure = publicComponentClosure().map((f) => f.replace(`${process.cwd()}/`, ""));
+    // A floor, not a fixture: the exact list changes with every refactor, but a
+    // closure that collapses is the failure this section exists to prevent.
+    expect(closure.length, "the component closure collapsed; the crawl is looking at nothing").toBeGreaterThan(20);
+    // Every funnel the wave-3 review found uncovered is named, so a route that
+    // stops rendering one of them is a red test rather than a silent hole.
+    for (const area of [
+      "src/components/assess/",
+      "src/components/book/",
+      "src/components/landing/",
+      "src/components/medical-history/",
+      "src/components/onboarding/",
+      // The channel-preference form, reachable only because /prefs joined
+      // PUBLIC_TREES above — it was invisible to this closure for exactly as
+      // long as its route tree was missing from the list.
+      "src/components/prefs/",
+      "src/components/previsit/",
+    ]) {
+      expect(
+        closure.some((f) => f.startsWith(area)),
+        `no ${area} component is reachable from a public route any more — either it moved or the closure broke`,
+      ).toBe(true);
+    }
+    const fragments = publicComponentClosure().reduce(
+      (n, f) => n + readFileSync(f, "utf8").split("\n").reduce((k, line) => k + readerFragments(line).length, 0),
+      0,
+    );
+    expect(fragments, "the reader-text extractor stopped finding anything to read").toBeGreaterThan(1500);
+  });
+
+  it("crawls every component a public route renders", () => {
+    const hits = publicComponentClosure()
+      .flatMap((file) => fundingHitsIn(file.replace(`${process.cwd()}/`, ""), readFileSync(file, "utf8")))
+      .filter((hit) => !isRuledExemption(hit));
+    expect(hits, `funding words in a component a patient is shown:\n${hits.join("\n")}`).toEqual([]);
+  });
+
+  it("the booking exemption is still the two option labels, and nothing else", () => {
+    // Dead wood check, the same shape as the FP17 one above: the day the booking
+    // form stops offering those two labels, this exemption is a hole and must be
+    // deleted rather than left standing.
+    const excused = publicComponentClosure()
+      .flatMap((file) => fundingHitsIn(file.replace(`${process.cwd()}/`, ""), readFileSync(file, "utf8")))
+      .filter(isRuledExemption);
+    expect(
+      excused.map((h) => h.split(" :: ")[1]).sort(),
+      "the W3/36 booking exemption no longer matches the two option labels — re-read it and delete it",
+    ).toEqual(["NHS", "Private"]);
+    // One line, one constant. If the labels have spread through the file the
+    // exemption is doing more work than it was written for.
+    expect(new Set(excused.map((h) => h.split(" :: ")[0])).size).toBe(1);
+  });
+
+  it("the crawl really can see a planted funding word in one of those components", () => {
+    // THE SELF-CHECK THE REVIEW ASKED FOR (ruling W3/17). A "nothing matched"
+    // assertion over a crawl nobody has proved can match is an always-true guard,
+    // and that is precisely how the hole above survived: this suite's only proof
+    // of life lived in another module's suite, against another module's renderer.
+    const target = "src/components/onboarding/onboarding-form.tsx";
+    expect(
+      publicComponentClosure().some((f) => f.endsWith(target)),
+      "the planted-word check points at a file the closure no longer reaches",
+    ).toBe(true);
+    const clean = readFileSync(join(process.cwd(), target), "utf8");
+    expect(fundingHitsIn(target, clean), "the target file is not clean; pick another").toEqual([]);
+    // The three shapes real copy takes in a component.
+    const plants = [
+      `        <p>Whether you are NHS or private, this takes two minutes.</p>`,
+      `  const REASSURANCE = "We treat NHS patients too";`,
+      `        Whether you come to us on the NHS or otherwise, it takes two minutes.`,
+    ];
+    for (const plant of plants) {
+      expect(
+        fundingHitsIn(target, `${clean}\n${plant}\n`).length,
+        `a planted funding word is invisible to the crawl: ${plant.trim()}`,
+      ).toBeGreaterThan(0);
+    }
   });
 });
 

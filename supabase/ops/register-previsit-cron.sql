@@ -1,0 +1,102 @@
+-- register-previsit-cron.sql  —  register the pre-visit questionnaire sweep on pg_cron
+-- ---------------------------------------------------------------------------
+-- STATUS: NOT YET APPLIED. `app-sweep-previsit` is not in cron.job (read-only
+-- `select jobname, schedule, active from cron.job`, production, 4 September 2026),
+-- so this really is an outstanding step — unlike five files in this directory
+-- which described themselves as pending for months while their jobs fired, and
+-- were corrected under ruling W3/22. Run it once (Fable applies cron SQL; the
+-- app's Supabase role is read-only on the cron.job TABLE, so use the cron.*
+-- FUNCTIONS, which are SECURITY DEFINER — same method as enable-24-7-cron.sql).
+--
+-- WHY THIS FILE EXISTS AT ALL. The same statement is printed verbatim in §2 of
+-- docs/runbooks/agent-switch-on.md, and until 5 September 2026 that was the ONLY
+-- place it lived — ruling W3/7 put it there because supabase/ops carried nothing
+-- for it. Ruling W3/30 asks for the file too, so the pre-visit jobs are found the
+-- way every other job in this platform is found: by looking in this directory.
+-- The runbook keeps its copy; src/lib/agent-wiring/runbook.test.ts holds the two
+-- to each other and to src/lib/agent-wiring/scheduler.ts, so they cannot drift.
+--
+-- WHAT IT RUNS: /api/previsit/sweep, three passes, and it sends nothing itself.
+--   PASS 1  (flag)   reads the appointment window ahead, keeps the live ones,
+--                    resolves each distinct patient ONCE, decides their question
+--                    bank from their payment plan, and records each appointment
+--                    a single time.
+--   PASS 2  (queue)  composes the fixed invite for every appointment now due and
+--                    puts it in this module's own outbox (previsit_outbox).
+--   PASS 3  (retire) stops every queued or sent target whose appointment has
+--                    already started (ruling W3/5) — fail closed, never a link
+--                    that opens after the visit.
+-- Delivery is the shared drain's job (/api/messaging/drain, already registered),
+-- which is where MESSAGING_DRY_RUN and the daily cap are applied.
+--
+-- CADENCE: */10, matching the other lifecycle sweeps. There is exactly ONE send
+-- instant per appointment (the module's own schedule decides it, clamped into
+-- 08:00-20:00 Europe/London), so the cadence is not a frequency — it is the
+-- precision with which that single instant is hit. A new job name is registered
+-- here, so nothing that already runs is moved by applying this file.
+--
+-- COST, IN STEADY STATE. Passes 2 and 3 make NO Dentally read at all. Pass 1
+-- makes two kinds of read and only one of them recurs:
+--   * the APPOINTMENT WINDOW, paged per mapped site, on every tick; and
+--   * ONE `GET /v1/patients/:id` per DISTINCT patient — but only for an
+--     appointment this module has not already flagged. Pass 1 consults
+--     `previsit_target` by its derivable key BEFORE paying for that read, so an
+--     appointment flagged at 09:00 costs no Dentally request at 09:10, 09:20 or
+--     on any tick after it. The expensive half is therefore paid once per NEWLY
+--     APPEARING appointment, not once per appointment per tick, and the steady-
+--     state cost of a `*/10` tick is the appointment pages plus the handful of
+--     patients who were booked since the last one.
+-- The per-run examination budget is split EVENLY across the three mapped sites
+-- (ruling W3/25, applied in the route): a site that exhausts its own share stops
+-- that site, not the run, an unused share does not roll over, and the response
+-- carries a per-site line with an `exhausted` flag — so N15, the busiest and the
+-- first in SITES order, cannot silently consume the whole tick and leave N17 and
+-- Romford Road unread.
+-- Every one of these reads is issued at BACKGROUND priority, which is 60% of
+-- Dentally's 3,600/hour ceiling (2,160) — a share this job does not own: the
+-- messaging drain resolves phone numbers in it, and so do the five syncs, the
+-- other lifecycle sweeps and the Dentally pre-warm cron. Background work fails
+-- CLOSED, so a tick refused for budget makes no read, sends nothing, and simply
+-- resumes at the next one.
+--
+-- SAFE TO REGISTER BEFORE THE SYSTEM IS SWITCHED ON. 'pre-visit-triage' is
+-- DEFAULT-OFF in the systems catalog and ships with an explicit disabled row, so
+-- until an owner deliberately enables it every run returns
+-- {"ok":true,"skipped":"system off"} and makes no Dentally read at all. The
+-- opposite order is the trap this file closes: with the switch ON and no job,
+-- the control panel says "Running." and nothing is ever sent.
+--
+-- CRON_SECRET is NOT written here; it lives inside public.trigger_app_cron(),
+-- exactly as the other jobs rely on.
+-- ---------------------------------------------------------------------------
+
+select cron.schedule(
+  'app-sweep-previsit',
+  '*/10 * * * *',
+  $$select public.trigger_app_cron('/api/previsit/sweep')$$
+);
+
+-- cron.schedule() on an existing job named 'app-sweep-previsit' updates its
+-- schedule/command but KEEPS the current active flag. If it was ever created
+-- inactive, activate it explicitly (find the id in cron.job first):
+--   select cron.alter_job(job_id := (select jobid from cron.job
+--                                    where jobname = 'app-sweep-previsit'),
+--                         active := true);
+
+-- Verify after applying:
+--   select jobname, schedule, active from cron.job where jobname = 'app-sweep-previsit';
+--   select jobname, status, return_message, start_time
+--     from cron.job_run_details
+--     where jobname = 'app-sweep-previsit'
+--     order by start_time desc limit 5;
+--
+-- A healthy run with the system OFF returns HTTP 200 and {"ok":true,"skipped":
+-- "system off"} — that is the correct shipping state. With it ON, the body carries
+-- the three passes' counts, and `queued` is the number of invites handed to the
+-- outbox, not the number delivered: the drain is what delivers, and only when
+-- MESSAGING_DRY_RUN is exactly "false".
+--
+-- THERE IS NO SEPARATE DRAIN JOB TO ADD. previsit_outbox is registered as a
+-- source in the shared /api/messaging/drain (already on pg_cron), so nothing
+-- about this module needs a second schedule. The implant scan that shares this
+-- module's switch is a DIFFERENT job: supabase/ops/register-previsit-mining-cron.sql.

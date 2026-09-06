@@ -1,0 +1,142 @@
+-- 0103_treatment_interest_recent_index.sql
+--
+-- APPLIED 6 September 2026 by Fable via the Supabase MCP, after reading it in
+-- full (ruling W3/33: a lane writes the FILE, Fable applies it), and verified
+-- live afterwards. Everything below describes what it does and what it costs;
+-- none of it is outstanding work.
+--
+-- ONE `create index if not exists`. It adds no column, drops nothing, changes no
+-- row, no order and no number this platform prints — the same rows come back in
+-- the same order, off an index instead of a sort. Safe to apply twice, safe to
+-- apply while the module is running, and safe never to apply at all: without it
+-- every query below still returns exactly what it returns today, just by scanning
+-- the table. Same posture and same shape of argument as
+-- 0086_go_live_hot_path_indexes.sql, which is where this file's format comes from.
+--
+-- ===========================================================================
+-- WHAT IS MISSING, AND WHY IT WAS MISSED
+-- ===========================================================================
+-- 0097 gives `treatment_interest` two indexes:
+--
+--     idx_treatment_interest_list     (site_id, treatment, answer, created_at desc)
+--     idx_treatment_interest_patient  (site_id, dentally_patient_id)
+--
+-- The first was built for the per-treatment list — "show me everybody who said yes
+-- to implants" — and it serves that read well (measured below). But THREE of this
+-- module's reads ask the treatment-less question, "everybody who said yes, newest
+-- first", and `treatment` is the SECOND column of that index. A btree cannot skip
+-- a middle column, so those three get nothing past the `site_id` prefix and
+-- Postgres sorts the whole matching set on every page:
+--
+--   1. src/lib/triage/repository.ts  listInterest, called with no `treatment`
+--        select … from treatment_interest
+--         where site_id in (…) and answer = 'yes'
+--         order by created_at desc limit 401
+--      The pre-visit screen's own interest panel
+--      (src/components/client/previsit/previsit-view.tsx, `INTEREST_PAGE + 1`),
+--      inside a force-dynamic server render with nothing caching it. This query
+--      shape IS that page's latency.
+--
+--   2. src/lib/triage/repository.ts  listInterestToCompletion, "All treatments"
+--        … same filter, order by created_at desc, id asc, limit 999, keyset-paged
+--      GET /api/previsit/interest/export — which ruling W3/29 made the ONLY export
+--      this module has, so every Download and every Copy-as-audience of the full
+--      list walks this shape up to 20 times.
+--
+--   3. src/lib/triage/repository.ts  countInterestByTreatmentDetailed's keyset walk
+--        … same filter and order, reading (id, created_at, treatment, patient id)
+--      The FALLBACK for the headline counts. `interest_counts_by_treatment` (0101,
+--      applied 5 Sep) answers them on the live database, so this walk runs only
+--      where 0101 has not been applied or the rpc fails — which is precisely the
+--      environment least likely to have anybody watching it.
+--
+-- WHY NO TEST CAUGHT IT: vitest never touches Postgres. The fake Supabase client
+-- sorts JavaScript arrays and has no notion of an index, so every existing test of
+-- these three reads is a test of their correctness — which is not in question —
+-- and none of them can observe a query plan. The gap was found by reading the
+-- comment at src/lib/triage/repository.ts (the "DEEP OFFSET GETS SLOWER" note),
+-- which names this exact index gap and then reasons past it.
+--
+-- ===========================================================================
+-- MEASURED, NOT REASONED ABOUT
+-- ===========================================================================
+-- On a throwaway PostgreSQL 17.10 cluster: 0097's table and both of its indexes
+-- verbatim, 400,000 rows across three sites, 320,000 of them 'yes' — roughly a
+-- practice-year at four ticks a submission. `explain (analyze, buffers)` on the
+-- exact statements above, single site (which is the DEFAULT view: src/lib/
+-- site-view.ts getViewScope returns `[selection]` unless the user picks all sites):
+--
+--                                    shipped          with this index
+--   page render, limit 401           5,938 buffers    29 buffers
+--   export page 1, limit 999         5,952 buffers    67 buffers
+--   export page ~16 (deep cursor)    6,353 buffers    316 buffers
+--   counts walk page, limit 999      5,952 buffers    67 buffers
+--
+-- Shipped, every one of those is a parallel sequential scan of the whole table
+-- plus a top-N heapsort, and it recruits two extra worker backends to do it. With
+-- the index they are ordered index scans and the sort disappears entirely.
+--
+-- THE DEEP PAGE IS THE INTERESTING NUMBER, because it is the one the repository
+-- comment gets wrong. That comment argues the keyset rewrite makes "the work
+-- shrink page by page instead". It does not: shipped, page 1 read 5,952 buffers
+-- and page ~16 read 6,353 — the scan is identical and only the sort's INPUT
+-- shrinks (91,666 rows to 76,666). The keyset rewrite's real and sufficient
+-- justification is its FIRST one — an OFFSET moves under a table the public submit
+-- endpoint is inserting into, and a keyset cursor cannot be moved by a concurrent
+-- write. That argument is untouched. Only the performance half was optimistic, and
+-- this index is what actually makes it true. Correcting that comment is a handoff
+-- to whoever owns src/lib/triage; nothing here depends on it.
+--
+-- Index size at that scale: 23 MB against a 46 MB table, alongside the existing
+-- 21 MB list index. One extra btree entry per inserted row — up to four per form
+-- submission, on a table written a few times a day.
+--
+-- ===========================================================================
+-- WHAT THIS INDEX DOES NOT FIX, STATED SO NOBODY OVER-READS IT
+-- ===========================================================================
+-- THE ALL-SITES VIEW STILL SCANS. With more than one site in the filter the
+-- planner sees `site_id = ANY (…)` rather than `site_id = 'x'`, and a btree scan
+-- over an array of values cannot emit rows in index order — measured on the same
+-- cluster: the same parallel sequential scan and top-N heapsort, ~5,940 buffers,
+-- with this index present and without it, to within a handful of blocks. No btree
+-- fixes that shape, because the all-sites question legitimately touches most of
+-- the table; the honest description of this file is that it fixes the DEFAULT
+-- view (one site) and leaves the group view where it was. Ordering it too would
+-- take a per-site read in the application, which is a code change and is
+-- deliberately not smuggled into an index migration.
+--
+-- SO THE WIN DEPENDS ON THE FILTER ARRIVING AS AN EQUALITY. A single-element `in`
+-- list is folded to `=` by the parser, which is what makes the single-site case an
+-- ordered index scan. If a future client library sends the one-site case as an
+-- explicit `= any(array[…])` instead, the ordered scan is lost and this index
+-- degrades to what it is for the multi-site case: a narrower bitmap filter, still
+-- an improvement on the deep pages, no improvement on the page render. Nothing
+-- breaks either way — this is a note for whoever next reads a plan and wonders.
+--
+-- ===========================================================================
+-- WHAT IS DELIBERATELY NOT HERE
+-- ===========================================================================
+-- THE PER-TREATMENT PATHS ARE ALREADY SERVED and are left alone.
+-- `idx_treatment_interest_list` gives the single-site per-treatment list an
+-- ordered index scan at 94 buffers, and the per-treatment export walk 239 — the
+-- `id` tiebreak it lacks is settled by an incremental sort over the handful of
+-- rows sharing an instant, which is cheap enough that widening that index to
+-- (…, created_at desc, id) would cost a write per insert to buy nothing
+-- measurable.
+--
+-- NO `include (treatment, dentally_patient_id)`, which would make the counts
+-- fallback index-only. It is a fallback — 0101's aggregate answers the counts
+-- wherever it is applied — and at 67 buffers a page it is no longer the thing
+-- worth another two text columns in every index entry.
+--
+-- `id` IS IN THE KEY, and that is the one thing here that is not about the page
+-- render. Both walks order by `created_at desc, id asc` because one submit writes
+-- up to four rows in a single instant, so `created_at` alone is not a cursor.
+-- Carrying `id` in the index is what lets the walk page in pure index order with
+-- no sort at all — the same reason, and the same shape, as
+-- idx_funnel_event_summary (0086) and idx_assessment_step_event_… (0080).
+create index if not exists idx_treatment_interest_recent
+  on treatment_interest (site_id, answer, created_at desc, id);
+
+comment on index idx_treatment_interest_recent is
+  'The treatment-less interest reads: the pre-visit screen''s newest-first panel, the All-treatments export walk, and the counts fallback — all filter (site_id, answer) and order by created_at desc, id asc, which idx_treatment_interest_list cannot serve because treatment sits in the middle of it.';

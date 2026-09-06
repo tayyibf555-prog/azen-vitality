@@ -93,7 +93,7 @@ vi.mock("@/lib/itdesk/repository", async (importOriginal) => ({
 
 import { EQUIPMENT_REFUSALS } from "@/lib/equipment/topic-gate";
 import { makeCopilotDispatch } from "./tools";
-import { copilotTurn, finaliseCopilotReply } from "./turn";
+import { copilotTurn, equipmentJudgementAskedByPerson, finaliseCopilotReply } from "./turn";
 
 /** What the model wrote: on topic, unremarkable, and no rule matches it. */
 const PARAPHRASE = "autoclave next service due date and supplier";
@@ -290,6 +290,86 @@ describe("the register supplies the half of the judgement the person did not say
     expect(out.refused).toBe(true);
     expect(out.reason).toBe("off_topic");
     expect(out.factsOnly).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// THE JUDGEMENT WORDS ARE READ FROM THE PERSON'S LATEST TURN, AND ONLY THAT ONE.
+//
+// `equipmentJudgementAskedByPerson` (src/lib/copilot/turn.ts) states this in its
+// header — "THE LATEST TURN ONLY, matching the gate's own calibration: a
+// judgement asked and answered three messages ago must not silently
+// facts-only-cap a later, ordinary question" — and nothing in the tree tested it:
+// swapping `words[words.length - 1]` for `words[0]` left the whole suite green.
+// It is the one turn-selection rule of the three that was unproven; the two
+// SAFETY windows are pinned (mutating `for (const turn of turns)` to
+// `turns.slice(-1)` in src/lib/equipment/topic-gate.ts and src/lib/itdesk/
+// topic-gate.ts each goes red in several named tests), and the register rule's
+// own latest-turn read is pinned by "follows the pronoun back one turn, and no
+// further" above.
+//
+// WHY IT NEEDS ITS OWN CASES RATHER THAN LEANING ON THE ONES ABOVE. Every other
+// multi-turn judgement case here is MASKED by `equipmentJudgementFromRegister`:
+// its fixture machine (the Lisa) is overdue, so the register sets facts-only on
+// its own and the person-words disjunct could be deleted with the suite still
+// green. So both cases below are about the DURR COMPRESSOR, which the register
+// says is in date until 2099 — the register can supply nothing, and the person's
+// own words are the whole rule.
+//
+// BOTH DIRECTIONS, because the two mutations are opposite mistakes. Reading the
+// FIRST turn loses the sentence W1-D/2 says is never optional; reading ANY turn
+// prints it under later questions that do not need it, which is how a standing
+// safety sentence stops being read at all.
+// ===========================================================================
+describe("the judgement question is read from the person's LATEST turn", () => {
+  it("CAPS A JUDGEMENT ASKED IN THE LATEST TURN, after an ordinary opening one", async () => {
+    // Turn 1 trips nothing. Turn 2 is the judgement, about a machine the register
+    // says is FINE — so the register disjunct cannot save this, and the gate sees
+    // the bland paraphrase last. The person's own latest words are the only
+    // evidence there is.
+    const turns = [
+      "which manuals do we have for the Durr compressor?",
+      "the compressor's pressure vessel test lapsed in June - can we keep using it?",
+    ];
+    expect(equipmentJudgementAskedByPerson(copilotTurn(turns))).toBe(true);
+
+    const { out, turn } = await askEquipment(turns);
+    expect(out.refused).toBeUndefined();
+    expect(out.factsOnly).toBe(true);
+    expect(out.judgement).toBe(EQUIPMENT_REFUSALS.judgement);
+    expect(turn.equipmentJudgementRequired).toBe(true);
+    // And the sentence really does reach the practice, which is the thing being
+    // protected rather than the flag.
+    expect(finaliseCopilotReply("It was last tested on 1 March 2026.", turn)).toContain(
+      EQUIPMENT_REFUSALS.judgement,
+    );
+  });
+
+  it("LEAVES A LATER ORDINARY QUESTION ALONE, however the conversation opened", async () => {
+    // The opposite mistake, and it is not a smaller one: a judgement asked and
+    // answered earlier must not put "take the machine out of use and call the
+    // engineer" under every question for the rest of the conversation.
+    const turns = [
+      "the compressor is out of test, can we run it today?",
+      "thanks - when is the Durr compressor next due a service?",
+    ];
+    expect(equipmentJudgementAskedByPerson(copilotTurn(turns))).toBe(false);
+
+    const { out, turn } = await askEquipment(turns);
+    expect(out.refused).toBeUndefined();
+    expect(out.factsOnly).toBeUndefined();
+    expect(out.judgement).toBeUndefined();
+    expect(turn.equipmentJudgementRequired).toBe(false);
+    expect(finaliseCopilotReply("It is due on 1 March 2099.", turn)).toBe("It is due on 1 March 2099.");
+  });
+
+  it("an empty or absent window is not a judgement, and never throws", () => {
+    // The fail direction is the safe one here by construction: no words means no
+    // match, and the gate and the register are still there to decide.
+    expect(equipmentJudgementAskedByPerson(copilotTurn([]))).toBe(false);
+    expect(equipmentJudgementAskedByPerson(copilotTurn(["   "]))).toBe(false);
+    expect(equipmentJudgementAskedByPerson(null)).toBe(false);
+    expect(equipmentJudgementAskedByPerson(undefined)).toBe(false);
   });
 });
 

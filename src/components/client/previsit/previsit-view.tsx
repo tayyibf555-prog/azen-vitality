@@ -7,6 +7,7 @@ import { coverageSentence, exclusionSentence, MINING_CAVEATS, MINING_TITLE } fro
 import { listCandidates, listCoverage } from "@/lib/triage/mining-repository";
 import { countInterestByTreatmentDetailed, listInterest } from "@/lib/triage/repository";
 import { isSystemEnabled } from "@/lib/systems/repository";
+import { slugsWithNoScheduledJob } from "@/lib/agent-wiring/scheduler";
 import { PreVisitWorkspace } from "./previsit-workspace";
 import type { MiningCoverage } from "@/lib/triage/mining";
 
@@ -39,16 +40,24 @@ import type { MiningCoverage } from "@/lib/triage/mining";
 // the patients past the bound are invisible. `more` travels to the panels and is
 // printed beside the list (charter §0/5, ruling W3/11).
 //
-// AND SO ARE THE COUNTS ABOVE THE LIST. `countInterestByTreatmentDetailed`
-// scans a bounded number of interest rows and says, in `capped`, whether it
-// reached the end of them. The bare wrapper this page used to call could not
-// carry that word — a `Record<string, number>` cannot say "at least" — so it
-// THREW on a capped scan and the whole grid collapsed to "The totals could not
-// be read." A practice past twenty thousand yeses would lose every headline
-// figure it has, to protect it from a floor it could simply have been told was
-// a floor. `capped` travels down instead and each figure renders as "at least
-// N", the same sentence Home's Operating system band already prints for a
-// capped read (charter §0/5, ruling W3/11).
+// AND SO ARE THE COUNTS ABOVE THE LIST — ON A DATABASE THAT HAS NOT HAD 0101.
+// `countInterestByTreatmentDetailed` has two paths and the comment here used to
+// describe only the second. Where migration 0101 is applied (the live database,
+// 5 Sep) it asks Postgres for `interest_counts_by_treatment(text[])`, which does
+// the `count(distinct …)` where the rows live: EXACT at any scale, `capped`
+// always false, and not one interest row paged into this process. Only where the
+// function is missing does it fall back to the bounded keyset scan that says, in
+// `capped`, whether it reached the end. Both answers are honest; what differs is
+// whether a ceiling exists to hit.
+//
+// EITHER WAY `capped` IS THE WORD THIS PAGE NEEDS, and it is why the bare wrapper
+// this page used to call had to go: a `Record<string, number>` cannot say "at
+// least", so it THREW on a capped scan and the whole grid collapsed to "The
+// totals could not be read." A practice past twenty thousand yeses would lose
+// every headline figure it has, to protect it from a floor it could simply have
+// been told was a floor. `capped` travels down instead and each figure renders as
+// "at least N", the same sentence Home's Operating system band already prints for
+// a capped read (charter §0/5, ruling W3/11).
 
 /**
  * How many rows each list SHOWS. One more than this is asked for, so truncation
@@ -154,10 +163,19 @@ export async function PreVisitTriageView({ clientSlug }: { clientSlug: string })
         miningPageSize={MINING_PAGE}
         miningTitle={MINING_TITLE}
         miningCoverage={coverageLine(coverage, merged, unscanned, scope.siteIds.length)}
-        miningExclusions={exclusionSentence(merged)}
-        scopeLabel={scope.label}
+        miningExclusions={exclusionSentence(merged, unscanned === null ? undefined : { unscannedSites: unscanned.length })}
         miningCaveats={[...MINING_CAVEATS]}
         systemEnabled={systemEnabled}
+        // REGISTRATION TRUTH TRAVELS WITH THE SWITCH (rulings W3/7, W3/31).
+        //
+        // Read here rather than in the workspace: the scheduler is a plain
+        // server module and the workspace is "use client", so this is the seam
+        // the fact has to cross. It is a read of a module, not of the database —
+        // src/lib/agent-wiring/scheduler.ts holds what `cron.job` contained on 4
+        // September 2026 and is pinned against §2 of the runbook — so the day
+        // somebody registers the job, the sentence leaves the page with the same
+        // two-line edit that clears it from System controls and Home.
+        noScheduledJob={slugsWithNoScheduledJob().includes("pre-visit-triage")}
       />
     </>
   );
@@ -200,6 +218,12 @@ function mergeCoverage(rows: MiningCoverage[] | null, siteIds: string[]): Mining
   let candidates = 0;
   let excludedNoDob = 0;
   let excludedUnderAge = 0;
+  // NULL PROPAGATES. The column arrives in migration 0101 and migrations here are
+  // applied by hand, so a row read from a database without it reports null — "we
+  // do not know" — and a sum that turned that into 0 would print a claim over a
+  // scan whose unreadable patients were never recorded. One unknown row makes the
+  // merged figure unknown, which is the direction the sentence is silent in.
+  let excludedUnreadable: number | null = 0;
   let moreToRead = false;
   let lastRunAt = rows[0].lastRunAt;
   for (const r of rows) {
@@ -209,6 +233,10 @@ function mergeCoverage(rows: MiningCoverage[] | null, siteIds: string[]): Mining
     candidates += r.candidates;
     excludedNoDob += r.excludedNoDob;
     excludedUnderAge += r.excludedUnderAge;
+    excludedUnreadable =
+      excludedUnreadable === null || r.excludedUnreadable === null
+        ? null
+        : excludedUnreadable + r.excludedUnreadable;
     moreToRead = moreToRead || r.moreToRead;
     if (r.lastRunAt > lastRunAt) lastRunAt = r.lastRunAt;
   }
@@ -220,6 +248,7 @@ function mergeCoverage(rows: MiningCoverage[] | null, siteIds: string[]): Mining
     candidates,
     excludedNoDob,
     excludedUnderAge,
+    excludedUnreadable,
     lastRunAt,
     moreToRead: moreToRead || anyUnscanned,
   };

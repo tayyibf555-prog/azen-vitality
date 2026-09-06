@@ -75,10 +75,16 @@ describe("collectPages", () => {
   });
 
   // THE OVERSHOOT TRIM. Every other ceiling test uses a maxRows that is an exact
-  // multiple of pageSize (and so do the production defaults, 1000 into 10000), so
-  // the `rows.length > maxRows` branch — the one that actually SLICES — was never
-  // executed anywhere. A ceiling that is not a round number of pages is the only
-  // way to reach it.
+  // multiple of pageSize, so the `rows.length > maxRows` branch — the one that
+  // actually SLICES — is never executed by them. A ceiling that is not a round
+  // number of pages is the only way to reach it.
+  //
+  // The production defaults now reach it as well: W3/32 moved DEFAULT_PAGE_SIZE off
+  // the PostgREST ceiling to 999, which does not divide DEFAULT_MAX_ROWS, so a month
+  // that runs past the hard ceiling overshoots it and is trimmed with
+  // `truncated: true` rather than landing exactly on it and needing the probe. That
+  // is the fail-CLOSED direction for a payroll figure, which is why the defaults are
+  // allowed to be indivisible.
   it("trims to the ceiling exactly when a page overshoots it", async () => {
     const s = source(5000);
     const out = await collectPages(s.fetchPage, { pageSize: 100, maxRows: 250 });

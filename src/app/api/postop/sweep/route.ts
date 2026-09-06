@@ -20,6 +20,8 @@ import {
   listTargets,
   insertDraft,
   stopTarget,
+  getTarget,
+  postopTargetId,
 } from "@/lib/postop/repository";
 import { postopConfig } from "@/lib/postop/types";
 import type { PostopTarget } from "@/lib/postop/types";
@@ -217,12 +219,48 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     let examined = 0;
     let flagged = 0;
     let skippedNoFacts = 0;
+    let alreadyFlagged = 0;
     const flagCounts: Record<string, number> = {};
+    const siteReports: Array<{ siteId: string; examined: number; flagged: number; exhausted: boolean }> = [];
+    // ONE PATIENT, ONE DENTALLY READ PER RUN. Two procedures on the same patient
+    // inside the two-day window is ordinary (an extraction and a review), and the
+    // facts we take are the patient's, not the appointment's.
+    const facts = new Map<string, PatientFacts | null>();
+
+    // NO SITE STARVES ANOTHER (ruling W3/25, as applied to the pre-visit sweep).
+    //
+    // `maxExaminedPerRun` was ONE POT spent in SITES order, and both guards below
+    // broke out of the WHOLE loop when it emptied. The pot (500) is smaller than
+    // what two sites can page (MAX_PAGES_PER_SITE * PER_PAGE = 300 each), N15 is
+    // first in that order and is the busiest, and the two-day window is
+    // date-granular — so on a busy practice the third site's book was never
+    // opened, tick after tick, and its patients' post-op check-ins were flagged
+    // never. The run report said only `examined: 500`, which is the same figure a
+    // healthy run prints.
+    //
+    // `Math.max(1, ...)` so a practice with more sites than budget still opens
+    // every one of them rather than handing a site a share of zero.
+    const perSiteExamineShare = Math.max(
+      1,
+      Math.floor(config.maxExaminedPerRun / Math.max(1, siteIds.length)),
+    );
 
     for (const siteId of siteIds) {
       if (dentallyScopeRefused()) break;
+      // This site's ceiling as a run total: its own share on top of what the run
+      // has already spent, clamped to the run's ceiling. An earlier site that
+      // under-spent does NOT hand its remainder on — that is the starvation this
+      // split exists to end — so a quiet run may finish well under the ceiling.
+      const siteCeiling = Math.min(config.maxExaminedPerRun, examined + perSiteExamineShare);
+      const examinedBefore = examined;
+      const flaggedBefore = flagged;
+      let siteExhausted = false;
+
       for (let page = 1; page <= MAX_PAGES_PER_SITE; page += 1) {
-        if (examined >= config.maxExaminedPerRun || dentallyScopeRefused()) break;
+        if (examined >= siteCeiling || dentallyScopeRefused()) {
+          siteExhausted = siteExhausted || examined >= siteCeiling;
+          break;
+        }
         let rows: unknown[] = [];
         try {
           const res = await client.listAppointments({
@@ -239,7 +277,12 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         }
         if (rows.length === 0) break;
         for (const raw of rows) {
-          if (examined >= config.maxExaminedPerRun) break;
+          // THIS SITE'S share, not the run's. A site that fills its allowance
+          // stops THIS site; the loop moves on to the next one.
+          if (examined >= siteCeiling) {
+            siteExhausted = true;
+            break;
+          }
           examined += 1;
           const hit = flagAppointment(raw);
           if (!hit || !hit.flag) continue;
@@ -247,8 +290,37 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
           // An undatable procedure gets no check-in: without a time we cannot say
           // whether the message would be timely or three days late.
           if (!dueAt) continue;
-          const facts = await patientFacts(client, hit.patientId);
-          if (!facts) {
+
+          // ALREADY ON THE WORKLIST? Then this appointment costs no Dentally
+          // request. `upsertTargetIfNew` would have returned null for it and the
+          // patient read would have been thrown away — the snapshot on the row is
+          // deliberately never refreshed — so asking one keyed question of our own
+          // table first is the whole saving, on every tick after the first. The
+          // window is two days wide and the sweep is hourly, so the same procedure
+          // is re-read up to 48 times.
+          //
+          // A READ ERROR FALLS THROUGH TO THE OLD BEHAVIOUR rather than skipping
+          // the row. This memo is a COST optimisation, not a safety guard: the
+          // fail-closed direction for it would be to assume the appointment is
+          // already flagged and never flag it, which would silently drop a
+          // patient's check-in for the sake of one Dentally read. The upsert below
+          // is idempotent and is what actually decides.
+          let seenBefore = false;
+          try {
+            seenBefore = (await getTarget(postopTargetId(siteId, hit.appointmentId))) !== null;
+          } catch (err) {
+            console.warn(`[postop] worklist check failed for ${siteId}:${hit.appointmentId}`, err);
+          }
+          if (seenBefore) {
+            alreadyFlagged += 1;
+            continue;
+          }
+
+          if (!facts.has(hit.patientId)) {
+            facts.set(hit.patientId, await patientFacts(client, hit.patientId));
+          }
+          const f = facts.get(hit.patientId) ?? null;
+          if (!f) {
             skippedNoFacts += 1;
             continue;
           }
@@ -256,13 +328,13 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
             siteId,
             dentallyPatientId: hit.patientId,
             appointmentId: hit.appointmentId,
-            patientName: facts.name,
+            patientName: f.name,
             procedureFlag: hit.flag.flag,
             procedureSource: hit.flag.source,
             procedureAt: hit.procedureAt,
             dueAt,
-            consentSms: facts.consentSms,
-            consentEmail: facts.consentEmail,
+            consentSms: f.consentSms,
+            consentEmail: f.consentEmail,
           });
           if (created) {
             flagged += 1;
@@ -270,7 +342,23 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
           }
         }
         if (rows.length < PER_PAGE) break;
+        // THE OTHER TRUNCATION, and it is not the budget's. `MAX_PAGES_PER_SITE`
+        // stops a mis-filtered query walking the whole book, and a site whose last
+        // allowed page came back FULL has more behind it. Without this the
+        // per-site line would print a complete-looking figure whenever an operator
+        // raised POSTOP_MAX_EXAMINED_PER_RUN above the page cap's reach.
+        if (page === MAX_PAGES_PER_SITE) siteExhausted = true;
       }
+
+      siteReports.push({
+        siteId,
+        examined: examined - examinedBefore,
+        flagged: flagged - flaggedBefore,
+        // True means "there was more of this site's book we did not open", so the
+        // numbers on this line are a floor and not a total (charter section 0
+        // item 5).
+        exhausted: siteExhausted,
+      });
     }
 
     // -----------------------------------------------------------------------
@@ -385,6 +473,8 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       flagged,
       flagCounts,
       skippedNoFacts,
+      alreadyFlagged,
+      sites: siteReports,
       drafted,
       waiting,
       stopped,

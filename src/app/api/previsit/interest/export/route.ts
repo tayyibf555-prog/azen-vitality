@@ -3,12 +3,20 @@ import { getClient, getSite } from "@/lib/mock/clients";
 import { getViewScope } from "@/lib/site-view";
 import { isSystemEnabled } from "@/lib/systems/repository";
 import { INTEREST_TREATMENTS, isKnownInterestKey } from "@/lib/triage/bank";
-import { listInterest } from "@/lib/triage/repository";
+import {
+  interestAudience,
+  interestAudienceText,
+  interestCsvDocument,
+  interestExportFilename,
+  interestPeopleLabel,
+  type InterestExportRow,
+} from "@/lib/triage/interest-csv";
+import { listInterestToCompletion } from "@/lib/triage/repository";
 import { TRIAGE_SYSTEM_SLUG } from "@/lib/triage/types";
 import type { InterestTreatmentKey } from "@/lib/triage/types";
 
 // ===========================================================================
-// THE INTEREST LIST, AS A FILE THE PRACTICE CAN ACT ON (ruling W3/10).
+// THE INTEREST LIST, AS A FILE THE PRACTICE CAN ACT ON (rulings W3/10, W3/29).
 //
 // Every "yes" on the pre-visit form lands on a per-treatment list, and until this
 // route existed NOTHING could target one. The outreach segment builder pages
@@ -18,6 +26,13 @@ import type { InterestTreatmentKey } from "@/lib/triage/types";
 // audience field is free text. So the practice could see the list on screen and
 // had no way whatsoever to work it. W3/10's minimum is exactly this: an
 // owner + practice-manager export, per treatment.
+//
+// AND IT IS THE ONLY ONE (W3/29). The screen used to build its own CSV in the
+// browser out of the 400 rows the page had rendered, so the same list left the
+// platform in two shapes with two different provenance rows and two different
+// completeness sentences. The client-side path is retired; the Download and the
+// Copy-as-audience controls on the pre-visit screen both call this route, and the
+// formatting lives in one module (src/lib/triage/interest-csv.ts).
 //
 // ---------------------------------------------------------------------------
 // WHO. Owner, agency and the practice manager — the module page's own roles.
@@ -31,6 +46,14 @@ import type { InterestTreatmentKey } from "@/lib/triage/types";
 // whole practice's marketing list as a file. The manager IS an intended user —
 // working the interest lists is her job — which is why this is the approver guard
 // and not `requireOwnerRole` as the mining scan next door uses.
+//
+// AND THE SITES ARE THE CALLER'S OWN. The scope is intersected with the verified
+// session's `siteIds`, the way every other display route does it
+// (inbox/threads, inbox/reply, reviews/today). It is a no-op today — a session's
+// siteIds are every site of its client — and it is here because this is a FILE OF
+// NAMED PATIENTS: the day a per-site login exists, a route that scoped by the
+// cookie alone would hand a Romford Road coordinator the N15 list by flipping a
+// switcher. One line, ahead of the need.
 //
 // ---------------------------------------------------------------------------
 // SWITCH-GATED, DELIBERATELY.
@@ -46,65 +69,79 @@ import type { InterestTreatmentKey } from "@/lib/triage/types";
 // default-off slug's absent row — and an unreadable toggle — to OFF.
 //
 // ---------------------------------------------------------------------------
-// HONEST NUMBERS (charter §0/5, ruling W3/11).
+// HONEST NUMBERS (charter §0/5, ruling W3/11, ruling W3/29).
 // ---------------------------------------------------------------------------
-// PostgREST's own max-rows is 1,000: past it a select returns a CLIPPED page with
-// `error: null`, so a truncated read is indistinguishable from a complete one in
-// the returned shape — the trap this tree has documented four times. So the read
-// asks for exactly `MAX_ROWS + 1` = 1,000, which is at or below that ceiling
-// either way, and a full response means the bound bit whichever bound it was. The
-// file then says "at least N people" in its first line and names the cause. A
-// campaign sized off a floor wearing a total's clothes is the harm; a file that
-// says so is not.
+// The read WALKS THE TABLE TO ITS END with a keyset cursor
+// (`listInterestToCompletion`) rather than asking for one page and hoping. A
+// single bounded select is the trap this tree has documented five times:
+// PostgREST clips at its max-rows and returns `error: null`, so a truncated read
+// is indistinguishable from a complete one in the returned shape — and a campaign
+// sized off a floor wearing a total's clothes is the harm. Past the walk's own
+// 20,000-row ceiling the file says "at least N people" in its first line and
+// names the cause.
+//
+// IT IS EACH SURFACE'S OWN HONESTY, NOT A SHARED CEILING. An earlier draft of
+// this header — and of listInterestToCompletion's — said the walk was bounded by
+// "the same ceiling as the counts grid on the screen above, so the file and the
+// grid cannot disagree". That has not been true since migration 0101 landed:
+// `countInterestByTreatmentDetailed` now answers the grid from
+// `interest_counts_by_treatment(text[])` in Postgres, exact at any scale with
+// `capped` always false, and only falls back to the shared 20,000-row keyset walk
+// on a database where 0101 is not applied. The export has no such short-circuit —
+// it needs the ROWS, not a tally — so past 20,000 the grid prints an exact total
+// while the file beside it says "at least N". Both sentences are true of what
+// their own read did, which is the property that matters; what is NOT available
+// is inferring one surface's behaviour from the other's. (The claim was already
+// loose before 0101 for a single-treatment export: the count scan spends its
+// ceiling across every treatment at once, this walk spends it on the one asked
+// for.) Change the constant here and you have changed THIS file's floor only.
+//
+// AND A PERSON IS COUNTED ONCE, WHATEVER THEY TICKED. `interestAudience` keys on
+// `${treatmentLabel}|${dentallyPatientId}` — one row per person PER TREATMENT —
+// which is what the FILE wants, because its Treatment column is the point. It is
+// not what a count of PEOPLE wants on the all-treatments export: the tick grid
+// submits an answer for every treatment at once (previsit-form.tsx), so one
+// patient routinely produces three or four `yes` rows, and `people.length` there
+// counts person-treatment PAIRS. Printed as "People" it equals the SUM of the
+// per-treatment cells in the grid two inches above the button, each of which is
+// `count(distinct ti.dentally_patient_id)` (migration 0101) — so the file
+// contradicted the screen, and the card the button sits in promises in writing
+// that "a patient who said yes twice is one person". The count below is therefore
+// off DISTINCT PATIENTS, and so is the paste; only the CSV's row shape keeps the
+// per-treatment key. The co-pilot's `interest_lists` made the same correction for
+// the same reason (src/lib/copilot/tools.ts).
 //
 // NO DENTALLY READ. Names and ids are the ones the patient's own submission
-// stored, so an export costs one database query and nothing on the practice's
+// stored, so an export costs database queries and nothing on the practice's
 // shared API budget.
 // ===========================================================================
 
 export const dynamic = "force-dynamic";
-
-/**
- * Rows exported. One BELOW PostgREST's 1,000-row ceiling so the over-fetch that
- * proves truncation cannot itself be clipped into looking complete.
- *
- * A practice past this in one treatment needs the paged export named in the
- * ledger, not a bigger number here.
- */
-const MAX_ROWS = 999;
 
 function bad(message: string, status = 400): Response {
   return Response.json({ ok: false, error: message }, { status });
 }
 
 /**
- * RFC4180 quoting, plus the spreadsheet guard.
+ * ONE ROW PER PERSON, keeping their most recent yes — the count, and the paste.
  *
- * The quoting is the house style from src/lib/charting/export-csv.ts: quote when
- * the value holds a comma, a quote or a line break, and double any quote inside.
- *
- * THE GUARD IS THE HALF THAT IS NOT FUSSINESS. A cell beginning `=`, `+`, `-`,
- * `@` or a control character is a FORMULA to Excel, Numbers and Sheets, and every
- * value in this file is text somebody else typed — the patient name comes off the
- * Dentally record, which is data and never instructions (charter §0/8). A leading
- * apostrophe is the standard mitigation: the spreadsheet shows the text and runs
- * nothing, and only a cell that would otherwise execute is touched, so an ordinary
- * name is untouched. Written to match `csvCell` in
- * src/components/client/previsit/previsit-workspace.tsx byte for byte, so the two
- * doors onto this list cannot disagree about what is safe to put in a file.
+ * This is `interestAudience`'s key with the TREATMENT DROPPED rather than held
+ * fixed. Per treatment the two agree exactly and this is a no-op; across every
+ * treatment they do not, and this is the half that may be called "people". A
+ * pasted audience with the same Dentally id on three lines is one person uploaded
+ * three times, which is the harm on the paste; a figure that counts them three
+ * times is the harm on the number. The list arrives newest first, so the row kept
+ * is their most recent yes, matching the shared formatter's own rule.
  */
-function cell(value: string): string {
-  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return /[",\r\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
-}
-
-const COLUMNS = ["Patient name", "Dentally patient ID", "Site", "Treatment", "Said yes on"] as const;
-
-/** Safe on every filesystem, and stamped so two exports are distinguishable. */
-function filename(treatment: string, at: Date): string {
-  const iso = at.toISOString();
-  const stamp = `${iso.slice(0, 10).replace(/-/g, "")}-${iso.slice(11, 16).replace(":", "")}`;
-  return `interest-${treatment.replace(/[^a-zA-Z0-9._-]/g, "-")}-${stamp}.csv`;
+function uniqueByPatient(rows: InterestExportRow[]): InterestExportRow[] {
+  const seen = new Set<string>();
+  const out: InterestExportRow[] = [];
+  for (const r of rows) {
+    if (seen.has(r.dentallyPatientId)) continue;
+    seen.add(r.dentallyPatientId);
+    out.push(r);
+  }
+  return out;
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -123,7 +160,7 @@ export async function GET(request: Request): Promise<Response> {
   if (roleDenied) return roleDenied;
 
   // The treatment, from the CLOSED set the form offers. Not interpolated into any
-  // pattern: `listInterest` matches it with `eq` on the stored key (ruling W3/12
+  // pattern: the repository matches it with `eq` on the stored key (ruling W3/12
   // is about the other shape, and this one never had it).
   const raw = url.searchParams.get("treatment") ?? "";
   if (raw !== "" && !isKnownInterestKey(raw)) return bad("Unknown treatment", 404);
@@ -131,6 +168,12 @@ export async function GET(request: Request): Promise<Response> {
   const label = treatment
     ? INTEREST_TREATMENTS.find((t) => t.key === treatment)?.label ?? treatment
     : "All treatments";
+
+  // TWO SHAPES OF THE SAME LIST, and an unknown one is refused rather than
+  // silently served as a CSV: a caller asking for a format we do not have is a
+  // caller who would paste a spreadsheet into an audience box.
+  const format = url.searchParams.get("format") ?? "csv";
+  if (format !== "csv" && format !== "audience") return bad("Unknown format", 404);
 
   if (!(await isSystemEnabled(client.id, TRIAGE_SYSTEM_SLUG))) {
     return Response.json({
@@ -141,84 +184,75 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   // SCOPED TO THE SELECTED SITE, exactly as the screen the button sits on is:
-  // a practice looking at N15 exports N15's list, not the group's.
+  // a practice looking at N15 exports N15's list, not the group's. Then narrowed
+  // to the sites this session actually holds — see the header.
   const scope = await getViewScope(client.id);
+  const siteIds = auth ? scope.siteIds.filter((id) => auth.siteIds.includes(id)) : scope.siteIds;
 
-  let rows;
+  let walk;
   try {
-    rows = await listInterest({
-      siteIds: scope.siteIds,
+    walk = await listInterestToCompletion({
+      siteIds,
       ...(treatment ? { treatment } : {}),
       answer: "yes",
-      limit: MAX_ROWS + 1,
     });
   } catch (err) {
     console.error("[previsit/interest/export] read failed", err);
     return bad("This list could not be read just now.", 500);
   }
 
-  const capped = rows.length > MAX_ROWS;
-  const kept = rows.slice(0, MAX_ROWS);
+  const rows: InterestExportRow[] = walk.rows.map((r) => ({
+    patientName: r.patientName,
+    dentallyPatientId: r.dentallyPatientId,
+    siteName: getSite(r.siteId)?.name ?? r.siteId,
+    treatmentLabel: INTEREST_TREATMENTS.find((t) => t.key === r.treatment)?.label ?? r.treatment,
+    createdAt: r.createdAt,
+  }));
+  // The FILE's rows: one per person per treatment, because the Treatment column is
+  // what makes the file workable. The PEOPLE: distinct patients, because that is
+  // what the word means. See the header.
+  const people = interestAudience(rows);
+  const audience = uniqueByPatient(rows);
+  const now = new Date();
+  // The count the screen prints beside the button and the count the paste holds
+  // are the SAME NUMBER, produced once. "142", or "at least 20,000".
+  const peopleLabel = interestPeopleLabel(audience.length, walk.capped);
 
-  // ONE ROW PER PERSON PER TREATMENT. A patient who filled the form in before two
-  // appointments and said yes to whitening both times is ONE person to ring, and a
-  // file with them in twice is a file somebody works twice. The list arrives newest
-  // first, so the row kept is their most recent yes — the one worth quoting.
-  const seen = new Set<string>();
-  const lines: string[] = [];
-  for (const r of kept) {
-    // "|" cannot occur in either half: treatment keys come from the closed
-    // INTEREST_TREATMENTS set and a Dentally patient id is a number.
-    const dedupeKey = `${r.treatment}|${r.dentallyPatientId}`;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    lines.push(
-      [
-        cell(r.patientName),
-        cell(r.dentallyPatientId),
-        cell(getSite(r.siteId)?.name ?? r.siteId),
-        cell(INTEREST_TREATMENTS.find((t) => t.key === r.treatment)?.label ?? r.treatment),
-        cell(r.createdAt),
-      ].join(","),
-    );
+  const headers: Record<string, string> = {
+    // Named patients. Never held by a shared cache, and never re-served from a
+    // back button after a sign-out.
+    "cache-control": "no-store",
+    // For the panel: it can print the same honest sentence beside the button
+    // without parsing the file.
+    "x-interest-people": peopleLabel,
+  };
+
+  if (format === "audience") {
+    return new Response(interestAudienceText(audience), {
+      status: 200,
+      headers: {
+        ...headers,
+        // NOT an attachment: this one is pasted, not saved.
+        "content-type": "text/plain; charset=utf-8",
+      },
+    });
   }
 
-  const now = new Date();
-  // THE STAMP IS THE FIRST ROW, and it carries the count in words rather than as
-  // a bare figure. An exported list with no date claims the present tense for
-  // ever, and a capped one that printed "999" would be read as "999 people".
-  const people = capped ? `at least ${lines.length}` : String(lines.length);
-  const header = [
-    cell("Interest list"),
-    cell(label),
-    cell("Sites"),
-    cell(scope.label),
-    cell("Exported"),
-    cell(now.toISOString()),
-    cell("People"),
-    cell(people),
-    cell(
-      capped
-        ? "This file holds the most recent people who said yes and there are more behind them."
-        : "This is the whole list.",
-    ),
-  ].join(",");
-
-  // An EMPTY list still produces both header rows rather than an empty file: an
-  // empty file is indistinguishable from a failed export.
-  const csv = `﻿${[header, COLUMNS.map((c) => cell(c)).join(","), ...lines].join("\r\n")}\r\n`;
-
-  return new Response(csv, {
-    status: 200,
-    headers: {
-      "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="${filename(treatment ?? "all", now)}"`,
-      // Named patients. Never held by a shared cache, and never re-served from a
-      // back button after a sign-out.
-      "cache-control": "no-store",
-      // For the panel: it can print the same honest sentence beside the button
-      // without parsing the file.
-      "x-interest-people": people,
+  return new Response(
+    interestCsvDocument({
+      listLabel: label,
+      scopeLabel: scope.label,
+      exportedAt: now,
+      rows: people,
+      capped: walk.capped,
+    }),
+    {
+      status: 200,
+      headers: {
+        ...headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="${interestExportFilename(treatment, now)}"`,
+      },
     },
-  });
+  );
 }

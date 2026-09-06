@@ -86,9 +86,15 @@ vi.mock("@/lib/dentally/read", () => ({
   dentallyFromEnv: vi.fn(),
 }));
 
+// BOTH readers are stubbed, because nudge_lead reads its switch through the
+// SEND door (`isSystemEnabledForSend`, ruling W1-B/1-5) while the read-only tools
+// in this file still use `isSystemEnabled`. Stubbing only one of them would leave
+// the other resolving against a Supabase client that is not here, and every
+// "the switch is on" assertion below would pass or fail for the wrong reason.
 vi.mock("@/lib/systems/repository", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isSystemEnabled: async () => store.systemOn,
+  isSystemEnabledForSend: async () => store.systemOn,
 }));
 
 // --- the assessment side ---------------------------------------------------

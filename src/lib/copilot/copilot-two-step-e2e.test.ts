@@ -101,6 +101,8 @@ vi.mock("@/lib/messaging/frequency", () => ({
 vi.mock("@/lib/systems/repository", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isSystemEnabled: async () => store.systemOn,
+  // nudge_lead reads the SEND door's version (W1-B/1-5); same answer here.
+  isSystemEnabledForSend: async () => store.systemOn,
 }));
 
 vi.mock("@/lib/speed-to-lead/repository", async (importOriginal) => ({

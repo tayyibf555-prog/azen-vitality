@@ -218,7 +218,15 @@ export async function listOpenRecallPatientKeys(siteIds: string[]): Promise<Set<
   // reactivation. A single unranged select is capped at PostgREST's 1000-row default,
   // so a practice with >1000 open recalls would silently lose the rows past 1000 and
   // reactivation would double-chase those patients. Range past the cap in a loop.
-  const PAGE = 1000;
+  // ONE ROW UNDER THE SERVER'S CEILING (ruling W3/32). `rows.length < PAGE` is
+  // this loop's "we are done" signal, and Supabase clips every response at a
+  // max-rows ceiling measured at 1,000 (POSTGREST_MAX_ROWS in
+  // src/lib/test-support/fake-supabase.ts). A page size sitting ON that ceiling
+  // cannot tell a full page from a clipped one, so a server cap below the page
+  // size would end this walk early — and a SHORT set of open recall keys is the
+  // fail-OPEN direction here: reactivation would double-chase the patients recall
+  // still owns. At 999 a short page can only mean the rows ran out.
+  const PAGE = 999;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from("recall_target")

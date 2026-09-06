@@ -1,0 +1,114 @@
+-- 0105_consume_rate_budget_execute_grants.sql
+--
+-- NOT YET APPLIED. A lane writes the migration FILE; Fable reads it and applies
+-- it via the Supabase MCP (ruling W3/33). Nothing here is destructive and every
+-- statement is safe to run twice.
+--
+-- ===========================================================================
+-- WHAT IS WRONG, IN ONE LINE
+-- ===========================================================================
+-- 0023 ends with
+--
+--     revoke all on function consume_rate_budget(text, integer, integer)
+--       from anon, authenticated;
+--
+-- and that statement does nothing. Postgres grants EXECUTE on a newly created
+-- function to PUBLIC by default; anon and authenticated hold it THROUGH that
+-- PUBLIC grant, not through a grant of their own. Revoking the two roles by name
+-- removes a grant neither of them has and leaves PUBLIC's untouched, so both can
+-- still execute the function afterwards.
+--
+-- This is precisely the defect ruling W3/35 diagnosed on the OTHER function in
+-- this tree and 0104 corrected by naming PUBLIC first ("revoking those two by
+-- name while leaving PUBLIC's grant in place would change nothing"). 0101 got it
+-- right for `interest_counts_by_treatment`. 0023 is the remaining instance, and
+-- it went unnoticed because the guard W3/35 produced
+-- (src/lib/migration-definer-search-path.test.ts) asserts 0104's grants by name
+-- rather than crawling the directory for the class. That gap is closed in the
+-- same change as this file, by src/lib/migration-function-grants.test.ts.
+--
+-- READ LIVE BEFORE THIS FILE WAS WRITTEN (project qoiyaiiajdqydyrccixt,
+-- read-only select on pg_proc, 6 September 2026):
+--
+--     consume_rate_budget            proacl {=X/postgres,postgres=X/postgres,service_role=X/postgres}
+--                                    anon EXECUTE = true   authenticated EXECUTE = true
+--     interest_counts_by_treatment   proacl {postgres=X/postgres,service_role=X/postgres}
+--                                    anon EXECUTE = false  authenticated EXECUTE = false
+--     verify_practice_brain_password proacl {postgres=X/postgres,service_role=X/postgres}
+--                                    anon EXECUTE = false  authenticated EXECUTE = false
+--
+-- The leading `=X` in the first line IS PUBLIC's grant. The two functions written
+-- in the corrected form do not have it. Note also that 0012, 0019 and 0033 each
+-- ran a blanket `revoke all on all functions in schema public from anon,
+-- authenticated` — 0019 AFTER 0023 — and none of them removed it either, for the
+-- same reason. A blanket revoke naming PUBLIC is a much larger posture change
+-- than this file makes and is not attempted here; it is raised as a question
+-- rather than guessed at, and the guard names those three statements as a listed,
+-- cited exception so a fourth cannot arrive unnoticed.
+--
+-- ===========================================================================
+-- WHAT THE REACH ACTUALLY IS — STATED SO NOBODY OVER-READS THIS FILE
+-- ===========================================================================
+-- Nil today, and the honest reason is not the revoke. `consume_rate_budget` is
+-- NOT security definer (`prosecdef = false`, read live above), so an anon caller
+-- executes the body with anon's own rights, and anon holds nothing on the table
+-- it writes:
+--
+--     has_table_privilege('anon','public.api_budget','INSERT') = false
+--     has_table_privilege('anon','public.api_budget','SELECT') = false
+--
+-- So `POST /rest/v1/rpc/consume_rate_budget` with the anon key is admitted at the
+-- permission layer and then dies with 42501 inside the body. No rate-limit
+-- bypass, no budget exhaustion, no disclosure.
+--
+-- It is fixed because the permission layer is supposed to be the barrier and here
+-- it is not — the table grant is doing work the function grant was written to do,
+-- and 0023's own header claims the stricter posture ("Post-0012 locked posture:
+-- RLS on, no grants; the function + table are reached only via the service-role
+-- client"). One migration adding `security definer` to this function, or one
+-- grant on `api_budget`, turns a dead call into a public write to the ledger that
+-- caps spend on every public AI endpoint in the platform. W3/9: copy matches
+-- code, never the reverse.
+--
+-- ===========================================================================
+-- WHY REVOKING IS SAFE — THE CALLER LIST, CHECKED RATHER THAN ASSUMED
+-- ===========================================================================
+-- Every call site in the tree builds its client with the service-role key:
+--
+--     src/lib/rate-budget.ts:19          serviceClient().rpc("consume_rate_budget", …)
+--     src/lib/dentally/budget.ts:191     (await import(...)).serviceClient().rpc(…)
+--
+-- and everything else routes through one of those two (src/lib/agent/
+-- idempotency.ts claims a Twilio MessageSid through consumeBudget; the closer and
+-- collection drafts describe the same shared ceiling). No browser-side path calls
+-- this rpc. `service_role`'s EXECUTE is granted back explicitly below rather than
+-- left resting on the PUBLIC grant being removed.
+--
+-- This check mattered more than usual: `consumeBudget` FAILS OPEN on an rpc error
+-- (src/lib/rate-budget.ts:24 returns true when `error` is set), so a revoke that
+-- caught a real caller would not raise an alarm — it would quietly stop capping
+-- spend on the public AI endpoints. That is the whole reason the caller list was
+-- read rather than assumed.
+--
+-- ===========================================================================
+-- 0023 IS ALSO CORRECTED IN PLACE, AND WHY BOTH
+-- ===========================================================================
+-- Same shape as 0101/0102 (0102 lines 60-63): correcting 0023 alone never reaches
+-- the applied database, and this file alone would leave a database replayed from
+-- scratch arriving at the wrong grant without it. So 0023's statement now names
+-- PUBLIC too, and this file exists to carry the same correction to the database
+-- where 0023 already ran. Running this against a freshly replayed database is a
+-- no-op that re-asserts what is already true.
+--
+-- If this file is never applied, nothing breaks: the function keeps working
+-- exactly as it does today for the service-role callers, with the wider grant
+-- 0023 shipped and the nil reach described above.
+
+revoke all on function public.consume_rate_budget(text, integer, integer)
+  from public, anon, authenticated;
+
+grant execute on function public.consume_rate_budget(text, integer, integer)
+  to service_role;
+
+comment on function public.consume_rate_budget(text, integer, integer) is
+  'Atomically consumes one unit of a shared per-window call budget (api_budget) and returns whether the caller is still within the limit. EXECUTE is held by service_role alone: every caller in the platform builds its client with the service-role key, and the callers fail OPEN on an rpc error, so a browser-side key must not be able to reach it at all.';

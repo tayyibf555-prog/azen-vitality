@@ -115,10 +115,27 @@ describe("the Sync Status page never claims a mock write reached the practice's 
     expect(payload.target).toEqual({ host: "api.dentally.co", live: true });
   });
 
-  it("the owner's own master switch still wins the sentence, mock or not", async () => {
-    // Three states, not two: "you have switched it off" is the nearer fact and
-    // the one the reader can act on.
+  it("names the master switch AND the missing connection when both are in the way", async () => {
+    // This asserted `/because you have switched it off/` — the owner's switch
+    // winning the sentence outright, because it is the nearer of the two facts.
+    // A deployment armed at a MOCK is one of the two states where that is only
+    // half the story (the other, and the one production is permanently in, is
+    // the seeded master row: seeded-master-row.test.ts). Flipping the switch on
+    // would not send anything to the practice's book from here, so the sentence
+    // may not imply it would.
     armedAtTheMock();
+    h.masterOff = true;
+    const payload = await assembleSyncStatus("vitality");
+    expect(payload.master.off).toBe(true);
+    expect(payload.headline).toMatch(/System controls/);
+    expect(payload.headline).toMatch(/connection to your Dentally book is not in place/i);
+    expect(payload.headline).not.toMatch(/because you have switched it off/i);
+  });
+
+  it("CONTROL: armed at the REAL book, the owner's switch does win the sentence", async () => {
+    // The state the named-first design was written for, kept intact: here the
+    // instruction is true and the reader can act on it this minute.
+    armedAtTheBook();
     h.masterOff = true;
     const payload = await assembleSyncStatus("vitality");
     expect(payload.headline).toMatch(/because you have switched it off/i);

@@ -12,6 +12,7 @@ import {
 import { getActiveCampaignBySlug } from "@/lib/smile-assessment/campaign-repository";
 import { goalLabel } from "@/lib/smile-assessment/campaign";
 import { consumeBudget } from "@/lib/rate-budget";
+import { checkAgentReply } from "@/lib/agent/guardrail";
 import { clientIp } from "@/lib/http/client-ip";
 import { isSystemEnabled } from "@/lib/systems/repository";
 
@@ -25,6 +26,12 @@ export const maxDuration = 15;
 // costs a token; never throws to the client. The AI only SELECTS bank questions,
 // so the path is always on-brand + scoreable; a deterministic fallback covers a
 // failed/slow model call so the funnel never stalls.
+//
+// ONE STRING HERE IS THE MODEL'S OWN WORDS: the transition line, which the quiz
+// paints verbatim. It is prompted under the same compliance clauses as every
+// other patient-facing generator in the tree AND scanned by `checkAgentReply`
+// before it leaves (see safeTransition below) - charter section 0 item 7, the
+// funding-jargon rule, which no prompt alone is allowed to carry.
 
 const IP_LIMIT = 80; // next-question calls per IP per hour (~13 full funnels)
 const HOUR_MS = 60 * 60 * 1000;
@@ -50,6 +57,44 @@ function tooManyForIp(ip: string, now: number): boolean {
 
 function cleanLine(s: string): string {
   return s.replace(/[—–]/g, ", ").replace(/\s+/g, " ").trim().slice(0, 120).trim();
+}
+
+/**
+ * THE TRANSITION IS PATIENT-FACING COPY, SO IT IS SCANNED LIKE ANY OTHER.
+ *
+ * Everything else this route emits is ours: the question prompts and option
+ * labels come out of the shipped bank and are pinned by the patient-copy crawl.
+ * The transition line is the ONE string on this endpoint the model writes in its
+ * own words, and all three quiz shells paint it verbatim on the patient's phone.
+ *
+ * The prompt now carries the funding rule, but a prompt is a soft control and
+ * this endpoint invites the exact slip: the system message asks the model to make
+ * sure "how they would fund treatment" gets covered, and the bank's own funding
+ * question offers "I'd like it covered by a plan or scheme" - an answer a model
+ * asked to acknowledge warmly is one step from naming the regime that option was
+ * worded to avoid. Charter section 0 item 7 is absolute ("never says NHS or
+ * private, in any agent, form or message"), so it gets the hard, code-level
+ * backstop every other drafted line in this tree already has.
+ *
+ * `checkAgentReply` is that backstop, at the same setting the shared drain and
+ * the coordinator drafts use: `includePrice: false`, which enforces the two
+ * universal rules (no funding jargon, no clinical advice) and leaves the money
+ * wording alone, because the prompt's GBP clause is about a legitimate figure
+ * rather than an invented one.
+ *
+ * FAILS CLOSED, and silently to the patient: a line that trips the scan is
+ * replaced with the neutral fallback the funnel already uses when the model call
+ * fails at all, so the quiz never stalls and never shows the offending words. The
+ * refusal is logged with the matched phrase, because a hit here means the model
+ * slipped past its own rules and somebody should see it.
+ */
+function safeTransition(line: string, neutral: string): string {
+  const guard = checkAgentReply(line, { includePrice: false });
+  if (guard.ok) return line;
+  console.warn(
+    `[smile-assessment] refused a transition line (${guard.category}: ${guard.matched}); used the neutral one`,
+  );
+  return neutral;
 }
 
 /** Clean the supplied answers to known question id -> valid option value only. */
@@ -97,7 +142,7 @@ async function pickNext(
         ? `This enquiry came in through a campaign about ${campaignGoal}, so favour questions that best qualify for that.`
         : "",
       "Also write one short, warm transition line that acknowledges their last answer and leads into the next question.",
-      "Rules: choose ONLY a candidate id, exactly as written. Transition under 14 words. Use no em-dash. Never give clinical advice and never say whether a treatment is suitable. British English. Any money is in GBP using the £ symbol.",
+      "Rules: choose ONLY a candidate id, exactly as written. Transition under 14 words. Use no em-dash. Never give clinical advice and never say whether a treatment is suitable. Never mention NHS or private care, plans, schemes, bands or funding of any kind. British English. Any money is in GBP using the £ symbol.",
       'Respond with ONLY a JSON object: {"nextId": "<one candidate id>", "transition": "<one short line>"}',
     ]
       .filter(Boolean)
@@ -133,7 +178,7 @@ async function pickNext(
       typeof parsed.transition === "string" && parsed.transition.trim()
         ? cleanLine(parsed.transition)
         : fallback.transition;
-    return { id, transition };
+    return { id, transition: safeTransition(transition, fallback.transition) };
   } catch {
     return fallback;
   }

@@ -202,6 +202,20 @@ describe("an unreadable manuals index is not a register with no manuals", () => 
     expect(html).not.toContain("No manual uploaded");
   });
 
+  it("equipment-manuals-banner-names-the-cause-retrying-will-not-clear", () => {
+    // W3/9, COPY MATCHES CODE. `listManuals` returns null for TWO reasons now:
+    // a failed read, and a read that came back at MANUAL_INDEX_ROW_CAP (999,
+    // ruling W3/32). "Try again in a moment" is true of the first and false of
+    // the second — no amount of waiting shrinks an index that has outgrown one
+    // read — and the second is the one where somebody needs to ring the agency
+    // rather than refresh. The banner offers the retry AND names the other
+    // cause, without claiming to know which of the two this is (the repository
+    // collapses them deliberately; the log is where they are still told apart).
+    const html = render({ assets: [asset(1)], manualsUnreadable: true, initialTab: "manuals" });
+    expect(html).toContain("try again in a moment");
+    expect(html).toContain("grown past what this page can index in one go");
+  });
+
   it("does not print 'none' in the register's Manual column for it", () => {
     const html = render({ assets: [asset(1)], manualsUnreadable: true, initialTab: "register" });
     expect(html).toContain("not read");
@@ -209,9 +223,10 @@ describe("an unreadable manuals index is not a register with no manuals", () => 
   });
 
   it("labels the button neutrally, because it REPLACES what it cannot see", () => {
-    // The upload deletes the stored manual and inserts the new one. A button
-    // that says "Upload" over a machine whose manual we simply could not read
-    // invites somebody to overwrite a document the platform holds.
+    // The upload writes the new manual and then retires the stored one (that
+    // order, so a failed ingestion never leaves the asset with nothing). A
+    // button that says "Upload" over a machine whose manual we simply could not
+    // read invites somebody to overwrite a document the platform holds.
     const html = render({ assets: [asset(1)], manualsUnreadable: true, initialTab: "manuals" });
     expect(html).toContain("Upload or replace");
   });

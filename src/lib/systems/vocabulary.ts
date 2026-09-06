@@ -66,10 +66,23 @@ export interface SystemVocabulary {
  * → correspondence trace, which is what puts a thing in the agent roster.
  */
 const MODULE_VOCABULARY: Record<string, { starts: string; needsFirst: readonly string[] }> = {
+  // THE MIRROR IMAGE OF THE `halts` SENTENCE, and it has to carry the same
+  // second door (ruling W3/19). `starts` is what the systems view prints under
+  // an off system and what the co-pilot's agent_status reads back, so it is the
+  // sentence an owner actually reads while deciding to switch this on — and
+  // switching it on arms more than the public form: the write gate resolves
+  // `writeSlugFor("copilot", "patient.create")` to this slug, so the co-pilot's
+  // create stops being refused with `system_off`. The parenthesis is not
+  // decoration: BOTH the module switch and the master dentally-write-back
+  // switch have to be on before anything reaches the practice's real book, and
+  // an owner told only about this one would flip it and wonder why nothing
+  // happened. vocabulary.test.ts derives the requirement from the same registry
+  // the gate asks.
   onboarding: {
     starts:
       "The public new-patient form at /onboard comes online and submissions start arriving in the " +
-      "Onboarding module for the team to review and register.",
+      "Onboarding module for the team to review and register, and the co-pilot may create a patient " +
+      "in Dentally when the owner asks (Dentally write-back has to be on as well).",
     needsFirst: ["PUBLIC_BASE_URL, so the link you share resolves"],
   },
   fp17: {

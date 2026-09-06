@@ -5,7 +5,26 @@
 // need to be". That sentence is not checkable until somebody writes down what
 // "an agent" is, so this file does: a trigger, a guard, a drafter, an outbox (or
 // an explicit statement that it sends directly), and a place on the patient's
-// record. Sixteen of them, in one list, with the exact file that does each part.
+// record. All of them, in one list, with the exact file that does each part.
+//
+// AND NO TOTAL IS WRITTEN DOWN IN THIS PARAGRAPH, deliberately. It used to say
+// how many there were, and that was the roster's size on the day the file was
+// written rather than its size now: the list outgrew the sentence, and the
+// sentence went on being read as the roster's own count of what it covers — by
+// an auditor scoring the charter's enumeration against it, that reads as agents
+// MISSING when in fact extra ones are present. The runbook's opening line had
+// the identical defect and is now pinned against it:
+// runbook.test.ts, "does not restate a total number of agents in the opening line".
+// This header is pinned the same way by
+// roster.test.ts, "states no fixed agent count in its header or its test names".
+// `AGENTS.length` is the only answer that cannot go stale.
+//
+// WHAT IS PINNED INSTEAD IS THE MEMBERSHIP:
+// roster.test.ts, "covers every agent the programme charter lists"
+// holds the charter's own §2 W1-B names by key, so none of them can quietly
+// leave. `pre-visit-triage`, `outreach` and `diary-notify` were rostered on top
+// of that list after it was written, which is why this roster is LONGER than the
+// charter's enumeration rather than shorter.
 //
 // WHY A RECORD AND NOT PROSE. The codebase already had three partial registries
 // pulling in three directions:
@@ -145,14 +164,29 @@ export const AGENTS: readonly AgentDef[] = [
     firstTick:
       "Every uncontacted lead inside the 48-hour window is drafted and texted on the next " +
       "minute's tick, then the nurture cadence follows up the ones who never replied.",
+    // Three is MAX_FAILED_CONTACT_ATTEMPTS in src/lib/speed-to-lead/contact.ts —
+    // a source constant with no environment override, so there is nothing for an
+    // owner to set and nothing for `needs` to carry. The sentence states the
+    // number, which is the whole of the answer to "what bounds this".
     bound:
       "The sweep runs every minute and takes leads in age order; a lead that fails to deliver " +
-      "is retried at most MAX_FAILED_CONTACT_ATTEMPTS (3) times before it needs a person.",
+      "is retried at most three times before it needs a person.",
     verify: "Leads worklist → stage moves new → contacted, with an attempt row and a first-response time.",
     stop: "Switch off 'speed-to-lead'. Intake is rejected and nothing is auto-contacted.",
     gaps: [
-      "contactLead itself reads no toggle: all four callers gate it, pinned by a source crawl " +
-        "in roster.test.ts rather than by a guard inside the function.",
+      // THE COUNT IS DERIVED, NOT REMEMBERED. "all four callers" was true when it
+      // was written and was four doors short by the time anybody read it again:
+      // the co-pilot's nudge_lead, the missed-call bridge and the smile-assessment
+      // submit path all reach the same primitive now. "the roster's speed-to-lead
+      // gap sentence names as many callers as the crawl finds" in roster.test.ts
+      // recomputes the word below from the crawl, so it cannot silently drift a
+      // second time.
+      "contactLead itself reads no toggle: all six callers gate it, pinned by a source crawl " +
+        "in roster.test.ts rather than by a guard inside the function — and that crawl can " +
+        "only see that a switch was read, never which way it fails. So a second crawl beside " +
+        "it requires every one of those doors to use the fail-closed read, where a switch " +
+        "nobody can reach counts as off; the staff worklist's Resend, the last of them to " +
+        "move, is pinned by its own test in resend-switch.test.ts.",
     ],
   },
   {
@@ -186,13 +220,28 @@ export const AGENTS: readonly AgentDef[] = [
     ],
   },
   {
+    // WHERE THE DECISIONS BEHIND THIS ENTRY ARE RECORDED: ruling W1-B/4 (the two
+    // switches this rescue needs, and its narrow transactional basis) and ruling
+    // W1-B/5 (the shared ten-row gate on the host sweep), both in the programme's
+    // decisions log.
+    //
+    // THEY ARE CITED HERE AND NOT IN THE STRINGS BELOW, which is a change made on
+    // 5 September 2026. Eight of this Record's fields are read straight back to a
+    // practice owner — `slugNote`, `bound` and `gaps` among them, through the
+    // co-pilot's agent_status and the control panel — and three of these sentences
+    // ended in an internal code. To the owner, "Ruling W1-B/4, 3 Sep 2026" inside
+    // an answer about his own platform is a reference he cannot resolve, and it
+    // makes a settled fact read like an unfinished note. It is the same argument
+    // that deleted a lane-ownership hedge from the pre-visit entry below
+    // (roster.test.ts, "names no build lane as the owner of anything"): a comment
+    // is where a build decision is traced; owner copy states the decision itself.
     key: "abandoned-booking-rescue",
     label: "Abandoned-booking rescue",
     slug: null,
     slugNote:
       "No switch of its own, and it needs TWO to run: 'speed-to-lead' (the machinery it feeds) AND " +
-      "'online-booking' (the flow it invites the patient back into). Ruling W1-B/4, 3 Sep 2026 — an " +
-      "owner who has switched online booking off has switched off the page this text points at.",
+      "'online-booking' (the flow it invites the patient back into). An owner who has switched " +
+      "online booking off has switched off the page this text points at.",
     trigger: "src/lib/booking/abandoned-holds.ts",
     guard: "src/app/api/speed-to-lead/sweep/route.ts",
     draft: "llm",
@@ -206,13 +255,13 @@ export const AGENTS: readonly AgentDef[] = [
       "A booking hold abandoned for 20 minutes becomes a lead, which the same sweep then " +
       "first-contacts like any other.",
     bound:
-      "At most 25 holds converted per tick, and — because the host sweep now uses the shared " +
-      "ten-row gate (ruling W1-B/5) — drafting stops within ten rows of the switch being turned " +
+      "At most 25 holds converted per tick, and — because the host sweep re-reads its switch as it " +
+      "goes — drafting stops within ten rows of the switch being turned " +
       "off mid-run, rather than at the end of the batch.",
     verify: "Leads → a lead with source 'booking' and an attempt row.",
     stop: "Switch off 'speed-to-lead'.",
     gaps: [
-      "Its basis is narrow ON PURPOSE (ruling W1-B/4): one transactional follow-up about the booking " +
+      "Its basis is narrow ON PURPOSE: one transactional follow-up about the booking " +
         "the patient started, never marketing. It is excluded from the nurture cadence at both of " +
         "listNurtureDue's selection queries, and the lead records consent source 'booking-form'.",
     ],
@@ -260,7 +309,14 @@ export const AGENTS: readonly AgentDef[] = [
     correspondence: ["agent"],
     needs: ["TWILIO_* sender", "the SMS number's Messaging webhook pointed at /api/webhooks/twilio/inbound"],
     firstTick: "Every inbound SMS gets an agent reply within the request. STOP is honoured either way.",
-    bound: "Per-sender budget AGENT_SENDER_BUDGET_LIMIT per AGENT_SENDER_BUDGET_WINDOW.",
+    // 20 an hour is AGENT_SENDER_BUDGET_LIMIT / AGENT_SENDER_BUDGET_WINDOW (3600s)
+    // in src/app/api/webhooks/twilio/inbound/route.ts. Both have defaults and
+    // neither is required for the agent to work, so they do not belong in `needs`
+    // ("required before it can work at all") and the name would be unreadable in
+    // an agent_status answer. The figure is the answer; the names live here.
+    bound:
+      "At most 20 agent replies an hour to any one number, by default: somebody texting the " +
+      "practice number over and over cannot run the model without limit.",
     verify: "Conversations → a two-way thread with agent turns.",
     stop: "Switch off 'booking-agent'. Inbound messages are flagged for a human; opt-out still works.",
     gaps: [
@@ -282,7 +338,7 @@ export const AGENTS: readonly AgentDef[] = [
     correspondence: ["agent"],
     needs: ["the client's Meta Business login", "TWILIO_WHATSAPP_FROM"],
     firstTick: "Inbound WhatsApp messages get an agent reply, on the same route as SMS.",
-    bound: "The same per-sender budget as the SMS agent.",
+    bound: "The same 20-an-hour per-sender budget as the SMS agent, on the same route.",
     verify: "Conversations → a thread whose channel is WhatsApp.",
     stop:
       "Switch off 'whatsapp-agent' (inbound replies stop). The separate 'whatsapp' switch controls " +
@@ -310,7 +366,16 @@ export const AGENTS: readonly AgentDef[] = [
     bound: "One resolved context per inbound message, at most 30 days old.",
     verify: "Conversations → a reply that names the appointment type the invite offered.",
     stop: "Switch it off. With no context resolved the agent is byte-for-byte its old self.",
-    gaps: ["Post-op check-ins deliberately never prime the agent (POSTOP_NEVER_PRIMES)."],
+    // The constant behind this sentence is POSTOP_NEVER_PRIMES in
+    // src/lib/agent/reply-context.ts, and it stays in this comment: `gaps` is
+    // handed straight back to a practice owner as agent_status's `knownGaps`,
+    // and a bare identifier in brackets is a reference he cannot resolve. Same
+    // argument as the ruling codes deleted from the abandoned-rescue entry.
+    gaps: [
+      "Post-op check-ins deliberately never prime it: someone answering 'how is the healing going?' " +
+        "is telling the practice about a wound, not accepting an appointment, and a reply that late " +
+        "is usually about something else entirely.",
+    ],
   },
   // -------------------------------------------------------------------------
   // Patient lifecycle (the drain modules)
@@ -368,9 +433,15 @@ export const AGENTS: readonly AgentDef[] = [
     bound: "The reactivation_settings daily contact limit, enforced before drafting.",
     verify: "Reactivation worklist → touches move to sent; the drain reports perSource.reactivation.",
     stop: "Switch off 'reactivation'.",
+    // MISSING_FROM_MIGRATIONS in src/lib/test-support/fake-supabase.ts is where
+    // the four tables are hand-declared for the test fake. The name stays in this
+    // comment for the same reason as POSTOP_NEVER_PRIMES above: `gaps` is read
+    // back to the owner as `knownGaps`, and "see X in the fake" is an instruction
+    // to a developer, not an answer to a practice.
     gaps: [
-      "Its four tables were created out-of-band and have no migration, so their real constraints are " +
-        "invisible from the repo (see MISSING_FROM_MIGRATIONS in the fake).",
+      "Its four tables were created directly on the database rather than by a migration, so the " +
+        "repository cannot see what the live columns and constraints actually are. Nothing is broken " +
+        "by it today; it is what to check first if a reactivation write ever fails on live and not here.",
     ],
   },
   {
@@ -393,7 +464,12 @@ export const AGENTS: readonly AgentDef[] = [
       "Confirmations go out for appointments already inside their T-48/T-24/T-3 windows — which on " +
       "day one is a BACKLOG, not a trickle. The two-pass sweep settles unsendable targets first and " +
       "then sends at most 25 a run by default, soonest appointment first.",
-    bound: "NOSHOW_MAX_SENDS_PER_RUN per tick, every ten minutes.",
+    // Same correction as the sentence above it: the number, not its variable
+    // name. 25 is NOSHOW_DEFAULT_MAX_SENDS_PER_RUN and the env name that raises
+    // it is already in `needs`. Ten minutes is app-sweep-noshow's registered
+    // schedule (`*/10 * * * *` in ./scheduler.ts), not an assumption — the
+    // comment on NOSHOW_DEFAULT_MAX_SENDS_PER_RUN still says "hourly".
+    bound: "At most 25 confirmations a run by default, and the run comes round every ten minutes.",
     verify: "No-show worklist → confirmations sent; the drain reports perSource.noshow (transactional, drains second).",
     stop: "Switch off 'no-show-defence'. Confirmations, reminders AND waitlist fill all stop.",
     gaps: [
@@ -444,7 +520,15 @@ export const AGENTS: readonly AgentDef[] = [
     firstTick:
       "NOTHING IS SENT. The sweep drafts follow-ups for a human to approve; approval is the only " +
       "thing that ever writes closer_outbox.",
-    bound: "CLOSER_DRAFT_BUDGET_LIMIT drafts per CLOSER_DRAFT_BUDGET_WINDOW; CLOSER_COOLDOWN_HOURS between chases.",
+    // The figures are DEFAULT_CLOSER_CONFIG in src/lib/closer/types.ts
+    // (maxExaminedPerRun 500, maxDraftsPerRun 25, cooldownHours 24), read by the
+    // sweep at src/app/api/closer/sweep/route.ts:97/132/196. The old sentence
+    // named CLOSER_DRAFT_BUDGET_LIMIT/_WINDOW instead, which is the MODEL-cost
+    // guard in draft.ts (200 an hour) rather than the volume the owner asked
+    // about, and named it with no figure at all.
+    bound:
+      "At most 500 plans looked at and 25 drafts written a run; a plan whose draft was refused, or " +
+      "whose approved message failed to deliver, waits 24 hours before it is tried again.",
     verify: "The closer queue in the coordinator worklist fills with drafts. Nothing leaves until someone approves.",
     stop: "Switch off 'treatment-closer'. Drafting stops and approved-but-unsent rows stop draining.",
     gaps: [
@@ -470,7 +554,14 @@ export const AGENTS: readonly AgentDef[] = [
       "COLLECTION_PAYMENT_URL",
     ],
     firstTick: "NOTHING IS SENT. Reminders are drafted for approval; no figure is quoted by default.",
-    bound: "COLLECTION_DRAFT_BUDGET_LIMIT per window; COLLECTION_COOLDOWN_HOURS between reminders.",
+    // DEFAULT_COLLECTION_CONFIG in src/lib/collection/types.ts (maxExaminedPerRun
+    // 300, maxVerifyReadsPerRun 40, maxDraftsPerRun 10, cooldownHours 24), read
+    // by the sweep at src/app/api/collection/sweep/route.ts:149/194/195/278. As
+    // with the closer, COLLECTION_DRAFT_BUDGET_LIMIT is the model-cost guard, not
+    // the volume, and the old sentence carried no figure at all.
+    bound:
+      "At most 300 accounts looked at, 40 balances verified against Dentally and 10 drafts written " +
+      "a run; an account that could not be verified waits 24 hours before it is tried again.",
     verify: "The balance queue fills with drafts. Nothing leaves until someone approves.",
     stop: "Switch off 'balance-reminders'.",
     gaps: [
@@ -538,13 +629,24 @@ export const AGENTS: readonly AgentDef[] = [
     // switch changes nothing at all — no invite, no queue row, no error — which
     // is the failure a person only discovers by waiting a day for a text that was
     // never going to come. §2 of the runbook already says it in those words
-    // ("Needs first — and this one is a hard stop"), and runbook.test.ts's
+    // ("Needs first — and this one is a hard stop"), and ./scheduler.ts's
     // SCHEDULER holds the read of cron.job that makes it true: app-sweep-previsit
     // is not registered. Registering it deletes this clause AND flips the
     // SCHEDULER row, in one edit, or the tests disagree with each other.
     needs: [
       "a cron registration for /api/previsit/sweep — until it is run the switch sends nothing at all, " +
         "silently: no invite, no queue row, no error (the SQL is in §2 of docs/runbooks/agent-switch-on.md)",
+      // THE SECOND JOB THIS MODULE OWNS (wave-3c handoff H39/B77). The module has
+      // TWO unregistered sweeps and this line named one of them, so an owner who
+      // arranged everything "Needs first" asked for still had a nightly scan that
+      // never ran — and, unlike the questionnaire, that one has a manual door, so
+      // the honest sentence is "or" rather than a second hard stop. Both jobs are
+      // in the runbook §2 table and in SCHEDULER (app-sweep-previsit-mining,
+      // 20 2 * * *, not registered); registering it deletes this clause and flips
+      // that row in the same edit.
+      "a cron registration for /api/previsit/mining-sweep, or the implant-candidate list grows only " +
+        "when the owner presses Build / refresh candidates on the Implants tab (that SQL is in §2 of " +
+        "docs/runbooks/agent-switch-on.md too)",
       "PUBLIC_BASE_URL, so the link the text carries resolves",
     ],
     // DELIVERY COPY MATCHES THE CODE (ruling W3/9). The brief asked for the link
@@ -558,7 +660,8 @@ export const AGENTS: readonly AgentDef[] = [
     firstTick:
       "Patients with an appointment coming up are sent a link to a short questionnaire. " +
       "It is its own text, sent before the appointment and separate from the medical-history " +
-      "link — one extra message per appointment.",
+      "link — one extra message per appointment. Switching it on also opens the implant-candidate " +
+      "list on the Implants tab, which the owner builds by hand and which messages nobody.",
     bound: "One invite per upcoming appointment, bounded per site by the sweep's own page cap.",
     // THE SURFACE THIS NAMES HAS TO BE ONE THAT RENDERS (wave-3 review, 4 Sep
     // 2026). This field is the runbook's "verify in the first hour" step AND the
@@ -568,7 +671,8 @@ export const AGENTS: readonly AgentDef[] = [
     // appointment-level surface — the diary's appointment panel reads no triage
     // summary. `previsitSummaryFor` has exactly two non-test callers: the record
     // tab below and the co-pilot's previsit_summary tool. Pinned by
-    // roster.test.ts, "the pre-visit summary is verified where it is rendered".
+    // roster.test.ts, "the pre-visit summary is verified on the record, which is
+    // where it is drawn".
     verify:
       "The patient's Correspondence tab shows the invite; a completed form appears as " +
       "'What the patient shared before this visit', above the appointment list on the patient " +
@@ -636,7 +740,11 @@ export const AGENTS: readonly AgentDef[] = [
       "seen after that is asked at 10am the next morning. Those hours are the shipped defaults.",
     bound: "One request per attended appointment; the drain's daily cap yields to every lifecycle message.",
     verify: "The drain reports perSource.reviews.sent; the request rows move to sent.",
-    stop: "Switch off 'reviews', or unset REVIEW_LINK_URL.",
+    // `stop` is read back by the co-pilot as `howToStopIt`, so the second clause
+    // used to hand a practice owner an environment-variable name as one of his
+    // two ways to stop an agent. The clause is true (the sweep no-ops without the
+    // link) and stays, in words; the name it needs is already in `needs`.
+    stop: "Switch off 'reviews'. Clearing the review link the sweep sends people to also stops it dead.",
     gaps: ["Templated deliberately: a model must never paraphrase a review link or an incentive."],
   },
   {
@@ -655,7 +763,7 @@ export const AGENTS: readonly AgentDef[] = [
     // This field used to say "the app-sweep-outreach cron REGISTERED
     // (supabase/ops/register-outreach-cron.sql — NOT applied)". `cron.job` says
     // otherwise and has for months: app-sweep-outreach is registered, active and
-    // firing every ten minutes (runbook.test.ts's SCHEDULER holds the read, and
+    // firing every ten minutes (scheduler.ts's SCHEDULER holds the read, and
     // §2 of the runbook prints it). This is not documentation drift — vocabulary.ts
     // reads `needs` BY IDENTITY into `needsFirst`, /api/systems ships it, and
     // systems-view.tsx prints "Needs first: …" on every switched-OFF row, so the
@@ -712,13 +820,16 @@ export const AGENTS: readonly AgentDef[] = [
     correspondence: [],
     recordNote: "It never messages anyone. It writes a row the in-app Notifications feed reads.",
     // SAME CORRECTION AS OUTREACH, SAME RULING (W3/7). app-sweep-anomaly is
-    // registered and active, hourly at minute 45 — not the minute 40 that
-    // supabase/ops/register-anomaly-cron.sql would set, which is the second reason
-    // this line had to go: an owner who acted on it and ran that file would have
-    // re-scheduled a working job (cron.schedule updates a job of the same name),
-    // and the runbook warns about exactly that at §2. Empty for the same reason as
-    // outreach: this agent needs nothing arranged. It writes notification rows and
-    // messages nobody, so there is no sender, link or key to prepare.
+    // registered and active, hourly at minute 45. Its ops file used to propose
+    // minute 40 — the hourly Dentally prewarm's own minute — so an owner who acted
+    // on this line and ran that file would have re-scheduled a job that had been
+    // working for months (cron.schedule updates a job of the same name), and the
+    // runbook warns about exactly that at §2. The file was corrected to 45 under
+    // ruling W3/22 on 5 September 2026, and src/lib/agent-wiring/
+    // ops-cron-registration.test.ts now holds every ops file to the minute its job
+    // really runs. Empty for the same reason as outreach: this agent needs nothing
+    // arranged. It writes notification rows and messages nobody, so there is no
+    // sender, link or key to prepare.
     needs: [],
     firstTick: "The first hourly pass raises alerts for takings dips, no-show clusters, SLA breaches and stuck queues.",
     bound: "Deduped per condition; an alert only resolves on evidence the condition ENDED.",
@@ -730,7 +841,7 @@ export const AGENTS: readonly AgentDef[] = [
       // on every pass. `gaps` reaches the owner too — the co-pilot's agent_status
       // returns it as `knownGaps` — so a false gap is a false answer, not just a
       // stale note. Collection and post-op keep theirs: those two really are
-      // unregistered (SCHEDULER in runbook.test.ts, read from cron.job).
+      // unregistered (SCHEDULER in ./scheduler.ts, read from cron.job).
       "Alerts are client-scoped while the notifications feed is site-scoped.",
     ],
   },
@@ -756,9 +867,30 @@ export const AGENTS: readonly AgentDef[] = [
     bound: "One message per member of staff per publication, and one per day from the sweep.",
     verify: "The publish response reports notifiedStaff / notifiedShifts / sendFailures.",
     stop: "Switch off 'rota'. Auto-generation and the staff texts stop together.",
+    // WHAT WAS HERE, AND WHY IT COULD NOT STAY. The single gap read: "The only
+    // toggle read in the tree that happens INSIDE a loop (per client), which is
+    // the pattern every other sweep should eventually follow." That is a note
+    // from one build lane to another about the shape of our source, and `gaps` is
+    // not a note field — src/lib/copilot/tools.ts hands it to the practice
+    // verbatim as agent_status's `knownGaps`, exactly as the reactivation and
+    // anomaly-alerts entries above already say against themselves. So an owner
+    // asking "is there anything I should know before I switch the staff rota
+    // texts on?" was answered with an observation about our loops that he can
+    // neither act on nor tell apart from a warning ("the only ... in the tree"
+    // reads as a defect). It was also untrue: the shared ten-row gate
+    // (liveSwitch().stillOn(), src/lib/systems/live-switch.ts) re-reads its
+    // switch inside the loop in eight sweeps, and it is THAT gate the rest of the
+    // tree follows — this per-client read is the weaker pattern, which is why
+    // runbook.test.ts section 6 files the 06:00 sweep under "once" and section 0
+    // of the runbook lists `rota` among the sweeps that run their batch out.
+    // The fact underneath it is real and does belong to the owner, so it is
+    // restated below in his terms: the same remedy this file already used for
+    // POSTOP_NEVER_PRIMES and MISSING_FROM_MIGRATIONS.
     gaps: [
-      "The only toggle read in the tree that happens INSIDE a loop (per client), which is the pattern " +
-        "every other sweep should eventually follow.",
+      "Switching this off part-way through the 06:00 run does not stop that run: the switch is read " +
+        "once for the practice and the staff still to be worked through are texted anyway. These go " +
+        "out as they are drafted rather than waiting in a queue, so switching off takes hold from the " +
+        "next morning's run. Publishing a rota is different — that is refused the moment you switch off.",
     ],
   },
 ] as const;

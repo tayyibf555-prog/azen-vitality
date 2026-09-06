@@ -120,7 +120,9 @@ const COPILOT_ACCESS: readonly Role[] = [
 
 /** The roles that reach a module today, spelled out per slug this file depends on. */
 const MODULE_HOLDERS: Record<string, readonly Role[]> = {
-  // The co-pilot: owner, agency and the practice manager (scoped — see above).
+  // The co-pilot: EVERY known role since W1-E/2 (see COPILOT_ACCESS above). The
+  // per-person grant narrows WHO may ask; src/lib/copilot/scope.ts's
+  // ACCESS_BY_ROLE decides what each of them is answered with.
   "co-pilot": COPILOT_ACCESS,
   // Front-desk modules: the three original roles, and neither new role.
   "no-show-defence": APPROVER,

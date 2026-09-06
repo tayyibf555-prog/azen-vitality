@@ -55,14 +55,39 @@ function maybe<T>(value: T | "throw", name: string): T {
   return value;
 }
 
+/** What each list read was ASKED for, on the last call. */
+const limits: Record<string, number | undefined> = {};
+
+/**
+ * A LIST STUB THAT HONOURS `limit`, BECAUSE THE REAL ONE DOES AND THE FLOOR
+ * TESTS BELOW ARE ONLY EVIDENCE IF IT DOES.
+ *
+ * `listLeads` and `listTargets` both end in `.limit(args.limit ?? N)`
+ * (src/lib/speed-to-lead/repository.ts, src/lib/triage/repository.ts), so the
+ * database can NEVER hand the band more rows than the band asked for. A stub
+ * that ignored the argument and returned the whole fixture broke that link: it
+ * let a seeded 201-row fixture reach `figure()` however small a page the code
+ * requested, so "a read at the cap is a FLOOR" proved only that the FORMATTER
+ * handles an over-full array. Drop the `+ 1` from either read — the one thing
+ * that makes `rowCount > TILE_ROW_CAP` reachable at all — and the whole suite
+ * stayed green while the band began printing an exact "200 sent, awaiting an
+ * answer" for a practice with hundreds more out. Charter §0/11: the mock must
+ * be at least as strict as live.
+ */
+function bounded<T>(value: T[] | "throw", name: string, args?: { limit?: number }): T[] {
+  limits[name] = args?.limit;
+  const rows = maybe(value, name);
+  return args?.limit === undefined ? rows : rows.slice(0, args.limit);
+}
+
 vi.mock("@/lib/systems/repository", () => ({
   getSystemStates: async () => maybe(systemStates, "getSystemStates"),
 }));
 vi.mock("@/lib/speed-to-lead/repository", () => ({
-  listLeads: async () => maybe(leads, "listLeads"),
+  listLeads: async (args: { limit?: number }) => bounded(leads, "listLeads", args),
 }));
 vi.mock("@/lib/triage/repository", () => ({
-  listTargets: async () => maybe(targets, "listTargets"),
+  listTargets: async (args: { limit?: number }) => bounded(targets, "listTargets", args),
 }));
 // ASSET_ROW_CAP is re-exported by the mock rather than dropped: the band reads
 // the register's OWN bound to decide whether its figure is a floor, and a mock
@@ -97,6 +122,7 @@ const ALL_OFF = ALL_ON.map((s) => ({ ...s, enabled: false }));
 
 beforeEach(() => {
   called.length = 0;
+  for (const k of Object.keys(limits)) delete limits[k];
   vi.spyOn(console, "error").mockImplementation(() => {});
   systemStates = ALL_ON;
   leads = [];
@@ -334,6 +360,42 @@ describe("a switched-on system prints an honest figure", () => {
       tone: "neutral",
     });
   });
+
+  // THE HEADLINE COUNT AND THE TILE BESIDE IT MUST NOT DISAGREE (ruling W3/31).
+  //
+  // Four owner switches arm a sweep with no scheduled job. The pre-visit tile
+  // already says "On, but nothing runs it yet" for one of them; counting the
+  // same system in a headline "running" figure put two cells of one instrument
+  // in contradiction, with the summary-shaped one wrong. And three of the four
+  // — treatment-closer, balance-reminders, postop-checkin — have no tile of
+  // their own at all, so this figure is the only thing Home says about them and
+  // nothing on the front door could have corrected it.
+  it("a switched-on system with no scheduled job is not counted as running, and is named", async () => {
+    systemStates = [
+      { slug: "recall", enabled: true }, // registered: genuinely running
+      { slug: "pre-visit-triage", enabled: true }, // armed, no cron job
+      { slug: "postop-checkin", enabled: true }, // armed, no cron job, and no tile of its own
+      { slug: "reviews", enabled: false },
+    ];
+    expect(tile(await readOsBand(OWNER), "automations").state).toEqual({
+      kind: "fact",
+      // One of the four is running; two are switched on and inert; the
+      // denominator is still every controllable system there is.
+      text: "1 of 4 running, 2 not started",
+      tone: "attention",
+    });
+  });
+
+  it("takes the stalled slugs from the scheduler, not from a list of its own", async () => {
+    // The derivation, the same one the pre-visit tile uses: registering the two
+    // jobs (a status edit in src/lib/agent-wiring/scheduler.ts) restores them to
+    // the running count with no edit to this module. `recall` above is the
+    // control — a slug the scheduler DOES run, which must keep counting.
+    const { slugsWithNoScheduledJob } = await import("@/lib/agent-wiring/scheduler");
+    const stalled = slugsWithNoScheduledJob();
+    expect(stalled).toEqual(expect.arrayContaining(["pre-visit-triage", "postop-checkin"]));
+    expect(stalled).not.toContain("recall");
+  });
 });
 
 describe("the write-back tile's ZERO is as honest as its figure", () => {
@@ -430,6 +492,45 @@ describe("the pre-visit figure is one the practice can clear", () => {
     ).toMatch(/stopTarget\(\s*[^)]*"expired"\s*\)/);
   });
 
+  // THE ZERO THAT IS NOT A ZERO (wave-3b handoff B128, ruling W3/31). The
+  // pre-visit sweep has no scheduled job, so a switched-on module sends nothing
+  // and this tile's honest-looking "0 sent, awaiting an answer" was the same
+  // fail-open the control panel's "Switched on, but it has not started" sentence
+  // was written to close — printed one screen earlier and read by more people.
+  it("an ON module whose sweep has no scheduled job says so instead of printing 0", async () => {
+    targets = [];
+    expect(tile(await readOsBand(OWNER), "pre-visit").state).toEqual({
+      kind: "fact",
+      text: "On, but nothing runs it yet",
+      tone: "attention",
+    });
+  });
+
+  it("takes that fact from the scheduler, not from a list of its own", async () => {
+    // The derivation, not the sentence: this tile qualifies itself because
+    // `pre-visit-triage` is in slugsWithNoScheduledJob(), so registering the job
+    // (a two-line edit to src/lib/agent-wiring/scheduler.ts) restores the figure
+    // without anybody remembering this file exists.
+    const { slugsWithNoScheduledJob } = await import("@/lib/agent-wiring/scheduler");
+    expect(slugsWithNoScheduledJob()).toContain("pre-visit-triage");
+    expect(slugsWithNoScheduledJob().length, "the scheduler reports every sweep as registered")
+      .toBeGreaterThan(0);
+  });
+
+  it("never hides a real number behind it", async () => {
+    // The other direction, and the one that would be a worse defect: a count
+    // that exists is proof the sweep ran, whatever this module records. Only the
+    // EMPTY figure is replaced.
+    targets = [{}, {}, {}];
+    expect(tile(await readOsBand(OWNER), "pre-visit").state).toEqual({
+      kind: "figure",
+      value: 3,
+      noun: "sent, awaiting an answer",
+      atLeast: false,
+      tone: "neutral",
+    });
+  });
+
   it("counts the questionnaires out, and prints a floor at the bound", async () => {
     // The noun the paragraph above is about, pinned as text: a rename that made
     // it a claim about something other than an outstanding answer would land
@@ -443,6 +544,51 @@ describe("the pre-visit figure is one the practice can clear", () => {
       tone: "neutral",
     });
   });
+
+  it("reads ONE ROW PAST the bound, or the floor above could never be true", async () => {
+    // THE READ, NOT THE FORMATTER. `figure()` decides `atLeast` from
+    // `rowCount > TILE_ROW_CAP`, and that comparison is reachable only because
+    // the query asks for TILE_ROW_CAP + 1: a read bounded at exactly the cap
+    // cannot come back with more than the cap, so `atLeast` would be
+    // structurally false and this tile would print a flat "200 sent, awaiting
+    // an answer" — a complete-looking total — to a practice with hundreds more
+    // links out. That is rule 4 of the module header ("a number at its cap is a
+    // floor, not a total") and programme ruling W3/11, and dropping the `+ 1`
+    // used to leave the whole suite green, because the stub ignored `limit`.
+    // The stub honours it now, so the assertion below is the real path and the
+    // recorded argument is the diagnosis printed alongside it.
+    targets = Array.from({ length: TILE_ROW_CAP * 4 }, () => ({}));
+    const state = tile(await readOsBand(OWNER), "pre-visit").state;
+    expect(limits.listTargets, "the questionnaire read must reach past its own bound").toBe(
+      TILE_ROW_CAP + 1,
+    );
+    expect(state).toEqual({
+      kind: "figure",
+      value: TILE_ROW_CAP,
+      noun: "sent, awaiting an answer",
+      atLeast: true,
+      tone: "neutral",
+    });
+  });
+
+  it("the enquiries read reaches past ITS bound too — the sibling this one drifted from", async () => {
+    // The symmetry is the point: both figures on the band are floors off
+    // bounded reads, and the pre-visit one went un-probed for a whole wave
+    // while the leads one was pinned in os-scenarios/j8-honest-numbers. Neither
+    // is now pinned only by its neighbour.
+    leads = Array.from({ length: TILE_ROW_CAP * 4 }, () => ({}));
+    const state = tile(await readOsBand(OWNER), "leads").state;
+    expect(limits.listLeads, "the enquiries read must reach past its own bound").toBe(
+      TILE_ROW_CAP + 1,
+    );
+    expect(state).toEqual({
+      kind: "figure",
+      value: TILE_ROW_CAP,
+      noun: "awaiting first contact",
+      atLeast: true,
+      tone: "attention",
+    });
+  });
 });
 
 describe("a read that failed never wears a number's clothes", () => {
@@ -454,8 +600,16 @@ describe("a read that failed never wears a number's clothes", () => {
     expect(tile(band, "leads").state.kind).toBe("unreadable");
     expect(tile(band, "equipment").state.kind).toBe("unreadable");
     expect(tile(band, "it-desk").state.kind).toBe("unreadable");
-    // One failure does not take the others down.
-    expect(tile(band, "pre-visit").state.kind).toBe("figure");
+    // One failure does not take the others down. The pre-visit read SUCCEEDED
+    // and returned nothing, which since B128 prints as the unscheduled-sweep
+    // sentence rather than a bare zero — the point here is that it is not
+    // "unreadable", and that the distinction survives three siblings throwing.
+    expect(tile(band, "pre-visit").state.kind).not.toBe("unreadable");
+    expect(tile(band, "pre-visit").state).toEqual({
+      kind: "fact",
+      text: "On, but nothing runs it yet",
+      tone: "attention",
+    });
   });
 
   it("unreadable SWITCHES stop every read and say the band's state is unknown", async () => {

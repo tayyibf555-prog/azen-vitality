@@ -1,5 +1,6 @@
 import { checkAgentReply } from "@/lib/agent/guardrail";
 import { fundingTermIn } from "./forbidden";
+import { gsm7LengthUnits } from "./sms-cost";
 
 // ===========================================================================
 // EVERY PATIENT-FACING WORD THIS MODULE SENDS. PURE, no I/O, no model.
@@ -27,6 +28,25 @@ import { fundingTermIn } from "./forbidden";
 // id instead, and it is why MAX_CHARS below is a real constraint rather than a
 // tidiness rule: `previsitBody` is asserted under it in copy.test.ts at a
 // realistic origin length.
+//
+// ONE CREDIT *FOR A NAME GSM-7 CAN CARRY*, AND THE MODULE NOW SAYS SO. The
+// ceiling used to be checked with `body.length`, which counts UTF-16 code units
+// and knows nothing about the alphabet a carrier bills in. A single letter
+// GSM 03.38 has no code point for — the ł in Małgorzata, the â in Siân, the ț
+// in Ionuț — forces the WHOLE body into UCS-2, where one segment is 70 units,
+// not 160. The composed message is ~140 characters either way, so such a
+// message is two or three credits while passing a check that certified it as
+// one. `./sms-cost.ts` is the honest measure (and the numbers above are from
+// it, not from an estimate); `smsCost` is asserted on the shipped body for both
+// alphabets in copy.test.ts, so the real figure is a pinned fact rather than a
+// surprise on an invoice.
+//
+// The scan does NOT refuse a body for being UCS-2. Refusing would mean the
+// practice never texts a patient because of how their name is spelled, which is
+// a worse failure than the cost, and the name is the one part of this message
+// the platform does not get to write. What to do about the 2-3x for that cohort
+// (transliterate the greeting? drop to a neutral one? accept it?) changes words
+// a patient reads, so it is the owner's call and not this file's.
 //
 // ---------------------------------------------------------------------------
 // WHY THE MEDICAL-HISTORY LINK IS NOT IN THIS MESSAGE.
@@ -136,12 +156,17 @@ export type TriageScanResult =
   | { ok: false; category: TriageRefusalCategory; matched: string };
 
 /**
- * ONE SMS CREDIT. 160 GSM-7 characters, and the ceiling is enforced on the whole
+ * ONE SMS CREDIT. 160 GSM-7 septets, and the ceiling is enforced on the whole
  * composed body including the link.
  *
  * Not 306 (two segments) and not 320 (post-op's ceiling): the brief was one
  * credit, and a ceiling set at two segments would let the message grow to two
  * without anybody noticing that it had.
+ *
+ * SEPTETS, NOT `body.length` — see the header. The unit is `gsm7LengthUnits`,
+ * which charges two for an escape-table character (`[`, `]`, `{`, `}`, `\`,
+ * `^`, `~`, `|`, `€`), because the wire does. A body of 160 characters holding
+ * one `[` is two segments, and the old measure called it one.
  */
 export const MAX_CHARS = 160;
 
@@ -251,8 +276,16 @@ export function checkTriageMessage(
   const dash = /[—–]/.exec(text);
   if (dash) return { ok: false, category: "em_dash", matched: dash[0] };
 
-  if (text.length > MAX_CHARS) {
-    return { ok: false, category: "too_long", matched: `${text.length} chars` };
+  // THE LENGTH RULE, IN THE UNIT THE CARRIER COUNTS IN. `text.length` was the
+  // wrong measure twice over: it charged one for an escape-table character the
+  // wire charges two for, and it certified "one credit" for a UCS-2 body that
+  // is two or three. The refusal stays keyed to the septet count — the thing it
+  // was written to catch is the TEMPLATE growing — and the true cost of a body
+  // in either alphabet is `smsCost`, which nothing here refuses on. See the
+  // header for why a name outside GSM-7 must not cost the patient their message.
+  const units = gsm7LengthUnits(text);
+  if (units > MAX_CHARS) {
+    return { ok: false, category: "too_long", matched: `${units} chars` };
   }
   return { ok: true };
 }
@@ -314,9 +347,27 @@ export const TRIAGE_PUBLIC_COPY = {
    * The one line of orientation. It sets the expectation (short), the stakes
    * (none) and the point (so we are ready for you). It does NOT say "so we can
    * plan your treatment", which would be a claim about what happens next.
+   *
+   * IT ALSO DOES NOT OFFER A SKIP, BECAUSE THE FORM DOES NOT HAVE ONE. It used
+   * to end "you can skip anything you would rather talk about in person", and
+   * that was simply untrue: `defaultConfigFor` ships `attending`,
+   * `health-changed`, the interest grid and (on the full bank) `visit-reason`
+   * REQUIRED, `outstandingCount` counts every unanswered one of them plus every
+   * unanswered interest row, and the submit button is disabled until that count
+   * is zero. A patient who took the sentence at its word met a dead button with
+   * a count line for an explanation, and the likeliest outcome was an abandoned
+   * form on the very question the sentence was written for.
+   *
+   * The design is right and the sentence was wrong, so the sentence changed
+   * (ruling W3/9: copy matches code, never the reverse). What the form actually
+   * offers is REQUIRED-BUT-REFUSABLE: the handful we insist on can each be
+   * answered without going into anything ("I'm not sure yet", "Something else",
+   * "Not right now", and health-changed's own help line already says a yes or a
+   * no is enough), and the detail waits for the chair. That is what it now says.
+   * Pinned by "the intro never promises a skip the form will not allow".
    */
   intro:
-    "A few quick questions so we are ready for you. It takes about a minute, and you can skip anything you would rather talk about in person.",
+    "A few quick questions so we are ready for you. It takes about a minute. Most are optional, and where we do need an answer there is always one that leaves the details for your visit.",
   /** Under the interest grid. Says plainly that yes is not a commitment. */
   interestNote:
     "Saying yes just means someone will have a chat with you about it. Nothing is booked and nothing is charged.",

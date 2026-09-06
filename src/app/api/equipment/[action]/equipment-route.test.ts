@@ -22,8 +22,16 @@ const store = vi.hoisted(() => ({
   systemEnabled: false,
   assets: [] as Record<string, unknown>[],
   assetsFail: false,
+  // The manual INDEX read, which has three outcomes and not two: a list, an
+  // empty list, and null for "the read failed". Section 6 below is about the
+  // third, so it is a seam here rather than the fixed `[]` it used to be.
+  manuals: [] as Record<string, unknown>[],
+  manualsFail: false,
   turns: 0,
   emptyReply: false,
+  // What the route actually handed the model. Captured so a claim about the
+  // prompt can be asserted rather than reasoned about.
+  lastSystemPrompt: null as string | null,
 }));
 
 vi.mock("@/lib/mock/clients", () => ({
@@ -67,7 +75,7 @@ vi.mock("@/lib/systems/repository", () => ({
 
 vi.mock("@/lib/equipment/repository", () => ({
   listAssets: async () => (store.assetsFail ? null : store.assets),
-  listManuals: async () => [],
+  listManuals: async () => (store.manualsFail ? null : store.manuals),
   importAssets: async () => ({ inserted: 0, updated: 0, failed: [] }),
   createAsset: async () => "new-id",
   updateAsset: async () => true,
@@ -83,8 +91,9 @@ vi.mock("@/lib/telemetry", () => ({ recordUsage: async () => {} }));
 vi.mock("@anthropic-ai/sdk", () => ({ default: class Anthropic {} }));
 
 vi.mock("@/lib/agent/run", () => ({
-  runAgentTurn: async () => {
+  runAgentTurn: async (_history: unknown, opts: { systemPrompt?: string }) => {
     store.turns += 1;
+    store.lastSystemPrompt = typeof opts?.systemPrompt === "string" ? opts.systemPrompt : null;
     return {
       replyText: store.emptyReply ? "" : "The manual says, on page 3, that E04 means the door did not seal.",
       toolCalls: [],
@@ -117,7 +126,10 @@ beforeEach(() => {
   store.systemEnabled = true;
   store.assets = [ASSET];
   store.assetsFail = false;
+  store.manuals = [];
+  store.manualsFail = false;
   store.turns = 0;
+  store.lastSystemPrompt = null;
   store.emptyReply = false;
 });
 
@@ -378,5 +390,78 @@ describe("5. an unknown action is a 404, not a fall-through", () => {
       { params: Promise.resolve({ action: "nonsense" }) },
     );
     expect(response.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. AN UNREADABLE MANUAL INDEX IS NOT AN EMPTY ONE.
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT THIS PINS. The route built the prompt's manual index as
+// `new Set((manuals ?? []).filter(...))`, so `listManuals` returning null —
+// which is what it returns when the READ FAILED, not when the practice has
+// uploaded nothing — arrived at buildEquipmentSystemPrompt as an empty set.
+// The prompt then printed `manual: NO` beside every machine on the register and
+// paired it with "if the asset has no manual uploaded, say so and suggest
+// uploading it on the Manuals tab". A nurse asking about the autoclave would
+// have been told, confidently, that the practice has no manual for it and
+// invited to upload one it uploaded months ago.
+//
+// `buildEquipmentSystemPrompt` has taken `ReadonlySet<string> | null` since the
+// wave-3 prompt fix and its own behaviour on null is proven in
+// src/lib/equipment/prompt.test.ts §3c. What was missing was the WIRING — and
+// tsc was clean either way, because a Set and a Set are the same type, so
+// nothing went red to remind anybody. That is exactly the shape that needs a
+// route-level test.
+describe("6. a failed manual-index read reaches the prompt as null, not as 'no manuals'", () => {
+  it("emits NO manual column and forbids saying a machine has no manual", async () => {
+    store.manualsFail = true;
+    const response = await ask("when is the autoclave next due a service?");
+    expect(response.status).toBe(200);
+    expect(store.turns).toBe(1);
+    const prompt = String(store.lastSystemPrompt);
+    // The register line for the one asset must carry no verdict about its manual.
+    expect(prompt, "the index still claims a manual state we could not read").not.toMatch(
+      /manual: (yes|NO)/,
+    );
+    // And the model is told, in terms, not to make the claim itself.
+    expect(prompt).toMatch(/could not be read just now/i);
+    expect(prompt).toMatch(/NEVER tell anyone a machine has no manual/i);
+    expect(prompt).toMatch(/search_manual/);
+    // The invitation to upload is GONE — it is the sentence that did the damage.
+    expect(prompt, "still inviting an upload of a manual that may already be there").not.toMatch(
+      /suggest uploading it on the Manuals tab/i,
+    );
+  });
+
+  it("still says 'manual: NO' when the index READ FINE and the manual is genuinely absent", async () => {
+    // The control. Without it the assertions above pass on a prompt that has
+    // simply lost its manual column altogether, which would be the opposite
+    // defect: a practice that never learns a manual is missing.
+    store.manualsFail = false;
+    store.manuals = [];
+    const response = await ask("when is the autoclave next due a service?");
+    expect(response.status).toBe(200);
+    const prompt = String(store.lastSystemPrompt);
+    expect(prompt).toMatch(/manual: NO/);
+    expect(prompt).toMatch(/suggest uploading it on the Manuals tab/i);
+    expect(prompt).not.toMatch(/NEVER tell anyone a machine has no manual/i);
+  });
+
+  it("says 'manual: yes' for an asset whose manual is ready, so the column means something", async () => {
+    store.manualsFail = false;
+    store.manuals = [{ assetId: "a1", status: "ready" }];
+    await ask("what does E04 mean on the autoclave?");
+    expect(String(store.lastSystemPrompt)).toMatch(/manual: yes/);
+  });
+
+  it("does not count a manual that is still INGESTING as one the desk can quote", async () => {
+    // `status === "ready"` is the filter, and it is the difference between a
+    // manual whose text is in the chunk table and a PDF that is still being
+    // read. Only the first can be searched.
+    store.manualsFail = false;
+    store.manuals = [{ assetId: "a1", status: "ingesting" }];
+    await ask("what does E04 mean on the autoclave?");
+    expect(String(store.lastSystemPrompt)).toMatch(/manual: NO/);
   });
 });

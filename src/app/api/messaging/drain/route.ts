@@ -91,6 +91,7 @@ import {
 } from "@/lib/outreach/repository";
 import { SITES } from "@/lib/mock/clients";
 import { getDisabledSlugsForSend } from "@/lib/systems/repository";
+import { liveSwitch } from "@/lib/systems/live-switch";
 import { DRAIN_SOURCE_TO_SLUG } from "@/lib/systems/catalog";
 
 import { dentallyReadKey } from "@/lib/dentally/read";
@@ -104,8 +105,11 @@ function authorized(request: Request): boolean {
   return header === `Bearer ${secret}`;
 }
 
+/** The single pilot client. Both switch reads below are scoped to it. */
+const CLIENT_ID = "vitality";
+
 function vitalitySiteIds(): string[] {
-  return SITES.filter((s) => s.clientId === "vitality").map((s) => s.id);
+  return SITES.filter((s) => s.clientId === CLIENT_ID).map((s) => s.id);
 }
 
 // Per-source, per-run cap on recipient-resolution throws. The rows themselves
@@ -275,17 +279,45 @@ async function dispatch(
 
 async function drainSource(
   source: OutboxSource,
+  slug: string,
   client: DentallyClient,
   siteIds: string[],
   statusCallbackUrl: string | undefined,
   today: string,
   whatsappEnabled: boolean,
-): Promise<{ drained: number; sent: number; failed: number; blocked: number }> {
+): Promise<{ drained: number; sent: number; failed: number; blocked: number; switchedOffMidRun: boolean }> {
+  // THE OWNER'S SWITCH, RE-READ INSIDE THE BATCH (ruling W1-B/5, generalised by
+  // W3/4: the list of long-running loops grows, the rule does not bend).
+  //
+  // The caller has just read the disabled set for THIS source, so row 0 costs no
+  // read — which is exactly the contract src/lib/systems/live-switch.ts is written
+  // to: "the caller is expected to have checked the switch already, before the
+  // loop". From there the gate re-reads every SWITCH_RECHECK_EVERY_ROWS rows and
+  // latches off for the rest of the run once it has seen off.
+  //
+  // WHY THE DRAIN NEEDS THIS AT ALL, when it was the sweeps the ruling named. The
+  // sweeps only DRAFT; live-switch.ts's own header justifies their ten-row bound by
+  // noting that with the old behaviour "nothing was delivered (the drain re-reads
+  // the switch and refuses the source)". The drain was written as the backstop and
+  // had none of its own: it holds a 310-second lease, declares maxDuration 300, and
+  // is the one organ here whose rows reach a patient's handset. An owner who hit the
+  // kill switch twenty seconds into a tick watched the count keep climbing until the
+  // budget ran out. Bounding the sweeps at ten rows for the lesser harm while the
+  // send path ran unbounded was the asymmetry the wrong way round.
+  const gate = liveSwitch(CLIENT_ID, slug);
   const rows = await source.list(siteIds);
   let sent = 0, failed = 0, blocked = 0;
   let resolveFailures = 0;
   let examined = 0;
   for (const row of rows) {
+    // Asked BEFORE anything is done for this row — before the staleness retirement,
+    // before the Dentally lookup, and well before source.claim() — so a run the
+    // owner halted mid-batch leaves every row it never reached at 'queued' and
+    // strands nothing at 'sending'. System controls promises that switching a
+    // system off "halts that system's work: its sweeps, sends, agent replies and
+    // public forms stop"; this is the half of that sentence the drain owes.
+    if (!(await gate.stillOn())) break;
+
     // THE SHARED DENTALLY BUDGET HAS REFUSED THIS RUN. resolveRecipient below reads
     // the patient record from Dentally, so every remaining row would fail its lookup
     // and be counted against the resolve-failure cap — five rows of noise, then a
@@ -500,7 +532,7 @@ async function drainSource(
   }
   // 'drained' counts rows this run actually examined; rows deferred past a cap
   // break stay queued for the next tick and are not counted.
-  return { drained: examined, sent, failed, blocked };
+  return { drained: examined, sent, failed, blocked, switchedOffMidRun: gate.switchedOffMidRun };
 }
 
 async function handleWithDentallyPriority(request: Request): Promise<Response> {
@@ -540,28 +572,9 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
     // The Europe/London calendar day, computed once so every source this run shares one
     // "today" for the cross-module frequency cap (a run cannot straddle local midnight).
     const today = londonDayKey(new Date());
-    // Owner kill switch: a disabled system's outbox must not send. Fetch the
-    // disabled set once. The ForSend variant FAILS CLOSED when messaging is live:
-    // a toggle-read error returns EVERY slug as disabled, so the whole tick skips
-    // rather than sending for a system the owner may have switched off. It behaves
-    // fail-open only under dry-run. Single client in the pilot, matching
-    // vitalitySiteIds().
-    const disabledSlugs = await getDisabledSlugsForSend("vitality");
-    // Channel-preference gate for WhatsApp - DOUBLE-GATED and fail-closed. A
-    // patient's WhatsApp preference is honoured ONLY when BOTH are true:
-    //   1) the owner kill switch is ON - 'whatsapp' is not in the disabled set.
-    //      getDisabledSlugsForSend fails CLOSED when messaging is live (every slug
-    //      disabled on a read error), so a blip leaves WhatsApp treated as OFF; and
-    //      migration 0047 seeds the 'whatsapp' toggle OFF so it is never live by the
-    //      mere ABSENCE of a row (system_toggle is default-ON, like 0041 for outreach).
-    //   2) WhatsApp is actually DELIVERABLE - a WhatsApp sender (TWILIO_WHATSAPP_FROM)
-    //      is configured. Without a sender, routing to WhatsApp would fail the send in
-    //      live mode instead of using SMS, so a 'whatsapp' preference must stay a no-op.
-    // Either gate closed => WhatsApp treated as OFF: the queued SMS path is left intact,
-    // never routed to a dead channel. This holds regardless of the toggle's state.
-    const whatsappEnabled = !disabledSlugs.has("whatsapp") && isWhatsappConfigured();
     let drained = 0, sent = 0, failed = 0, blocked = 0;
-    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string }> = {};
+    let switchedOffMidRun = false;
+    const perSource: Record<string, { drained: number; sent: number; failed: number; blocked: number; error?: string; skipped?: string; switchedOffMidRun?: boolean }> = {};
     const sourceErrors: string[] = [];
     for (const source of SOURCES) {
       // Stop before the next module when the budget has gone: the refusal is sticky
@@ -574,6 +587,37 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
         );
         break;
       }
+      // Owner kill switch, READ AGAIN FOR EVERY SOURCE rather than once for the
+      // whole tick. The ForSend variant FAILS CLOSED when messaging is live: a
+      // toggle-read error returns EVERY slug as disabled, so the rest of the tick
+      // skips rather than sending for a system the owner may have switched off. It
+      // behaves fail-open only under dry-run. Single client in the pilot, matching
+      // vitalitySiteIds().
+      //
+      // WHY PER SOURCE. This run iterates eleven modules of up to a hundred rows
+      // each, with a Dentally patient read and a provider call per row, under a
+      // 310-second lease. A set captured at the top was a verdict up to five
+      // minutes stale by the time the later modules took their turn: an owner who
+      // switched Segment outreach off while recall was draining had that switch
+      // ignored for outreach's entire pass, hundreds of rows later. One small
+      // toggle read per module is nothing next to what each module then spends,
+      // and it means a system switched off BEFORE its turn never gets one.
+      const disabledSlugs = await getDisabledSlugsForSend(CLIENT_ID);
+      // Channel-preference gate for WhatsApp - DOUBLE-GATED and fail-closed. A
+      // patient's WhatsApp preference is honoured ONLY when BOTH are true:
+      //   1) the owner kill switch is ON - 'whatsapp' is not in the disabled set.
+      //      getDisabledSlugsForSend fails CLOSED when messaging is live (every slug
+      //      disabled on a read error), so a blip leaves WhatsApp treated as OFF; and
+      //      migration 0047 seeds the 'whatsapp' toggle OFF so it is never live by the
+      //      mere ABSENCE of a row (system_toggle is default-ON, like 0041 for outreach).
+      //   2) WhatsApp is actually DELIVERABLE - a WhatsApp sender (TWILIO_WHATSAPP_FROM)
+      //      is configured. Without a sender, routing to WhatsApp would fail the send in
+      //      live mode instead of using SMS, so a 'whatsapp' preference must stay a no-op.
+      // Either gate closed => WhatsApp treated as OFF: the queued SMS path is left intact,
+      // never routed to a dead channel. This holds regardless of the toggle's state.
+      // Recomputed here from the fresh set, so switching WhatsApp off mid-tick takes
+      // effect for every module that has not yet drained.
+      const whatsappEnabled = !disabledSlugs.has("whatsapp") && isWhatsappConfigured();
       // Kill switch: skip this system entirely when the owner has turned it off.
       // Its rows stay 'queued' for as long as it is off — nothing here retires or
       // sends them.
@@ -599,9 +643,10 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       // recall/noshow/coordinator/reviews from delivering their queued rows.
       // The rows of the failing module stay 'queued' for the next tick.
       try {
-        const r = await drainSource(source, client, siteIds, statusCallbackUrl, today, whatsappEnabled);
+        const r = await drainSource(source, slug, client, siteIds, statusCallbackUrl, today, whatsappEnabled);
         perSource[source.name] = r;
         drained += r.drained; sent += r.sent; failed += r.failed; blocked += r.blocked;
+        switchedOffMidRun = switchedOffMidRun || r.switchedOffMidRun;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         perSource[source.name] = { drained: 0, sent: 0, failed: 0, blocked: 0, error: message };
@@ -619,6 +664,10 @@ async function handleWithDentallyPriority(request: Request): Promise<Response> {
       budgetRefused: refusal !== null,
       budgetRefusalReason: refusal?.reason ?? null,
       drained, sent, failed, blocked, perSource,
+      // Honest signal for ops: at least one module stopped part-way because the
+      // owner switched it off while this tick was sending, not because there was
+      // nothing left to deliver. The same field the sweeps report.
+      switchedOffMidRun,
       ...(sourceErrors.length ? { errors: sourceErrors } : {}),
     });
   } finally {

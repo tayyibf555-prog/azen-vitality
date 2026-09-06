@@ -18,7 +18,10 @@
 // SOURCE TREE against the roster: every file that queues a message, every file
 // that calls sendMessage, every default-off switch, every path the runbook
 // promises. It fails in both directions, and it is the test that goes red first
-// when somebody adds agent number nineteen.
+// when somebody adds the next agent. (Not "agent number nineteen", which is what
+// this line used to say: the roster passed nineteen without the sentence
+// noticing, and a count written into prose is the thing that goes stale — see
+// "states no fixed agent count in its header or its test names" below.)
 // ===========================================================================
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -26,6 +29,7 @@ import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { AGENTS, AGENT_BY_KEY, DRAIN_AGENTS, PATIENT_FACING_AGENTS } from "./roster";
+import type { AgentDef } from "./roster";
 import { SYSTEM_BY_SLUG, DRAIN_SOURCE_TO_SLUG, DEFAULT_OFF_SLUGS } from "@/lib/systems/catalog";
 import { CORRESPONDENCE_SOURCE_NAMES } from "@/lib/inbox/repository";
 import { SEND_SITES } from "@/lib/inbox/send-sites";
@@ -459,8 +463,18 @@ describe("a default-off system is off twice", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. The shared first-contact primitive, and its four gates.
+// 7. The shared first-contact primitive, and the gates on every door into it.
 // ---------------------------------------------------------------------------
+
+/** Files that call `contactLead`, excluding the module that defines it. */
+function contactLeadCallers(): string[] {
+  return everySourceFile().filter(
+    (rel) => rel !== "src/lib/speed-to-lead/contact.ts" && /\bcontactLead\s*\(/.test(code(readRepo(rel))),
+  );
+}
+
+/** How the roster's prose counts, so a derived count can be compared to it. */
+const COUNT_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 
 describe("contactLead is gated by every one of its callers", () => {
   /**
@@ -468,18 +482,59 @@ describe("contactLead is gated by every one of its callers", () => {
    * toggle itself. That is a deliberate choice — the smile-assessment path needs
    * BOTH its own switch and speed-to-lead's, which an internal single-slug guard
    * could not express — but it means the guarantee lives in the callers, and a
-   * guarantee that lives in four places is one edit from living in three.
+   * guarantee that lives in six places is one edit from living in five.
    */
   it("every file that calls it reads a system toggle", () => {
-    const callers = everySourceFile().filter(
-      (rel) => rel !== "src/lib/speed-to-lead/contact.ts" && /\bcontactLead\s*\(/.test(code(readRepo(rel))),
-    );
+    const callers = contactLeadCallers();
     expect(callers.length, "the crawl found no callers at all; it has gone stale").toBeGreaterThan(2);
     const ungated = callers.filter((rel) => !readsAToggle(readRepo(rel)));
     expect(
       ungated,
       `these first-contact a lead without consulting the kill switch: ${ungated.join(", ")}`,
     ).toEqual([]);
+  });
+
+  /*
+   * THE CRAWL ABOVE CANNOT SEE A FAIL DIRECTION, WHICH IS HALF THE RULE.
+   * `readsAToggle` accepts the literal `isSystemEnabled(` as readily as
+   * `isSystemEnabledForSend(`, so it proves a switch was consulted and says
+   * nothing about what happens when the switch cannot be READ. The lenient form
+   * resolves a toggle-table error to the slug's CATALOG DEFAULT, and
+   * `speed-to-lead` is default-ON — so a blip on system_toggle answered
+   * "enabled" for a system the owner had switched off, at a door whose next line
+   * texts a real patient with no outbox and no drain to re-gate it.
+   *
+   * The fail-direction law (W1-B/1-5, and the reason the sweeps moved) makes
+   * uncertainty count as OFF. The staff worklist's Resend was the last human
+   * door still on the lenient read; this crawl is what stops a seventh door
+   * being written the old way and looking green.
+   */
+  it("every caller of contactLead reads the FOR-SEND form of the switch", () => {
+    const callers = contactLeadCallers();
+    const lenient = callers.filter((rel) => !code(readRepo(rel)).includes("isSystemEnabledForSend("));
+    expect(
+      lenient,
+      `these reach contactLead behind a switch read that fails OPEN: ${lenient.join(", ")}`,
+    ).toEqual([]);
+    // Floor: the assertion above is empty for the right reason, not because the
+    // crawl found nothing to look at.
+    expect(callers.length, "the caller crawl went stale").toBeGreaterThan(2);
+  });
+
+  it("the roster's speed-to-lead gap sentence names as many callers as the crawl finds", () => {
+    // WHY THE PROSE IS DERIVED. This sentence said "all four callers" while six
+    // files called it — the co-pilot's nudge_lead, the missed-call bridge and the
+    // smile-assessment submit path had all arrived since. It is printed on the
+    // owner's control panel and returned by the co-pilot's agent_status, so it is
+    // a claim the practice reads, and nothing checked it. Now the number in the
+    // sentence is recomputed from the same crawl the sentence is about.
+    const count = contactLeadCallers().length;
+    const word = COUNT_WORDS[count] ?? String(count);
+    const gap = AGENTS.find((a) => a.key === "speed-to-lead")?.gaps.join(" ") ?? "";
+    expect(
+      gap,
+      `the roster says something other than "all ${word} callers", but the crawl finds ${count}`,
+    ).toContain(`all ${word} callers gate it`);
   });
 
   it("the smile-assessment path needs BOTH switches, not either", () => {
@@ -550,25 +605,75 @@ describe("the switch-on runbook covers every agent", () => {
 const ENV_NAME = /\b[A-Z][A-Z0-9]{2,}(?:_[A-Z0-9]+)+\b/g;
 
 describe("the switch-on sentence an owner reads is written for an owner", () => {
+  /**
+   * The three fields an owner is given as ANSWERS. Extended from `firstTick`
+   * alone on 5 September 2026 — see the note inside the test below.
+   */
+  const ANSWER_FIELDS: ReadonlyArray<readonly [string, (a: AgentDef) => string]> = [
+    ["firstTick", (a) => a.firstTick],
+    ["bound", (a) => a.bound],
+    ["stop", (a) => a.stop],
+  ];
+
   it("never names an environment variable", () => {
-    // WHY firstTick AND NOT EVERY FIELD. `needs` is the field where env names
-    // belong, and vocabulary.ts:50-55 says so in as many words: it becomes
+    // WHY THESE THREE FIELDS AND NOT EVERY FIELD. `needs` is the field where env
+    // names belong, and vocabulary.ts:50-55 says so in as many words: it becomes
     // "Needs first" a paragraph below, and "the person reading this row is the
-    // person who arranges them". `firstTick` answers a different question —
-    // what will happen if I flip this — and an answer given in the names of
-    // values the owner cannot read is not an answer. Found by the wave-3 review
-    // on recall, no-show-defence and reviews; the audit note of 4 Sep had caught
-    // recall alone, because the copy sweep in src/lib/systems/os-copy-sweep.test.ts
-    // feeds only `source: "module"` sentences into its crawl and every rostered
-    // sentence arrives as `source: "roster"`.
-    const offenders = AGENTS.map((a) => ({ key: a.key, hits: a.firstTick.match(ENV_NAME) ?? [] }))
+    // person who arranges them". `firstTick`, `bound` and `stop` each answer a
+    // different question — what will happen if I flip this, how much of it will
+    // there be, how do I make it stop — and an answer given in the names of
+    // values the owner cannot read is not an answer.
+    //
+    // `firstTick` alone was scanned when this was written on 4 Sep, because
+    // `firstTick` is the field the CONTROL PANEL prints (vocabulary.ts reads it
+    // by identity as `starts`). That was too narrow by one door: the co-pilot's
+    // agent_status hands `bound` back as `whatBoundsIt` and `stop` as
+    // `howToStopIt` (both in src/lib/copilot/tools.ts, agent_status's describe
+    // block), to an owner-and-agency tool whose description invites exactly the
+    // question "what limits the no-show agent?". Four `bound` sentences and one
+    // `stop` were still written
+    // in deployment identifiers on 5 Sep, and three of the four carried no
+    // figure at all — so the owner was handed an identifier INSTEAD of an
+    // answer, three lines below a comment stating the rule as "the number, not
+    // its variable name".
+    //
+    // `gaps` is deliberately NOT here. Its env names are prerequisites of the
+    // same class as `needs` — "booking into real Dentally still needs
+    // DENTALLY_DEFAULT_PAYMENT_PLAN_ID" is addressed to whoever arranges it, and
+    // blanket-sweeping it would delete a true warning rather than rewrite a bad
+    // answer. That field's own problem (it also carries internal code constants)
+    // is a separate one and is not solved by this regex.
+    //
+    // The panel-side sweep in src/lib/systems/os-copy-sweep.test.ts cannot cover
+    // any of this: it is fed SYSTEM_VOCABULARY.starts + catalog.halts +
+    // FIRST_STEPS, and neither `bound` nor `stop` reaches a screen at all. This
+    // test is their only guard.
+    const offenders = AGENTS.flatMap((a) =>
+      ANSWER_FIELDS.map(([field, read]) => ({ key: a.key, field, hits: read(a).match(ENV_NAME) ?? [] })),
+    )
       .filter((r) => r.hits.length > 0)
-      .map((r) => `${r.key}: ${[...new Set(r.hits)].join(", ")}`);
+      .map((r) => `${r.key}.${r.field}: ${[...new Set(r.hits)].join(", ")}`);
     expect(
       offenders,
-      `these print an environment-variable name to the practice owner on the control panel: ` +
-        `${offenders.join("; ")}. Put the NUMBER in firstTick and leave the name in needs.`,
+      `these print an environment-variable name to the practice owner — on the control panel, or ` +
+        `read back by the co-pilot's agent_status: ${offenders.join("; ")}. Put the NUMBER in the ` +
+        `sentence and leave the name in needs (or in a comment, when it is not a prerequisite).`,
     ).toEqual([]);
+  });
+
+  it("and the crawl reaches all three answer fields, not just the one it started on", () => {
+    // Floor for the "nothing matched" assertion above (ruling W3/17), aimed at
+    // the specific way it rotted once: scanning one field and reporting clean.
+    expect(ANSWER_FIELDS.map(([field]) => field)).toEqual(["firstTick", "bound", "stop"]);
+    for (const [field, read] of ANSWER_FIELDS) {
+      const planted = AGENTS.map((a) => ({ ...a, [field]: `${read(a)} Set NOSHOW_MAX_SENDS_PER_RUN.` }));
+      const caught = planted.flatMap((a) =>
+        ANSWER_FIELDS.flatMap(([, r]) => r(a as unknown as AgentDef).match(ENV_NAME) ?? []),
+      );
+      expect(caught, `an env name planted in ${field} is invisible to the crawl`).toContain(
+        "NOSHOW_MAX_SENDS_PER_RUN",
+      );
+    }
   });
 
   it("and the crawl can still see one where an env name is allowed", () => {
@@ -590,6 +695,41 @@ describe("the switch-on sentence an owner reads is written for an owner", () => 
       expect(agent!.firstTick.length, `${key}.firstTick`).toBeGreaterThan(60);
       expect(/\d/.test(agent!.firstTick), `${key}.firstTick states no figure at all`).toBe(true);
     }
+  });
+
+  it("and `bound` answers the volume question with a figure, not a shrug", () => {
+    // The same floor for the second field, and the reason it needed rewriting
+    // rather than trimming: three of the four offenders — booking-agent,
+    // treatment-closer, balance-reminders — named an identifier and NO number,
+    // so an owner asking the co-pilot "what limits this?" was given a word he
+    // cannot look up in place of the answer. Deleting the identifier would have
+    // left an empty sentence and a green test.
+    const figures: Record<string, readonly string[]> = {
+      "speed-to-lead": ["three"],
+      "booking-agent": ["20"],
+      "whatsapp-agent": ["20"],
+      "no-show-defence": ["25", "ten minutes"],
+      "treatment-closer": ["500", "25", "24 hours"],
+      "balance-reminders": ["300", "40", "10", "24 hours"],
+    };
+    for (const [key, expected] of Object.entries(figures)) {
+      const agent = AGENT_BY_KEY.get(key);
+      expect(agent, `${key} is missing from the roster`).toBeTruthy();
+      for (const fragment of expected) {
+        expect(agent!.bound, `${key}.bound no longer states ${fragment}`).toContain(fragment);
+      }
+    }
+  });
+
+  it("and `stop` still names the switch it told the owner to reach for", () => {
+    // reviews.stop offered two ways to stop the agent and wrote the second one
+    // as REVIEW_LINK_URL. The clause is true and stays; only the identifier
+    // went. This pins both halves so the rewrite cannot quietly become "switch
+    // off 'reviews'" and lose a real answer.
+    const reviews = AGENT_BY_KEY.get("reviews");
+    expect(reviews, "reviews is missing from the roster").toBeTruthy();
+    expect(reviews!.stop).toContain("'reviews'");
+    expect(reviews!.stop.toLowerCase()).toContain("review link");
   });
 });
 
@@ -691,13 +831,29 @@ describe("no sentence an owner reads is addressed to the team that built it", ()
    * (runbook.test.ts, "the pre-visit section is finished work"); this is the
    * other half, and this is what stops a third one being written.
    *
-   * WHAT IS AND IS NOT FORBIDDEN. Not ruling citations: "ruling W1-B/4" tells a
-   * reader where a decision is recorded and three of these sentences carry one
-   * deliberately. What is forbidden is the PROVISIONAL-OWNERSHIP class — a
-   * sentence that names a build lane as the thing responsible, or says the entry
-   * is a draft somebody else has still to confirm. Those are true only inside the
-   * programme, and they are false to the person reading them.
+   * TWO CLASSES ARE FORBIDDEN, and the second was added on 5 September 2026.
+   *
+   * PROVISIONAL OWNERSHIP: a sentence that names a build lane as the thing
+   * responsible, or says the entry is a draft somebody else has still to confirm.
+   * True only inside the programme, and false to the person reading it.
+   *
+   * INTERNAL RULING CODES: "Ruling W1-B/4, 3 Sep 2026". Three sentences on the
+   * abandoned-booking rescue carried one, and they were argued for at the time as
+   * traceability rather than a hedge — a reader can look the decision up. The
+   * owner cannot: the decisions log is a programme document he has never seen, so
+   * in an agent_status answer about his own platform the code is an unresolvable
+   * reference that makes a settled fact read like an unfinished note. The
+   * citations were not deleted, they MOVED — src/lib/agent-wiring/roster.ts
+   * carries them in a comment above that entry, which is where a build decision
+   * belongs. Owner copy states the decision itself.
    */
+  /**
+   * A programme ruling code as this repository writes them: W1-B/4, W3/9, W2-C/2.
+   * Matched anywhere in a sentence, because the offence is the owner meeting the
+   * code at all, not where in the line it sits.
+   */
+  const RULING_CODE = /\bW\d(?:-[A-E])?\/\d+\b/;
+
   const HANDOVER_NOTE: readonly RegExp[] = [
     /\bowned by\b/i,
     /\blanes?\s+W\d/i,
@@ -745,10 +901,184 @@ describe("no sentence an owner reads is addressed to the team that built it", ()
     expect(sentences.length, "the owner-facing crawl found almost nothing").toBeGreaterThan(120);
     expect(new Set(sentences.map((s) => s.field)).size, "the crawl reads only some fields").toBe(9);
 
-    // Ruling citations are deliberately NOT caught: three sentences carry one.
-    const cited = sentences.filter((s) => /\bruling W\d-[A-E]\/\d/i.test(s.text));
-    expect(cited.length, "the ruling citations vanished; loosen this floor deliberately or not at all")
-      .toBeGreaterThan(0);
+  });
+
+  it("cites no internal ruling code in anything the owner is shown", () => {
+    // The second forbidden class. Every code the programme uses, in the shapes
+    // this file has actually written them: "W1-B/4", "ruling W3/9", "W2-C/2".
+    const offenders = ownerFacingSentences()
+      .filter(({ text }) => RULING_CODE.test(text))
+      .map(({ key, field, text }) => `${key}.${field}: "${text}"`);
+    expect(
+      offenders,
+      `an owner reading these on the control panel, or hearing them back from the co-pilot, ` +
+        `cannot resolve a programme ruling code: ${offenders.join("; ")}`,
+    ).toEqual([]);
+  });
+
+  it("and that crawl would still catch the three sentences it was written for", () => {
+    // Floor for the assertion above, in the same shape as the one for handover
+    // notes: the deleted fragments, byte for byte, so "nothing matched" cannot
+    // quietly become "the pattern stopped matching".
+    for (const deleted of [
+      "'online-booking' (the flow it invites the patient back into). Ruling W1-B/4, 3 Sep 2026 — an owner…",
+      "because the host sweep now uses the shared ten-row gate (ruling W1-B/5) — drafting stops",
+      "Its basis is narrow ON PURPOSE (ruling W1-B/4): one transactional follow-up",
+    ]) {
+      expect(RULING_CODE.test(deleted), deleted).toBe(true);
+    }
+    // And it does not fire on ordinary copy, which is what makes the empty
+    // result above meaningful rather than an accident of a lenient pattern.
+    expect(RULING_CODE.test("At most 25 holds converted per tick.")).toBe(false);
+    expect(RULING_CODE.test("Switch off 'speed-to-lead'.")).toBe(false);
+  });
+
+  /**
+   * THE THIRD FORBIDDEN CLASS, added 5 September 2026 alongside the env-name
+   * widening in section 9.
+   *
+   * `gaps` is not scanned by the env-name rule, and deliberately: the identifiers
+   * an owner meets there are mostly things somebody has to GO AND ARRANGE — "still
+   * needs DENTALLY_DEFAULT_PAYMENT_PLAN_ID" is the same class of sentence as
+   * `needs`, and blanket-sweeping the field would delete a true warning rather
+   * than rewrite a bad answer.
+   *
+   * What does not belong is the OTHER kind of identifier the field had collected:
+   * a constant in our own source, named to a practice owner with no way to look it
+   * up. Two of them were there — `POSTOP_NEVER_PRIMES` (a boolean in
+   * src/lib/agent/reply-context.ts) and `MISSING_FROM_MIGRATIONS` (a table in the
+   * test fake, cited as "see … in the fake") — and both are now stated in words,
+   * with the constant's name moved into a comment beside the entry.
+   *
+   * So the rule is an allow-list, not a pattern: every SCREAMING_SNAKE identifier
+   * that survives in `gaps` must be a named, cited configuration value the
+   * practice or its deployer actually sets. A new one goes red until it is
+   * justified here or rewritten, which is the fail-closed direction.
+   */
+  const CONFIGURATION_NAMES_ALLOWED_IN_GAPS: Record<string, string> = {
+    // src/lib/dentally/patient-payload.ts — real Dentally rejects a patient
+    // create without a payment plan id; the owner supplies it (charter §3).
+    DENTALLY_DEFAULT_PAYMENT_PLAN_ID: "booking-agent",
+    // src/lib/collection/draft.ts — must stay unset until pounds-vs-pence is
+    // reconciled against a real invoice (charter §3, money semantics).
+    COLLECTION_QUOTE_AMOUNT: "balance-reminders",
+    // src/lib/triage/copy.ts completion screen — off by default, and switching
+    // pre-visit questions on does not switch it on.
+    MEDICAL_HISTORY_ENABLED: "pre-visit-triage",
+  };
+
+  it("names no internal code constant in the gaps the co-pilot reads back", () => {
+    const offenders = AGENTS.flatMap((a) =>
+      a.gaps.flatMap((text) =>
+        [...new Set(text.match(ENV_NAME) ?? [])]
+          .filter((name) => CONFIGURATION_NAMES_ALLOWED_IN_GAPS[name] !== a.key)
+          .map((name) => `${a.key}.gaps: ${name}`),
+      ),
+    );
+    expect(
+      offenders,
+      `agent_status returns these to a practice owner as knownGaps, and they are identifiers from ` +
+        `our own source rather than something he sets: ${offenders.join("; ")}. State the fact in ` +
+        `words and put the constant's name in a comment, or add it to ` +
+        `CONFIGURATION_NAMES_ALLOWED_IN_GAPS with a citation.`,
+    ).toEqual([]);
+  });
+
+  /**
+   * THE FOURTH FORBIDDEN CLASS, added 6 September 2026.
+   *
+   * The three rules above all key on an IDENTIFIER — a lane code, a ruling code,
+   * a SCREAMING_SNAKE constant — and a sentence carrying none of them walks
+   * straight through all three. `rota-notify`'s only gap did: "The only toggle
+   * read in the tree that happens INSIDE a loop (per client), which is the
+   * pattern every other sweep should eventually follow." No identifier, so it was
+   * clean by every crawl in this file, and it was still a note to a build lane —
+   * the register gives it away, not any name in it. A practice owner asking the
+   * co-pilot what he should know before switching staff rota texts on was told
+   * something about the shape of our loops, in a phrase ("the only ... in the
+   * tree") that reads as a defect report about the safest of the three patterns.
+   *
+   * So this rule is about the REGISTER rather than the vocabulary: our source
+   * described as "the tree", work somebody means to do later ("should
+   * eventually", "for now", "to be done"), and a claim about a code pattern being
+   * followed. All three are true only to a reader who has the repository open,
+   * and `gaps`/`needs`/`firstTick` reach a reader who does not.
+   *
+   * The fix is always the same one this file has used twice before: the
+   * observation moves into a comment beside the entry, and the fact underneath it
+   * — if there is one the owner can use — is restated in his terms.
+   */
+  const BUILD_REGISTER: readonly RegExp[] = [
+    /\bin the tree\b/i,
+    /\bthe (?:code)?base\b/i,
+    /\bcodebase\b/i,
+    /\bshould eventually\b/i,
+    /\bfor now\b/i,
+    /\bthe pattern (?:every|that|which|all|the)\b/i,
+    /\brefactor/i,
+    /\bTODO\b/,
+  ];
+
+  it("describes no agent to the owner in the register of the people who built it", () => {
+    const offenders = ownerFacingSentences()
+      .filter(({ text }) => BUILD_REGISTER.some((re) => re.test(text)))
+      .map(({ key, field, text }) => `${key}.${field}: "${text}"`);
+    expect(
+      offenders,
+      `the co-pilot reads these back to a practice as knownGaps/needsFirst and the control panel ` +
+        `prints them, and they are written about our repository rather than about his platform: ` +
+        `${offenders.join("; ")}. Put the observation in a comment beside the entry and state the ` +
+        `fact underneath it in the owner's terms.`,
+    ).toEqual([]);
+  });
+
+  it("and that crawl would still catch the sentence it was written for (W3/17)", () => {
+    // Floor for the assertion above, in the shape the other two floors take: the
+    // deleted sentence, byte for byte, so "nothing matched" cannot quietly become
+    // "the pattern stopped matching". Two clauses of it offend independently,
+    // which is the point — one narrow pattern would not have been enough.
+    const deleted =
+      "The only toggle read in the tree that happens INSIDE a loop (per client), which is the pattern " +
+      "every other sweep should eventually follow.";
+    expect(BUILD_REGISTER.filter((re) => re.test(deleted)).length, deleted).toBeGreaterThanOrEqual(2);
+    // And it leaves ordinary owner copy alone, including the true sentence that
+    // replaced it — otherwise the empty result above is a lenient pattern rather
+    // than a clean roster.
+    const replacement = AGENT_BY_KEY.get("rota-notify")!.gaps.join(" ");
+    expect(replacement, "rota-notify's gap no longer says what a mid-run switch-off costs").toContain(
+      "does not stop that run",
+    );
+    for (const ordinary of [
+      replacement,
+      "Switch off 'speed-to-lead'. Intake is rejected and nothing is auto-contacted.",
+      "At most 25 holds converted per tick.",
+    ]) {
+      expect(
+        BUILD_REGISTER.filter((re) => re.test(ordinary)).map(String),
+        `this is ordinary owner copy: ${ordinary}`,
+      ).toEqual([]);
+    }
+  });
+
+  it("and that allow-list is exact, not a wildcard (W3/17)", () => {
+    // Floor for the assertion above. The two deleted fragments, byte for byte,
+    // so "nothing matched" cannot quietly become "the pattern stopped matching";
+    // and the allow-list is keyed to ONE agent each, so the same name appearing
+    // on a different agent is still caught.
+    for (const deleted of [
+      "Post-op check-ins deliberately never prime the agent (POSTOP_NEVER_PRIMES).",
+      "invisible from the repo (see MISSING_FROM_MIGRATIONS in the fake).",
+    ]) {
+      expect(deleted.match(ENV_NAME) ?? [], deleted).not.toEqual([]);
+    }
+    for (const [name, key] of Object.entries(CONFIGURATION_NAMES_ALLOWED_IN_GAPS)) {
+      const agent = AGENT_BY_KEY.get(key);
+      expect(agent, `${name} is allowed for ${key}, which is not in the roster`).toBeTruthy();
+      expect(
+        agent!.gaps.some((g) => g.includes(name)),
+        `${name} is allowed for ${key} and ${key} no longer says it — delete the exemption`,
+      ).toBe(true);
+    }
   });
 });
 
@@ -756,31 +1086,83 @@ describe("no sentence an owner reads is addressed to the team that built it", ()
 // 10. Sanity: the roster is not silently empty.
 // ---------------------------------------------------------------------------
 
+/**
+ * THE CHARTER'S OWN LIST, by key, in the charter's own order (§2 W1-B, "for
+ * EVERY agent in the roster (smile-assessment, speed-to-lead, ...)").
+ *
+ * It is a named constant rather than an inline literal because the floor below
+ * is derived from it: "the roster holds at least everything the charter names"
+ * is a claim that stays true as the charter's list is read again, where a hand-
+ * typed number is only ever true on the day it is typed. The roster is longer
+ * than this — `pre-visit-triage`, `outreach` and `diary-notify` were rostered
+ * after the charter was written — so the floor is a floor and not an equality.
+ */
+const CHARTER_AGENT_KEYS: readonly string[] = [
+  "smile-assessment",
+  "speed-to-lead",
+  "missed-call-bridge",
+  "abandoned-booking-rescue",
+  "booking-agent",
+  "whatsapp-agent",
+  "online-booking",
+  "recall",
+  "reactivation",
+  "no-show-defence",
+  "treatment-coordinator",
+  "treatment-closer",
+  "balance-reminders",
+  "postop-checkin",
+  "booking-reply-context",
+  "anomaly-alerts",
+  "reviews",
+  "rota-notify",
+];
+
 describe("the roster is real", () => {
-  it("covers the sixteen agents the programme charter lists, at least", () => {
-    expect(AGENTS.length).toBeGreaterThanOrEqual(16);
-    for (const key of [
-      "smile-assessment",
-      "speed-to-lead",
-      "missed-call-bridge",
-      "abandoned-booking-rescue",
-      "booking-agent",
-      "whatsapp-agent",
-      "online-booking",
-      "recall",
-      "reactivation",
-      "no-show-defence",
-      "treatment-coordinator",
-      "treatment-closer",
-      "balance-reminders",
-      "postop-checkin",
-      "booking-reply-context",
-      "anomaly-alerts",
-      "reviews",
-      "rota-notify",
-    ]) {
+  it("covers every agent the programme charter lists", () => {
+    expect(AGENTS.length).toBeGreaterThanOrEqual(CHARTER_AGENT_KEYS.length);
+    for (const key of CHARTER_AGENT_KEYS) {
       expect(AGENT_BY_KEY.has(key), `the charter names ${key} and the roster does not`).toBe(true);
     }
+  });
+
+  it("states no fixed agent count in its header or its test names", () => {
+    /*
+     * A COUNT IN PROSE IS THE THING THAT GOES STALE. roster.ts's header said the
+     * list held sixteen while it held twenty-one, and the title of the test above
+     * said the same, so a reader auditing charter §2 W1-B against the roster read
+     * "sixteen" in the roster's own voice, saw the charter's eighteen, and could
+     * only conclude that agents were MISSING when three extra ones were present —
+     * with a green test appearing to confirm the figure. Nothing else could catch
+     * it: the floor above is `>=`, so growth never reddens it, and the number
+     * lived in a comment and a test title, which no assertion reads.
+     *
+     * THE RUNBOOK ALREADY HAS THIS RULE for the same reason and in the same words
+     * (runbook.test.ts, "does not restate a total number of agents in the opening
+     * line"); this is the roster half of it, over the two places the stale figure
+     * actually sat. `AGENTS.length` and the membership check above are the honest
+     * answers, and neither can rot.
+     *
+     * THE SHAPE, NOT EVERY NUMERAL. A number attached to a claim about the size
+     * of this list is banned; numbers doing other work in prose are not, because
+     * a rule that bans digits from a comment is a rule authors route around.
+     */
+    const claimsATotal =
+      /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:-\w+)?|\d+)\b[ \t]*(?:of them|of these|agents?|entries|rows|in one list|in this list|in the list)\b/i;
+
+    const rosterSource = readRepo("src/lib/agent-wiring/roster.ts");
+    const header = rosterSource.slice(0, rosterSource.indexOf("/** How the message"));
+    expect(header.length, "roster.ts's header block was not found").toBeGreaterThan(500);
+    expect(
+      header.match(claimsATotal)?.[0] ?? null,
+      "roster.ts's header states a fixed number of agents; the list outgrows it",
+    ).toBeNull();
+
+    const self = readRepo("src/lib/agent-wiring/roster.test.ts");
+    const titles = [...self.matchAll(/^\s*(?:it|describe)\(\s*"([^"\n]+)"/gm)].map((m) => m[1]);
+    expect(titles.length, "no test titles were read; the pin has gone stale").toBeGreaterThan(40);
+    const stale = titles.filter((title) => claimsATotal.test(title));
+    expect(stale, `test names stating a fixed agent count: ${stale.join(" | ")}`).toEqual([]);
   });
 
   it("keeps the in-memory database OUT of the application", () => {

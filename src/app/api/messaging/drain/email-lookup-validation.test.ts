@@ -115,7 +115,10 @@ vi.mock("@/lib/cron-lock", () => ({
   acquireCronLock: (...a: unknown[]) => fakes.acquireCronLock(...a),
   releaseCronLock: (...a: unknown[]) => fakes.releaseCronLock(...a),
 }));
-vi.mock("@/lib/systems/repository", () => ({ getDisabledSlugsForSend: async () => new Set<string>() }));
+vi.mock("@/lib/systems/repository", () => ({
+  getDisabledSlugsForSend: async () => new Set<string>(),
+  isSystemEnabledForSend: async () => true,
+}));
 vi.mock("@/lib/mock/clients", () => ({
   SITES: [{ id: "site-cc", clientId: "vitality", name: "Test", timezone: "Europe/London" }],
 }));
